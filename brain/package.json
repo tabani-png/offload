@@ -1,0 +1,16 @@
+{
+  "name": "offload-brain",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "analyze": "bun run src/cli.ts analyze",
+    "serve": "bun run src/cli.ts serve",
+    "fixture": "bun run fixtures/gen.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.12",
+    "typescript": "5.9.3"
+  }
+}
