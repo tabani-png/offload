@@ -397,7 +397,8 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   is good enough for the daily volume, else the first. `POST /workflows/:id/tools {stepId, toolId}` records a pick.
 - `POST /workflows/:id/dry-run` on a plan workflow adds `general` (`GeneralDryRunDTO`): per instance `ours` vs
   `theirs` (`{kind, summary, fields[{label, value|null}], text, actions}`), a match figure with arithmetic, the steps,
-  evidence ids, the time estimate and the `commit` the s13 chain would make. Values are copied by code; text steps are
+  evidence ids, the time estimate and the `commit` the chain would make: `{tool, verb, fields: [label, value][],
+  missing}` in the labelled form of the chosen tool's s16 schema (brain/CONNECTORS.md "Commit schemas (s16)"). Values are copied by code; text steps are
   drafted from masked text. `tools` lists the chosen tool per step. `instances` stays `[]` for plan workflows.
 - `GET /status` gains `understanding {version, embedder, framesRead}` and `models` (router summary: backend, metered,
   month, spentUsd, budgetUsd, captionsLocal, blocked, needsYou, routes). `GET /models/usage`: the month's ledger per
