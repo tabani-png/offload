@@ -126,7 +126,7 @@ struct S08ConnectorTests {
     let ok = ConnectorChipModel(MockBrainClient.gmail)
     #expect(ok.role == .done && ok.action == nil)
     let key = ConnectorChipModel(MockBrainClient.hubspot)
-    #expect(key.role == .needsYou && key.action == "Add key…")
+    #expect(key.role == .needsYou && key.action == "Sign in…")  // s10d: "Add key…" was jargon
     let no = ConnectorChipModel(MockBrainClient.sheets)
     #expect(no.role == .neutral && no.action == "Connect…")
     #expect(no.accessibilityLabel == "Google Sheets, not connected")

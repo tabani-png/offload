@@ -12,6 +12,13 @@ extension Palette {
   /// Diff-lite highlight behind a changed word. Neutral on purpose: colour means state, and a reworded phrase
   /// is not a state.
   var mark: Color { isDark ? .white.opacity(0.15) : .black.opacity(0.075) }
+  /// Window toolbar band and the action bar under the review (s10d: named, not literals at each use).
+  var toolbarFill: Color { isDark ? Color(hex: 0x232326) : Color(hex: 0xEDEDF0) }
+  var actionBarFill: Color { isDark ? Color(hex: 0x1C1C1F) : Color(hex: 0xF8F8FA) }
+  /// Sheet background.
+  var sheetFill: Color { isDark ? Color(hex: 0x2A2A2D) : Color(hex: 0xFBFBFC) }
+  /// Snapshot stand-in for the sidebar material (live: NSSplitViewItem's own sidebar material).
+  var sidebarFill: Color { isDark ? Color(hex: 0x1F1F22) : Color(hex: 0xE8E8EB) }
 
   /// Timeline ink for a task rank (s10a): neutral steps of one ink, darkest = most time, never a hue (colour means
   /// state). Values and their >= 3:1 contrast live in Core (TimelineInk) so they are tested.
@@ -133,18 +140,22 @@ struct OptionalPointerTarget: ViewModifier {
 struct DiffText: View {
   var segments: [DiffLite.Segment]
   var marked = true
+  /// s10d: the other side's words; a word it also uses is not marked.
+  var other: Set<String>? = nil
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
     let p = Palette(scheme: scheme)
     var s = AttributedString()
     for seg in segments {
-      var run = AttributedString(seg.text)
-      run.foregroundColor = seg.changed && marked ? p.ink1 : p.ink2
-      if seg.changed && marked && !seg.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        run.underlineStyle = Text.LineStyle(pattern: .solid, color: p.ink3)
+      // s10d: inside a changed run only the words that carry a claim are marked; "the", "our", "of" are not.
+      for token in seg.changed && marked ? DiffLite.tokens(seg.text) : [seg.text] {
+        var run = AttributedString(token)
+        let mark = seg.changed && marked && DiffEmphasis.marks(token, other: other)
+        run.foregroundColor = mark ? p.ink1 : p.ink2
+        if mark { run.underlineStyle = Text.LineStyle(pattern: .solid, color: p.ink3) }
+        s += run
       }
-      s += run
     }
     return Text(s)
       .paragraphStyle(Tokens.TypeScale.body)
@@ -228,52 +239,99 @@ struct RowDivider: View {
 
 /// Snapshot stand-in for the AppKit window frame: traffic lights, a unified toolbar with title and subtitle,
 /// and the trailing toolbar items. Live windows get the real frame from NSWindow and NSToolbar.
+/// s10d: `sidebar` draws a source-list column under the traffic lights (the dashboard), and `sheet` draws a sheet
+/// the way macOS 26 presents `beginSheet`: centred on the window, with the window dimmed behind it.
 struct WindowChrome<Content: View>: View {
   var title: String
   var subtitle: String?
   var toolbarItems: [ToolbarItemLook] = []
   var width: CGFloat
+  var sidebar: AnyView? = nil
+  var sheet: AnyView? = nil
   @ViewBuilder var content: Content
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
     let p = Palette(scheme: scheme)
     let shape = RoundedRectangle(cornerRadius: Tokens.Radius.window, style: .continuous)
-    VStack(spacing: 0) {
-      HStack(spacing: Tokens.Space.s8) {
-        ForEach([0xFF5F57, 0xFEBC2E, 0x28C840], id: \.self) { hex in
-          Circle().fill(Color(hex: UInt32(hex))).frame(width: Tokens.Space.s12, height: Tokens.Space.s12)
-            .overlay(Circle().strokeBorder(.black.opacity(0.12), lineWidth: 0.5))
-        }
-        VStack(alignment: .leading, spacing: 0) {
-          Text(title).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
-          if let subtitle { Text(subtitle).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3) }
-        }
-        .padding(.leading, Tokens.Space.s12)
-        Spacer()
-        ForEach(toolbarItems) { item in
-          HStack(spacing: Tokens.Space.s4) {
-            Image(systemName: item.symbol).symbolStyle(Tokens.TypeScale.Symbol.regular)
-            if let t = item.title { Text(t).textStyle(Tokens.TypeScale.callout) }
+    Group {
+      if let sidebar {
+        HStack(spacing: 0) {
+          VStack(alignment: .leading, spacing: 0) {
+            lights.padding(.horizontal, Tokens.Space.s20).frame(height: Tokens.Size.toolbar)
+            sidebar
+            Spacer(minLength: 0)
           }
-          .foregroundStyle(p.ink2)
-          .padding(.horizontal, Tokens.Space.s8)
-          .frame(height: Tokens.Size.chip + Tokens.Space.s4)
-          .background(RoundedRectangle(cornerRadius: Tokens.Radius.control, style: .continuous).fill(p.fill))
+          .frame(width: Tokens.Layout.sidebar)
+          .frame(maxHeight: .infinity, alignment: .top)
+          .background(p.sidebarFill)
+          .overlay(alignment: .trailing) { Rectangle().fill(p.barHairline).frame(width: Tokens.Layout.hairline) }
+          VStack(spacing: 0) {
+            toolbar(p, lights: false)
+            content
+          }
+        }
+      } else {
+        VStack(spacing: 0) {
+          toolbar(p, lights: true)
+          content
         }
       }
-      .padding(.horizontal, Tokens.Space.s20)
-      .frame(height: Tokens.Size.toolbar)
-      .background(p.isDark ? Color(hex: 0x232326) : Color(hex: 0xEDEDF0))
-      .overlay(alignment: .bottom) { Rectangle().fill(p.isDark ? .black.opacity(0.5) : .black.opacity(0.1)).frame(height: 1) }
-      content
     }
     .frame(width: width)
     .background(p.canvas)
+    .overlay {
+      if let sheet {
+        ZStack {
+          Rectangle().fill(.black.opacity(p.isDark ? Tokens.Window.scrimDark : Tokens.Window.scrimLight))
+          let sheetShape = RoundedRectangle(cornerRadius: Tokens.Window.sheetRadius, style: .continuous)
+          sheet
+            .clipShape(sheetShape)
+            .overlay(sheetShape.strokeBorder(p.isDark ? .white.opacity(0.12) : .black.opacity(0.10), lineWidth: Tokens.Layout.hairline))
+            .compositingGroup()
+            .shadow(color: .black.opacity(p.isDark ? 0.5 : 0.22), radius: Tokens.Window.shadowRadius, x: 0, y: Tokens.Window.shadowY)
+        }
+      }
+    }
     .clipShape(shape)
-    .overlay(shape.strokeBorder(p.isDark ? .white.opacity(0.14) : .black.opacity(0.14), lineWidth: 1))
+    .overlay(shape.strokeBorder(p.isDark ? .white.opacity(Tokens.Window.ringDark) : .black.opacity(Tokens.Window.ringLight), lineWidth: Tokens.Layout.hairline))
     .compositingGroup()
-    .shadow(color: .black.opacity(p.isDark ? 0.5 : 0.18), radius: 24, x: 0, y: 14)
+    .shadow(color: .black.opacity(p.isDark ? 0.5 : 0.18), radius: Tokens.Window.shadowRadius, x: 0, y: Tokens.Window.shadowY)
+  }
+
+  private var lights: some View {
+    HStack(spacing: Tokens.Space.s8) {
+      ForEach([0xFF5F57, 0xFEBC2E, 0x28C840], id: \.self) { hex in
+        Circle().fill(Color(hex: UInt32(hex))).frame(width: Tokens.Space.s12, height: Tokens.Space.s12)
+          .overlay(Circle().strokeBorder(.black.opacity(0.12), lineWidth: 0.5))
+      }
+    }
+  }
+
+  private func toolbar(_ p: Palette, lights showLights: Bool) -> some View {
+    HStack(spacing: Tokens.Space.s8) {
+      if showLights { lights }
+      VStack(alignment: .leading, spacing: 0) {
+        Text(title).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
+        if let subtitle { Text(subtitle).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3) }
+      }
+      .padding(.leading, showLights ? Tokens.Space.s12 : 0)
+      Spacer()
+      ForEach(toolbarItems) { item in
+        HStack(spacing: Tokens.Space.s4) {
+          Image(systemName: item.symbol).symbolStyle(Tokens.TypeScale.Symbol.regular)
+          if let t = item.title { Text(t).textStyle(Tokens.TypeScale.callout) }
+        }
+        .foregroundStyle(p.ink2)
+        .padding(.horizontal, Tokens.Space.s8)
+        .frame(height: Tokens.Size.chip + Tokens.Space.s4)
+        .background(RoundedRectangle(cornerRadius: Tokens.Radius.control, style: .continuous).fill(p.fill))
+      }
+    }
+    .padding(.horizontal, Tokens.Space.s20)
+    .frame(height: Tokens.Size.toolbar)
+    .background(p.toolbarFill)
+    .overlay(alignment: .bottom) { Rectangle().fill(p.barHairline).frame(height: Tokens.Layout.hairline) }
   }
 }
 

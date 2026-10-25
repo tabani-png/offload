@@ -89,7 +89,7 @@ struct FirstRunPlan: Equatable, Sendable {
       seen.insert(id)
       missing.append(c)
       return c.state == .missingEnv
-        ? "\(c.name) needs its key. \(step.title) waits until it has one."
+        ? "\(c.name) is signed out. \(step.title) waits until you sign in."
         : "\(c.name) is not connected. \(step.title) waits until you connect it."
     }
     self.missing = missing
@@ -103,15 +103,15 @@ struct FirstRunPlan: Equatable, Sendable {
   /// The reason Turn on is disabled, said next to it.
   var turnOnBlockedReason: String? {
     guard let first = missing.first else { return nil }
-    let verb = first.state == .missingEnv ? "Add the \(first.name) key" : "Connect \(first.name)"
+    let verb = first.state == .missingEnv ? "Sign in to \(first.name)" : "Connect \(first.name)"
     let more = missing.count > 1 ? " and \(missing.dropFirst().map(\.name).joined(separator: " and "))" : ""
     return "\(verb)\(more) first. Turn on needs every step able to run."
   }
 
-  /// The sheet's primary while blocked: "Connect Google Sheets" / "Add the HubSpot key".
+  /// The sheet's primary while blocked: "Connect Google Sheets" / "Sign in to HubSpot".
   var connectTitle: String? {
     guard let first = missing.first else { return nil }
-    return first.state == .missingEnv ? "Add the \(first.name) key" : "Connect \(first.name)"
+    return first.state == .missingEnv ? "Sign in to \(first.name)" : "Connect \(first.name)"
   }
 
   static func emails(_ n: Int) -> String { n == 1 ? "1 email" : "\(n) emails" }

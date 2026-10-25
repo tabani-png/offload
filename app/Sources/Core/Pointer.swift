@@ -207,3 +207,82 @@ enum GlassVeil {
     p.cases.map { caseContrast(p, $0, veilOpacity: veilOpacity, backdrop: backdrop) }.min() ?? 1
   }
 }
+
+/// s10d: where the pointer's label goes. It must never cover the target, the arrow, or any text it was told about
+/// (`obstacles`), and it stays inside the window. Candidates: along the target's own line (right of it, then left),
+/// then scanning down and up from the target in small steps, each anchored at the arrow and flipped to end at the
+/// arrow when it would leave the window. The free candidate nearest the target wins; a vertical step costs a
+/// little more than a sideways one, so the label stays on the target's line when it can. If nothing is free (a
+/// window too small), the candidate with the least covered area is used.
+enum PointerLabelPlacement {
+  enum Side: Equatable, Sendable { case right, left, below, above }
+
+  struct Placement: Equatable, Sendable {
+    var rect: CGRect
+    var side: Side
+    var collides: Bool
+  }
+
+  static let gap: CGFloat = 6
+  static let inset: CGFloat = 8
+  static let step: CGFloat = 2
+
+  static func place(label size: CGSize, tip: CGPoint, arrow: CGSize, target: CGRect, obstacles: [CGRect],
+                    bounds: CGRect) -> Placement {
+    let arrowRect = CGRect(origin: tip, size: arrow)
+    let blocked = [target, arrowRect] + obstacles.filter { !$0.isNull && !$0.isEmpty && !$0.contains(target) }
+    let inner = bounds.insetBy(dx: inset, dy: inset)
+    let busy = target.union(arrowRect)
+
+    func fits(_ r: CGRect) -> Bool { inner.contains(r) }
+    func hits(_ r: CGRect) -> CGFloat {
+      blocked.reduce(0) { acc, b in
+        // Keep a gap's worth of air around every obstacle, so the label never touches text.
+        let i = r.intersection(b.insetBy(dx: -gap, dy: -gap / 2))
+        return acc + (i.isNull ? 0 : i.width * i.height)
+      }
+    }
+
+    var candidates: [(CGRect, Side, CGFloat)] = []
+    // Along the target's line: the label's centre on the target's centre line.
+    let lineY = target.midY - size.height / 2
+    var x = busy.maxX + gap
+    while x + size.width <= inner.maxX {
+      candidates.append((CGRect(x: x, y: lineY, width: size.width, height: size.height), .right, x - busy.maxX))
+      x += step * 4
+    }
+    x = busy.minX - gap - size.width
+    while x >= inner.minX {
+      candidates.append((CGRect(x: x, y: lineY, width: size.width, height: size.height), .left, busy.minX - (x + size.width)))
+      x -= step * 4
+    }
+    // Below and above: anchored at the arrow's tip, flipped to end at it when the right edge is too close.
+    func anchoredX() -> CGFloat {
+      let start = tip.x + arrow.width * 0.5
+      if start + size.width <= inner.maxX { return max(inner.minX, start) }
+      return max(inner.minX, min(tip.x - size.width, inner.maxX - size.width))
+    }
+    let ax = anchoredX()
+    var y = busy.maxY + gap
+    while y + size.height <= inner.maxY {
+      candidates.append((CGRect(x: ax, y: y, width: size.width, height: size.height), .below, (y - busy.maxY) * 1.15))
+      y += step
+    }
+    y = busy.minY - gap - size.height
+    while y >= inner.minY {
+      candidates.append((CGRect(x: ax, y: y, width: size.width, height: size.height), .above, (busy.minY - (y + size.height)) * 1.15))
+      y -= step
+    }
+
+    let valid = candidates.filter { fits($0.0) }
+    if let free = valid.filter({ hits($0.0) == 0 }).min(by: { $0.2 < $1.2 }) {
+      return Placement(rect: free.0, side: free.1, collides: false)
+    }
+    if let least = valid.min(by: { (hits($0.0), $0.2) < (hits($1.0), $1.2) }) {
+      return Placement(rect: least.0, side: least.1, collides: true)
+    }
+    let fallback = CGRect(x: max(inner.minX, min(ax, inner.maxX - size.width)), y: busy.maxY + gap,
+                          width: size.width, height: size.height)
+    return Placement(rect: fallback, side: .below, collides: true)
+  }
+}

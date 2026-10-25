@@ -28,7 +28,7 @@ describe("s05 tone: clean", () => {
   });
 
   test("drops '>' lines and a '--' signature block", () => {
-    const c = cleanEmail(mail("Hi Tom,\n\nShort one.\n> old text\n\nMuhammad\n\n--\nMuhammad Ali\nFounder, Acme\n+44 7700 900123"));
+    const c = cleanEmail(mail("Hi Tom,\n\nShort one.\n> old text\n\nMuhammad\n\n--\nMuhammad Ali\nFounder, Offload\n+44 7700 900123"));
     expect(c.text).toBe("Hi Tom,\n\nShort one.\n\nMuhammad");
   });
 
@@ -49,7 +49,7 @@ describe("s05 tone: clean", () => {
   });
 
   test("drops title and phone lines after the sign name", () => {
-    const c = cleanEmail(mail("Hi Jo,\n\nYes.\n\nBest,\nMuhammad\nFounder, Acme\n+44 7700 900123"));
+    const c = cleanEmail(mail("Hi Jo,\n\nYes.\n\nBest,\nMuhammad\nFounder, Offload\n+44 7700 900123"));
     expect(c.text).toBe("Hi Jo,\n\nYes.\n\nBest,\nMuhammad");
   });
 });

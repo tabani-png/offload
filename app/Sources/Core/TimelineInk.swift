@@ -123,6 +123,59 @@ extension DashboardData {
     let all = days.flatMap(\.bars)
     guard let raw = all.first(where: { $0.id == MockBrainClient.evidenceBarId }) ?? all.first(where: { !$0.automated }) ?? all.first,
           let day = days.first(where: { $0.bars.contains { $0.id == raw.id } }) else { return nil }
-    return TimelineMerge.merge(day.bars).first { $0.start <= raw.start && raw.start < $0.end } ?? raw
+    return TimelineMerge.display(day.bars).first { $0.start <= raw.start && raw.start < $0.end } ?? raw
+  }
+}
+
+extension TimelineMerge {
+  /// s10d: what the chart draws. After the 3-minute merge, a span under 10 minutes within 10 minutes of a neighbour
+  /// is folded into it, so a live row never starts with 1-3 px slivers. Offload's runs are never
+  /// folded away: they are the evidence that it ran. The merged span keeps the longer neighbour's id.
+  static let displaySeconds: Double = 600
+
+  static func display(_ input: [TimelineBar]) -> [TimelineBar] {
+    var bars = merge(input)
+    var changed = true
+    var guardCount = 0
+    while changed && guardCount < 16 {
+      changed = false
+      guardCount += 1
+      for i in bars.indices {
+        let b = bars[i]
+        guard !b.automated, b.end.timeIntervalSince(b.start) < displaySeconds else { continue }
+        let near: (Int) -> Bool = { j in
+          bars.indices.contains(j) && !bars[j].automated &&
+            (j < i ? b.start.timeIntervalSince(bars[j].end) : bars[j].start.timeIntervalSince(b.end)) < displaySeconds
+        }
+        let dur: (Int) -> Double = { bars[$0].end.timeIntervalSince(bars[$0].start) }
+        let target: Int? = {
+          switch (near(i - 1), near(i + 1)) {
+          case (true, true): return dur(i - 1) >= dur(i + 1) ? i - 1 : i + 1
+          case (true, false): return i - 1
+          case (false, true): return i + 1
+          default: return nil
+          }
+        }()
+        guard let t = target, dur(t) >= b.end.timeIntervalSince(b.start) else { continue }
+        bars[t].start = min(bars[t].start, b.start)
+        bars[t].end = max(bars[t].end, b.end)
+        bars.remove(at: i)
+        changed = true
+        break
+      }
+    }
+    return bars
+  }
+}
+
+extension TimelineLayout {
+  /// s10d: the window also covers "now" when today has a row, so today's marker is always on the chart.
+  func including(_ now: Date?, days: [TimelineDay], calendar: Calendar = .current) -> TimelineLayout {
+    guard let now, days.contains(where: { calendar.isDate($0.date, inSameDayAs: now) }) else { return self }
+    let h = calendar.component(.hour, from: now)
+    var l = self
+    l.startHour = min(l.startHour, h)
+    l.endHour = max(l.endHour, min(24, h + 1))
+    return l
   }
 }

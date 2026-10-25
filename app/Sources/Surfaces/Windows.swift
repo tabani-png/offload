@@ -10,9 +10,11 @@ class TitledWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate {
   var onClose: (() -> Void)?
   private var keyMonitor: Any?
 
-  init(title: String, subtitle: String, size: NSSize, minSize: NSSize, autosave: String) {
+  init(title: String, subtitle: String, size: NSSize, minSize: NSSize, autosave: String, fullSize: Bool = false) {
+    var mask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+    if fullSize { mask.insert(.fullSizeContentView) }
     window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
-                      styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+                      styleMask: mask, backing: .buffered, defer: false)
     super.init()
     window.title = title
     window.subtitle = subtitle
@@ -65,9 +67,11 @@ class TitledWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate {
   }
 
   var toolbarButtons: [ToolbarButton] { [] }
+  /// s10d: windows with a sidebar put the title after the sidebar's edge.
+  var tracksSidebar: Bool { false }
 
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-    [.flexibleSpace] + toolbarButtons.map { NSToolbarItem.Identifier($0.id) }
+    (tracksSidebar ? [.sidebarTrackingSeparator] : []) + [.flexibleSpace] + toolbarButtons.map { NSToolbarItem.Identifier($0.id) }
   }
 
   func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -119,8 +123,15 @@ final class ReviewWindowController: TitledWindowController {
     model.loadEditables()
   }
 
+  /// s10d: open with nothing focused, so R, E and S act at once instead of typing into "Your voice".
+  override func show() {
+    super.show()
+    DispatchQueue.main.async { [weak self] in self?.window.makeFirstResponder(nil) }
+  }
+
   override var toolbarButtons: [ToolbarButton] {
-    [ToolbarButton(id: "skill", symbol: "list.bullet.rectangle", label: "Steps (S)") { [weak self] in self?.model.send(.skill) }]
+    // s10d: one place to change the steps (the page already shows them read-only).
+    [ToolbarButton(id: "skill", symbol: "square.and.pencil", label: "Edit the steps (E)") { [weak self] in self?.model.send(.edit) }]
   }
 
   override func handleKey(_ e: NSEvent) -> Bool {
@@ -130,10 +141,10 @@ final class ReviewWindowController: TitledWindowController {
                               command: e.flags.contains(.command), control: e.flags.contains(.control),
                               option: e.flags.contains(.option), textEditing: editing) else { return false }
     if case .skill = model.sheet {
-      // In the SKILL.md sheet only Esc is ours (it closes the sheet).
-      guard key == .escape else { return false }
-      model.dismissSheet()
-      return true
+      // In the steps editor only Esc (close) and ⌘↩ (save) are ours; every other key types.
+      if key == .escape { model.dismissSheet(); return true }
+      if key == .approve { model.saveSkill(); return true }
+      return false
     }
     model.send(key)
     return true
@@ -148,7 +159,10 @@ final class ReviewWindowController: TitledWindowController {
     let root: AnyView
     switch sheet {
     case .confirm: root = AnyView(ConfirmSheet(model: model))
-    case .skill(let editing): root = AnyView(SkillSheet(model: model, editing: editing))
+    case .skill(let editing):
+      root = AnyView(SkillSheet(model: model, editing: editing, onReveal: { path in
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+      }))
     }
     let host = NSHostingView(rootView: root)
     let w = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.titled], backing: .buffered, defer: false)
@@ -165,24 +179,75 @@ final class ReviewWindowController: TitledWindowController {
 
 // MARK: dashboard
 
+/// s10d: sidebar and page in an NSSplitViewController, so the sidebar gets the system's own material and the
+/// toolbar title sits after the sidebar edge, like Mail or Notes.
 @MainActor
 final class DashboardWindowController: TitledWindowController {
   let model: DashboardModel
   var onToggle: (() -> Void)?
+  private var sheetWindow: NSWindow?
+  private var bag: Set<AnyCancellable> = []
 
   init(model: DashboardModel) {
     self.model = model
-    super.init(title: "Offload", subtitle: "Dashboard", size: NSSize(width: 820, height: 900),
-               minSize: NSSize(width: 720, height: 520), autosave: "OffloadDashboard")
-    let host = NSHostingView(rootView: DashboardView(model: model))
-    host.sceneBridgingOptions = []
-    window.contentView = host
+    super.init(title: "Offload", subtitle: model.section.title, size: NSSize(width: 980, height: 760),
+               minSize: NSSize(width: 860, height: 520), autosave: "OffloadDashboard2", fullSize: true)
+    let split = NSSplitViewController()
+    let side = NSViewController()
+    let sideHost = NSHostingView(rootView: DashboardSidebar(model: model))
+    sideHost.sceneBridgingOptions = []
+    side.view = sideHost
+    let sideItem = NSSplitViewItem(sidebarWithViewController: side)
+    sideItem.minimumThickness = Tokens.Layout.sidebar
+    sideItem.maximumThickness = Tokens.Layout.sidebar + Tokens.Space.s48
+    sideItem.canCollapse = false
+    let detail = NSViewController()
+    let detailHost = NSHostingView(rootView: DashboardDetail(model: model))
+    detailHost.sceneBridgingOptions = []
+    detail.view = detailHost
+    split.addSplitViewItem(sideItem)
+    split.addSplitViewItem(NSSplitViewItem(viewController: detail))
+    let frame = window.frame
+    window.contentViewController = split
+    window.setFrame(frame, display: false)
+    window.setFrameUsingName("OffloadDashboard2")
+    model.$section.removeDuplicates().sink { [weak self] s in self?.window.subtitle = s.title }.store(in: &bag)
+    model.$autoSend.map { $0 != nil }.removeDuplicates().sink { [weak self] open in self?.presentAutoSend(open) }.store(in: &bag)
+  }
+
+  override var tracksSidebar: Bool { true }
+
+  private func presentAutoSend(_ open: Bool) {
+    if let w = sheetWindow { window.endSheet(w); sheetWindow = nil }
+    guard open else { return }
+    let host = NSHostingView(rootView: AutoSendSheetView(model: model))
+    let w = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.titled], backing: .buffered, defer: false)
+    w.contentView = host
+    sheetWindow = w
+    window.beginSheet(w) { [weak self] _ in
+      guard let self, self.sheetWindow === w else { return }
+      self.sheetWindow = nil
+      self.model.dismissAutoSend()
+    }
   }
 
   override func handleKey(_ e: NSEvent) -> Bool {
     guard owns(e) else { return false }
+    if model.autoSend != nil {
+      if e.keyCode == ReviewKey.escapeKeyCode { model.dismissAutoSend(); return true }
+      if ReviewKey.returnKeyCodes.contains(e.keyCode) {
+        if case .offer = model.autoSend { if e.flags.contains(.command) { model.confirmAutoSend() } } else { model.dismissAutoSend() }
+        return true
+      }
+      return false
+    }
     if e.flags.contains(.command), e.charactersIgnoringModifiers?.lowercased() == "d" {
       window.performClose(nil)
+      return true
+    }
+    // ⌘1…⌘4: the sidebar's places.
+    if e.flags.contains(.command), let n = Int(e.charactersIgnoringModifiers ?? ""), let s = DashboardSection.forShortcut(n) {
+      model.show(s)
       return true
     }
     // Keys belong to text fields when one has focus (none today, but keep typing safe).
@@ -192,4 +257,8 @@ final class DashboardWindowController: TitledWindowController {
     model.send(key)
     return true
   }
+}
+
+extension NSAppearance {
+  var isDark: Bool { bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
 }

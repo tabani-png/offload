@@ -23,7 +23,7 @@ import { tempHome } from "../helpers.ts";
 import { NOW, world, type World } from "../s05-workflows/setup.ts";
 
 const DAY_MS = 86_400_000;
-const EXCERPT = "founder of Acme";
+const EXCERPT = "founder of Offload";
 const CORPUS_PHRASE = "You backed Spotify early";
 
 function filesUnder(dir: string): string[] {
@@ -98,7 +98,7 @@ describe("s05b privacy: encrypted, purged artefacts", () => {
 
   test("H4: legacy plaintext dry-run files are removed by the purge", () => {
     const legacy = join(w.home, "workflows", w.outreach.id, "dry-run.json");
-    writeFileSync(legacy, JSON.stringify({ instances: [{ observed: { excerpt: `I'm Sam, ${EXCERPT}` } }] }));
+    writeFileSync(legacy, JSON.stringify({ instances: [{ observed: { excerpt: `I'm Muhammad, ${EXCERPT}` } }] }));
     purgeExpired(w.home, NOW);
     expect(plaintextHits(join(w.home, "workflows"), EXCERPT)).toEqual([]);
   });

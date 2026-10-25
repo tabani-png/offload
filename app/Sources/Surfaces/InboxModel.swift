@@ -75,7 +75,8 @@ final class InboxModel: ObservableObject {
 
   func togglePause() {
     guard var s = status else { return }
-    s.state = s.state == .paused ? .watching : .paused
+    // s10d: "Not recording" resumes too; Pause is only offered while it is actually watching.
+    s.state = (s.state == .paused || s.state == .stale) ? .watching : .paused
     status = s
     onTogglePause?(s.state == .paused)
   }

@@ -20,6 +20,9 @@ struct DashboardAutomation: Codable, Equatable, Identifiable, Sendable {
   var taskId: String?
   /// s10a: the brain's arithmetic behind the estimate, so the dashboard prints the same digits as the card.
   var arithmetic: String? = nil
+  /// s10d: auto-send is on (the brain's WorkflowSummaryDTO autoRun), and how many people it covers.
+  var autoRun: Bool = false
+  var autoRunPeople: Int? = nil
 }
 
 extension StatusRole {
@@ -369,4 +372,78 @@ extension Format {
 
   /// "21.9 h a week"
   static func perWeek(_ h: Double) -> String { "\(hours(h)) a week" }
+}
+
+// MARK: s10d sections
+
+/// The dashboard's sidebar: four places, the way a first-party Mac app splits an overview from its detail.
+enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
+  case overview, automations, week, observing
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .overview: return "Overview"
+    case .automations: return "Automations"
+    case .week: return "This week"
+    case .observing: return "Observing"
+    }
+  }
+
+  var symbol: String {
+    switch self {
+    case .overview: return "square.grid.2x2"
+    case .automations: return "arrow.triangle.2.circlepath"
+    case .week: return "calendar"
+    case .observing: return "eye"
+    }
+  }
+
+  /// ⌘1…⌘4
+  var shortcut: String { "⌘\((Self.allCases.firstIndex(of: self) ?? 0) + 1)" }
+
+  static func forShortcut(_ digit: Int) -> DashboardSection? {
+    allCases.indices.contains(digit - 1) ? allCases[digit - 1] : nil
+  }
+}
+
+/// What the observer row offers, from its state and the permissions (s10d: never "Pause" when it is not recording).
+enum ObserverAction: Equatable, Sendable {
+  case pause, resume, openSettings(URL)
+
+  var title: String {
+    switch self {
+    case .pause: return "Pause watching"
+    case .resume: return "Resume watching"
+    case .openSettings: return "Open Settings"
+    }
+  }
+
+  static func forState(_ s: ObserverState, permissions: [PermissionState]) -> ObserverAction {
+    switch s {
+    case .watching: return .pause
+    case .paused: return .resume
+    case .stale, .noData:
+      // Not recording: a missing Screen Recording grant is the usual reason, and Settings is what fixes it.
+      if let p = permissions.first(where: { $0.kind == .screenRecording && $0.grant == .notGranted }), let url = p.settingsURL {
+        return .openSettings(url)
+      }
+      return .resume
+    }
+  }
+}
+
+/// s10d: where the dashboard pointer goes for a row, and what it says. Plain words ("Sign in to HubSpot here").
+enum DashboardPointer {
+  /// Where P on a row points: the first connector that is not ready, else the reason line.
+  static func target(for a: DashboardAutomation) -> (id: String, label: String) {
+    if let c = a.connectors.first(where: { $0.state != .connected }) {
+      let verb = c.state == .missingEnv ? "Sign in to \(c.name) here" : "Connect \(c.name) here"
+      return ("conn.\(a.id).\(c.id)", a.state == .needsYou ? verb : "\(verb) before it can run")
+    }
+    if a.state == .readyForReview { return ("row.\(a.id)", "Press ↩ to review it") }
+    return ("row.\(a.id)", a.needsYouReason ?? a.name)
+  }
+
 }

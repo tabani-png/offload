@@ -101,6 +101,12 @@ struct Workflow: Codable, Equatable, Identifiable, Sendable {
   var needsYou: [String] = []
   /// s10a: the brain's arithmetic behind `estimatedHoursPerWeek`, so the review prints the card's digits.
   var arithmetic: String = ""
+  /// s10d: the facts the drafts may use (facts.md from GET /workflows/:id), for the dry run's "not in your facts" check.
+  var facts: String = ""
+  /// s10d: auto-send state from the brain (WorkflowSummaryDTO autoRun / autoRunPin).
+  var autoRun: Bool = false
+  /// s10d: the workflow's folder on this Mac (GET /workflows/:id `path`), for "Show in Finder".
+  var path: String = ""
 
   var gate: WorkflowStep? { steps.first(where: \.isGate) }
 
@@ -160,7 +166,7 @@ enum ConnectorState: String, Codable, CaseIterable, Sendable {
 struct ConnectorChipModel: Equatable, Sendable {
   var name: String
   var role: StatusRole
-  /// Present when the chip offers an action: "Connect…" or "Add key…".
+  /// Present when the chip offers an action: "Connect…" or "Sign in…" (s10d: no "key" in copy).
   var action: String?
   var accessibilityLabel: String
 
@@ -170,7 +176,7 @@ struct ConnectorChipModel: Equatable, Sendable {
     case .connected:
       role = .done; action = nil; accessibilityLabel = "\(c.name), connected"
     case .missingEnv:
-      role = .needsYou; action = "Add key…"; accessibilityLabel = "\(c.name), needs its key"
+      role = .needsYou; action = "Sign in…"; accessibilityLabel = "\(c.name), signed out"
     case .missing:
       role = .neutral; action = "Connect…"; accessibilityLabel = "\(c.name), not connected"
     }

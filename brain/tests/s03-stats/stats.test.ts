@@ -61,7 +61,7 @@ function twoDays(): Span[] {
       b.focus(t, "New Message");
       b.at(t + 2, "ocr", { text: `To: p${i}@fund${i}.vc\nHi, we are raising`, textHash: `h${i}` });
       t += 60 * (i + 1);
-      b.focus(t, "Inbox (1) - sam@acme.io - Gmail");
+      b.focus(t, "Inbox (1) - muhammad@offload.so - Gmail");
       t += 60;
     }
     b.at(t, "idle_start");

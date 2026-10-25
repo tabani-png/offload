@@ -22,9 +22,9 @@ describe("s05 dry run", () => {
     expect([...starts].sort((a, b) => b - a)).toEqual(starts);
     for (const i of r.instances) {
       expect(i.recipient.email).toMatch(/^[a-z.]+@[a-z0-9.]+$/);
-      expect(i.subject).toMatch(/^Acme seed round: /);
+      expect(i.subject).toMatch(/^Offload seed round: /);
       expect(i.draft?.startsWith(`Hi ${i.recipient.firstName},`)).toBe(true);
-      expect(i.observed.excerpt).toContain("founder of Acme");
+      expect(i.observed.excerpt).toContain("founder of Offload");
       expect(i.observed.eventIds.length).toBeGreaterThan(0);
     }
   });
@@ -51,7 +51,7 @@ describe("s05 dry run", () => {
     expect(drafts.every((c) => c.model === "claude-opus-5-5")).toBe(true);
     expect(drafts[0]!.prompt).toContain("# Style card: investor outreach");
     expect(drafts[0]!.prompt).toContain("--- example 3");
-    expect(drafts[0]!.prompt).toContain("traction: $40k MRR");
+    expect(drafts[0]!.prompt).toContain("traction: 40 design partners");
     expect(drafts[0]!.system).toContain("## The big picture");
     expect(r.instances.every((i) => i.warnings.length === 0)).toBe(true);
     expect(r.instances.every((i) => i.examplesUsed.length >= 3)).toBe(true);

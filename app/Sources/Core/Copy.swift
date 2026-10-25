@@ -18,16 +18,52 @@ struct CardCopy: Equatable, Sendable {
     let phrase = i.taskPhrase.prefix(1).uppercased() + i.taskPhrase.dropFirst()
     let last = i.taskPhrase.split(separator: " ").last.map(String.init) ?? ""
     let plural = last.hasSuffix("s") && !last.hasSuffix("ss")
-    title = "\(phrase) \(plural ? "take" : "takes") \(Figures.share(display: i.shareDisplay, value: i.timeShare)) of your week"
+    // s10d: a headline says a whole percent ("64%"); the decimals live in the receipt and the evidence.
+    title = "\(phrase) \(plural ? "take" : "takes") \(Figures.wholeShare(display: i.shareDisplay, value: i.timeShare)) of your week"
     let median = i.medianDisplay ?? String(format: "%.1f min", locale: Locale(identifier: "en_US_POSIX"), i.medianMinutes)
     facts = "\(Figures.count(i.instanceCount, i.unitPlural)) this week, about \(median) each"
     savingChip = Figures.saves(value: i.saving.hoursPerWeek, arithmetic: i.saving.arithmetic)
       ?? "Saves \(Figures.range(low: i.saving.hoursPerWeekLow, high: i.saving.hoursPerWeekHigh))"
-    arithmetic = i.saving.arithmetic.map(Figures.arithmeticSteps) ?? []
+    arithmetic = (i.saving.arithmetic.map(Figures.arithmeticSteps) ?? []).map { Self.wholeCounts($0, i) }
     range = "Likely \(Figures.range(low: i.saving.hoursPerWeekLow, high: i.saving.hoursPerWeekHigh)), depending on review time"
   }
 
   var allStrings: [String] { [title, facts, savingChip ?? "", range] + arithmetic.flatMap { [$0.label, $0.text] } }
+
+  /// s10d: "98.4/day × 5 days × 3.0 min" reads as a computer talking (a fractional email). When the instance count
+  /// times the median gives the very hours the brain printed, the "By hand" line says that instead:
+  /// "492 emails × 3.0 min". The result digits stay the brain's; otherwise the brain's formula is kept as sent.
+  static func wholeCounts(_ step: ArithmeticStep, _ i: Insight) -> ArithmeticStep {
+    guard step.label == "By hand", step.formula.contains("/day"),
+          let printed = Double(step.result.split(separator: " ").first ?? "") else { return step }
+    // The brain's arithmetic uses the median as it printed it ("3.0 min"), so the tie is checked with that.
+    let printedMedian = i.medianDisplay.flatMap { Double($0.split(separator: " ").first ?? "") } ?? i.medianMinutes
+    let hours = Double(i.instanceCount) * printedMedian / 60
+    guard abs(hours - printed) <= 0.05 + 1e-9 else { return step }
+    var s = step
+    let median = i.medianDisplay ?? String(format: "%.1f min", locale: Locale(identifier: "en_US_POSIX"), i.medianMinutes)
+    s.formula = "\(Figures.count(i.instanceCount, i.unitPlural)) × \(median)"
+    s.text = "\(s.formula) = \(step.result) a week"
+    return s
+  }
+}
+
+/// s10d: a two-line headline broken where both lines come out closest in width, so no word is left alone on the
+/// second line. `measure` gives a string's width in points (NSFont in the app, character counts in tests).
+enum BalancedWrap {
+  static func lines(_ text: String, width: Double, measure: (String) -> Double) -> [String] {
+    guard measure(text) > width else { return [text] }
+    let words = text.split(separator: " ").map(String.init)
+    guard words.count > 1 else { return [text] }
+    var best: (Double, [String])?
+    for k in 1..<words.count {
+      let a = words[..<k].joined(separator: " "), b = words[k...].joined(separator: " ")
+      let worst = max(measure(a), measure(b))
+      guard measure(a) <= width, measure(b) <= width else { continue }
+      if best == nil || worst < best!.0 { best = (worst, [a, b]) }
+    }
+    return best?.1 ?? [text]
+  }
 }
 
 /// The evidence list under the card: one row per span in the app the task lives in, aligned columns.
@@ -115,6 +151,14 @@ struct ReviewCopy: Equatable, Sendable {
     var time: String
     var saved: String
     var theirsTitle: String
+    /// s10d: numbers and dates in the draft that are in neither what you sent nor your facts.
+    var unsupported: [String] = []
+    var check: String? {
+      guard !unsupported.isEmpty else { return nil }
+      let quoted = unsupported.map { "“\($0)”" }
+      let list = quoted.count == 1 ? quoted[0] : quoted.dropLast().joined(separator: ", ") + " and " + quoted.last!
+      return "Check \(list): not in what you sent or in your facts."
+    }
   }
 
   var status: String
@@ -150,20 +194,29 @@ struct ReviewCopy: Equatable, Sendable {
       } else if let c {
         switch c.state {
         case .connected: place = c.name
-        case .missingEnv: place = "\(c.name), needs its key"; problem = true
+        case .missingEnv: place = "\(c.name), signed out"; problem = true
         case .missing: place = "\(c.name), not connected"; problem = true
         }
       } else {
         place = "On this Mac"
       }
-      return Step(id: s.id, number: "\(i + 1)", title: PlainWords.clean(s.title), detail: PlainWords.clean(s.detail),
+      var detail = PlainWords.clean(s.detail)
+      // s10d: the right column already says "On this Mac"; the description does not say it again.
+      if place == "On this Mac" {
+        for dup in ["Runs on this Mac.", "Runs on this Mac", "on this Mac."] where detail.hasSuffix(dup) {
+          detail = String(detail.dropLast(dup.count)).trimmingCharacters(in: .whitespaces)
+          if !detail.isEmpty && !detail.hasSuffix(".") { detail += "." }
+          break
+        }
+      }
+      return Step(id: s.id, number: "\(i + 1)", title: PlainWords.clean(s.title), detail: detail,
                   place: place, placeNeedsYou: problem, isGate: s.isGate)
     }
     let sample = dryRun?.isSample == true
     dryRunTitle = "Dry run"
     sampleChip = sample ? "Sample drafts" : nil
     oursTitle = sample ? "Sample draft" : "Our draft"
-    diffNote = "Underlined words are where the draft differs from what you sent."
+    diffNote = "Underlined: words in the draft that your email did not use."
     if let d = dryRun {
       let n = d.items.count
       let what = n == 1 ? "1 of last week's emails" : "\(n) of last week's emails"
@@ -173,18 +226,29 @@ struct ReviewCopy: Equatable, Sendable {
     }
     emptyDryRun = running ? "Drafting against last week's real emails…" : "No dry run yet. Press R to run one."
     items = (dryRun?.items ?? []).map {
-      Item(id: $0.id, who: $0.recipient.display, subject: $0.subject,
+      Item(id: $0.id, who: $0.recipient.display, subject: Self.subject($0.subject, org: $0.recipient.org),
            time: Figures.itemTime(observedMinutes: $0.observedMinutes, reviewSeconds: $0.reviewSeconds),
            saved: Figures.minutesSaved($0.minutesSaved),
-           theirsTitle: "What you sent · \(Format.weekdayClock($0.sentAt))")
+           theirsTitle: "What you sent · \(Format.weekdayClock($0.sentAt))",
+           unsupported: FactCheck.unsupported(draft: $0.ourDraft, source: $0.whatYouSent, facts: w.facts))
     }
+  }
+
+  /// s10d: "Offload seed round: Bessemer Venture Partners" under "Sven, Bessemer Venture Partners" says the fund
+  /// twice. The subject drops a trailing ": <org>" (or " - <org>") when the org is already on the line.
+  static func subject(_ s: String, org: String) -> String {
+    guard !org.isEmpty else { return s }
+    for sep in [": ", " - ", " · ", ", "] where s.hasSuffix(sep + org) {
+      return String(s.dropLast(sep.count + org.count))
+    }
+    return s
   }
 
   var allStrings: [String] {
     [status, title, summary, savingChip ?? "", schedule, stepsTitle, stepsTrailing, dryRunTitle, dryRunTrailing,
      sampleChip ?? "", oursTitle, diffNote, emptyDryRun]
       + steps.flatMap { [$0.number, $0.title, $0.detail, $0.place] }
-      + items.flatMap { [$0.who, $0.subject, $0.time, $0.saved, $0.theirsTitle] }
+      + items.flatMap { [$0.who, $0.subject, $0.time, $0.saved, $0.theirsTitle, $0.check ?? ""] }
   }
 }
 
@@ -259,7 +323,8 @@ struct DashboardCopy: Equatable, Sendable {
   var heroQualifier: String?
   var heroPlaceholder: String?
   var heroDetail: String
-  var heroNote = "Measured compares your time on the task on full days before you turned it on with full days after."
+  /// s10d: present only when a measured figure is on screen; with nothing measured there is nothing to explain.
+  var heroNote: String?
   var counts: [Count]
   var rows: [Row]
   var tracked: String
@@ -273,6 +338,7 @@ struct DashboardCopy: Equatable, Sendable {
       heroQualifier = "Measured"
       heroPlaceholder = nil
       heroDetail = "Estimated \(Figures.perWeek(d.hours.estimated))"
+      heroNote = "Measured compares your time on the task on full days before you turned it on with full days after."
     } else if !active.isEmpty {
       heroValue = nil
       heroQualifier = nil
@@ -326,7 +392,7 @@ struct DashboardCopy: Equatable, Sendable {
   }
 
   var allStrings: [String] {
-    [heroTitle, heroValue ?? "", heroQualifier ?? "", heroPlaceholder ?? "", heroDetail, heroNote, tracked, observingDays]
+    [heroTitle, heroValue ?? "", heroQualifier ?? "", heroPlaceholder ?? "", heroDetail, heroNote ?? "", tracked, observingDays]
       + columns + counts.map { "\($0.n) \($0.label)" }
       + rows.flatMap { [$0.name, $0.chip ?? "", $0.reason ?? "", $0.lastRun, $0.nextRun, $0.saved, $0.savedQualifier] }
   }

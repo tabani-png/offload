@@ -76,6 +76,10 @@ enum Snapshotter {
           RailView(rail: RailModel(
             status: ObserverStatus(state: .paused, daysStored: 7, windowDays: 7, nextPurge: now, insightsWaiting: 0),
             automations: [], micRecording: false), hoveringStatus: true)
+          // Not recording: amber ring, and the tool offers Resume (s10d).
+          RailView(rail: RailModel(
+            status: ObserverStatus(state: .stale, daysStored: 7, windowDays: 7, nextPurge: now, insightsWaiting: 3),
+            automations: [], micRecording: false), hoveringStatus: false)
         }
       })),
       ("card", card(base)),
@@ -116,9 +120,7 @@ enum Snapshotter {
         let m = ReviewModel(workflow: w, dryRun: MockBrainClient.outreachDryRun, client: MockBrainClient(), clock: { reviewNow })
         return reviewChrome(m, width: ReviewView.minWindowWidth) { ReviewView(model: m, parts: [.header]) }
       }()),
-      ("dashboard-permissions", dashboardChrome {
-        DashboardView(model: dashboardModel(), parts: [.observing], frozenNow: reviewNow)
-      }),
+      ("dashboard-permissions", dashboardScene(dashboardModel(section: .observing))),
     ]
   }
 
@@ -133,18 +135,34 @@ enum Snapshotter {
     return m
   }
 
-  static func dashboardModel(pointer: PointerRequest? = nil) -> DashboardModel {
+  static func dashboardModel(pointer: PointerRequest? = nil, section: DashboardSection = .overview,
+                             autoSend: DashboardModel.AutoSendSheet? = nil) -> DashboardModel {
     let m = DashboardModel(client: MockBrainClient(), clock: { reviewNow })
-    m.preview(MockBrainClient.sampleDashboard, pointer: pointer)
+    m.preview(MockBrainClient.sampleDashboard, pointer: pointer, section: section, autoSend: autoSend)
     return m
+  }
+
+  nonisolated static let dashboardWidth: CGFloat = 980
+
+  /// s10d: the dashboard as it ships: sidebar, the selected page, and a sheet when one is up.
+  static func dashboardScene(_ m: DashboardModel, pointerAt: Date? = nil, sheet: AnyView? = nil) -> AnyView {
+    AnyView(Backdrop(padding: 32) {
+      WindowChrome(title: "Offload", subtitle: m.section.title, width: dashboardWidth,
+                   sidebar: AnyView(DashboardSidebar(model: m)), sheet: sheet) {
+        DashboardDetail(model: m, frozenNow: reviewNow, frozenPointerAt: pointerAt)
+      }
+    })
   }
 
   nonisolated static let windowWidth: CGFloat = 900
 
-  static func reviewChrome<C: View>(_ m: ReviewModel, width: CGFloat = windowWidth, @ViewBuilder _ content: () -> C) -> AnyView {
+  static func reviewChrome<C: View>(_ m: ReviewModel, width: CGFloat = windowWidth, sheet: AnyView? = nil,
+                                    @ViewBuilder _ content: () -> C) -> AnyView {
     AnyView(Backdrop(padding: 32) {
       WindowChrome(title: "Review workflow", subtitle: "Drafted from your week",
-                   toolbarItems: [ToolbarItemLook(symbol: "list.bullet.rectangle", title: nil)], width: width) { content() }
+                   toolbarItems: [ToolbarItemLook(symbol: "square.and.pencil", title: nil)], width: width, sheet: sheet) {
+        content()
+      }
     })
   }
 
@@ -154,21 +172,10 @@ enum Snapshotter {
     })
   }
 
-  /// A macOS 11+ sheet: a rounded panel just under the toolbar, over the window's own content (as beginSheet
-  /// draws it live), not a drawer hanging from the title bar.
-  static func sheetScene<B: View, S: View>(_ m: ReviewModel, @ViewBuilder base: () -> B, @ViewBuilder sheet: () -> S) -> AnyView {
-    reviewChrome(m) {
-      ZStack(alignment: .top) {
-        base()
-        sheet()
-          .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.window, style: .continuous))
-          .overlay(RoundedRectangle(cornerRadius: Tokens.Radius.window, style: .continuous)
-            .strokeBorder(.white.opacity(0.10), lineWidth: 1))
-          .compositingGroup()
-          .shadow(color: .black.opacity(0.4), radius: 18, x: 0, y: 10)
-          .padding(.top, Tokens.Space.s8)
-      }
-    }
+  /// s10d: a sheet as macOS 26 presents `beginSheet` (see the live capture): centred on the window, the window
+  /// dimmed behind it. Snapshot and live now agree on placement.
+  static func sheetScene<B: View>(_ m: ReviewModel, sheet: AnyView, @ViewBuilder base: () -> B) -> AnyView {
+    reviewChrome(m, sheet: sheet) { base() }
   }
 
   static func s08Surfaces() -> [(String, AnyView)] {
@@ -185,8 +192,7 @@ enum Snapshotter {
     let holdAt = reviewNow.addingTimeInterval(1.4 + 1.5)
 
     func confirmScene(_ m: ReviewModel) -> AnyView {
-      sheetScene(m, base: { ReviewView(model: m, parts: [.header, .steps]) },
-                 sheet: { ConfirmSheet(model: m, frozenNow: reviewNow) })
+      sheetScene(m, sheet: AnyView(ConfirmSheet(model: m, frozenNow: reviewNow))) { ReviewView(model: m, parts: [.header, .steps]) }
     }
 
     // Every connector connected: Turn on is enabled and can be armed.
@@ -210,6 +216,11 @@ enum Snapshotter {
     before.days = before.days.map { var d = $0; d.bars = d.bars.map { var b = $0; b.automated = false; return b }; return d }
     let beforeModel = DashboardModel(client: MockBrainClient(), clock: { reviewNow })
     beforeModel.preview(before)
+    let skillModel = reviewModel([(.edit, -1)])
+    let pinned = AutoRunResult(workflowId: "wf_outreach", enabled: true, pinnedRecipients: MockBrainClient.samplePinned)
+    let offerModel = dashboardModel(section: .automations,
+                                    autoSend: .offer(automationId: "auto_outreach", workflowId: "wf_outreach", name: "Investor outreach emails"))
+    let onModel = dashboardModel(section: .automations, autoSend: .result(pinned))
 
     func widths(_ w: CGFloat) -> AnyView {
       let m = reviewModel()
@@ -226,21 +237,22 @@ enum Snapshotter {
       ("review-confirm", confirmScene(confirm)),
       ("review-confirm-ready", confirmScene(confirmReady)),
       ("review-armed", confirmScene(armedReady)),
-      ("review-skill", sheetScene(review, base: { ReviewView(model: review, parts: [.header, .steps]) },
-                                  sheet: { SkillSheet(model: review, editing: false) })),
-      ("review-skill-source", sheetScene(review, base: { ReviewView(model: review, parts: [.header, .steps, .tone]) },
-                                         sheet: { SkillSheet(model: review, editing: false, sourceOpen: true) })),
-      ("dashboard", dashboardChrome { DashboardView(model: dashboardModel(), frozenNow: reviewNow) }),
-      ("dashboard-before", dashboardChrome { DashboardView(model: beforeModel, parts: [.hero, .automations], frozenNow: reviewNow) }),
-      ("timeline", AnyView(TimelineSheet(model: dashboardModel()))),
-      ("pointer", dashboardChrome {
-        DashboardView(model: dashboardModel(pointer: evidencePointer), parts: [.hero, .automations, .timeline],
-                      frozenNow: reviewNow, frozenPointerAt: holdAt)
+      ("review-skill", sheetScene(skillModel, sheet: AnyView(SkillSheet(model: skillModel))) {
+        ReviewView(model: skillModel, parts: [.header, .steps])
       }),
-      ("pointer-row", dashboardChrome {
-        DashboardView(model: dashboardModel(pointer: rowPointer), parts: [.hero, .automations],
-                      frozenNow: reviewNow, frozenPointerAt: holdAt)
+      ("review-skill-source", sheetScene(skillModel, sheet: AnyView(SkillSheet(
+        model: skillModel, problem: "Not saved. Keep each step title under 80 characters."))) {
+        ReviewView(model: skillModel, parts: [.header, .steps])
       }),
+      ("dashboard", dashboardScene(dashboardModel())),
+      ("dashboard-before", dashboardScene(beforeModel)),
+      ("dashboard-automations", dashboardScene(dashboardModel(section: .automations))),
+      ("dashboard-observing", dashboardScene(dashboardModel(section: .observing))),
+      ("dashboard-autosend", dashboardScene(offerModel, sheet: AnyView(AutoSendSheetView(model: offerModel)))),
+      ("dashboard-autosend-on", dashboardScene(onModel, sheet: AnyView(AutoSendSheetView(model: onModel)))),
+      ("timeline", dashboardScene(dashboardModel(section: .week))),
+      ("pointer", dashboardScene(dashboardModel(pointer: evidencePointer, section: .week), pointerAt: holdAt)),
+      ("pointer-row", dashboardScene(dashboardModel(pointer: rowPointer, section: .automations), pointerAt: holdAt)),
     ]
   }
 
@@ -415,7 +427,7 @@ struct ComponentSheet: View {
           }
         }
         row("Section") {
-          SectionHeader(title: "Evidence", trailing: "6 of 500 emails")
+          SectionHeader(title: "Evidence", trailing: "5 of 492 emails")
         }
         row("Empty") {
           EmptyState(title: "Nothing to decide.", message: "Still watching.", statusLabel: "Watching · Day 7 of 7")
@@ -444,16 +456,3 @@ struct ComponentSheet: View {
   }
 }
 
-/// The timeline on its own, on the window canvas, for a close look.
-struct TimelineSheet: View {
-  @ObservedObject var model: DashboardModel
-  @Environment(\.colorScheme) private var scheme
-
-  var body: some View {
-    TimelineSection(model: model, data: model.data!, now: Snapshotter.reviewNow,
-                    tracked: DashboardCopy(model.data!, now: Snapshotter.reviewNow).tracked)
-      .padding(24)
-      .frame(width: Snapshotter.windowWidth)
-      .background(Palette(scheme: scheme).canvas)
-  }
-}

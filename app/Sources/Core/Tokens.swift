@@ -114,12 +114,58 @@ enum Tokens {
     static let springDamping: Double = 0.9
   }
 
-  /// Opacity ladder for dark-mode foregrounds (96 / 78 / 52). s10a: secondary rose from 62% so body copy in
+  /// Opacity ladder for dark-mode foregrounds (96 / 84 / 52). s10a: secondary rose from 62%, s10d to 84%, so body copy in
   /// cards reads as copy, not as a caption (DESIGN-REVIEW-1 token check); tertiary keeps 4.5:1 on graphite.
   enum Ink {
     static let primary: Double = 0.96
-    static let secondary: Double = 0.78
+    static let secondary: Double = 0.84
     static let tertiary: Double = 0.52
+    /// Light mode: black at these opacities (s10d: tokens, not literals in Theme). Tertiary 63% measured 4.5:1 live.
+    static let lightPrimary: Double = 0.86
+    static let lightSecondary: Double = 0.72
+    static let lightTertiary: Double = 0.63
+  }
+
+  /// s10d: fixed layout widths and strokes the surfaces share (DESIGN-REVIEW-2 section D: no literals in Surfaces).
+  enum Layout {
+    /// The review steps' right column ("Gmail", "Google Sheets, not connected"): one width for every row, so every
+    /// description wraps at the same measure.
+    static let placeColumn: Double = 184
+    /// The card receipt's label column.
+    static let receiptLabel: Double = 80
+    /// Dashboard sidebar.
+    static let sidebar: Double = 208
+    /// Dashboard table columns.
+    static let runColumn: Double = 112
+    static let savedColumn: Double = 92
+    /// Observing label column.
+    static let labelColumn: Double = 120
+    /// Min height of "Your voice" while it is empty, and its height cap.
+    static let editorMin: Double = 72
+    static let editorMax: Double = 180
+    /// Steps editor height and the confirm sheet width.
+    static let editorSheet: Double = 420
+    static let confirmSheet: Double = 560
+    static let skillSheet: Double = 640
+    /// The "now" line and bar outline strokes.
+    static let nowLine: Double = 1.5
+    static let hairline: Double = 1
+    /// Smallest drawn width of an Offload run on the timeline, so its hatch reads as a pattern.
+    static let runMinWidth: Double = 16
+    static let hatchSpacing: Double = 4
+    static let hatchLine: Double = 1
+  }
+
+  /// s10d: window chrome numbers in one place (shadow, ring, sheet scrim), shared by the snapshot chrome.
+  enum Window {
+    static let shadowRadius: Double = 16
+    static let shadowY: Double = 8
+    static let ringDark: Double = 0.14
+    static let ringLight: Double = 0.14
+    /// The dimming macOS puts over a window while a sheet is up (measured from the live capture).
+    static let scrimDark: Double = 0.40
+    static let scrimLight: Double = 0.22
+    static let sheetRadius: Double = 24
   }
 
   static let undoSeconds: Double = 5

@@ -61,7 +61,7 @@ function ulid(ts: number, rng: Rng): string {
 
 // ---------- the founder's world ----------
 
-const ME = "sam@acme.io";
+const ME = "muhammad@offload.so";
 const GMAIL = `${ME} - Gmail`;
 const CHROME = "com.google.Chrome";
 const SLACK = "com.tinyspeck.slackmacgap";
@@ -155,17 +155,17 @@ function contact(rng: Rng): Contact {
   return { fund, first, last, email };
 }
 
-const subjectFor = (f: Fund) => `Acme seed round: ${f.name}`;
+const subjectFor = (f: Fund) => `Offload seed round: ${f.name}`;
 
 function outreachText(c: Contact, hook: number, stage: 1 | 2 | 3): string {
   const head = `To: ${c.email}\nSubject: ${subjectFor(c.fund)}\n\nHi ${c.first},`;
   if (stage === 1) return `New Message\nTo: ${c.email}\nSubject: ${subjectFor(c.fund)}`;
   const body =
-    `\n\nI'm Sam, founder of Acme. We help finance teams close the books in two days instead of ten.\n` +
+    `\n\nI'm Muhammad, founder of Offload. Offload is a Mac app that watches a week of your work and automates the parts that repeat.\n` +
     `${HOOKS[hook]!(c.fund)}\n\n` +
-    `We are raising a $3M seed round. Traction: $40k MRR, growing 18% month over month, 31 paying customers.\n\n` +
-    `Would you be open to a 20 minute call next week? Deck attached.`;
-  return stage === 2 ? head + body.slice(0, 120) : `${head}${body}\n\nBest,\nSam\nAcme | acme.io`;
+    `We are raising a $2.5M seed. Traction: 40 design partners, 3 paying.\n\n` +
+    `Worth 20 minutes next week? Deck attached.`;
+  return stage === 2 ? head + body.slice(0, 120) : `${head}${body}\n\nBest,\nMuhammad\nOffload | offload.so`;
 }
 
 // ---------- day builder ----------
@@ -255,7 +255,7 @@ function inbox(b: DayBuilder, rng: Rng, seconds: number): void {
   b.focus(CHROME, `Inbox (${int(rng, 3, 40)}) - ${GMAIL}`, `${MAIL_URL}#inbox`);
   const lines = Array.from({ length: 4 }, () => {
     const c = contact(rng);
-    return `${c.first} ${c.last}  Re: ${subjectFor(c.fund)}  Thanks Sam, ${pick(rng, ["happy to chat", "passing for now", "looping in my partner", "send the deck"])}`;
+    return `${c.first} ${c.last}  Re: ${subjectFor(c.fund)}  Thanks Muhammad, ${pick(rng, ["happy to chat", "passing for now", "looping in my partner", "send the deck"])}`;
   });
   b.ocr(1.5, `Inbox\n${lines.join("\n")}`);
   b.work(seconds, 2, 8);
@@ -264,7 +264,7 @@ function inbox(b: DayBuilder, rng: Rng, seconds: number): void {
 function slackVisit(b: DayBuilder, rng: Rng): void {
   const dm = rng() < 0.4;
   const who = pick(rng, TEAM);
-  b.focus(SLACK, dm ? `${who} (DM) - Acme - Slack` : `${pick(rng, CHANNELS)} (Channel) - Acme - Slack`);
+  b.focus(SLACK, dm ? `${who} (DM) - Offload - Slack` : `${pick(rng, CHANNELS)} (Channel) - Offload - Slack`);
   b.ocr(1.5, `${who}: ${pick(rng, ["shipped the billing fix", "customer call notes are in the doc", "new signup from a logistics company", "standup moved to the afternoon"])}`);
   b.work(around(rng, 75, 35), 45, 6);
 }
@@ -280,7 +280,7 @@ function outreachEmail(b: DayBuilder, rng: Rng): void {
     // Interrupted mid-email by a Slack DM, then back to the same draft.
     const first = around(rng, 85, 10);
     b.work(first, 160, 3);
-    b.focus(SLACK, `${pick(rng, TEAM)} (DM) - Acme - Slack`);
+    b.focus(SLACK, `${pick(rng, TEAM)} (DM) - Offload - Slack`);
     b.ocr(1.5, `${pick(rng, TEAM)}: quick one, can you approve the invoice?`);
     b.work(around(rng, 25, 4), 30, 2);
     b.focus(CHROME, "New Message", MAIL_URL);
@@ -299,7 +299,7 @@ function schedulingReply(b: DayBuilder, rng: Rng): void {
   const [d1, d2] = [pick(rng, WEEKDAYS), pick(rng, WEEKDAYS)];
   b.ocr(
     2,
-    `${c.first} ${c.last} <${c.email}>\nThanks Sam, happy to find a time.\n\n` +
+    `${c.first} ${c.last} <${c.email}>\nThanks Muhammad, happy to find a time.\n\n` +
       `Thanks ${c.first}! Does ${d1} at ${pick(rng, TIMES)} or ${d2} at ${pick(rng, TIMES)} work for you? I'll send a calendar invite with a Zoom link.`,
   );
   b.work(Math.max(70, around(rng, 125, 30)), 110, 6);
@@ -321,7 +321,7 @@ function zoomCall(b: DayBuilder, rng: Rng, minutes: number): void {
 }
 
 function claudeCode(b: DayBuilder, rng: Rng, minutes: number): void {
-  b.focus(TERMINAL, `claude — ~/builds/acme-app — ${int(rng, 120, 160)}×${int(rng, 36, 48)}`);
+  b.focus(TERMINAL, `claude — ~/builds/offload — ${int(rng, 120, 160)}×${int(rng, 36, 48)}`);
   b.ocr(2, `> ${pick(rng, ["fix the failing test in billing.ts", "add CSV export to the ledger view", "why is the sync job slow"])}\nReading src/billing.ts\nRunning bun test`);
   b.work(minutes * 60, 22, 2);
 }

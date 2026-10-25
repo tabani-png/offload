@@ -92,7 +92,7 @@ struct OnboardingView: View {
     let p = Palette(scheme: scheme)
     VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: Tokens.Space.s8) {
-        OffloadMark(size: 22)
+        OffloadMark(size: Tokens.Space.s24)
         Text(model.flow.step.counter).textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
         Spacer()
       }

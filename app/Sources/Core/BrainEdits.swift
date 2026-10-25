@@ -121,6 +121,8 @@ struct ObserverResponseDTO: Decodable, Equatable, Sendable {
   var error: String?
   var permissions: ObserverReport.Permissions?
   var status: ObserverReport?
+  /// s10b: files kept until you delete them.
+  var keptFiles: [KeptFileDTO]? = nil
 
   /// The observer's state as the app reads it; nil when the brain could not ask it.
   var report: ObserverReport? {

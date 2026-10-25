@@ -192,7 +192,11 @@ struct RailModel: Equatable, Sendable {
   var overflowCount: Int
   var observerLabel: String
   var observerPaused: Bool
+  /// s10d: "Not recording" and "Paused" both offer Resume, never Pause.
+  var observerResumable: Bool = false
   var micRole: StatusRole
+  /// s10d: what each automation dot is, for its tooltip and the hover label ("Investor outreach emails · running").
+  var dotNames: [String: String] = [:]
 
   init(status: ObserverStatus, automations: [Automation], micRecording: Bool) {
     inboxBadge = Self.badgeLabel(status.insightsWaiting)
@@ -216,6 +220,19 @@ struct RailModel: Equatable, Sendable {
     }()
     observerLabel = status.state == .noData ? word : "\(word) · Day \(day) of \(status.windowDays)"
     observerPaused = status.state == .paused
+    observerResumable = status.state == .paused || status.state == .stale
+    for a in automations where a.isActive {
+      let what: String
+      switch a.status {
+      case .running: what = "running"
+      case .awaitingApproval: what = "ready for review"
+      case .failed: what = "needs you"
+      case .paused: what = "paused"
+      case .draft: what = "drafting"
+      case .done: what = "done"
+      }
+      dotNames[a.id] = "\(a.name) · \(what)"
+    }
     micRole = StatusRole.forMic(recording: micRecording)
   }
 

@@ -45,7 +45,7 @@ describe("s05 runner", () => {
     await activate();
     const b = await prepareLiveBatch({ home: w.home, workflowId: w.outreach.id, model: w.model, now: () => NOW + 10 });
     expect(b.items.map((i) => i.to)).toEqual(["anna@northzone.com", "leo@hustlefund.vc", "tom@seedcamp.com"]);
-    expect(b.items[0]!.subject).toBe("Acme seed round: Northzone");
+    expect(b.items[0]!.subject).toBe("Offload seed round: Northzone");
     expect(b.items[0]!.body.startsWith("Hi Anna,")).toBe(true);
     const s = summaryOf(w.home, readWorkflow(w.home, w.outreach.id)!, connectorStatus(w.home, {}));
     expect(s.state).toBe("needs_you");

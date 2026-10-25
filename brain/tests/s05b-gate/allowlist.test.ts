@@ -7,7 +7,7 @@ import { makeBatch, type Batch, type BatchItem } from "../../src/workflows/batch
 import { canonicalArgs, normaliseAddress, policyFor, TOOL_POLICIES } from "../../src/workflows/allowlist.ts";
 import { classifyTool, createGate, type GateContext } from "../../src/workflows/gate.ts";
 
-const item = (to: string, body: string): BatchItem => ({ key: to.toLowerCase(), to, subject: "Acme seed round", body, warnings: [] });
+const item = (to: string, body: string): BatchItem => ({ key: to.toLowerCase(), to, subject: "Offload seed round", body, warnings: [] });
 const A = makeBatch("wf_a", "live", [item("a@fund.com", "Approved body."), item("b@fund.com", "Second body.")], 1);
 const TOKEN = "t".repeat(32);
 const SEND = "mcp__gmail__send_email";
@@ -87,8 +87,8 @@ describe("s05b gate allowlist", () => {
     expect(normaliseAddress("Evil <a@fund.com>")).toBeNull();
     const idn = makeBatch("wf_a", "live", [item("a@fünd.com", "Body.")], 2);
     const g = gateFor(idn);
-    expect(g.decide(SEND, { to: "a@fսnd.com", subject: "Acme seed round", body: "Body." }, true).allow).toBe(false);
-    expect(g.decide(SEND, { to: "a@xn--fnd-hoa.com", subject: "Acme seed round", body: "Body." }, true).allow).toBe(true);
+    expect(g.decide(SEND, { to: "a@fսnd.com", subject: "Offload seed round", body: "Body." }, true).allow).toBe(false);
+    expect(g.decide(SEND, { to: "a@xn--fnd-hoa.com", subject: "Offload seed round", body: "Body." }, true).allow).toBe(true);
   });
 
   test("H1: forward, reply to an arbitrary thread and drafts-with-send are denied", () => {
@@ -195,7 +195,7 @@ describe("s05b gate allowlist", () => {
 
   test("B1: prototype-named argument keys and server names are denied, never thrown", () => {
     const g = gateFor(A);
-    const proto = JSON.parse(`{"to":"a@fund.com","subject":"Acme seed round","body":"Approved body.","__proto__":{"x":1}}`) as Record<string, unknown>;
+    const proto = JSON.parse(`{"to":"a@fund.com","subject":"Offload seed round","body":"Approved body.","__proto__":{"x":1}}`) as Record<string, unknown>;
     expect(g.decide(SEND, proto, true).allow).toBe(false);
     expect(g.decide(SEND, { ...exact(i0), constructor: "x", toString: "y" }, true).allow).toBe(false);
     for (const server of ["__proto__", "constructor", "toString", "hasOwnProperty"]) expect(g.decide(`mcp__${server}__send_email`, exact(i0), true).allow).toBe(false);

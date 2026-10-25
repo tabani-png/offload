@@ -26,6 +26,10 @@ protocol BrainClient: Sendable {
 
   // s09b: the newest stored dry run (GET /workflows/:id/dry-runs/latest), so opening a review never re-drafts.
   func latestDryRun(workflowId: String) async throws -> DryRun?
+
+  // s10d (brain s10b): auto-send with its pin, and the files kept until you delete them.
+  func setAutoRun(workflowId: String, enabled: Bool) async throws -> AutoRunResult
+  func keptFiles() async throws -> [KeptFile]
 }
 
 enum BrainError: Error, Equatable {
@@ -51,7 +55,7 @@ enum BrainError: Error, Equatable {
     case .unreachable: return "Brain is not running. Offload restarts it on its own; this clears in a few seconds."
     case .starting: return "Brain is starting. This takes a few seconds."
     case .timedOut: return "The brain is taking too long to answer. Try again in a moment."
-    case .unauthorized: return "The brain did not accept this app's key. Quit and reopen Offload."
+    case .unauthorized: return "Offload could not reach its own background helper. Quit and reopen Offload."
     case .conflict(let m): return BrainError.sentence(m.isEmpty ? "Not possible right now." : m)
     case .badRequest: return "The brain could not read that request. Nothing was changed."
     case .server: return "The brain hit a problem. Nothing was changed; details are in its log."
@@ -177,7 +181,7 @@ struct MockBrainClient: BrainClient {
       span("sp_out_3", day: 1, 10, 2, minutes: 3.1, app: "Chrome", title: "Quick question on your fund thesis", host: "mail.google.com", who: "Northline Fund"),
       span("sp_out_4", day: 1, 10, 6, minutes: 2.9, app: "Numbers", title: "Investor pipeline.numbers"),
       span("sp_out_5", day: 2, 8, 47, minutes: 3.4, app: "Chrome", title: "Deck and data room access, Pellow Partners", host: "mail.google.com", who: "Pellow Partners"),
-      span("sp_out_6", day: 3, 16, 31, minutes: 2.7, app: "Chrome", title: "Re: Intro: Offload seed round", host: "mail.google.com", who: "Halden Ventures"),
+      span("sp_out_6", day: 3, 16, 31, minutes: 2.7, app: "Chrome", title: "Re: Intro: Offload seed round", host: "mail.google.com", who: "Brightwater Angels"),
     ],
     "ins_scheduling": [
       span("sp_sch_1", day: 0, 11, 40, minutes: 6.5, app: "Chrome", title: "Re: Time next week?", host: "mail.google.com", who: "Daniel Osei"),

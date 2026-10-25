@@ -1,14 +1,74 @@
 import AppKit
 import SwiftUI
 
-/// Dashboard window: time saved (only what was measured is a number; s10a), automations with what needs you on
-/// top, a 7-day timeline (one row per day, neutral ink per task, Offload's runs hatched), and the observer's
-/// state. Every string comes from DashboardCopy.
-struct DashboardView: View {
-  enum Part: CaseIterable { case hero, automations, timeline, observing }
-
+/// Dashboard window, s10d: a source-list sidebar (Overview, Automations, This week, Observing) and one page at a
+/// time, the way a first-party Mac app separates an overview from its detail. Live, the sidebar sits in an
+/// NSSplitViewController sidebar item (system material); snapshots draw the same rows in WindowChrome's sidebar
+/// column. Every string comes from DashboardCopy or the s10d models.
+struct DashboardSidebar: View {
   @ObservedObject var model: DashboardModel
-  var parts: Set<Part> = Set(Part.allCases)
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    VStack(alignment: .leading, spacing: Tokens.Space.nudge) {
+      ForEach(DashboardSection.allCases) { s in
+        let selected = model.section == s
+        Button { model.show(s) } label: {
+          HStack(spacing: Tokens.Space.s8) {
+            Image(systemName: s.symbol).symbolStyle(Tokens.TypeScale.Symbol.large)
+              .foregroundStyle(selected ? p.ink1 : p.ink2)
+              .frame(width: Tokens.Space.s20)
+            Text(s.title).textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink1)
+            Spacer(minLength: Tokens.Space.s4)
+            badge(s, p)
+          }
+          .padding(.horizontal, Tokens.Space.s8)
+          .frame(height: Tokens.Size.control - Tokens.Space.nudge)
+          .background {
+            if selected {
+              RoundedRectangle(cornerRadius: Tokens.Radius.control, style: .continuous).fill(p.fillStrong)
+            }
+          }
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(PressStyle())
+        .help("\(s.title) \(s.shortcut)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+      }
+    }
+    .padding(.horizontal, Tokens.Space.s12)
+    .padding(.top, Tokens.Space.s8)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  /// Amber only where something needs you.
+  @ViewBuilder
+  private func badge(_ s: DashboardSection, _ p: Palette) -> some View {
+    switch s {
+    case .automations:
+      let n = model.automations.filter { $0.state == .needsYou || $0.state == .readyForReview }.count
+      if n > 0 {
+        HStack(spacing: Tokens.Space.s4) {
+          Circle().fill(p.status(.needsYou)).frame(width: Tokens.Size.dotSmall, height: Tokens.Size.dotSmall)
+          Text("\(n)").textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink2)
+        }
+        .accessibilityLabel("\(n) need you")
+      }
+    case .observing:
+      if model.observerAction != .pause {
+        Circle().fill(p.status(.needsYou)).frame(width: Tokens.Size.dotSmall, height: Tokens.Size.dotSmall)
+          .accessibilityLabel("Not recording")
+      }
+    default:
+      EmptyView()
+    }
+  }
+}
+
+/// The page for the selected section.
+struct DashboardDetail: View {
+  @ObservedObject var model: DashboardModel
   /// Snapshots: a fixed "now" for run times and the now-line, and the pointer frozen at this moment.
   var frozenNow: Date? = nil
   var frozenPointerAt: Date? = nil
@@ -25,20 +85,14 @@ struct DashboardView: View {
           ScrollView { content }
             .onChange(of: model.pointer) { _, new in
               guard let id = new?.targetId else { return }
-              withAnimation(Motion.outExpo(Tokens.Duration.slow)) { proxy.scrollTo(Self.scrollId(for: id), anchor: .center) }
+              withAnimation(Motion.outExpo(Tokens.Duration.slow)) { proxy.scrollTo(DashboardView.scrollId(for: id), anchor: .center) }
             }
         }
       }
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .background(p.canvas)
     .pointerLayer(model.pointer, frozenAt: frozenPointerAt)
-  }
-
-  /// Pointer targets live inside rows; scroll the row (or the timeline) into view first.
-  static func scrollId(for target: String) -> String {
-    if target.hasPrefix("bar.") { return "section.timeline" }
-    let parts = target.split(separator: ".")
-    return parts.count >= 2 ? "row.\(parts[1])" : target
   }
 
   private var now: Date { frozenNow ?? model.now }
@@ -47,10 +101,19 @@ struct DashboardView: View {
     VStack(alignment: .leading, spacing: Tokens.Space.s32) {
       if let d = model.data {
         let copy = DashboardCopy(d, now: now)
-        if parts.contains(.hero) { HeroSection(copy: copy) }
-        if parts.contains(.automations) { AutomationsSection(model: model, copy: copy) }
-        if parts.contains(.timeline) { TimelineSection(model: model, data: d, now: now, tracked: copy.tracked).id("section.timeline") }
-        if parts.contains(.observing) { ObservingSection(model: model, observing: d.observing, now: now) }
+        switch model.section {
+        case .overview:
+          HeroSection(copy: copy)
+          NeedsYouSection(model: model, copy: copy)
+          ObservingSummary(model: model, observing: d.observing)
+        case .automations:
+          AutomationsSection(model: model, copy: copy)
+        case .week:
+          TimelineSection(model: model, data: d, now: now, tracked: copy.tracked).id("section.timeline")
+        case .observing:
+          ObservingSection(model: model, observing: d.observing, now: now)
+          KeptFilesSection(model: model)
+        }
       } else if let problem = model.problem {
         EmptyState(title: "The dashboard is not available yet.", message: problem)
           .padding(.top, Tokens.Space.s48)
@@ -63,11 +126,35 @@ struct DashboardView: View {
     .padding(.horizontal, Tokens.Space.s32)
     .padding(.top, Tokens.Space.s24)
     .padding(.bottom, Tokens.Space.s32)
-    .frame(maxWidth: .infinity)
+    .frame(maxWidth: .infinity, alignment: .top)
   }
 }
 
-// MARK: hero
+/// Fallback composition: sidebar and page side by side (live uses a split view controller, snapshots WindowChrome).
+struct DashboardView: View {
+  @ObservedObject var model: DashboardModel
+  var frozenNow: Date? = nil
+  var frozenPointerAt: Date? = nil
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    HStack(spacing: 0) {
+      DashboardSidebar(model: model)
+        .frame(width: Tokens.Layout.sidebar)
+        .background(Palette(scheme: scheme).sidebarFill)
+      DashboardDetail(model: model, frozenNow: frozenNow, frozenPointerAt: frozenPointerAt)
+    }
+  }
+
+  /// Pointer targets live inside rows; scroll the row (or the timeline) into view first.
+  static func scrollId(for target: String) -> String {
+    if target.hasPrefix("bar.") { return "section.timeline" }
+    let parts = target.split(separator: ".")
+    return parts.count >= 2 ? "row.\(parts[1])" : target
+  }
+}
+
+// MARK: overview
 
 private struct HeroSection: View {
   var copy: DashboardCopy
@@ -92,10 +179,12 @@ private struct HeroSection: View {
               .paragraphStyle(Tokens.TypeScale.body).monospacedDigit().foregroundStyle(p.ink2)
               .fixedSize(horizontal: false, vertical: true)
               .padding(.top, Tokens.Space.s8)
-            Text(copy.heroNote)
-              .paragraphStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
-              .fixedSize(horizontal: false, vertical: true)
-              .padding(.top, Tokens.Space.s12)
+            if let note = copy.heroNote {
+              Text(note)
+                .paragraphStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, Tokens.Space.s12)
+            }
           }
           .frame(maxWidth: .infinity, alignment: .leading)
           .accessibilityElement(children: .combine)
@@ -115,6 +204,77 @@ private struct HeroSection: View {
   }
 }
 
+/// What needs you, on the overview: one line each, and the one action that clears it.
+private struct NeedsYouSection: View {
+  @ObservedObject var model: DashboardModel
+  var copy: DashboardCopy
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    let rows = model.automations.filter { $0.state == .needsYou || $0.state == .readyForReview }
+    WindowSection(title: "Needs you", trailing: nil) {
+      RingBox {
+        if rows.isEmpty {
+          Text("Nothing needs you. Everything that is on is running.")
+            .textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
+            .padding(Tokens.Space.s16)
+        }
+        ForEach(Array(rows.enumerated()), id: \.element.id) { i, a in
+          if i > 0 { RowDivider(inset: Tokens.Space.s40) }
+          let row = copy.rows.first { $0.id == a.id }
+          HStack(alignment: .center, spacing: Tokens.Space.s12) {
+            StatusDot(role: .needsYou, size: Tokens.Size.dot)
+              .frame(width: Tokens.Space.s16, height: Tokens.Space.s16)
+            VStack(alignment: .leading, spacing: Tokens.Space.s4) {
+              Text(a.name).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
+              Text(row?.reason ?? (a.state == .readyForReview ? "Drafted from your week. Nothing runs until you approve it." : a.state.label))
+                .paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if a.state == .needsYou, let c = a.connectors.first(where: { $0.state != .connected }) {
+              SecondaryButton(title: c.state == .missingEnv ? "Sign in to \(c.name)…" : "Connect \(c.name)…") { model.onConnect?(c) }
+            } else if let wf = a.workflowId {
+              SecondaryButton(title: "Review…") { model.onOpenWorkflow?(wf) }
+            }
+          }
+          .padding(.horizontal, Tokens.Space.s16)
+          .padding(.vertical, Tokens.Space.s12)
+          .accessibilityElement(children: .combine)
+        }
+      }
+    }
+  }
+}
+
+/// One line on the overview: the observer's state, with the same action as the Observing page.
+private struct ObservingSummary: View {
+  @ObservedObject var model: DashboardModel
+  var observing: ObservingState
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    var shown = observing
+    shown.state = model.paused ? .paused : observing.state
+    let role = StatusRole.forObserver(shown.state)
+    return WindowSection(title: "Observing", trailing: "Kept on this Mac, encrypted, \(observing.keepDays) days") {
+      RingBox {
+        HStack(spacing: Tokens.Space.s8) {
+          StatusDot(role: role, pulses: role.pulses(context: .observer), size: Tokens.Size.dot)
+            .frame(width: Tokens.Space.s16)
+          Text(shown.stateLabel).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
+          Text(observing.daysLabel).textStyle(Tokens.TypeScale.body).monospacedDigit().foregroundStyle(p.ink2)
+          Spacer()
+          SecondaryButton(title: model.observerAction.title) { model.performObserverAction() }
+        }
+        .padding(.horizontal, Tokens.Space.s16).frame(height: Tokens.Size.toolbar - Tokens.Space.s4)
+      }
+    }
+  }
+}
+
 // MARK: automations
 
 private struct AutomationsSection: View {
@@ -122,8 +282,8 @@ private struct AutomationsSection: View {
   var copy: DashboardCopy
   @Environment(\.colorScheme) private var scheme
 
-  static let col: CGFloat = 112
-  static let savedCol: CGFloat = 92
+  static let col: CGFloat = Tokens.Layout.runColumn
+  static let savedCol: CGFloat = Tokens.Layout.savedColumn
 
   var body: some View {
     let p = Palette(scheme: scheme)
@@ -140,12 +300,12 @@ private struct AutomationsSection: View {
         .foregroundStyle(p.ink3)
         .padding(.horizontal, Tokens.Space.s16)
         .frame(height: Tokens.Size.control)
+        .pointerObstacle("columns")
         RowDivider(inset: 0)
         ForEach(Array(autos.enumerated()), id: \.element.id) { i, a in
           if i > 0 { RowDivider(inset: Tokens.Space.s40) }
           if let row = copy.rows.first(where: { $0.id == a.id }) {
-            AutomationRow(automation: a, row: row, selected: model.selection.selectedId == a.id,
-                          onConnect: { model.onConnect?($0) })
+            AutomationRow(automation: a, row: row, selected: model.selection.selectedId == a.id, model: model)
               .id("row.\(a.id)")
               .contentShape(Rectangle())
               .onTapGesture(count: 2) { if let wf = a.workflowId { model.onOpenWorkflow?(wf) } }
@@ -154,6 +314,7 @@ private struct AutomationsSection: View {
         }
       }
       KeyLegend(items: [(["J", "K"], "select"), (["P"], "point to what needs you"), (["↩"], "open")])
+        .pointerObstacle("legend")
     }
   }
 }
@@ -162,14 +323,14 @@ private struct AutomationRow: View {
   let a: DashboardAutomation
   var row: DashboardCopy.Row
   var selected: Bool
-  var onConnect: (Connector) -> Void
+  @ObservedObject var model: DashboardModel
   @Environment(\.colorScheme) private var scheme
 
-  init(automation: DashboardAutomation, row: DashboardCopy.Row, selected: Bool, onConnect: @escaping (Connector) -> Void) {
+  init(automation: DashboardAutomation, row: DashboardCopy.Row, selected: Bool, model: DashboardModel) {
     self.a = automation
     self.row = row
     self.selected = selected
-    self.onConnect = onConnect
+    self.model = model
   }
 
   var body: some View {
@@ -186,6 +347,7 @@ private struct AutomationRow: View {
           Text(row.name).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1).lineLimit(1)
           if let chip = row.chip { Chip(text: chip, style: row.chipNeedsYou ? .recommended : .neutral) }
         }
+        .pointerObstacle("name.\(a.id)")
         if let reason = row.reason {
           Text(reason).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink1)
             .fixedSize(horizontal: false, vertical: true)
@@ -193,24 +355,29 @@ private struct AutomationRow: View {
         }
         FlowLayout(spacing: Tokens.Space.s8) {
           ForEach(a.connectors) { c in
-            ConnectorChip(connector: c, compact: true, actionTarget: "conn.\(a.id).\(c.id)", onAction: onConnect)
+            ConnectorChip(connector: c, compact: true, actionTarget: "conn.\(a.id).\(c.id)") { model.onConnect?($0) }
+              .pointerObstacle("chip.\(a.id).\(c.id)")
           }
           if needsYou {
             HStack(spacing: Tokens.Space.s4) {
               Keycap(label: "P")
               Text("show me").textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
             }
+            .pointerObstacle("hint.\(a.id)")
           }
         }
+        if a.state == .active { autoSend(p) }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .background { if !needsYou { Color.clear.pointerTarget("row.\(a.id)") } }
       Text(row.lastRun)
         .textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(a.lastRunAt == nil ? p.ink3 : p.ink2)
         .frame(width: AutomationsSection.col, alignment: .leading)
+        .pointerObstacle("last.\(a.id)")
       Text(row.nextRun)
         .textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(a.nextRunAt == nil ? p.ink3 : p.ink2)
         .frame(width: AutomationsSection.col, alignment: .leading)
+        .pointerObstacle("next.\(a.id)")
       VStack(alignment: .trailing, spacing: Tokens.Space.nudge) {
         Text(row.saved)
           .textStyle(Tokens.TypeScale.label).monospacedDigit()
@@ -219,6 +386,7 @@ private struct AutomationRow: View {
           .textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
       }
       .frame(width: AutomationsSection.savedCol, alignment: .trailing)
+      .pointerObstacle("saved.\(a.id)")
     }
     .padding(.horizontal, Tokens.Space.s12)
     .padding(.vertical, Tokens.Space.s12)
@@ -226,12 +394,29 @@ private struct AutomationRow: View {
       // Selection is neutral (s10a): amber stays on the dot and the chip, where it means "needs you".
       if selected {
         let shape = RoundedRectangle(cornerRadius: Tokens.Radius.inset, style: .continuous)
-        shape.fill(p.fillStrong).overlay(shape.strokeBorder(p.ringStrong, lineWidth: 1)).padding(Tokens.Space.s4)
+        shape.fill(p.fillStrong).overlay(shape.strokeBorder(p.ringStrong, lineWidth: Tokens.Layout.hairline)).padding(Tokens.Space.s4)
       }
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(row.name), \(a.state.label). \(row.reason ?? "")")
     .accessibilityAddTraits(selected ? .isSelected : [])
+  }
+
+  /// "Waits for you to approve each batch · Send without asking…" or "Sends on its own to 37 people · Turn off".
+  private func autoSend(_ p: Palette) -> some View {
+    HStack(spacing: Tokens.Space.s8) {
+      Text(a.autoRun
+           ? "Sends on its own\(a.autoRunPeople.map { " to \($0) people" } ?? "")"
+           : "Asks you before each batch")
+        .textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
+      Button { a.autoRun ? model.turnOffAutoSend(a) : model.offerAutoSend(a) } label: {
+        Text(a.autoRun ? "Turn off" : "Send without asking…")
+          .textStyle(Tokens.TypeScale.calloutEmphasis).foregroundStyle(p.ink1)
+          .underline(true, color: p.ink3)
+      }
+      .buttonStyle(PressStyle())
+    }
+    .pointerObstacle("autosend.\(a.id)")
   }
 }
 
@@ -250,22 +435,25 @@ struct TimelineSection: View {
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    let layout = TimelineLayout.fitting(data.days).evenSpan
+    let layout = TimelineLayout.fitting(data.days).including(now, days: data.days).evenSpan
     VStack(alignment: .leading, spacing: Tokens.Space.s12) {
       HStack(alignment: .center, spacing: Tokens.Space.s8) {
         Text("This week").textStyle(Tokens.TypeScale.title).foregroundStyle(p.ink1).accessibilityAddTraits(.isHeader)
         Text(tracked).textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
         Spacer()
-        SecondaryButton(title: "Show the evidence", key: "2") { model.showEvidence() }
+        // The key is in the legend under the chart, so the "2" is never read as a count.
+        SecondaryButton(title: "Show the evidence") { model.showEvidence() }
           .pointerTarget("timeline.evidence")
       }
+      .pointerObstacle("week.header")
       RingBox(padding: Tokens.Space.s16) {
         VStack(alignment: .leading, spacing: Tokens.Space.s8) {
-          axis(layout, p)
+          axis(layout, p).pointerObstacle("axis")
           ForEach(data.days) { day in row(day, layout: layout, p: p) }
-          legend(p).padding(.top, Tokens.Space.s8)
+          legend(p).padding(.top, Tokens.Space.s8).pointerObstacle("legend")
         }
       }
+      KeyLegend(items: [(["2"], "point to the evidence")])
     }
   }
 
@@ -288,34 +476,45 @@ struct TimelineSection: View {
     .frame(height: Tokens.Space.s16)
   }
 
+  /// The focus task (the one with the most time, rank 0) is ink; everything else is one neutral (s10d: four greys
+  /// at 1.5:1 could not be told apart).
+  private func ink(_ taskId: String, _ p: Palette) -> Color {
+    p.task(rank(taskId) == 0 ? 0 : 3)
+  }
+
   private func row(_ day: TimelineDay, layout: TimelineLayout, p: Palette) -> some View {
     let isToday = Calendar.current.isDate(day.date, inSameDayAs: now)
-    let bars = TimelineMerge.merge(day.bars)
+    let bars = TimelineMerge.display(day.bars)
     return HStack(spacing: 0) {
       Text(Format.dayShort(day.date))
         .textStyle(isToday ? Tokens.TypeScale.calloutEmphasis : Tokens.TypeScale.callout).monospacedDigit()
         .foregroundStyle(isToday ? p.ink1 : p.ink2)
         .frame(width: Self.labelWidth, alignment: .leading)
+        .pointerObstacle("day.\(day.id)")
       GeometryReader { geo in
         let w = geo.size.width
         ZStack(alignment: .leading) {
           // Hour grid, at every labelled tick.
           ForEach(layout.ticks, id: \.self) { h in
-            Rectangle().fill(p.ring).frame(width: 1).offset(x: x(h, layout, w))
+            Rectangle().fill(p.ring).frame(width: Tokens.Layout.hairline).offset(x: x(h, layout, w))
           }
           ForEach(bars) { bar in
             let e = layout.extent(bar, dayStart: day.date)
-            BarView(bar: bar, ink: p.task(rank(bar.taskId)))
-              .frame(width: max(Tokens.Space.nudge, w * e.width), height: Self.barHeight)
+            let width = max(bar.automated ? Tokens.Layout.runMinWidth : Tokens.Space.nudge, w * e.width)
+            BarView(bar: bar, ink: ink(bar.taskId, p))
+              .frame(width: width, height: Self.barHeight)
               .pointerTarget("bar.\(bar.id)")
-              .offset(x: w * e.x)
-              .help("\(Format.clock(bar.start))–\(Format.clock(bar.end)) · \(name(bar.taskId))\(bar.automated ? " · Offload ran it, you reviewed" : "")")
+              .offset(x: min(w * e.x, w - width))
+              .help("\(Format.clock(bar.start))–\(Format.clock(bar.end)) · \(name(bar.taskId))\(bar.automated ? " · Offload ran it; the bar is your review time" : "")")
           }
           if isToday {
             let nx = layout.fraction(now, dayStart: day.date)
-            Rectangle().fill(p.ink1).frame(width: 1.5, height: Self.rowHeight).offset(x: w * nx)
-            Text("now").textStyle(Tokens.TypeScale.micro).foregroundStyle(p.ink2).fixedSize()
-              .offset(x: w * nx + Tokens.Space.s4, y: -Tokens.Space.s12)
+            Rectangle().fill(p.ink1).frame(width: Tokens.Layout.nowLine, height: Self.rowHeight).offset(x: w * nx)
+            Text("now \(Format.clock(now))").textStyle(Tokens.TypeScale.micro).monospacedDigit().foregroundStyle(p.ink2).fixedSize()
+              .padding(.horizontal, Tokens.Space.s4)
+              .background(Capsule().fill(p.canvas.opacity(0.9)))
+              .offset(x: w * nx + Tokens.Space.s4)
+              .pointerObstacle("now")
           }
         }
         .frame(height: Self.rowHeight)
@@ -327,26 +526,28 @@ struct TimelineSection: View {
   }
 
   private func rank(_ taskId: String) -> Int { data.tasks.first { $0.id == taskId }?.tint ?? 3 }
-  private func name(_ taskId: String) -> String { data.tasks.first { $0.id == taskId }?.name ?? "" }
+  private func name(_ taskId: String) -> String {
+    rank(taskId) == 0 ? (data.tasks.first { $0.id == taskId }?.name ?? "") : "Everything else"
+  }
 
   /// The legend draws the very same BarView as the chart, so the swatch and the bar can never differ.
   private func legend(_ p: Palette) -> some View {
-    FlowLayout(spacing: Tokens.Space.s16, lineSpacing: Tokens.Space.s8) {
-      ForEach(data.tasks) { t in
-        HStack(spacing: Tokens.Space.s8) {
-          BarView(bar: Self.swatch(taskId: t.id, automated: false), ink: p.task(t.tint))
-            .frame(width: Tokens.Space.s16, height: Self.barHeight)
-          Text(t.name).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2).lineLimit(1).fixedSize()
-        }
+    let focus = data.tasks.first { $0.tint == 0 }
+    return FlowLayout(spacing: Tokens.Space.s16, lineSpacing: Tokens.Space.s8) {
+      if let focus {
+        item(Self.swatch(taskId: focus.id, automated: false), ink: p.task(0), text: "\(focus.name), by hand", p)
       }
       if data.days.contains(where: { $0.bars.contains(where: \.automated) }) {
-        HStack(spacing: Tokens.Space.s8) {
-          BarView(bar: Self.swatch(taskId: data.tasks.first?.id ?? "", automated: true), ink: p.task(0))
-            .frame(width: Tokens.Space.s16, height: Self.barHeight)
-          Text("Offload ran it, you reviewed").textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
-            .lineLimit(1).fixedSize()
-        }
+        item(Self.swatch(taskId: focus?.id ?? "", automated: true), ink: p.task(0), text: "Offload ran it, you reviewed", p)
       }
+      item(Self.swatch(taskId: "other", automated: false), ink: p.task(3), text: "Everything else", p)
+    }
+  }
+
+  private func item(_ bar: TimelineBar, ink: Color, text: String, _ p: Palette) -> some View {
+    HStack(spacing: Tokens.Space.s8) {
+      BarView(bar: bar, ink: ink).frame(width: Tokens.Layout.runMinWidth, height: Self.barHeight)
+      Text(text).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2).lineLimit(1).fixedSize()
     }
   }
 
@@ -356,18 +557,20 @@ struct TimelineSection: View {
   }
 }
 
-/// One span. By hand: solid ink. Offload's run: a faint fill with diagonal hatching and a ring in the same ink,
-/// so it reads as "not your time" without a colour.
+/// One span. By hand: solid ink. Offload's run: a green outline (done, by Offload) with green hatching, at least
+/// 16 pt wide so the pattern reads (s10d).
 struct BarView: View {
   var bar: TimelineBar
   var ink: Color
+  @Environment(\.colorScheme) private var scheme
 
   var body: some View {
     let shape = RoundedRectangle(cornerRadius: Tokens.Radius.bar, style: .continuous)
     if bar.automated {
-      shape.fill(ink.opacity(0.18))
-        .overlay(HatchShape(spacing: 3.5).stroke(ink, lineWidth: 1.2).clipShape(shape))
-        .overlay(shape.strokeBorder(ink, lineWidth: 1))
+      let green = Palette(scheme: scheme).status(.done)
+      shape.fill(green.opacity(0.16))
+        .overlay(HatchShape(spacing: Tokens.Layout.hatchSpacing).stroke(green.opacity(0.85), lineWidth: Tokens.Layout.hatchLine).clipShape(shape))
+        .overlay(shape.strokeBorder(green, lineWidth: Tokens.Layout.hairline))
     } else {
       shape.fill(ink)
     }
@@ -382,7 +585,7 @@ private struct ObservingSection: View {
   var now: Date
   @Environment(\.colorScheme) private var scheme
 
-  static let labelColumn: CGFloat = 120
+  static let labelColumn: CGFloat = Tokens.Layout.labelColumn
 
   var body: some View {
     let p = Palette(scheme: scheme)
@@ -398,7 +601,7 @@ private struct ObservingSection: View {
           Text(shown.stateLabel).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
           Text(observing.daysLabel).textStyle(Tokens.TypeScale.body).monospacedDigit().foregroundStyle(p.ink2)
           Spacer()
-          SecondaryButton(title: model.paused ? "Resume watching" : "Pause watching") { model.togglePause() }
+          SecondaryButton(title: model.observerAction.title) { model.performObserverAction() }
         }
         .padding(.horizontal, Tokens.Space.s16).frame(height: Tokens.Size.toolbar - Tokens.Space.s4)
         RowDivider(inset: Tokens.Space.s16)
@@ -414,6 +617,46 @@ private struct ObservingSection: View {
           if i > 0 { RowDivider(inset: Self.labelColumn + Tokens.Space.s24) }
           PermissionRow(permission: perm, header: i == 0 ? "Permissions" : nil)
         }
+      }
+    }
+  }
+}
+
+/// Files with your content that the 7-day deletion does not touch (brain s10b keptFiles): said plainly, with
+/// Reveal in Finder, so nothing is kept that you cannot find.
+private struct KeptFilesSection: View {
+  @ObservedObject var model: DashboardModel
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    WindowSection(title: "Kept until you delete them", trailing: nil) {
+      RingBox {
+        if model.keptFiles.isEmpty {
+          Text("Nothing. Everything Offload saw is deleted after 7 days.")
+            .textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2).padding(Tokens.Space.s16)
+        }
+        ForEach(Array(model.keptFiles.enumerated()), id: \.element.id) { i, f in
+          if i > 0 { RowDivider(inset: Tokens.Space.s16) }
+          HStack(spacing: Tokens.Space.s12) {
+            VStack(alignment: .leading, spacing: Tokens.Space.nudge) {
+              HStack(spacing: Tokens.Space.s8) {
+                Text(f.name).textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink1)
+                Text(f.size).textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
+              }
+              Text(f.note).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3).lineLimit(1)
+            }
+            Spacer(minLength: Tokens.Space.s8)
+            SecondaryButton(title: "Reveal in Finder") { model.onReveal?(f.path) }
+          }
+          .padding(.horizontal, Tokens.Space.s16).padding(.vertical, Tokens.Space.s8)
+          .accessibilityElement(children: .combine)
+        }
+      }
+      if !model.keptFiles.isEmpty {
+        Text("Everything Offload saw on screen, and your mail, is deleted after 7 days. These are files you gave it or edited, so they stay until you delete them.")
+          .paragraphStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
   }
@@ -452,6 +695,70 @@ struct PermissionRow: View {
     .frame(minHeight: Tokens.Size.toolbar - Tokens.Space.s4)
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(permission.name), \(permission.label). \(permission.purpose)")
+  }
+}
+
+// MARK: auto-send sheet
+
+/// Turning auto-send on, then what the brain pinned it to (s10b autoRunPin), in plain words.
+struct AutoSendSheetView: View {
+  @ObservedObject var model: DashboardModel
+  @Environment(\.colorScheme) private var scheme
+
+  static let width: CGFloat = Tokens.Layout.confirmSheet - Tokens.Space.s48 * 2
+
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    let copy: AutoRunCopy? = {
+      switch model.autoSend {
+      case .offer(_, _, let name): return AutoRunCopy.offer(workflowName: name)
+      case .result(let r): return AutoRunCopy(r)
+      case nil: return nil
+      }
+    }()
+    VStack(alignment: .leading, spacing: 0) {
+      if let copy {
+        Text(copy.title).paragraphStyle(Tokens.TypeScale.sheetTitle).foregroundStyle(p.ink1)
+        Text(copy.summary).paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, Tokens.Space.s8)
+        if !copy.people.isEmpty {
+          RingBox {
+            VStack(alignment: .leading, spacing: 0) {
+              ForEach(Array(copy.people.prefix(5).enumerated()), id: \.offset) { _, email in
+                Text(email).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2).lineLimit(1)
+                  .frame(height: Tokens.Space.s24)
+              }
+              if copy.people.count > 5 {
+                Text("and \(copy.people.count - 5) more").textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+                  .frame(height: Tokens.Space.s24)
+              }
+            }
+            .padding(.horizontal, Tokens.Space.s16).padding(.vertical, Tokens.Space.s8)
+          }
+          .padding(.top, Tokens.Space.s16)
+        }
+        if let detail = copy.detail {
+          Text(detail).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, Tokens.Space.s12)
+        }
+        HStack(spacing: Tokens.Space.s8) {
+          Spacer()
+          if case .offer = model.autoSend {
+            SecondaryButton(title: "Cancel", key: "esc") { model.dismissAutoSend() }
+            PrimaryButton(title: model.autoSendWorking ? "Turning on…" : "Send without asking", key: "⌘↩") { model.confirmAutoSend() }
+              .disabled(model.autoSendWorking)
+          } else {
+            PrimaryButton(title: "Done", key: "↩") { model.dismissAutoSend() }
+          }
+        }
+        .padding(.top, Tokens.Space.s20)
+      }
+    }
+    .padding(Tokens.Space.s24)
+    .frame(width: Self.width)
+    .background(p.sheetFill)
   }
 }
 

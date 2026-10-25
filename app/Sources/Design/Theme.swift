@@ -8,17 +8,19 @@ struct Palette {
   var isDark: Bool { scheme == .dark }
 
   // Ink ladder (opacity steps, not weight).
-  var ink1: Color { isDark ? .white.opacity(Tokens.Ink.primary) : .black.opacity(0.86) }
-  var ink2: Color { isDark ? .white.opacity(Tokens.Ink.secondary) : .black.opacity(0.72) }
+  var ink1: Color { isDark ? .white.opacity(Tokens.Ink.primary) : .black.opacity(Tokens.Ink.lightPrimary) }
+  var ink2: Color { isDark ? .white.opacity(Tokens.Ink.secondary) : .black.opacity(Tokens.Ink.lightSecondary) }
   // Light tertiary was 46% black: 3.5:1 even over pure white, below AA. Thin 11-pt dark text also renders lighter
   // than its nominal ink, so 63% is what measured 4.5:1 live (s08 DESIGN-REVIEW, "Glass").
-  var ink3: Color { isDark ? .white.opacity(Tokens.Ink.tertiary) : .black.opacity(0.63) }
+  var ink3: Color { isDark ? .white.opacity(Tokens.Ink.tertiary) : .black.opacity(Tokens.Ink.lightTertiary) }
+  /// The hairline under a toolbar or above an action bar (one value; WindowKit and the review bar shared two).
+  var barHairline: Color { isDark ? .black.opacity(0.55) : .black.opacity(0.10) }
 
   // Rings and fills.
   var ring: Color { isDark ? .white.opacity(0.10) : .black.opacity(0.10) }
   var ringStrong: Color { isDark ? .white.opacity(0.22) : .black.opacity(0.18) }
   // Light: a faint grey well instead of white-on-white, so rows and wells separate from light glass (s10a).
-  var fill: Color { isDark ? .white.opacity(0.06) : .black.opacity(0.04) }
+  var fill: Color { isDark ? .white.opacity(0.06) : .black.opacity(0.055) }
   var fillStrong: Color { isDark ? .white.opacity(0.12) : .white.opacity(0.96) }
   var track: Color { isDark ? .white.opacity(0.10) : .black.opacity(0.07) }
 
@@ -54,7 +56,8 @@ struct Palette {
     guard !isDark else { return status(role) }
     switch role {
     case .working: return Color(hex: 0x0058C4)
-    case .needsYou: return Color(hex: 0x8A5700)
+    // s10d: darker than 8A5700 so 11-pt amber text on its own 15% tint reaches 4.5:1 (DESIGN-REVIEW-2, card).
+    case .needsYou: return Color(hex: 0x6E4500)
     case .done: return Color(hex: 0x1A7A3A)
     case .recording: return Color(hex: 0xC4241B)
     case .neutral: return ink2

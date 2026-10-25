@@ -143,6 +143,8 @@ struct WorkflowDTO: Codable, Equatable {
   // s05c (optional)
   var lastRunAt: Double? = nil
   var nextRunAt: Double? = nil
+  // s10b (optional): what auto-send is pinned to
+  var autoRunPin: AutoRunPinDTO? = nil
   // detail
   var path: String?
   var skillMd: String?
@@ -177,7 +179,7 @@ struct WorkflowDTO: Codable, Equatable {
       schedule: WorkflowSchedule(summary: scheduleSummary, batchSize: batchSize ?? 0, nextRunAt: nextRunAt.map(BrainWire.date(ms:))),
       steps: steps, skillMarkdown: skillMd ?? "", toneCard: "", nextBatch: (pendingItems ?? []).map { $0.toRecipient() },
       logTarget: logTarget, sendFrom: "your account", estimatedHoursPerWeek: estimatedHoursSavedPerWeek,
-      batchHash: dryRunHash ?? "", needsYou: needsYou, arithmetic: arithmetic)
+      batchHash: dryRunHash ?? "", needsYou: needsYou, arithmetic: arithmetic, facts: facts ?? "", autoRun: autoRun, path: path ?? "")
   }
 }
 

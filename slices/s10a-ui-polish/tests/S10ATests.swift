@@ -76,7 +76,7 @@ struct S10AConsistencyTests {
     #expect(card.savingChip == "Saves 22.0 h a week")
     let a = dash.automations[0].toDashboardAutomation()
     #expect(Figures.savedHours(value: a.estimatedHoursPerWeek, arithmetic: a.arithmetic) == "22.0 h")
-    #expect(card.title == "Outreach emails take 64.5% of your week")
+    #expect(card.title == "Outreach emails take 65% of your week")  // s10d: whole percent in the headline
     #expect(card.facts == "495 emails this week, about 3.0 min each")
   }
 
@@ -286,7 +286,7 @@ struct S10ATurnOnTests {
   func key() {
     var w = SampleWeek.workflow
     w.connectors = w.connectors.map { $0.id == "gsheets" ? Connector(id: "gsheets", name: "Google Sheets", kind: .composio, connected: false, missingEnv: true) : $0 }
-    #expect(FirstRunPlan(workflow: w).connectTitle == "Add the Google Sheets key")
+    #expect(FirstRunPlan(workflow: w).connectTitle == "Sign in to Google Sheets")  // s10d: no "key" in copy
   }
 
   @Test("the confirm sheet does not number its lists and does not repeat the sender")
@@ -329,8 +329,8 @@ struct S10APlainWordsTests {
 
   @Test("card title is short, has no full stop and agrees in number")
   func title() {
-    #expect(S10AFixture.card.title == "Investor outreach emails take 64.4% of your week")
-    #expect(CardCopy(SampleWeek.scheduling).title == "Scheduling back-and-forth takes 14.2% of your week")
+    #expect(S10AFixture.card.title == "Investor outreach emails take 64% of your week")  // s10d
+    #expect(CardCopy(SampleWeek.scheduling).title == "Scheduling back-and-forth takes 14% of your week")
   }
 
   @Test("evidence names the app a person knows and sets other apps apart")

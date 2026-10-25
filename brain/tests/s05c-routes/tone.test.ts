@@ -31,7 +31,7 @@ describe("s05c tone card route", () => {
 
   test("TONE: PUT stores the card (0600), GET shows it as edited, and a rebuild keeps it", async () => {
     w = await routeWorld();
-    const text = "# Investor outreach\n- Short, warm, first name only.\n- Sign off with Best, Sam\n";
+    const text = "# Investor outreach\n- Short, warm, first name only.\n- Sign off with Best, Muhammad\n";
     const r = await w.call<ToneCardDTO>(path(w), { method: "PUT", body: { text } });
     expect(r.status).toBe(200);
     expect(r.body.text).toBe(text);

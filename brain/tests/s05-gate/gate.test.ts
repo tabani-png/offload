@@ -13,7 +13,7 @@ const SEND = "mcp__gmail__send_email";
 const READ = "mcp__gmail__search_emails";
 const APPEND = "mcp__composio__GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND";
 
-const item = (to: string, body = `Hi there,\n\nShort note for ${to}.\n\nMuhammad`): BatchItem => ({ key: to, to, subject: "Acme seed round", body, warnings: [] });
+const item = (to: string, body = `Hi there,\n\nShort note for ${to}.\n\nMuhammad`): BatchItem => ({ key: to, to, subject: "Offload seed round", body, warnings: [] });
 const A = makeBatch("wf_a", "live", [item("anna@northzone.com"), item("tom@seedcamp.com")], 1);
 const B = makeBatch("wf_a", "live", [item("leo@hustlefund.vc")], 2);
 const sendInput = (i: BatchItem) => ({ to: i.to, subject: i.subject, body: i.body });

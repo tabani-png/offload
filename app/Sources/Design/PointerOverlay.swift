@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // The "show me" pointer, drawn inside our own window's view tree. It cannot reach other apps: there is no overlay
@@ -13,7 +14,14 @@ struct PointerAnchorKey: PreferenceKey {
 extension View {
   /// Marks this view as something the pointer can fly to (or start from).
   func pointerTarget(_ id: String) -> some View {
-    anchorPreference(key: PointerAnchorKey.self, value: .bounds) { [id: $0] }
+    // transform, not set: a target inside another target (or an obstacle) must not hide the inner one.
+    transformAnchorPreference(key: PointerAnchorKey.self, value: .bounds) { $0[id] = $1 }
+  }
+
+  /// s10d: marks text the pointer's label must never cover. Shares the anchor key with targets; every anchor that is
+  /// not the target is an obstacle for the label.
+  func pointerObstacle(_ id: String) -> some View {
+    transformAnchorPreference(key: PointerAnchorKey.self, value: .bounds) { $0["obstacle.\(id)"] = $1 }
   }
 
   /// Hosts the pointer for everything inside: resolves target anchors and draws the flight on top.
@@ -55,30 +63,45 @@ private struct PointerLayer: View {
       }()
       let flight = PointerFlight(origin: origin, target: proxy[target], bounds: bounds, label: r.label,
                                  startedAt: r.startedAt, reduceMotion: reduceMotion)
+      let targetRect = proxy[target]
+      let obstacles = anchors.filter { $0.key != r.targetId }.map { proxy[$0.value] }
+      let label = PointerLabelPlacement.place(
+        label: PointerGlyph.labelSize(r.label), tip: flight.landing,
+        arrow: CGSize(width: PointerGlyph.size, height: PointerGlyph.size),
+        target: targetRect, obstacles: obstacles, bounds: bounds)
       if let frozenAt {
-        PointerGlyph(frame: flight.frame(at: frozenAt), label: r.label, bounds: bounds)
+        PointerGlyph(frame: flight.frame(at: frozenAt), label: r.label, labelRect: label.rect, bounds: bounds)
       } else {
         TimelineView(.animation) { ctx in
-          PointerGlyph(frame: flight.frame(at: ctx.date), label: r.label, bounds: bounds)
+          PointerGlyph(frame: flight.frame(at: ctx.date), label: r.label, labelRect: label.rect, bounds: bounds)
         }
       }
     }
   }
 }
 
-/// The arrow and its one-line label. The arrow's tip sits exactly on `frame.position`.
+/// The arrow and its one-line label. The arrow's tip sits exactly on `frame.position`; the label sits where
+/// `PointerLabelPlacement` found free space (s10d), never over the target or other text.
 struct PointerGlyph: View {
   var frame: PointerFlight.Frame
   var label: String
+  var labelRect: CGRect
   var bounds: CGRect
   @Environment(\.colorScheme) private var scheme
 
   static let size: CGFloat = 18
+  static let labelHeight: CGFloat = Tokens.Size.chip + Tokens.Space.s4
+
+  /// The label's size: its text in the callout-emphasis face plus the capsule's padding.
+  static func labelSize(_ text: String) -> CGSize {
+    let style = Tokens.TypeScale.calloutEmphasis
+    let font = NSFont.systemFont(ofSize: style.size, weight: .medium)
+    let w = (text as NSString).size(withAttributes: [.font: font, .kern: style.tracking]).width
+    return CGSize(width: ceil(w) + Tokens.Space.s12 * 2 + 2, height: labelHeight)
+  }
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    // Label goes right of the pointer, or left when that would leave the window.
-    let labelLeft = frame.position.x > bounds.width * 0.62
     ZStack(alignment: .topLeading) {
       ArrowShape()
         .fill(p.status(.working))
@@ -89,20 +112,18 @@ struct PointerGlyph: View {
         .scaleEffect(frame.scale, anchor: .topLeading)
         .position(x: frame.position.x + Self.size / 2, y: frame.position.y + Self.size / 2)
 
-      // Opaque, like a tooltip (s10a): the label often sits over text, and glass let that text bleed through.
+      // Opaque, like a tooltip (s10a): glass let the text under it bleed through.
       Text(label)
         .textStyle(Tokens.TypeScale.calloutEmphasis)
         .foregroundStyle(p.ink1)
         .lineLimit(1)
-        .padding(.horizontal, Tokens.Space.s12)
-        .frame(height: Tokens.Size.chip + Tokens.Space.s4)
+        .fixedSize()
+        .frame(width: labelRect.width, height: labelRect.height)
         .background(Capsule().fill(p.isDark ? Color(hex: 0x2C2C30) : .white))
         .overlay(Capsule().strokeBorder(p.ringStrong, lineWidth: 1))
         .compositingGroup()
         .shadow(color: .black.opacity(p.isDark ? 0.45 : 0.16), radius: 6, x: 0, y: 3)
-        .fixedSize()
-        .alignmentGuide(.leading) { d in labelLeft ? d.width : 0 }
-        .offset(x: frame.position.x + (labelLeft ? -6 : Self.size + 4), y: frame.position.y + Self.size - 4)
+        .offset(x: labelRect.minX, y: labelRect.minY)
         .opacity(frame.labelVisible ? 1 : 0)
         .animation(Motion.outExpo(Tokens.Duration.fast), value: frame.labelVisible)
     }

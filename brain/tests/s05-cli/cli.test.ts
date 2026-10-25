@@ -7,7 +7,7 @@ import { tempHome } from "../helpers.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const fx = tempHome();
-const factsFile = join(fx.home, "facts-acme.md");
+const factsFile = join(fx.home, "facts-offload.md");
 afterAll(() => fx.cleanup());
 
 function run(args: string[]): { code: number; out: string; err: string } {

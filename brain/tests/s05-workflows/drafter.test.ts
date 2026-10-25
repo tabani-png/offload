@@ -50,7 +50,7 @@ describe("s05 workflow drafter", () => {
   test("the folder has facts.md, recipients.csv, crm-log.csv and runnable scripts, all private", () => {
     const dir = join(w.home, "workflows", w.outreach.id);
     for (const f of ["facts.md", "recipients.csv", "crm-log.csv", "scripts/recipients.ts", "scripts/crm-log.ts", "workflow.json"]) expect(existsSync(join(dir, f))).toBe(true);
-    expect(readFileSync(join(dir, "facts.md"), "utf8")).toContain("company: Acme");
+    expect(readFileSync(join(dir, "facts.md"), "utf8")).toContain("company: Offload");
     expect(statSync(join(dir, "workflow.json")).mode & 0o077).toBe(0);
     const r = Bun.spawnSync(["bun", join(dir, "scripts/recipients.ts"), join(dir, "recipients.csv")]);
     expect(r.exitCode).toBe(0);

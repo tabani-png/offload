@@ -103,6 +103,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     dashboardModel.onOpenWorkflow = { [weak self] id in self?.openReview(workflowId: id) }
     dashboardModel.onConnect = { [weak self] c in self?.showConnectHelp(c) }
     dashboardModel.onTogglePause = { [weak self] paused in self?.setObserverPaused(paused) }
+    dashboardModel.onOpenURL = { NSWorkspace.shared.open($0) }
+    dashboardModel.onReveal = { path in
+      let url = URL(fileURLWithPath: path)
+      if FileManager.default.fileExists(atPath: path) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+      else { NSWorkspace.shared.activateFileViewerSelecting([url.deletingLastPathComponent()]) }
+    }
     rail.show()
     hotKey = HotKey { [weak self] in MainActor.assumeIsolated { self?.card.toggle() } }
     if hotKey == nil { NSLog("Offload: %@ is taken by another app; open the card from the rail", HotKey.displayName) }
@@ -128,9 +134,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func brainSpec(home: URL, demo: Bool = false) -> BrainLaunchSpec? {
     guard let repo, let bun = BrainLaunch.findBun(environment: ProcessInfo.processInfo.environment) else { return nil }
     let env = Self.environment(demo: demo || options.demo)
+    try? FileManager.default.createDirectory(at: Self.brainLogFile.deletingLastPathComponent(), withIntermediateDirectories: true)
     return BrainLaunch.spec(bun: bun, repo: repo, home: home, token: token,
                             baseEnvironment: env, observer: observer.binary,
-                            model: BrainLaunch.model(environment: env, demo: demo || options.demo))
+                            model: BrainLaunch.model(environment: env, demo: demo || options.demo),
+                            logFile: Self.brainLogFile)
   }
 
   /// Demo homes use raw key files (OFFLOAD_KEYS=file): nothing touches the real Keychain.
@@ -142,6 +150,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   nonisolated private static var brainLog: URL {
     URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Logs/Offload/brain.err.log")
+  }
+
+  /// s10d: `serve --log-file`: the brain's own scrubbed log lines (it rotates this file itself at 5 MB, keeping 2).
+  nonisolated static var brainLogFile: URL {
+    URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Logs/Offload/brain.log")
   }
 
   private var logTimer: Timer?
@@ -358,7 +371,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func presentReview(_ w: Workflow, dryRun: DryRun? = nil) {
     if let r = review, r.model.workflow.id == w.id { r.show(); return }
     review?.window.close()
-    let m = ReviewModel(workflow: w, dryRun: dryRun, client: client, dryRunLimit: options.dryRunLimit)
+    // s10d: the dry run runs on "last week's emails", plural. A limit under 3 exists to cap model calls; the offline
+    // sample model costs nothing, so with it the dry run always shows at least 3 real examples.
+    let stub = BrainLaunch.model(environment: Self.environment(demo: options.demo), demo: options.demo) == "stub"
+    let m = ReviewModel(workflow: w, dryRun: dryRun, client: client,
+                        dryRunLimit: stub ? max(3, options.dryRunLimit) : options.dryRunLimit)
     m.onConnect = { [weak self] c in self?.showConnectHelp(c) }
     m.onApproved = { [weak self] _ in Task { await self?.dashboardModel.load() } }
     m.onDiscarded = { [weak self] _ in self?.review?.window.close() }
@@ -403,6 +420,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   @objc func openDashboard() {
+    // s10d QA: `--qa-dashboard-section overview|automations|week|observing` opens on that page.
+    let args = CommandLine.arguments
+    if let i = args.firstIndex(of: "--qa-dashboard-section"), args.indices.contains(i + 1),
+       let s = DashboardSection(rawValue: args[i + 1]) {
+      dashboardModel.show(s)
+    }
     if let d = dashboard { d.show(); return }
     let c = DashboardWindowController(model: dashboardModel)
     c.onClose = { [weak self] in self?.dashboard = nil }
@@ -430,17 +453,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
-  /// Connect… / Add key… on a chip. The brain reads connectors from $OFFLOAD_HOME/connectors.json, secrets by env
-  /// var name only (s05 AC-1); the app never asks for or stores a key itself.
+  /// Connect… / Sign in… on a chip or the confirm sheet. The brain reads connectors from its own settings; the app
+  /// never asks for or stores a password itself. s10d: plain words, and a sheet on the window you are in (stacked on
+  /// the confirm sheet when that is up), never a modal that stops the app.
   private func showConnectHelp(_ c: Connector) {
     let alert = NSAlert()
-    alert.messageText = c.state == .missingEnv ? "\(c.name) needs its key" : "Connect \(c.name)"
-    alert.informativeText = c.state == .missingEnv
-      ? "The \(c.name) server is set up, but the environment variable it names is not set. Set it where the brain runs, then come back. Offload checks again when this window opens."
-      : "Add \(c.name) to the brain's connectors.json (see brain/CONNECTORS.md: Composio or an MCP server). Keys are named by environment variable only. Offload checks again when this window opens."
+    if c.state == .missingEnv {
+      alert.messageText = "Sign in to \(c.name)"
+      alert.informativeText = "\(c.name) is set up on this Mac but signed out, so steps that use it wait. Signing in from inside Offload is not ready yet: whoever set up Offload here can sign it back in. Offload checks again each time this window opens."
+    } else {
+      alert.messageText = "Connect \(c.name)"
+      alert.informativeText = "Offload is not connected to \(c.name) yet, so steps that use it wait. Connecting accounts from inside Offload is not ready yet: whoever set up Offload here can connect \(c.name). Offload checks again each time this window opens."
+    }
     alert.addButton(withTitle: "OK")
     NSApp.activate(ignoringOtherApps: true)
-    alert.runModal()
+    let host = review?.window.isKeyWindow == true ? review?.window : (dashboard?.window.isKeyWindow == true ? dashboard?.window : (review?.window ?? dashboard?.window))
+    guard let base = host else { alert.runModal(); return }
+    let on = base.attachedSheet ?? base
+    alert.beginSheetModal(for: on) { _ in }
+    if let r = review?.window, base === r { qaRecord("review-message", r) }
   }
 
   // MARK: QA
@@ -454,8 +485,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     if args.contains("--open-review") { openReview(insightId: model.state.insights.first?.id ?? MockBrainClient.outreach.id) }
     if args.contains("--open-dashboard") {
       openDashboard()
+
       if args.contains("--qa-pointer") {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.dashboardModel.send(.point) }
+      }
+      if args.contains("--qa-evidence") {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.dashboardModel.send(.evidence) }
+      }
+      if args.contains("--qa-autosend") {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+          guard let self, let a = self.dashboardModel.automations.first(where: { $0.workflowId != nil }) else { return }
+          self.dashboardModel.show(.automations)
+          self.dashboardModel.offerAutoSend(a)
+        }
       }
     }
     if args.contains("--open-review") || args.contains("--open-dashboard") {

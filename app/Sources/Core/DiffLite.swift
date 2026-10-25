@@ -131,3 +131,69 @@ struct EvidenceTitle: Equatable, Sendable {
     return subject.isEmpty ? lead : "\(lead) · \(subject)"
   }
 }
+
+// MARK: s10d: what a reviewer should look at
+
+/// Words that carry no claim. A changed "the" or "our" is not worth an underline: only the words that change what
+/// the email says are marked (DESIGN-REVIEW-2, dry run).
+enum DiffEmphasis {
+  static let functionWords: Set<String> = [
+    "a", "an", "the", "and", "or", "but", "of", "to", "in", "on", "at", "by", "for", "with", "from", "as", "is", "are",
+    "was", "be", "it", "its", "it's", "this", "that", "our", "your", "my", "we", "we're", "i", "i'm", "you", "me", "us",
+    "so", "if", "do", "does", "any", "all", "here", "there", "just", "up", "out", "into", "about", "them", "they",
+  ]
+
+  /// The word without the punctuation a sentence puts around it, lower-cased.
+  static func bare(_ token: String) -> String {
+    token.lowercased().trimmingCharacters(in: CharacterSet.punctuationCharacters.union(.symbols).subtracting(CharacterSet(charactersIn: "$%")))
+  }
+
+  /// True when a changed token is worth marking: a word that is not a function word, and (when the other side is
+  /// given) a word the other side never uses, so a word that only moved or lost its full stop is not marked.
+  static func marks(_ token: String, other: Set<String>? = nil) -> Bool {
+    guard DiffLite.isWord(token) else { return false }
+    let b = bare(token)
+    guard !b.isEmpty, !functionWords.contains(b) else { return false }
+    return !(other?.contains(b) ?? false)
+  }
+
+  /// The bare words of a text, for `marks(_:other:)`.
+  static func words(_ text: String) -> Set<String> {
+    Set(DiffLite.tokens(text).filter(DiffLite.isWord).map(bare))
+  }
+}
+
+/// s10d: a draft may only state what the person already said or what is in their facts. Numbers, amounts, months and
+/// weekdays in the draft that appear in neither are listed, so "led Tessellate's seed in March" is caught when the
+/// sent email never said March (step 4: "a number that is not in your facts is flagged"; a date is the same kind).
+enum FactCheck {
+  static let months = ["january", "february", "march", "april", "may", "june", "july", "august", "september",
+                       "october", "november", "december"]
+  static let weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+  static func claims(_ text: String) -> [String] {
+    var out: [String] = []
+    for raw in DiffLite.tokens(text) where DiffLite.isWord(raw) {
+      let t = raw.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?()\"'’"))
+      let l = t.lowercased()
+      let isNumber = t.contains { $0.isNumber }
+      // "May" is a verb at the start of a sentence more often than a month: months must be capitalised mid-text.
+      let isDate = (months.contains(l) && l != "may") || weekdays.contains(l)
+      if (isNumber || isDate) && !out.contains(t) { out.append(t) }
+    }
+    return out
+  }
+
+  /// Claims in `draft` found in neither `source` nor `facts` (case-insensitive, whole tokens).
+  static func unsupported(draft: String, source: String, facts: String) -> [String] {
+    let known = Set((claims(source) + claims(facts)).map { $0.lowercased() })
+    let knownText = (source + "\n" + facts).lowercased()
+    return claims(draft).filter { c in
+      let l = c.lowercased()
+      if known.contains(l) { return false }
+      // "3" inside "3 paying" in the facts counts; check the token with word edges.
+      let pattern = "(^|[^0-9a-z])" + NSRegularExpression.escapedPattern(for: l) + "($|[^0-9a-z])"
+      return knownText.range(of: pattern, options: .regularExpression) == nil
+    }
+  }
+}

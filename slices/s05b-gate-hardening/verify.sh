@@ -58,13 +58,13 @@ if (cd "$ROOT" && bun run brain/fixtures/gen.ts --out "$FX/home" --seed 42 --enc
   dry="$(cli dry-run --workflow "$wf" --home "$FX/home" --limit 3 --model stub)" || fail "dry-run exited non-zero"
   echo "$dry" | grep -E "side effects" | head -1
   echo "$dry" | grep -q "side effects 6/6 denied by the gate" || fail "dry run side effects were not all denied"
-  echo "$dry" | grep -q "founder of Acme" || fail "dry run did not show the OCR excerpt"
+  echo "$dry" | grep -q "founder of Offload" || fail "dry run did not show the OCR excerpt"
   grep -q '"decision":"deny"' "$FX/home/workflows/$wf/gate-log.jsonl" || fail "gate log not written"
   if grep -q '"decision":"allow"' "$FX/home/workflows/$wf/gate-log.jsonl"; then fail "dry run allowed a side effect"; fi
   [ -f "$FX/home/workflows/$wf/dry-run.json.enc" ] || fail "sealed dry-run.json.enc missing"
   [ -f "$FX/home/workflows/$wf/dry-run.json" ] && fail "plaintext dry-run.json written"
   [ -f "$FX/home/tone/corpus.jsonl.enc" ] || fail "sealed tone corpus missing"
-  if grep -rlq "founder of Acme" "$FX/home/workflows" "$FX/home/tone"; then fail "OCR excerpt in plaintext on disk: $(grep -rl 'founder of Acme' "$FX/home/workflows" "$FX/home/tone" | head -3)"; fi
+  if grep -rlq "founder of Offload" "$FX/home/workflows" "$FX/home/tone"; then fail "OCR excerpt in plaintext on disk: $(grep -rl 'founder of Offload' "$FX/home/workflows" "$FX/home/tone" | head -3)"; fi
   if grep -rlq "You backed Spotify early" "$FX/home/workflows" "$FX/home/tone"; then fail "sent mail text in plaintext on disk"; fi
   grep -q "IGNORE\|Replaces:" "$FX/home/workflows/$wf/SKILL.md" && fail "SKILL.md carries observed label text"
   echo "cli end to end: dry run sealed, nothing allowed, no plaintext OCR or mail text"

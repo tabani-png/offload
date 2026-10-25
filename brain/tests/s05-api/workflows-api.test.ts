@@ -75,7 +75,7 @@ describe("s05 API: workflows", () => {
   test("GET /workflows and /workflows/:id; unknown id 404; GET-only paths still refuse POST", async () => {
     const list = await call<WorkflowsResponse>("/workflows");
     expect(list.body.workflows.map((w) => w.id)).toEqual([wfId]);
-    expect((await call<WorkflowDetailDTO>(`/workflows/${wfId}`)).body.facts).toContain("company: Acme");
+    expect((await call<WorkflowDetailDTO>(`/workflows/${wfId}`)).body.facts).toContain("company: Offload");
     expect((await call("/workflows/wf_nope0")).status).toBe(404);
     expect((await call("/workflows/../../etc")).status).toBe(404);
     expect((await call("/insights", { method: "POST" })).status).toBe(405);
@@ -87,7 +87,7 @@ describe("s05 API: workflows", () => {
     expect(r.status).toBe(200);
     expect(r.body.instances).toHaveLength(3);
     expect(r.body.instances[0]!.draft).toContain("Muhammad");
-    expect(r.body.instances[0]!.observed.excerpt).toContain("founder of Acme");
+    expect(r.body.instances[0]!.observed.excerpt).toContain("founder of Offload");
     expect(r.body.sideEffects.denied).toBe(r.body.sideEffects.attempted);
     expect((await call(`/workflows/${wfId}/dry-run`, { method: "POST", body: { limit: 0 } })).status).toBe(400);
   });

@@ -241,6 +241,21 @@ struct HTTPBrainClient: BrainClient {
     }
   }
 
+  /// POST /workflows/:id/auto-run {enabled} (s10b): the summary carries `autoRunPin` when it was turned on.
+  func setAutoRun(workflowId: String, enabled: Bool) async throws -> AutoRunResult {
+    let dto = try await call(WorkflowDTO.self, "POST", "workflows/\(Self.segment(workflowId))/auto-run", body: ["enabled": enabled])
+    return AutoRunResult(workflowId: dto.id, enabled: dto.autoRun, pin: dto.autoRunPin)
+  }
+
+  /// GET /observer keptFiles (s10b). Empty from an older brain.
+  func keptFiles() async throws -> [KeptFile] {
+    do {
+      return (try await get(ObserverResponseDTO.self, "observer").keptFiles ?? []).map(KeptFile.init)
+    } catch BrainError.notFound {
+      return []
+    }
+  }
+
   /// Permission rows: the brain's GET /observer first, then the app's own observer CLI.
   func permissionRows() async -> [PermissionState] {
     if let r = try? await observer() { return r.permissionRows() }
@@ -264,7 +279,7 @@ struct HTTPBrainClient: BrainClient {
       return out
     }
     return DashboardComposer.compose(dashboard: d, status: s, workflows: w.workflows, connectors: connectors,
-                                     timelines: timelines, permissions: await permissionRows(), calendar: calendar)
+                                     timelines: timelines, permissions: await permissionRows(), calendar: calendar, now: Date())
   }
 }
 
@@ -289,11 +304,13 @@ enum DashboardComposer {
 
   static func compose(dashboard d: DashboardResponse, status s: StatusResponse, workflows: [WorkflowDTO],
                       connectors: [String: ConnectorState], timelines: [TimelineResponse],
-                      permissions: [PermissionState], calendar: Calendar = .current) -> DashboardData {
+                      permissions: [PermissionState], calendar: Calendar = .current, now: Date? = nil) -> DashboardData {
     let byId = Dictionary(workflows.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     let autos = d.automations.map { a -> DashboardAutomation in
       let wf = byId[a.workflowId ?? a.id]
       var m = a.toDashboardAutomation(taskId: wf?.taskId)
+      m.autoRun = wf?.autoRun ?? false
+      m.autoRunPeople = wf?.autoRunPin?.pinnedRecipients.count
       m.connectors = m.connectors.map { $0.applying(connectors) }
       // The brain's reasons are fragments ("connect Gmail first"); the row shows sentences.
       if let reasons = a.needsYou, !reasons.isEmpty { m.needsYouReason = reasons.map(BrainError.sentence).joined(separator: " ") }
@@ -315,7 +332,7 @@ enum DashboardComposer {
     }
     if ranked.count > named.count { tasks.append(TimelineTask(id: otherTaskId, name: "Everything else", tint: 3, automated: false)) }
 
-    let days = timelines.sorted { $0.day < $1.day }.map { t -> TimelineDay in
+    var days = timelines.sorted { $0.day < $1.day }.map { t -> TimelineDay in
       var day = t.toTimelineDay(activeSince: activeSince, calendar: calendar)
       day.bars = day.bars.map { b in
         var b = b
@@ -323,6 +340,19 @@ enum DashboardComposer {
         return b
       }
       return day
+    }
+
+    // s10d: today always has a row (empty until the observer writes it), so the "now" marker has somewhere to sit.
+    if let now {
+      let today = calendar.startOfDay(for: now)
+      if !days.contains(where: { calendar.isDate($0.date, inSameDayAs: today) }), days.last.map({ $0.date < today }) ?? true {
+        let f = DateFormatter()
+        f.calendar = calendar
+        f.timeZone = calendar.timeZone
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        days.append(TimelineDay(day: f.string(from: today), date: today, bars: []))
+      }
     }
 
     let observing = ObservingState(

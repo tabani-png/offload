@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The insight card plus its detached hint. Pure render of (state, evidence, now): the live wrapper feeds a
@@ -48,7 +49,8 @@ struct InsightCardView: View {
       .padding(.top, Tokens.Space.s16)
 
     VStack(alignment: .leading, spacing: 0) {
-      Text(copy.title)
+      // s10d: broken where both lines come out even, so "your week" is never left alone on line two.
+      Text(BalancedWrap.lines(copy.title, width: Self.titleWidth, measure: Self.measureTitle).joined(separator: "\n"))
         .paragraphStyle(Tokens.TypeScale.display)
         .foregroundStyle(p.ink1)
         .fixedSize(horizontal: false, vertical: true)
@@ -69,6 +71,9 @@ struct InsightCardView: View {
         Chip(text: chip, style: .positive)
       }
       arithmetic(copy.arithmetic, p)
+      // s10d: the likely range belongs to the receipt it qualifies, as its footnote.
+      Text(copy.range).textStyle(Tokens.TypeScale.footnote).monospacedDigit().foregroundStyle(p.ink3)
+        .fixedSize(horizontal: false, vertical: true)
       HStack(alignment: .center, spacing: Tokens.Space.s8) {
         Text(copy.usesLabel).textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink3)
         FlowLayout(spacing: Tokens.Space.s8) {
@@ -122,7 +127,7 @@ struct InsightCardView: View {
       }
       ForEach(Array(steps.enumerated()), id: \.offset) { i, s in
         let last = i == steps.count - 1
-        if last { Rectangle().fill(p.ring).frame(height: 1) }
+        if last { Rectangle().fill(p.ring).frame(height: Tokens.Layout.hairline) }
         HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
           Text(s.label).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
             .frame(width: Self.receiptLabel, alignment: .leading)
@@ -140,7 +145,15 @@ struct InsightCardView: View {
     .accessibilityLabel(steps.map { "\($0.label): \($0.text)" }.joined(separator: ". "))
   }
 
-  static let receiptLabel: CGFloat = 80
+  static let receiptLabel: CGFloat = Tokens.Layout.receiptLabel
+  /// The title's measure: the card less its 20-pt sides.
+  static let titleWidth: Double = 400 - Tokens.Space.s20 * 2
+
+  static func measureTitle(_ s: String) -> Double {
+    let style = Tokens.TypeScale.display
+    let font = NSFont.systemFont(ofSize: style.size, weight: .medium)
+    return Double((s as NSString).size(withAttributes: [.font: font, .kern: style.tracking]).width)
+  }
 
   private func options(_ insight: Insight) -> some View {
     let chosen: Int? = {
@@ -160,6 +173,7 @@ struct InsightCardView: View {
         OptionRow(number: n, title: title, recommended: rec,
                   state: rowState(n, chosen: chosen),
                   pressed: pressedOption == n)
+          .help(n == 3 ? "3: not now, until tomorrow. E: dismiss this insight for good." : "")
       }
     }
   }
@@ -171,9 +185,7 @@ struct InsightCardView: View {
 
   private func evidenceList(_ insight: Insight, _ copy: CardCopy, _ p: Palette) -> some View {
     VStack(alignment: .leading, spacing: Tokens.Space.s8) {
-      Rectangle().fill(p.ring).frame(height: 1).padding(.vertical, Tokens.Space.nudge)
-      Text(copy.range).textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
-        .fixedSize(horizontal: false, vertical: true)
+      Rectangle().fill(p.ring).frame(height: Tokens.Layout.hairline).padding(.vertical, Tokens.Space.nudge)
       if let spans = evidence {
         let e = EvidenceCopy(spans: spans, insight: insight)
         SectionHeader(title: e.header, trailing: e.trailing)
@@ -259,10 +271,9 @@ struct InsightCardView: View {
 
   private var hint: some View {
     HintPill {
+      // s10d: one way out in the hint. E still dismisses an insight for good; it is in the 3 row's tooltip.
       Keycap(label: "1"); Keycap(label: "2"); Keycap(label: "3")
       Text("choose").padding(.trailing, Tokens.Space.s8)
-      Keycap(label: "E")
-      Text("dismiss").padding(.trailing, Tokens.Space.s8)
       Keycap(label: "esc")
       Text("close")
     }

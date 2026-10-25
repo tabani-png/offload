@@ -12,7 +12,7 @@ describe("s05 MCP mail source", () => {
     try {
       const src = new McpMailSource({ caller: conn.caller, tool: "search_emails", args: { query: "in:sent" }, limitArg: "maxResults" });
       const got = await src.listSent({ limit: 1 });
-      expect(got).toEqual([{ id: "s1", to: ["anna@northzone.com"], subject: "Acme seed round: Northzone", body: "Hi Anna,\n\nShort one.\n\nMuhammad", sentAt: Date.parse("2026-10-01T09:00:00Z") }]);
+      expect(got).toEqual([{ id: "s1", to: ["anna@northzone.com"], subject: "Offload seed round: Northzone", body: "Hi Anna,\n\nShort one.\n\nMuhammad", sentAt: Date.parse("2026-10-01T09:00:00Z") }]);
     } finally {
       await conn.close();
     }

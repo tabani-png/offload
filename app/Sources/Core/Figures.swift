@@ -68,6 +68,12 @@ enum Figures {
     "\(String(format: "%.1f", locale: posix, observedMinutes)) min by hand, \(Int(reviewSeconds.rounded())) s to review"
   }
 
+  /// s10d: a headline share in whole percent ("64%"), from the brain's display when it sent one ("64.5%" → "65%").
+  static func wholeShare(display: String?, value: Double) -> String {
+    let raw = display.flatMap { Double($0.replacingOccurrences(of: "%", with: "")) } ?? value * 100
+    return "\(Int(raw.rounded(.toNearestOrAwayFromZero)))%"
+  }
+
   /// The brain's share display ("64.5%") when it sent one, else the value with the card's rule.
   static func share(display: String?, value: Double) -> String { display ?? Format.percent(value) }
 
@@ -117,6 +123,10 @@ enum PlainWords {
     // "(an export of your investor sheet: email, first_name, last_name, notes)": column names are not copy.
     if let re = try? NSRegularExpression(pattern: #"\s*\([^()]*(_|\.csv|\.md)[^()]*\)"#) {
       t = re.stringByReplacingMatches(in: t, range: NSRange(t.startIndex..., in: t), withTemplate: "")
+    }
+    // s10d: "your investor-outreach tone card" is "your voice", the name the review window uses for it.
+    if let re = try? NSRegularExpression(pattern: #"\b[Yy]our [A-Za-z-]+ (tone|style) card\b"#) {
+      t = re.stringByReplacingMatches(in: t, range: NSRange(t.startIndex..., in: t), withTemplate: "your voice")
     }
     for (a, b) in rewrites { t = t.replacingOccurrences(of: a, with: b) }
     while t.contains("  ") { t = t.replacingOccurrences(of: "  ", with: " ") }

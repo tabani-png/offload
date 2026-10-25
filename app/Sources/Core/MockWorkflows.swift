@@ -258,23 +258,9 @@ extension MockBrainClient {
     TimelineTask(id: "t_other", name: "Everything else", tint: 3, automated: false),
   ]
 
-  /// (task, "HH:MM", "HH:MM", automated). Outreach turned on Wed 21 at 09:00: after that it is Offload's runs plus
-  /// your batch review, drawn hatched.
-  private static let timelineRows: [(Int, [(String, String, String, Bool)])] = [
-    (17, [("t_other", "10:30", "11:40", false)]),
-    (18, [("t_outreach", "19:30", "20:20", false), ("t_other", "20:20", "20:50", false)]),
-    (19, [("t_outreach", "09:00", "10:40", false), ("t_sched", "10:45", "11:20", false), ("t_other", "11:30", "12:30", false),
-          ("t_outreach", "13:30", "15:10", false), ("t_crm", "15:15", "15:45", false), ("t_other", "16:00", "17:30", false),
-          ("t_crm", "17:30", "17:50", false)]),
-    (20, [("t_outreach", "08:50", "10:30", false), ("t_other", "10:40", "12:00", false), ("t_sched", "12:00", "12:25", false),
-          ("t_outreach", "13:40", "15:20", false), ("t_other", "15:30", "17:00", false), ("t_crm", "17:10", "17:40", false)]),
-    (21, [("t_outreach", "09:00", "09:18", true), ("t_other", "09:20", "11:30", false), ("t_sched", "11:30", "12:10", false),
-          ("t_other", "13:00", "15:00", false), ("t_outreach", "15:00", "15:12", true), ("t_crm", "15:20", "15:50", false),
-          ("t_other", "16:00", "18:00", false)]),
-    (22, [("t_outreach", "09:00", "09:16", true), ("t_sched", "09:20", "09:50", false), ("t_other", "10:00", "12:30", false),
-          ("t_other", "13:30", "16:30", false), ("t_outreach", "16:30", "16:42", true), ("t_crm", "16:45", "17:15", false)]),
-    (23, [("t_outreach", "09:00", "09:15", true), ("t_other", "09:20", "10:20", false), ("t_sched", "10:20", "10:50", false)]),
-  ]
+  /// The sample week's rows come from `MockWeek` (s10d), the one source the card, the timeline and the tracked
+  /// total all read, so "64.4% of your week" and the outreach bars are the same minutes.
+  private static let timelineRows: [(Int, [(String, String, String, Bool)])] = MockWeek.rows
 
   private static let barTitles: [String: (String, String?)] = [
     "t_outreach": ("Intro: Offload seed round", "Halden Ventures"),

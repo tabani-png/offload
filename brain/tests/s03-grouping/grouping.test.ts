@@ -10,7 +10,7 @@ const RAW = { ...DEFAULT_SESSION_OPTIONS, idleBackdateMs: 0 };
 
 describe("normalisation", () => {
   test("emails, numbers, times and long ids are masked", () => {
-    expect(maskText("Inbox (12) - sam@acme.io - Gmail")).toBe("Inbox (<n>) - <email> - Gmail");
+    expect(maskText("Inbox (12) - muhammad@offload.so - Gmail")).toBe("Inbox (<n>) - <email> - Gmail");
     expect(maskText("Call at 3:30pm on 2026-10-12, ref 8f3a9c2d1e")).toBe("Call at <time> on <date>, ref <id>");
   });
 
@@ -23,13 +23,13 @@ describe("normalisation", () => {
 
   test("titles that differ only in names cluster into one template with a wildcard", () => {
     const titles = [
-      "Re: Acme seed round for Sequoia Capital - <email> - Gmail",
-      "Re: Acme seed round for Index Ventures - <email> - Gmail",
-      "Re: Acme seed round for Accel - <email> - Gmail",
+      "Re: Offload seed round for Sequoia Capital - <email> - Gmail",
+      "Re: Offload seed round for Index Ventures - <email> - Gmail",
+      "Re: Offload seed round for Accel - <email> - Gmail",
     ].map(tokenize);
     const clusters = clusterTitles(titles);
     expect(clusters.length).toBe(1);
-    expect(clusters[0]?.template).toBe("Re: Acme seed round for <*> - <email> - Gmail");
+    expect(clusters[0]?.template).toBe("Re: Offload seed round for <*> - <email> - Gmail");
   });
 
   test("titles that differ only in a person's name share one template", () => {
@@ -39,7 +39,7 @@ describe("normalisation", () => {
   });
 
   test("structurally different titles stay in different clusters", () => {
-    const clusters = clusterTitles(["Inbox (<n>) - <email> - Gmail", "Re: Acme seed round for Accel - <email> - Gmail", "New Message"].map(tokenize));
+    const clusters = clusterTitles(["Inbox (<n>) - <email> - Gmail", "Re: Offload seed round for Accel - <email> - Gmail", "New Message"].map(tokenize));
     expect(clusters.length).toBe(3);
   });
 
@@ -66,14 +66,14 @@ function outreachDay(): Span[] {
   const b = new EventBuilder();
   let t = 0;
   const funds = ["sequoia.com", "accel.com", "indexventures.com", "a16z.com", "gv.com", "lsvp.com"];
-  b.focus(t, "Inbox (3) - sam@acme.io - Gmail");
+  b.focus(t, "Inbox (3) - muhammad@offload.so - Gmail");
   t += 20;
   for (const [i, d] of funds.entries()) {
     b.focus(t, "New Message");
-    b.at(t + 2, "ocr", { text: `To: partner${i}@${d}\nSubject: Acme seed round\nHi there, we are raising a seed round`, textHash: `h${i}` });
+    b.at(t + 2, "ocr", { text: `To: partner${i}@${d}\nSubject: Offload seed round\nHi there, we are raising a seed round`, textHash: `h${i}` });
     b.at(t + 60, "input", { keys: 200, clicks: 3 });
     t += 180;
-    b.focus(t, "Inbox (3) - sam@acme.io - Gmail");
+    b.focus(t, "Inbox (3) - muhammad@offload.so - Gmail");
     t += 20;
   }
   b.at(t, "idle_start");
@@ -82,7 +82,7 @@ function outreachDay(): Span[] {
 
 describe("task grouping", () => {
   test("own addresses are detected from mail window titles", () => {
-    expect(detectOwnEmails(outreachDay())).toEqual(["sam@acme.io"]);
+    expect(detectOwnEmails(outreachDay())).toEqual(["muhammad@offload.so"]);
   });
 
   test("compose spans and inbox spans become two tasks with stable ids", async () => {
@@ -97,13 +97,13 @@ describe("task grouping", () => {
     const compose = tasks.find((t) => t.profile.template === "New Message");
     expect(compose?.instances.length).toBe(6);
     expect(compose?.profile.identifiers.domains).toContain("sequoia.com");
-    expect(compose?.profile.identifiers.counterparties).not.toContain("sam@acme.io");
+    expect(compose?.profile.identifiers.counterparties).not.toContain("muhammad@offload.so");
   });
 
   test("a short interruption inside the same item does not split the instance", async () => {
     const b = new EventBuilder();
     b.focus(0, "Zoom Meeting", "us.zoom.xos", "");
-    b.focus(600, "general (Channel) - Acme - Slack", "com.tinyspeck.slackmacgap", "");
+    b.focus(600, "general (Channel) - Offload - Slack", "com.tinyspeck.slackmacgap", "");
     b.focus(630, "Zoom Meeting", "us.zoom.xos", "");
     b.at(1200, "idle_start");
     const tasks = await groupTasks(sessionize(b.events, "2026-10-12", RAW));

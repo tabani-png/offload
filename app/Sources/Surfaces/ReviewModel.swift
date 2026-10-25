@@ -17,6 +17,8 @@ final class ReviewModel: ObservableObject {
   @Published private(set) var message: String?
   /// A section id the window should scroll to (QA and "show me the dry run").
   @Published var scrollRequest: String?
+  /// s10d: a text box has focus, so R, E and S type letters instead of acting (the action bar says so).
+  @Published var textEditing = false
   static let dryRunSectionId = "section.dryrun"
   /// s05c: the tone card and SKILL.md text from the brain, and the editable copy of the SKILL fields.
   @Published private(set) var tone: ToneCard?
@@ -90,7 +92,7 @@ final class ReviewModel: ObservableObject {
     guard toneUnsaved, !saving else { return }
     let text = toneDraft
     if let max = tone?.maxBytes, !ToneCard.fits(text, maxBytes: max) {
-      message = "The tone card is too long. Keep it under \(max / 1024) KB."
+      message = "That is too long for your voice. Keep it under \(max / 1024) KB."
       return
     }
     saving = true
@@ -103,9 +105,9 @@ final class ReviewModel: ObservableObject {
         w.toneCard = t.text ?? ""
         w.toneEdited = t.edited
         flow.replaceWorkflow(w)
-        message = "Tone card saved. The next dry run writes in it."
+        message = "Your voice is saved. The next dry run writes in it."
       } catch {
-        message = "Tone card not saved. \(BrainError.message(for: error))"
+        message = "Your voice was not saved. \(BrainError.message(for: error))"
       }
     }
   }
@@ -131,7 +133,7 @@ final class ReviewModel: ObservableObject {
           if w.batchHash.isEmpty { w.batchHash = workflow.batchHash }
           flow.replaceWorkflow(w)
         }
-        message = "SKILL.md saved. Run the dry run again to see it."
+        message = "Steps saved. Run the dry run again to see them."
         sheet = nil
       } catch {
         if case .badRequest(let m)? = error as? BrainError {
@@ -143,13 +145,25 @@ final class ReviewModel: ObservableObject {
     }
   }
 
+  /// Snapshots: the steps as the editor shows them, from the workflow (the brain's GET /skill live).
+  var previewSkillDoc: SkillDoc {
+    let w = workflow
+    return SkillDoc(workflowId: w.id, skillMd: w.skillMarkdown, description: w.summary,
+                    steps: w.steps.map { SkillStep(id: $0.id, type: $0.type.rawValue, title: $0.title, detail: $0.detail,
+                                                   connector: $0.connectorId, sideEffect: $0.type.isSideEffect) },
+                    gates: w.steps.filter(\.isGate).map(\.id),
+                    limits: .init(descriptionChars: 400, titleChars: 80, detailChars: 400))
+  }
+
   /// Every string the window shows (s10a).
   var copy: ReviewCopy { ReviewCopy(workflow: workflow, dryRun: dryRun, running: runningDryRun) }
 
   func send(_ key: ReviewKey) {
     // s10a: Turn on is disabled while a connector a later step needs is missing; ↩ and ⌘↩ say why instead.
+    // s10d: the reason is already in the sheet, once, as the amber lines. ↩ / ⌘↩ press the sheet's primary, which
+    // while blocked is "Connect …".
     if !ArmGuard.allows(key, flow: flow) {
-      message = flow.plan.turnOnBlockedReason
+      connectFirstMissing()
       return
     }
     apply(flow.handle(key, at: clock()))
@@ -216,7 +230,9 @@ final class ReviewModel: ObservableObject {
         skillEdit = skillDoc
         sheet = .skill(editing: true)
       case .showSkill:
-        sheet = .skill(editing: false)
+        // s10d: the page already lists the steps; S opens the one place that changes them.
+        skillEdit = skillDoc
+        sheet = .skill(editing: true)
       case .rerunDryRun:
         rerun()
       }

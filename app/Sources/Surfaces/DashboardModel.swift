@@ -10,6 +10,18 @@ final class DashboardModel: ObservableObject {
   @Published private(set) var paused = false
   /// Why the dashboard could not load, as one calm sentence (s09a).
   @Published private(set) var problem: String?
+  /// s10d: the sidebar's place, the files kept until you delete them, and the auto-send sheet.
+  @Published var section: DashboardSection = .overview
+  @Published private(set) var keptFiles: [KeptFile] = []
+  @Published private(set) var autoSend: AutoSendSheet?
+  @Published private(set) var autoSendWorking = false
+
+  enum AutoSendSheet: Equatable {
+    /// Before: what turning it on does.
+    case offer(automationId: String, workflowId: String, name: String)
+    /// After: who it covers (the brain's pin).
+    case result(AutoRunResult)
+  }
 
   var onOpenWorkflow: ((String) -> Void)?
   var onConnect: ((Connector) -> Void)?
@@ -37,6 +49,49 @@ final class DashboardModel: ObservableObject {
     } catch {
       problem = BrainError.message(for: error)
     }
+    keptFiles = (try? await client.keptFiles()) ?? keptFiles
+  }
+
+  func show(_ s: DashboardSection) { section = s }
+
+  // MARK: auto-send (s10d, brain s10b autoRunPin)
+
+  func offerAutoSend(_ a: DashboardAutomation) {
+    guard let wf = a.workflowId else { return }
+    autoSend = .offer(automationId: a.id, workflowId: wf, name: a.name)
+  }
+
+  /// POST auto-run on; the sheet then shows who it covers, from the brain's pin.
+  func confirmAutoSend() {
+    guard case .offer(let id, let wf, _) = autoSend, !autoSendWorking else { return }
+    autoSendWorking = true
+    Task {
+      defer { autoSendWorking = false }
+      do {
+        let r = try await client.setAutoRun(workflowId: wf, enabled: true)
+        markAutoRun(id, on: r.enabled, people: r.pinnedRecipients.count)
+        autoSend = .result(r)
+      } catch {
+        autoSend = nil
+        problem = BrainError.message(for: error)
+      }
+    }
+  }
+
+  func turnOffAutoSend(_ a: DashboardAutomation) {
+    guard let wf = a.workflowId else { return }
+    Task {
+      if (try? await client.setAutoRun(workflowId: wf, enabled: false)) != nil { markAutoRun(a.id, on: false, people: nil) }
+    }
+  }
+
+  func dismissAutoSend() { autoSend = nil }
+
+  private func markAutoRun(_ id: String, on: Bool, people: Int?) {
+    guard var d = data, let i = d.automations.firstIndex(where: { $0.id == id }) else { return }
+    d.automations[i].autoRun = on
+    d.automations[i].autoRunPeople = people
+    data = d
   }
 
   /// Fresh permission rows from the observer, without reloading the brain.
@@ -61,8 +116,13 @@ final class DashboardModel: ObservableObject {
     switch key {
     case .next, .previous: selection.move(key)
     case .point:
-      if let id = selection.selectedId, let a = automations.first(where: { $0.id == id }) { point(at: a) }
-    case .evidence: showEvidence()
+      if let id = selection.selectedId, let a = automations.first(where: { $0.id == id }) {
+        section = .automations
+        point(at: a)
+      }
+    case .evidence:
+      section = .week
+      showEvidence()
     case .open:
       if let id = selection.selectedId, let a = automations.first(where: { $0.id == id }), let wf = a.workflowId {
         onOpenWorkflow?(wf)
@@ -76,17 +136,33 @@ final class DashboardModel: ObservableObject {
     onTogglePause?(paused)
   }
 
+  /// s10d: the observer row's one action. Resume when paused or not recording; Settings when a grant is missing.
+  var observerAction: ObserverAction {
+    guard let d = data else { return .resume }
+    return ObserverAction.forState(paused ? .paused : d.observing.state, permissions: d.observing.permissions)
+  }
+
+  func performObserverAction() {
+    switch observerAction {
+    case .pause:
+      paused = true
+      onTogglePause?(true)
+    case .resume:
+      paused = false
+      if var d = data, d.observing.state == .stale { d.observing.state = .watching; data = d }
+      onTogglePause?(false)
+    case .openSettings(let url):
+      onOpenURL?(url)
+    }
+  }
+
+  var onOpenURL: ((URL) -> Void)?
+  var onReveal: ((String) -> Void)?
+
   // MARK: pointer
 
-  /// Where P on a row points: the first connector that is not ready, else the reason line.
-  static func pointerTarget(for a: DashboardAutomation) -> (id: String, label: String) {
-    if let c = a.connectors.first(where: { $0.state != .connected }) {
-      let verb = c.state == .missingEnv ? "Add the \(c.name) key here" : "Connect \(c.name) here"
-      return ("conn.\(a.id).\(c.id)", a.state == .needsYou ? verb : "\(verb) before it can run")
-    }
-    if a.state == .readyForReview { return ("row.\(a.id)", "Press ↩ to review it") }
-    return ("row.\(a.id)", a.needsYouReason ?? a.name)
-  }
+  /// Where P on a row points (Core: DashboardPointer, so it is tested).
+  static func pointerTarget(for a: DashboardAutomation) -> (id: String, label: String) { DashboardPointer.target(for: a) }
 
   func point(at a: DashboardAutomation) {
     let t = Self.pointerTarget(for: a)
@@ -105,7 +181,7 @@ final class DashboardModel: ObservableObject {
   static func evidenceLabel(_ bar: TimelineBar, tasks: [TimelineTask]) -> String {
     let minutes = Int((bar.end.timeIntervalSince(bar.start) / 60).rounded())
     let task = tasks.first { $0.id == bar.taskId }?.name.lowercased() ?? "this task"
-    let dur = minutes >= 60 ? "\(minutes / 60) h \(minutes % 60) min" : "\(minutes) min"
+    let dur = minutes >= 60 ? (minutes % 60 == 0 ? "\(minutes / 60) h" : "\(minutes / 60) h \(minutes % 60) min") : "\(minutes) min"
     return "\(Format.weekdayClock(bar.start)) · \(dur) of \(task), by hand"
   }
 
@@ -124,8 +200,12 @@ final class DashboardModel: ObservableObject {
 
   // MARK: snapshot support
 
-  func preview(_ d: DashboardData, pointer: PointerRequest? = nil) {
+  func preview(_ d: DashboardData, pointer: PointerRequest? = nil, section: DashboardSection = .overview,
+               keptFiles: [KeptFile] = MockBrainClient.sampleKeptFiles, autoSend: AutoSendSheet? = nil) {
     set(d)
     self.pointer = pointer
+    self.section = section
+    self.keptFiles = keptFiles
+    self.autoSend = autoSend
   }
 }

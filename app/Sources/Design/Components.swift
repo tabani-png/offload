@@ -19,11 +19,12 @@ struct Keycap: View {
     Text(label)
       .textStyle(label.count > 2 ? Tokens.TypeScale.keyWord : Tokens.TypeScale.key)
       .monospacedDigit()
-      .foregroundStyle(onPrimary ? p.primaryInk.opacity(0.62) : (prominent ? p.ink1 : p.ink2))
+      // s10d: on the primary the key reads at 85% of the label's ink (62% was much fainter than the label).
+      .foregroundStyle(onPrimary ? p.primaryInk.opacity(0.85) : (prominent ? p.ink1 : p.ink2))
       .padding(.horizontal, label.count > 1 ? Tokens.Space.s4 : 0)
       .frame(minWidth: Tokens.Size.key, minHeight: Tokens.Size.key)
-      .background(shape.fill(onPrimary ? p.primaryInk.opacity(0.08) : (pressed ? p.ringStrong : p.fillStrong)))
-      .overlay(shape.strokeBorder(onPrimary ? p.primaryInk.opacity(0.10) : p.ring, lineWidth: 1))
+      .background(shape.fill(onPrimary ? p.primaryInk.opacity(0.12) : (pressed ? p.ringStrong : p.fillStrong)))
+      .overlay(shape.strokeBorder(onPrimary ? p.primaryInk.opacity(0.22) : p.ring, lineWidth: 1))
       // A faint lower lip gives the key its depth without a drop shadow.
       .overlay(
         shape.strokeBorder(
@@ -88,11 +89,12 @@ struct Chip: View {
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    let (ink, fill, ring): (Color, Color, Color) = {
+    let (ink, fill, ring): (Color, Color, Color?) = {
       switch style {
       case .neutral: return (p.ink2, p.fill, p.ring)
       case .positive: let g = p.status(.done); return (p.statusInk(.done), g.opacity(0.14), g.opacity(0.22))
-      case .recommended: let a = p.status(.needsYou); return (p.statusInk(.needsYou), a.opacity(0.15), a.opacity(0.0))
+      // A tag, not a control: tint only, no ring (s10d removed the always-invisible one).
+      case .recommended: return (p.statusInk(.needsYou), p.status(.needsYou).opacity(0.15), nil)
       }
     }()
     HStack(spacing: Tokens.Space.s4) {
@@ -104,7 +106,7 @@ struct Chip: View {
     .padding(.horizontal, Tokens.Space.s8)
     .frame(height: style == .recommended ? Tokens.Size.tag : Tokens.Size.chip)
     .background(Capsule().fill(fill))
-    .overlay(Capsule().strokeBorder(ring, lineWidth: 1))
+    .overlay { if let ring { Capsule().strokeBorder(ring, lineWidth: 1) } }
     .fixedSize()
   }
 }
@@ -188,20 +190,22 @@ struct PrimaryButton: View {
         Text(title).textStyle(Tokens.TypeScale.label)
         if let key {
           // The same Keycap as everywhere else (s10a), toned for the primary fill.
-          Keycap(label: key, onPrimary: true)
+          Keycap(label: key, onPrimary: isEnabled)
         } else {
           Image(systemName: "arrow.right").symbolStyle(Tokens.TypeScale.Symbol.regular)
         }
       }
-      .foregroundStyle(p.primaryInk)
+      // s10d: disabled keeps its label, the way a disabled AppKit button does: a quiet fill and tertiary ink, never
+      // a faded white pill with nothing on it.
+      .foregroundStyle(isEnabled ? p.primaryInk : p.ink3)
       .padding(.leading, Tokens.Space.s16)
       .padding(.trailing, key == nil ? Tokens.Space.s16 : Tokens.Space.s8)
       .frame(height: Tokens.Size.control)
-      .background(Capsule().fill(p.primaryFill))
+      .background(Capsule().fill(isEnabled ? p.primaryFill : p.fill))
+      .overlay { if !isEnabled { Capsule().strokeBorder(p.ring, lineWidth: 1) } }
       .contentShape(Capsule())
     }
     .buttonStyle(PressStyle())
-    .opacity(isEnabled ? 1 : 0.4)
   }
 
   @Environment(\.isEnabled) private var isEnabled
