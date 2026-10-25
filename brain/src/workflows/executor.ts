@@ -8,7 +8,8 @@
 import type { McpServerConfig, Options } from "@anthropic-ai/claude-agent-sdk";
 import type { Role } from "./allowlist.ts";
 import type { Batch } from "./batch.ts";
-import type { Gate } from "./gate.ts";
+import type { CrmSheet } from "./allowlist.ts";
+import type { Gate, GateAction } from "./gate.ts";
 import { UNTRUSTED_RULE, untrustedBlock } from "./untrusted.ts";
 
 export interface ExecJob {
@@ -23,6 +24,13 @@ export interface ExecJob {
   signal?: AbortSignal;
   /** Called once per allowed call when its result is known. */
   onToolResult?: (rec: ToolCallRecord) => void;
+  /** s13: only these item keys (the connector chain's fallback hands over the never-attempted items). The gate still
+   * checks every call against the whole approved batch. Absent = every item. */
+  only?: ReadonlySet<string>;
+  /** s13: the side-effect actions the workflow declares (deterministic executors build their calls from them). */
+  actions?: readonly GateAction[];
+  /** s13: where the CRM log may append (workflow.json inputs.crmSheet). */
+  crmSheet?: CrmSheet;
 }
 
 export interface ToolCallRecord {
@@ -51,7 +59,7 @@ export type Script = (job: ExecJob) => Array<{ tool: string; input: Record<strin
 export const sendEachItem =
   (tool: string): Script =>
   (job) =>
-    job.batch.items.map((i) => ({ tool, input: { to: i.to, subject: i.subject, body: i.body } }));
+    job.batch.items.filter((i) => job.only === undefined || job.only.has(i.key)).map((i) => ({ tool, input: { to: i.to, subject: i.subject, body: i.body } }));
 
 export class ScriptedExecutor implements Executor {
   constructor(
@@ -97,13 +105,14 @@ export const SEND_SYSTEM_APPEND = [
 ].join("\n");
 
 /** Prompt for the send step. The model only moves approved text into tool calls; the gate checks every call. */
-export function sendPrompt(batch: Batch): string {
+export function sendPrompt(batch: Batch, only?: ReadonlySet<string>): string {
+  const items = batch.items.filter((i) => only === undefined || only.has(i.key));
   return [
     "Send each approved email in the approved_batch block with the connected Gmail send tool, one tool call per email.",
     "Use the recipient, subject and body exactly as given: do not change, add or drop any text, and add no other recipients or fields.",
     "If a call is denied, do not retry it with different input; go on to the next email. When done, reply with one line per email: the address and sent or failed.",
     "",
-    untrustedBlock("approved_batch", JSON.stringify(batch.items.map((i) => ({ to: i.to, subject: i.subject, body: i.body })), null, 2)),
+    untrustedBlock("approved_batch", JSON.stringify(items.map((i) => ({ to: i.to, subject: i.subject, body: i.body })), null, 2)),
   ].join("\n");
 }
 
@@ -148,7 +157,7 @@ export function sdkQueryOptions(job: ExecJob, env: Readonly<Record<string, strin
     else job.signal.addEventListener("abort", () => abort.abort(job.signal?.reason), { once: true });
   }
   return {
-    prompt: sendPrompt(job.batch),
+    prompt: sendPrompt(job.batch, job.only),
     options: {
       ...(job.model === undefined ? {} : { model: job.model }),
       systemPrompt: { type: "preset", preset: "claude_code", append: SEND_SYSTEM_APPEND },

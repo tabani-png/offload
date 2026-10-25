@@ -14,6 +14,14 @@ export interface BatchItem {
   warnings: string[];
   /** s10b N1, live batches: sha256 of the recipients.csv row this draft was written from (autorun.ts rowHash). */
   sourceRowHash?: string;
+  /** s13: the commit a non-email item approves (computer use / any app): the verb of the control and the form values,
+   * as [label, value] pairs. Part of the batch hash when present. */
+  commit?: ItemCommit;
+}
+
+export interface ItemCommit {
+  verb: string;
+  fields: Array<[string, string]>;
 }
 
 export type BatchKind = "dry_run" | "live";
@@ -65,13 +73,16 @@ export interface Batch {
   review?: { newRecipients: number; changedRecipients: number; changedFiles: string[] };
 }
 
-export function batchHash(workflowId: string, kind: BatchKind, items: readonly Pick<BatchItem, "to" | "subject" | "body">[]): string {
-  const canonical = JSON.stringify({ v: 1, workflowId, kind, items: items.map((i) => [i.to.toLowerCase(), i.subject, i.body]) });
+export function batchHash(workflowId: string, kind: BatchKind, items: readonly (Pick<BatchItem, "to" | "subject" | "body"> & { commit?: ItemCommit })[]): string {
+  // An item without `commit` hashes exactly as before s13, so existing batch hashes and approvals stay valid.
+  const row = (i: Pick<BatchItem, "to" | "subject" | "body"> & { commit?: ItemCommit }) =>
+    i.commit === undefined ? [i.to.toLowerCase(), i.subject, i.body] : [i.to.toLowerCase(), i.subject, i.body, { verb: i.commit.verb, fields: i.commit.fields.map(([l, v]) => [l, v]) }];
+  const canonical = JSON.stringify({ v: 1, workflowId, kind, items: items.map(row) });
   return createHash("sha256").update(canonical).digest("hex");
 }
 
 export function makeBatch(workflowId: string, kind: BatchKind, items: readonly BatchItem[], createdAt: number): Batch {
-  const copy = items.map((i) => ({ ...i, key: i.to.toLowerCase(), warnings: [...i.warnings] }));
+  const copy = items.map((i) => ({ ...i, key: i.to.toLowerCase(), warnings: [...i.warnings], ...(i.commit === undefined ? {} : { commit: { verb: i.commit.verb, fields: i.commit.fields.map(([l, v]) => [l, v] as [string, string]) } }) }));
   return { version: 1, workflowId, kind, hash: batchHash(workflowId, kind, copy), createdAt, state: "pending", items: copy, approvedAt: null, results: [] };
 }
 

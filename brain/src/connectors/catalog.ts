@@ -76,3 +76,13 @@ export function connectorsFor(profile: TaskProfile): ConnectorMatch {
   if (calendar !== undefined && primary?.id !== calendar.id && profile.schedulingShare >= SCHEDULING_SHARE_FOR_CALENDAR) also.push(calendar);
   return { primary, also, all: primary === null ? also : [primary, ...also], reachability: primary?.reach ?? 0 };
 }
+
+// s13: capability -> candidate tools (a workflow may use a better tool than the app the person used, e.g. Instantly for
+// bulk outreach instead of Gmail). The data lives in capabilities.ts; this is the app -> capability bridge.
+export { CAPABILITIES, capabilityById, TOOLS } from "./capabilities.ts";
+
+/** The capabilities whose candidates include the tool this catalog connector maps to (gmail -> send-email, ...). */
+export async function capabilitiesForConnector(id: string): Promise<string[]> {
+  const { CAPABILITIES: caps, TOOLS: tools } = await import("./capabilities.ts");
+  return caps.filter((c) => c.candidates.some((k) => tools[k.tool]?.catalogId === id)).map((c) => c.id);
+}

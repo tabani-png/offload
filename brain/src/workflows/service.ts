@@ -18,6 +18,8 @@ import { insightConnectors } from "../api/dto.ts";
 import { CONNECTORS, connectorById } from "../connectors/catalog.ts";
 import { catalogStatus, loadConnectorsConfig, missingEnv, type ConnectorStatus, type Env } from "../connectors/config.ts";
 import { readSim, withSimulated } from "../connectors/link.ts";
+import { chainConnected } from "../connectors/chain.ts";
+import type { ConnectorChainDTO } from "../api/types.ts";
 import { roleOfTool } from "./allowlist.ts";
 import type { Batch } from "./batch.ts";
 import { pendingLiveBatch } from "./runner.ts";
@@ -124,9 +126,13 @@ export function detailOf(home: string, wf: WorkflowJson, status: Record<string, 
 
 /** `simulated` (s10e): true only while the brain runs with the stub model; then demo sign-ins
  * (connect-sim.json, connectors/link.ts) count as connected. With the real model they are ignored. */
-export function connectorStatus(home: string, env: Env, simulated = false): Record<string, ConnectorStatus> {
+export function connectorStatus(home: string, env: Env, simulated = false, now: number = Date.now()): Record<string, ConnectorStatus> {
   const status = catalogStatus(loadConnectorsConfig(home).config, env);
-  return simulated ? withSimulated(status, home) : status;
+  if (simulated) return withSimulated(status, home);
+  // s13 (real model): a catalog id the connector chain can commit through (Composio CLI, a direct API, computer use)
+  // counts as connected, from an unexpired decision in connector-chain.json.
+  for (const id of chainConnected(home, now)) if (id in status) status[id] = "connected";
+  return status;
 }
 
 // ---------- measured saving ----------
@@ -179,7 +185,7 @@ function legacyStatus(state: WorkflowState, wf: WorkflowJson): AutomationStatus 
 }
 
 export function dashboard(a: Analysis, home: string, env: Env, now: number = Date.now(), simulated = false): DashboardResponse {
-  const status = connectorStatus(home, env, simulated);
+  const status = connectorStatus(home, env, simulated, now);
   const automations: AutomationDTO[] = listWorkflows(home).map((wf) => {
     const s = summaryOf(home, wf, status, now);
     const measured = measuredSaving(a, wf.taskId, wf.activatedAt);
@@ -222,10 +228,10 @@ export function dashboard(a: Analysis, home: string, env: Env, now: number = Dat
 
 // ---------- connectors ----------
 
-export function connectorsResponse(a: Analysis, home: string, env: Env, simulated = false): ConnectorsResponse {
+export function connectorsResponse(a: Analysis, home: string, env: Env, simulated = false, chains?: ConnectorChainDTO[], now: number = Date.now()): ConnectorsResponse {
   const { config, errors, path } = loadConnectorsConfig(home);
   const real = catalogStatus(config, env);
-  const status = simulated ? withSimulated(real, home) : real;
+  const status = simulated ? withSimulated(real, home) : connectorStatus(home, env, false, now);
   const sim = simulated ? readSim(home) : {};
   return {
     version: API_VERSION,
@@ -250,6 +256,7 @@ export function connectorsResponse(a: Analysis, home: string, env: Env, simulate
       const list = conns.map(({ c, role }) => ({ id: c.id, name: c.name, role, status: status[c.id] ?? ("missing" as ConnectorStatus) }));
       return { insightId: i.id, name: i.label.name, ready: list.length > 0 && list.every((x) => x.status === "connected"), connectors: list };
     }),
+    ...(chains === undefined ? {} : { chains }),
   };
 }
 

@@ -1,6 +1,7 @@
 // s10e follow-up: Connect is generic. Every link has a resolution method (mcp | composio | api | computer), the
 // ordered `methods` the connector can use, `next` after a failure and a plain-words `detail`. api and computer are
-// declared seams that fail with "not available yet"; GET /connectors/:id/status is the generic poll.
+// declared seams that fail with "not available yet" (s13 filled them: see the updated test below); GET
+// /connectors/:id/status is the generic poll.
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ConnectLinkDTO, ErrorResponse } from "../../src/api/types.ts";
 import type { ConnectorsConfig } from "../../src/connectors/config.ts";
@@ -79,14 +80,18 @@ describe("s10e connect methods: routes (stub)", () => {
     expect((await call(x, "/connectors/gmail/status")).body.state).toBe("connected");
   });
 
-  test("api and computer are seams: failed, 'not available yet', next = the next implemented method", async () => {
+  // s13 filled the api and computer seams (slices/s13-connector-chain/SPEC.md, Scope changes). Without a direct
+  // connection set up, api fails in plain words and offers the next usable way; computer use is a demo sign-in here.
+  test("api and computer are filled by s13: api without a direct connection fails and offers the next usable way; computer is a demo sign-in", async () => {
     x = await linkWorld({ linkMs: 0 });
-    for (const method of ["api", "computer"]) {
-      const r = await call(x, "/connectors/gmail/link", "POST", { method });
-      expect(r.status).toBe(200);
-      expect(r.body).toMatchObject({ state: "failed", method, next: "mcp", detail: "That way of connecting is not available yet.", via: "composio" });
-    }
-    expect((await call(x, "/connectors/slack/link", "POST", { method: "computer" })).body).toMatchObject({ state: "failed", next: "composio" });
+    const api = await call(x, "/connectors/gmail/link", "POST", { method: "api" });
+    expect(api.status).toBe(200);
+    expect(api.body).toMatchObject({ state: "failed", method: "api", next: "computer", detail: "No direct connection is set up for Gmail.", via: "composio" });
+    const computer = await call(x, "/connectors/gmail/link", "POST", { method: "computer" });
+    expect(computer.body).toMatchObject({ state: "waiting", method: "computer", next: null });
+    expect((await call(x, "/connectors/slack/link", "POST", { method: "computer" })).body).toMatchObject({ state: "waiting", method: "computer" });
+    // A seam that is not built still fails "not available yet" (unavailableMethod is kept for later slices).
+    expect((await unavailableMethod("api").start({} as never)).detail).toBe("That way of connecting is not available yet.");
   });
 
   test("a method the connector cannot use fails in plain words and offers the one it can", async () => {

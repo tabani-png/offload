@@ -6,6 +6,7 @@
       "name": "offload-brain",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.3.310",
+        "@anthropic-ai/sdk": "1.3.0",
         "@modelcontextprotocol/sdk": "1.32.2",
       },
       "devDependencies": {
