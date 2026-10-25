@@ -66,7 +66,8 @@ export const PLAYBOOK_DRAFT_RULES = [
   "  It was learned from someone's past messages with everything personal removed.",
   "- Say the playbook's message, in the shape of its template, but in the voice of <style_card> and <examples>: their",
   "  greeting, sentence length, sign-off and name. Never use another person's name, sign-off or phrases.",
-  "- The playbook never adds facts: state only what is in <facts> and <recipient>.",
+  "- The playbook never adds facts: state only what is in <facts> and <recipient>. Its placeholders ({company},",
+  "  {their_org}, [name], [number]) stand for facts: fill them from <facts> and <recipient> or write [missing: ...].",
 ].join("\n");
 
 /** The playbook as the drafting model sees it: the message, the rules and the first-message template on one line. */
