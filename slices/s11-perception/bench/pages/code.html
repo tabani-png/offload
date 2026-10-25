@@ -1,0 +1,17 @@
+<html><head><style>body{margin:0;background:#1e1e1e;color:#d4d4d4;font:13px Menlo,monospace}.tabs{background:#252526;padding:8px 12px;color:#ccc}.side{position:fixed;top:32px;left:0;bottom:0;width:220px;background:#252526;padding:10px;color:#bbb;line-height:1.8}.ed{margin-left:230px;padding:10px;white-space:pre;line-height:1.6}.k{color:#569cd6}.c{color:#6a9955}.term{position:fixed;left:220px;right:0;bottom:0;height:200px;background:#181818;border-top:1px solid #333;padding:10px;white-space:pre;color:#ddd}.err{color:#f48771}</style></head><body>
+<div class=tabs>billing-service — src/invoices/reconcile.ts ● &nbsp;&nbsp; tests/reconcile.test.ts</div><div class=side>BILLING-SERVICE<br>▾ src<br>&nbsp;▾ invoices<br>&nbsp;&nbsp;&nbsp;reconcile.ts<br>&nbsp;&nbsp;&nbsp;match.ts<br>&nbsp;▸ payments<br>▾ tests<br>&nbsp;&nbsp;reconcile.test.ts<br>package.json</div>
+<div class=ed><span class=k>export function</span> reconcile(invoices: Invoice[], payments: Payment[]): Match[] {
+  <span class=k>const</span> byRef = <span class=k>new</span> Map(payments.map((p) =&gt; [p.reference, p]));
+  <span class=c>// TODO: handle partial payments (BILL-342)</span>
+  <span class=k>return</span> invoices.flatMap((inv) =&gt; {
+    <span class=k>const</span> p = byRef.get(inv.number);
+    <span class=k>if</span> (!p) <span class=k>return</span> [];
+    <span class=k>return</span> [{ invoice: inv.number, payment: p.id, diff: inv.total - p.amount }];
+  });
+}</div>
+<div class=term>$ bun test tests/reconcile.test.ts
+<span class=err>✗ reconcile &gt; matches partial payments [2.1ms]
+  expected 1 match, received 0
+  at tests/reconcile.test.ts:41:18</span>
+ 4 pass
+ 1 fail</div></body></html>

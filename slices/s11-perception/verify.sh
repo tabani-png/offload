@@ -13,8 +13,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BRAIN="$ROOT/brain"
 SLICE="$ROOT/slices/s11-perception"
 export OFFLOAD_BUILD_DIR="${OFFLOAD_BUILD_DIR:-/tmp/offload-build-s11}"
-MIN_ENGINE=170
-MIN_BRAIN=430
+MIN_ENGINE=180
+MIN_BRAIN=470
 fails=0
 fail() { echo "FAIL $*"; fails=$((fails + 1)); }
 
@@ -42,7 +42,7 @@ echo "$bout" | grep -E "^\s*[0-9]+ (pass|fail)$|^Ran [0-9]+ tests" || true
 bran="$(echo "$bout" | sed -n 's/^Ran \([0-9][0-9]*\) tests.*/\1/p' | tail -1)"
 [ "${bran:-0}" -ge "$MIN_BRAIN" ] || fail "brain: only ${bran:-0} tests ran, need $MIN_BRAIN"
 for tag in C1 C2 C3 C4 C5 C6 C7 C8 C9 XL; do
-  grep -rqE "test\(\"$tag: " "$BRAIN"/tests/s11-perception || { fail "no test named \"$tag: ...\" in brain/tests/s11-perception"; continue; }
+  grep -rqE "\(\"$tag: " "$BRAIN"/tests/s11-perception || { fail "no test named \"$tag: ...\" in brain/tests/s11-perception"; continue; }
   t="$(cd "$BRAIN" && S11_FIXTURE_HOME="$fixture" OFFLOAD_OBSERVER_BIN="$OFFLOAD_BUILD_DIR/offload-observer" bun test tests/s11-perception -t "$tag: " 2>&1)"
   n="$(echo "$t" | sed -n 's/^ *\([0-9][0-9]*\) pass$/\1/p' | tail -1)"
   echo "$t" | grep -qE "^ *0 fail$" && [ "${n:-0}" -gt 0 ] && echo "$tag: $n passing" || fail "tests for $tag did not pass"

@@ -315,6 +315,8 @@ function artefacts(home: string): Array<{ path: string; plain: boolean; dryRunBa
   for (const run of ls(join(tone, "blind-test"))) {
     for (const n of ls(join(tone, "blind-test", run))) if (/^(pairs\.md|key\.json)(\.enc)?$/.test(n)) out.push({ path: join(tone, "blind-test", run, n), plain: !n.endsWith(SEALED_SUFFIX) });
   }
+  // s11: Frame notes (what the local vision model saw), sealed under the frame's capture day (vision/notes.ts).
+  for (const n of ls(join(home, "frame-notes"))) if (/^\d{4}-\d{2}-\d{2}\.jsonl\.enc$/.test(n)) out.push({ path: join(home, "frame-notes", n), plain: false });
   return out;
 }
 

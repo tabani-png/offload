@@ -52,6 +52,24 @@ Observer state (`recording` = an event in the last 5 min, `paused` = last event 
 the stored days with event and bad-line counts and day errors (e.g. missing key), retention (`keepDays` 7, the next
 day to be purged and the local midnight it expires), and a summary of the analysis.
 
+s11: `captioner` (`CaptionerStatusDTO`) is the health of the local vision captioner that turns the observer's masked
+keyframes into Frame notes (ADR 0007): `enabled`, `captioner` (`off` | `stub` | `ollama`), `model` (tag in use; with
+`--vision-model auto` the best pulled `qwen3-vl` instruct model, `"auto"` until the first health check), `healthy`
+(null = not checked yet), `queueDepth`, `processed`, `failed` (given up after 3 attempts), `skipped` (purged before
+captioning), `lastPollAt`, `lastCaptionAt`, `lastLatencyMs`, `lastError` (a short reason, never note text). With
+`serve --captioner off` (the default) it is `{enabled:false, captioner:"off", model:null, healthy:null, ...zeros}`.
+
+## Perception (s11, ADR 0007)
+`serve --captioner off|stub|ollama [--vision-model TAG|auto] [--ollama-url URL]`. Default off. `ollama` captions with
+a LOCAL Ollama server; the URL must be loopback (`127.0.0.0/8`, `[::1]`, `localhost` pinned to 127.0.0.1), any other
+URL is a usage error (exit 2), and requests use `redirect: "error"`. `stub` is the deterministic offline captioner for
+demos and tests. The worker polls every 15 s for keyframes of the last 8 local days that have no note
+(`offload-observer list-frames` / `export-frame`; in-process under `OFFLOAD_KEYS=file`), keeps at most 32 queued,
+captions one at a time, masks every text field with `grouping/normalize.ts maskText` (a bare person name in
+`counterpart` becomes `<name>`), and writes `frame-notes/YYYY-MM-DD.jsonl.enc` sealed with the brain key of the
+frame's capture day (purged with it). Readers: `vision/notes.ts readFrameNotes(home, day)`. Images never leave the
+Mac and never reach Claude; no route serves images or frame notes yet.
+
 ## GET /insights[?reviewSeconds=S] → `InsightsResponse`
 Ranked insights, best first. `reviewSeconds` (0 < S <= 600, default 20) changes only the saving estimate.
 

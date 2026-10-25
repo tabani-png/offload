@@ -12,7 +12,7 @@ import { AgentSdkModel, StubModel, type Model } from "../models/model.ts";
 import { AgentSdkExecutor, type Executor } from "../workflows/executor.ts";
 import { dashboard, keptFiles } from "../workflows/service.ts";
 import { toEvidence, toInsights, toStatus, toTimeline } from "./dto.ts";
-import { BRAIN_READY_PREFIX, MODEL_HEADER, type BrainReadyDTO, type ModelLabel } from "./types.ts";
+import { BRAIN_READY_PREFIX, CAPTIONER_OFF, MODEL_HEADER, type BrainReadyDTO, type CaptionerStatusDTO, type ModelLabel } from "./types.ts";
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
 import { workflowRoute } from "./workflow-routes.ts";
 import { Linker, LinkNotFound, simPath, type LinkRunner } from "../connectors/link.ts";
@@ -32,6 +32,15 @@ export interface BrainOptions {
   log?: (line: string) => void;
   /** s10e connect-link routes: the demo sign-in time (stub) and the command runner (real). Tests inject both. */
   link?: { linkMs?: number; runner?: LinkRunner };
+  /** s11: the caption worker (vision/worker.ts). Its status is `captioner` in GET /status; startBrainServer starts
+   * and stops it. Absent = `serve --captioner off`. */
+  vision?: VisionHandle;
+}
+
+/** What the server needs from the caption worker. */
+export interface VisionHandle {
+  status(): CaptionerStatusDTO;
+  start?(): () => void;
 }
 
 export interface Brain {
@@ -195,7 +204,7 @@ export function createBrain(opts: BrainOptions): Brain {
     }
     if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed");
 
-    if (path === "/status") return json(200, toStatus(await analysis(undefined), now()));
+    if (path === "/status") return json(200, toStatus(await analysis(undefined), now(), opts.vision?.status() ?? CAPTIONER_OFF));
     // s10b: plus the user files kept until the user deletes them, for the app's "Observing" section.
     if (path === "/observer") return json(200, { ...(await observerStatus(opts.home, observerEnv, now())), keptFiles: keptFiles(opts.home) });
     if (path === "/dashboard") return json(200, dashboard(await analysis(undefined), opts.home, env, now(), simulated));
@@ -272,6 +281,8 @@ export async function startBrainServer(opts: BrainOptions & { port?: number; sch
   const tick = () => void brain.schedulerTick().catch((err: unknown) => log(`brain: scheduler failed: ${err instanceof Error ? err.message : String(err)}`));
   const timer = interval > 0 ? setInterval(tick, interval) : null;
   if (timer !== null) setTimeout(tick, 0);
+  // s11: the caption worker polls for keyframes in the background (local captioner only).
+  const stopVision = opts.vision?.start?.() ?? (() => {});
   const listener = Bun.serve({
     hostname: LOOPBACK,
     port: opts.port ?? 0,
@@ -288,6 +299,7 @@ export async function startBrainServer(opts: BrainOptions & { port?: number; sch
     url: `http://${LOOPBACK}:${port}/`,
     stop: async () => {
       if (timer !== null) clearInterval(timer);
+      stopVision();
       stopPurge();
       await listener.stop(true);
     },

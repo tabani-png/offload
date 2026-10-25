@@ -11,8 +11,8 @@ descriptions of it. This slice is perception only: keep masked keyframes, descri
 ## Engine: keyframes (tag = Swift suite prefix `S11`)
 1. K1 trigger. Keyframes ride the existing OCR trigger (focus change, at most every 30 s, never idle, never paused).
    An OCR job asks for pixels only when a keyframe could be kept now (`KeyframeThrottle.mightKeep`). A result is a
-   keyframe candidate when its OCR text hash changed OR its perceptual hash moved at least `dedupeDistance` bits from
-   the last kept frame.
+   keyframe candidate when its perceptual hash is at least `dedupeDistance` bits from every recent kept frame (K3);
+   the OCR text dedupe is unchanged and independent.
 2. K2 privacy before anything is kept. No pixels are requested or kept for an excluded window (ExclusionPolicy +
    `exclusions.json`, re-checked when the result arrives), while Secure Event Input is on, or for a result from before
    a pause/resume. Before encoding: every OCR line whose text the Masker flags (cards, SSN, IBAN, keys, OTP ...) is
@@ -52,7 +52,7 @@ descriptions of it. This slice is perception only: keep masked keyframes, descri
 12. C5 prompt: domain-agnostic, no app or industry examples that steer the answer, asks for the schema fields
     (activity, verb, object, counterpart, surface, step, inputs, outputs, identifiers, confidence); optional user
     context (role/industry) and the frame's app/host are passed as hints. Text fields of the note are masked with
-    `grouping/normalize.ts maskText` before storage.
+    `grouping/normalize.ts maskText` before storage; a bare person name in `counterpart` becomes `<name>`.
 13. C6 frame source: `ObserverFrameSource` lists frames per day and reads one: keychain mode through
     `offload-observer list-frames` / `export-frame` (observer child env only, REVIEW-2 N6); `OFFLOAD_KEYS=file`
     decrypts raw day keys in process (tests, fixtures). Expired days (exit 3) are skipped, never retried.

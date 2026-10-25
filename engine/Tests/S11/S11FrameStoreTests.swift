@@ -110,7 +110,8 @@ import Testing
         let s = FrameStore(layout: layout, days: DayCalendar(), keys: DayKeyVault(layout: layout, mode: .file, secrets: nil))
         let data = try jpeg()
         let ts = epochMillis(Date())
-        let m = meta(ts)
+        var m = meta(ts)
+        m.bytes = data.count
         try s.storeFrame(data, meta: m)
         let sha = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let info = "{\"frameId\":\"\(m.frameId)\",\"day\":\"\(DayCalendar().day(of: Date()))\",\"sha256\":\"\(sha)\",\"bytes\":\(data.count)}\n"

@@ -11,6 +11,8 @@
 //   bun run brain/src/cli.ts purge   --home DIR [--json]   (s10b N4: the app runs it at launch; same purge as serve)
 //   serve --log-file FILE (s10b): the brain's log lines go to FILE, scrubbed of content, rotated at 5 MB keeping 2.
 //     Without it they go to stderr, scrubbed the same way.
+//   serve --captioner off|stub|ollama (s11, default off) [--vision-model TAG|auto] [--ollama-url http://127.0.0.1:11434]:
+//     captions the observer's keyframes with a LOCAL vision model into sealed Frame notes (brain/src/vision).
 import { readFileSync } from "node:fs";
 import { installBrainLogging } from "./log.ts";
 import { purgeAll } from "./store/retention.ts";
@@ -27,6 +29,10 @@ import { buildTonePack } from "./tone/pack.ts";
 import { draftWorkflow, NotFoundError } from "./workflows/drafter.ts";
 import { dryRun } from "./workflows/dryrun.ts";
 import { readWorkflow } from "./workflows/store.ts";
+import { ObserverFrameSource } from "./vision/frames.ts";
+import { DEFAULT_OLLAMA_URL, DEFAULT_VISION_MODEL, loopbackOrigin, OllamaCaptioner } from "./vision/ollama.ts";
+import { StubCaptioner } from "./vision/stub.ts";
+import { CaptionWorker } from "./vision/worker.ts";
 
 const USAGE = `usage:
   bun run brain/src/cli.ts analyze --home DIR [--top N] [--review-seconds S] [--json]
@@ -37,7 +43,7 @@ const USAGE = `usage:
   bun run brain/src/cli.ts draft --insight N|ins_ID --home DIR [--facts FILE] [--json]
   bun run brain/src/cli.ts dry-run (--workflow ID | --insight N|ins_ID) --home DIR [--limit N] [--model stub|claude] [--json]
   bun run brain/src/cli.ts purge --home DIR [--json]
-  serve also takes --log-file FILE`;
+  serve also takes --log-file FILE, --captioner off|stub|ollama, --vision-model TAG|auto, --ollama-url URL`;
 
 class UsageError extends Error {}
 
@@ -60,6 +66,9 @@ interface Args {
   holdBack: number;
   answers: boolean;
   logFile: string;
+  captioner: "off" | "stub" | "ollama";
+  visionModel: string;
+  ollamaUrl: string;
 }
 
 function parse(argv: readonly string[]): Args {
@@ -72,7 +81,7 @@ function parse(argv: readonly string[]): Args {
     rest = rest.slice(1);
   } else if (first === "analyze" || first === "serve" || first === "draft" || first === "dry-run" || first === "purge") command = first;
   else throw new UsageError(`unknown command ${first ?? "(none)"}`);
-  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "real", source: "fixture", force: false, holdBack: 0, answers: false, logFile: "" };
+  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "real", source: "fixture", force: false, holdBack: 0, answers: false, logFile: "", captioner: "off", visionModel: DEFAULT_VISION_MODEL, ollamaUrl: DEFAULT_OLLAMA_URL };
   const num = (flag: string, v: string | undefined, min: number, max: number): number => {
     const n = Number(v);
     if (v === undefined || !Number.isFinite(n) || n < min || n > max) throw new UsageError(`${flag} must be a number in [${min}, ${max}]`);
@@ -97,6 +106,19 @@ function parse(argv: readonly string[]): Args {
     else if (a === "--force") args.force = true;
     else if (a === "--answers") args.answers = true;
     else if (a === "--log-file") args.logFile = str(a, rest[++i]);
+    else if (a === "--captioner") {
+      const v = rest[++i];
+      if (v !== "off" && v !== "stub" && v !== "ollama") throw new UsageError("--captioner must be off, stub or ollama");
+      args.captioner = v;
+    } else if (a === "--vision-model") args.visionModel = str(a, rest[++i]);
+    else if (a === "--ollama-url") {
+      args.ollamaUrl = str(a, rest[++i]);
+      try {
+        loopbackOrigin(args.ollamaUrl);
+      } catch (err) {
+        throw new UsageError(`--ollama-url: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     else if (a === "--model") {
       const v = rest[++i];
       if (v !== "stub" && v !== "real" && v !== "claude") throw new UsageError("--model must be stub or real (claude is an alias for real)");
@@ -159,6 +181,15 @@ export function formatDryRun(r: DryRunResponse): string {
   lines.push("", `total: ${r.totals.arithmetic}`);
   return lines.join("\n");
 }
+
+/** s11: the caption worker for `serve --captioner`, or undefined when off. Exported for tests. */
+export function visionWorker(a: Pick<Args, "home" | "captioner" | "visionModel" | "ollamaUrl">): CaptionWorker | undefined {
+  if (a.captioner === "off") return undefined;
+  const captioner = a.captioner === "stub" ? new StubCaptioner() : new OllamaCaptioner({ url: a.ollamaUrl, model: a.visionModel });
+  return new CaptionWorker({ home: a.home, source: new ObserverFrameSource(a.home), captioner });
+}
+
+export { parse as parseArgs };
 
 const modelOf = (a: Args): Model => (a.model === "stub" ? new StubModel() : new AgentSdkModel());
 
@@ -270,7 +301,9 @@ async function runCommand(args: Args): Promise<number> {
   if (generated) console.error("brain: no OFFLOAD_TOKEN set; generated one (it is in the ready line)");
   const model = modelOf(args);
   if (args.model === "stub") console.error("brain: --model stub: drafts come from the deterministic test model (labelled model: \"stub\")");
-  const srv = await startBrainServer({ home: args.home, token, port: args.port, workflows: { model, modelLabel: args.model } });
+  const vision = visionWorker(args);
+  if (vision !== undefined) console.error(`brain: captioner ${args.captioner} (${args.captioner === "ollama" ? `${args.visionModel} on ${args.ollamaUrl}` : "deterministic"}); images stay on this Mac`);
+  const srv = await startBrainServer({ home: args.home, token, port: args.port, workflows: { model, modelLabel: args.model }, ...(vision === undefined ? {} : { vision }) });
   // The first stdout line, machine-readable; startup logs went to stderr (brain/API.md "Connection").
   process.stdout.write(formatReadyLine(srv.port, token) + "\n");
   console.log(`brain listening on ${srv.url}`);

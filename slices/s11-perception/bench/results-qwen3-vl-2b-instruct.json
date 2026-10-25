@@ -1,0 +1,346 @@
+{
+  "summary": {
+    "model": "qwen3-vl:2b-instruct",
+    "images": 11,
+    "valid": 11,
+    "firstMs": 9393,
+    "medianMs": 3914,
+    "maxMs": 9393,
+    "activityOk": 9,
+    "activityChecked": 11,
+    "idOk": 5,
+    "idChecked": 6
+  },
+  "rows": [
+    {
+      "image": "card-light",
+      "ms": 9393,
+      "bytes": 98006,
+      "error": "",
+      "activityOk": true,
+      "idOk": null,
+      "fields": {
+        "activity": "reviewing a report on investor outreach emails",
+        "confidence": 0.8,
+        "verb": "reviewing",
+        "object": "report",
+        "surface": "Insight",
+        "step": "<n>",
+        "inputs": [
+          "<n> emails this week, about <n> min each",
+          "Saves <n> h a week"
+        ],
+        "identifiers": [
+          "Insight <n> of <n>",
+          "Investor outreach emails take <n>% of your week",
+          "<n> emails this week, about <n> min each",
+          "Saves <n> h a week"
+        ]
+      }
+    },
+    {
+      "image": "code",
+      "ms": 3802,
+      "bytes": 52263,
+      "error": "",
+      "activityOk": true,
+      "idOk": true,
+      "fields": {
+        "activity": "writing test code in a programming editor",
+        "confidence": 0.9,
+        "verb": "writing",
+        "object": "test file",
+        "counterpart": "billing-service",
+        "surface": "BLLING-SERVICE - src/invoices/reconcile.ts tests/reconcile.test.ts",
+        "step": "testing a reconcile function",
+        "inputs": [
+          "reconcile.test.ts",
+          "reconcile.ts"
+        ],
+        "outputs": [
+          "test results"
+        ],
+        "identifiers": [
+          "tests/reconcile.test.ts",
+          "reconcile.ts",
+          "package.json",
+          "src/invoices/reconcile.ts",
+          "match.ts",
+          "BLLING-SERVICE"
+        ]
+      }
+    },
+    {
+      "image": "compose",
+      "ms": 3116,
+      "bytes": 52592,
+      "error": "",
+      "activityOk": true,
+      "idOk": false,
+      "fields": {
+        "activity": "writing a new email",
+        "confidence": 0.9,
+        "verb": "writing",
+        "object": "email",
+        "counterpart": "Elena",
+        "surface": "Mail",
+        "step": "creating and preparing to send an email",
+        "inputs": [
+          "to",
+          "subject",
+          "body"
+        ],
+        "outputs": [
+          "new message"
+        ],
+        "identifiers": [
+          "Brightline-seed-deck.pdf"
+        ]
+      }
+    },
+    {
+      "image": "crm",
+      "ms": 4165,
+      "bytes": 72328,
+      "error": "",
+      "activityOk": true,
+      "idOk": true,
+      "fields": {
+        "activity": "reviewing deals in Pipeline CRM",
+        "confidence": 0.9,
+        "verb": "reviewing",
+        "object": "deals",
+        "surface": "Pipeline CRM - Deals",
+        "step": "reviewing deal details and activity log",
+        "inputs": [
+          "D-<n> Fleet renewal",
+          "D-<n> Warehouse sensors",
+          "D-<n> Pilot expansion",
+          "D-<n> Annual support"
+        ],
+        "outputs": [
+          "Deal information",
+          "Activity log",
+          "Task creation"
+        ],
+        "identifiers": [
+          "D-<n> Fleet renewal",
+          "D-<n> Warehouse sensors",
+          "D-<n> Pilot expansion",
+          "D-<n> Annual support",
+          "Sam K.",
+          "Priya R."
+        ]
+      }
+    },
+    {
+      "image": "dashboard-light",
+      "ms": 3735,
+      "bytes": 71564,
+      "error": "",
+      "activityOk": true,
+      "idOk": null,
+      "fields": {
+        "activity": "reviewing CRM notes from replies",
+        "confidence": 0.9,
+        "verb": "reviewing",
+        "object": "CRM notes",
+        "counterpart": "HubSpot",
+        "surface": "Offload",
+        "step": "Reviewing notes that are waiting to be logged",
+        "inputs": [
+          "CRM notes from replies",
+          "HubSpot signed out, so <n> notes are waiting to be logged"
+        ],
+        "outputs": [
+          "reviewed notes"
+        ],
+        "identifiers": [
+          "<n> h a week",
+          "HubSpot signed out, so <n> notes are waiting to be logged",
+          "Drafted from your week. Nothing runs until you approve it"
+        ]
+      }
+    },
+    {
+      "image": "invoice",
+      "ms": 3914,
+      "bytes": 82120,
+      "error": "",
+      "activityOk": false,
+      "idOk": true,
+      "fields": {
+        "activity": "reviewing a new bill with details of items, quantities, prices, taxes, and totals",
+        "confidence": 0.9,
+        "verb": "reviewing",
+        "object": "bill",
+        "counterpart": "Acme Bakery Ltd",
+        "surface": "Ledgerly",
+        "step": "creating a new bill for payment",
+        "inputs": [
+          "From",
+          "Bill date",
+          "Due date",
+          "Reference"
+        ],
+        "outputs": [
+          "Item",
+          "Qty",
+          "Unit price",
+          "Account",
+          "Tax",
+          "Amount"
+        ],
+        "identifiers": [
+          "<id>.pdf",
+          "<id>",
+          "RYE<n>",
+          "SPL<n>",
+          "<n>"
+        ]
+      }
+    },
+    {
+      "image": "onboarding-permissions-light",
+      "ms": 4538,
+      "bytes": 121637,
+      "error": "",
+      "activityOk": true,
+      "idOk": null,
+      "fields": {
+        "activity": "Allowing permissions for Offload on macOS",
+        "confidence": 0.95,
+        "verb": "allowing",
+        "object": "permission settings",
+        "surface": "Offload",
+        "step": "setting up permissions",
+        "inputs": [
+          "Screen Recording",
+          "Accessibility",
+          "Input Monitoring"
+        ],
+        "identifiers": [
+          "<n> of <n>"
+        ]
+      }
+    },
+    {
+      "image": "recruit",
+      "ms": 4026,
+      "bytes": 66406,
+      "error": "",
+      "activityOk": false,
+      "idOk": true,
+      "fields": {
+        "activity": "reviewing a job application form",
+        "confidence": 0.8,
+        "verb": "reviewing",
+        "object": "job application form",
+        "counterpart": "Jordan Mehta",
+        "surface": "TalentFlow",
+        "step": "submitting a scorecard",
+        "inputs": [
+          "resume",
+          "phone screen scorecard"
+        ],
+        "outputs": [
+          "scorecard"
+        ],
+        "identifiers": [
+          "<id>",
+          "jordan-mehta-cv.pdf",
+          "Screen <n>",
+          "Onsite <n>",
+          "Offer <n>",
+          "Must have: Spark at scale",
+          "Must have: data modelling",
+          "Nice to have: Kafka"
+        ]
+      }
+    },
+    {
+      "image": "review-1280-dark",
+      "ms": 4397,
+      "bytes": 88243,
+      "error": "",
+      "activityOk": true,
+      "idOk": null,
+      "fields": {
+        "activity": "reviewing a workflow for investor outreach emails",
+        "confidence": 0.9,
+        "verb": "reviewing",
+        "object": "workflow",
+        "counterpart": "investor outreach",
+        "surface": "Review workflow",
+        "step": "<n>",
+        "inputs": [
+          "Investor pipeline sheet, rows marked Not contacted"
+        ],
+        "outputs": [
+          "Google Sheets, not connected"
+        ],
+        "identifiers": [
+          "Connect..."
+        ]
+      }
+    },
+    {
+      "image": "sheet",
+      "ms": 3691,
+      "bytes": 58542,
+      "error": "",
+      "activityOk": true,
+      "idOk": null,
+      "fields": {
+        "activity": "calculating a total budget using a formula",
+        "confidence": 0.9,
+        "verb": "calculating",
+        "object": "budget",
+        "counterpart": "FY<n> Marketing budget",
+        "surface": "Sheets",
+        "step": "reviewing and calculating the total for FY<n> marketing budget",
+        "inputs": [
+          "formula",
+          "range"
+        ],
+        "outputs": [
+          "total"
+        ],
+        "identifiers": [
+          "FY<n> budget",
+          "SUM(C<n>:N<n>)"
+        ]
+      }
+    },
+    {
+      "image": "ticket",
+      "ms": 3789,
+      "bytes": 78012,
+      "error": "",
+      "activityOk": true,
+      "idOk": true,
+      "fields": {
+        "activity": "reviewing a ticket in HelpDesk",
+        "confidence": 0.9,
+        "verb": "reviewing",
+        "object": "ticket",
+        "counterpart": "customer",
+        "surface": "HelpDesk",
+        "step": "reading and responding to a support request",
+        "inputs": [
+          "ticket #<n>",
+          "Dana Whitfield's message",
+          "issue description"
+        ],
+        "outputs": [
+          "reply to the customer"
+        ],
+        "identifiers": [
+          "#<n>",
+          "<id>",
+          "reports, v<n>"
+        ]
+      }
+    }
+  ]
+}
