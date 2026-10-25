@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/notice-ack.schema.json",
+  "title": "Sync object: notice acknowledgment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "createdAt",
+    "noticeVersionId",
+    "acknowledgedAt",
+    "jurisdiction",
+    "features",
+    "channel"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/ulid"
+    },
+    "kind": {
+      "const": "notice_ack"
+    },
+    "createdAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "noticeVersionId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "acknowledgedAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "jurisdiction": {
+      "$ref": "common.schema.json#/$defs/jurisdiction"
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/feature"
+      },
+      "maxItems": 3
+    },
+    "channel": {
+      "enum": [
+        "mac_app",
+        "web"
+      ]
+    }
+  }
+}

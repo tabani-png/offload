@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/department.schema.json",
+  "title": "Department DTO",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "parentId",
+    "directoryGroups",
+    "leadPersonIds"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "name": {
+      "$ref": "common.schema.json#/$defs/name"
+    },
+    "parentId": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "directoryGroups": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "maxItems": 20
+    },
+    "leadPersonIds": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/uuid"
+      },
+      "maxItems": 20
+    }
+  }
+}

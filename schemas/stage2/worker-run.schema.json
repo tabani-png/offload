@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/worker-run.schema.json",
+  "title": "One cloud worker run (one Managed Agents session).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "workerId",
+    "trigger",
+    "startedAt",
+    "endedAt",
+    "state",
+    "stopReason",
+    "costCents",
+    "batchHashes",
+    "summary",
+    "sessionRef"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/ulid"
+    },
+    "workerId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "trigger": {
+      "enum": [
+        "manual",
+        "schedule"
+      ]
+    },
+    "startedAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "endedAt": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/tsMs"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "state": {
+      "enum": [
+        "running",
+        "waiting_approval",
+        "idle",
+        "done",
+        "failed",
+        "capped",
+        "interrupted"
+      ]
+    },
+    "stopReason": {
+      "oneOf": [
+        {
+          "enum": [
+            "end_turn",
+            "requires_action",
+            "budget_reached",
+            "error"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "costCents": {
+      "$ref": "common.schema.json#/$defs/cents"
+    },
+    "batchHashes": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/sha256"
+      },
+      "maxItems": 50
+    },
+    "summary": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 2000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sessionRef": {
+      "type": "string",
+      "maxLength": 100
+    }
+  }
+}

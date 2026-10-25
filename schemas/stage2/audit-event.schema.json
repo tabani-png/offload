@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/audit-event.schema.json",
+  "title": "Append-only, hash-chained audit event (ADR 0108 \u00a75).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "at",
+    "actor",
+    "action",
+    "subjectPersonId",
+    "resource",
+    "detail",
+    "prevHash",
+    "hash"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/ulid"
+    },
+    "at": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id",
+        "accessRole"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "person",
+            "device",
+            "service",
+            "support",
+            "system"
+          ]
+        },
+        "id": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "accessRole": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/accessRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "action": {
+      "type": "string",
+      "maxLength": 80,
+      "pattern": "^[a-z_]+\\.[a-z_]+$",
+      "description": "e.g. person.read, feature.enable, batch.approve, kill_switch.set"
+    },
+    "subjectPersonId": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "detail": {
+      "type": "object"
+    },
+    "prevHash": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "hash": {
+      "$ref": "common.schema.json#/$defs/sha256"
+    }
+  }
+}

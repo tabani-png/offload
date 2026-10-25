@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/role-identity.schema.json",
+  "title": "Company-held sending identity for a job role (ADR 0107).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "jobRoleId",
+    "label",
+    "address",
+    "connectionId",
+    "signature"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "jobRoleId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "label": {
+      "$ref": "common.schema.json#/$defs/name"
+    },
+    "address": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 254
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "connectionId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "signature": {
+      "type": "string",
+      "maxLength": 2000
+    }
+  }
+}

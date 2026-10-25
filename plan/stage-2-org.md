@@ -71,3 +71,5 @@ Research brief: adam/memory/research/stage2/ (cua cloud sandboxes, RBAC/SCIM, mo
   departed person, never automate a personal LinkedIn; workflows kept as SOPs without tokens.
 - Hours saved: median observed manual time minus measured review/fix time, successful runs only, A/B/C confidence grade,
   evidence links, exactly recomputable.
+
+Architecture, ADRs 0101-0110, contracts and slices: `plan/stage-2/plan.md` (2026-10-25).

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/sync-envelope.schema.json",
+  "title": "POST /v1/sync/batches body. JCS-canonical JSON, ES256-signed in the Offload-Signature header (ADR 0103 \u00a73).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "deviceId",
+    "seq",
+    "sentAt",
+    "objects"
+  ],
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "deviceId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sentAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "notice-ack.schema.json"
+          },
+          {
+            "$ref": "run-outcome.schema.json"
+          },
+          {
+            "$ref": "review-event.schema.json"
+          },
+          {
+            "$ref": "baseline-sample.schema.json"
+          },
+          {
+            "$ref": "daily-aggregate.schema.json"
+          },
+          {
+            "$ref": "working-time-aggregate.schema.json"
+          },
+          {
+            "$ref": "workflow-definition.schema.json"
+          }
+        ]
+      },
+      "maxItems": 500,
+      "minItems": 1
+    }
+  }
+}

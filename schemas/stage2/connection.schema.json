@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/connection.schema.json",
+  "title": "Connection binding (credential lives in Composio / vault; this is a reference).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "ownership",
+    "label",
+    "ownerPersonId",
+    "jobRoleId",
+    "provider",
+    "externalRef",
+    "health",
+    "createdAt"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "kind": {
+      "$ref": "common.schema.json#/$defs/connectionKind"
+    },
+    "ownership": {
+      "$ref": "common.schema.json#/$defs/ownership"
+    },
+    "label": {
+      "$ref": "common.schema.json#/$defs/name"
+    },
+    "ownerPersonId": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "jobRoleId": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "provider": {
+      "enum": [
+        "composio",
+        "managed_agents_vault",
+        "mcp",
+        "api"
+      ]
+    },
+    "externalRef": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "health": {
+      "enum": [
+        "ok",
+        "failed",
+        "unknown"
+      ]
+    },
+    "createdAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    }
+  }
+}

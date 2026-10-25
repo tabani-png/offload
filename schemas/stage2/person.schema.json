@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/person.schema.json",
+  "title": "Person DTO",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "email",
+    "displayName",
+    "accessRole",
+    "departmentId",
+    "deptLeadOf",
+    "jobRoleIds",
+    "jurisdiction",
+    "state",
+    "leavingOn",
+    "source",
+    "noticeAckVersionId"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "email": {
+      "type": "string",
+      "maxLength": 254,
+      "format": "email"
+    },
+    "displayName": {
+      "$ref": "common.schema.json#/$defs/name"
+    },
+    "accessRole": {
+      "$ref": "common.schema.json#/$defs/accessRole"
+    },
+    "departmentId": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "deptLeadOf": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/uuid"
+      },
+      "maxItems": 50
+    },
+    "jobRoleIds": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/uuid"
+      },
+      "maxItems": 20
+    },
+    "jurisdiction": {
+      "$ref": "common.schema.json#/$defs/jurisdiction"
+    },
+    "state": {
+      "$ref": "common.schema.json#/$defs/personState"
+    },
+    "leavingOn": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/day"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source": {
+      "enum": [
+        "directory",
+        "invite",
+        "manual"
+      ]
+    },
+    "noticeAckVersionId": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

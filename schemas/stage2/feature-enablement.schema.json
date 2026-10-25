@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/feature-enablement.schema.json",
+  "title": "Sensitive feature enablement (owner only, ADR 0108).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "feature",
+    "jurisdictions",
+    "legalBasis",
+    "dpiaAttestation",
+    "noticeVersionId",
+    "noticePeriodDays",
+    "worksAgreementRef",
+    "quebecActivationAck",
+    "purposeLock",
+    "enabledBy",
+    "enabledAt",
+    "effectiveAt",
+    "disabledAt"
+  ],
+  "properties": {
+    "feature": {
+      "$ref": "common.schema.json#/$defs/sensitiveFeature"
+    },
+    "jurisdictions": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/jurisdiction"
+      },
+      "maxItems": 100,
+      "minItems": 1
+    },
+    "legalBasis": {
+      "enum": [
+        "legitimate_interest",
+        "contract",
+        "consent",
+        "works_agreement",
+        "other"
+      ]
+    },
+    "dpiaAttestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "completedOn",
+        "documentHash",
+        "documentName",
+        "signerName",
+        "signerTitle"
+      ],
+      "properties": {
+        "completedOn": {
+          "$ref": "common.schema.json#/$defs/day"
+        },
+        "documentHash": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "documentName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "signerName": {
+          "$ref": "common.schema.json#/$defs/name"
+        },
+        "signerTitle": {
+          "$ref": "common.schema.json#/$defs/name"
+        }
+      }
+    },
+    "noticeVersionId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "noticePeriodDays": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 90
+    },
+    "worksAgreementRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "documentHash",
+            "documentName",
+            "allowedViews"
+          ],
+          "properties": {
+            "documentHash": {
+              "$ref": "common.schema.json#/$defs/sha256"
+            },
+            "documentName": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "allowedViews": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "maxItems": 50
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "quebecActivationAck": {
+      "type": "boolean"
+    },
+    "purposeLock": {
+      "const": "process_improvement"
+    },
+    "enabledBy": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "enabledAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "effectiveAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "disabledAt": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/tsMs"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

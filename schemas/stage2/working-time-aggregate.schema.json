@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/working-time-aggregate.schema.json",
+  "title": "Sync object: one person-day of active time. Only when working_time is enabled, acknowledged and past its notice period (ADR 0103 G2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "createdAt",
+    "day",
+    "activeMinutes",
+    "firstActiveQuarter",
+    "lastActiveQuarter",
+    "noticeVersionId"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/ulid"
+    },
+    "kind": {
+      "const": "working_time_aggregate"
+    },
+    "createdAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "day": {
+      "$ref": "common.schema.json#/$defs/day"
+    },
+    "activeMinutes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1440
+    },
+    "firstActiveQuarter": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 95,
+      "description": "index of the first active 15-minute slot of the local day"
+    },
+    "lastActiveQuarter": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 95
+    },
+    "noticeVersionId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    }
+  }
+}

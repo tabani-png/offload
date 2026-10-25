@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/promote-request.schema.json",
+  "title": "POST /v1/workflows/:id/promote body",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "jobRoleId",
+    "departmentId",
+    "fromVersion",
+    "bindings"
+  ],
+  "properties": {
+    "jobRoleId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "departmentId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "fromVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stepId",
+          "connectionId",
+          "disable"
+        ],
+        "properties": {
+          "stepId": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "connectionId": {
+            "oneOf": [
+              {
+                "$ref": "common.schema.json#/$defs/uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "disable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "maxItems": 40
+    }
+  }
+}
