@@ -5,7 +5,7 @@
 import { join } from "node:path";
 import { openText, sealText } from "../store/vault.ts";
 import type { Analysis } from "../analyze.ts";
-import type { DryRunInstanceDTO, DryRunResponse } from "../api/types.ts";
+import type { DryRunInstanceDTO, DryRunResponse, ModelLabel } from "../api/types.ts";
 import { API_VERSION } from "../api/types.ts";
 import type { Model, ModelConfig } from "../models/model.ts";
 import { draftInTone } from "../tone/draft.ts";
@@ -25,6 +25,8 @@ export interface DryRunOptions {
   model: Model;
   limit?: number;
   now?: () => number;
+  /** s09b: stored with the result so the UI can say "sample drafts" for the stub. */
+  modelLabel?: ModelLabel;
 }
 
 const round1 = (x: number) => Math.round(x * 10 + 1e-9) / 10;
@@ -110,6 +112,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResponse> {
     },
     gateLog: gateLog.map((d) => ({ at: d.at, tool: d.tool, toolClass: d.toolClass, decision: d.decision, reason: d.reason, ...(d.itemKey === undefined ? {} : { itemKey: d.itemKey }) })),
     warnings,
+    ...(o.modelLabel === undefined ? {} : { model: o.modelLabel }),
   };
   const dir = join(workflowDir(o.home, wf.id), "dry-runs");
   ensureDir(dir);

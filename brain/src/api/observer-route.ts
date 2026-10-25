@@ -3,7 +3,7 @@
 // with the reason, so the UI can say what is wrong instead of failing the request.
 import { existsSync } from "node:fs";
 import { missingBinMessage, observerBin, observerChildEnv, type ObserverEnv } from "../store/observer.ts";
-import { API_VERSION, type ObserverPermissionsDTO, type ObserverResponse, type ObserverStatusDTO } from "./types.ts";
+import { API_VERSION, type ObserverControlResponse, type ObserverPermissionsDTO, type ObserverResponse, type ObserverStatusDTO } from "./types.ts";
 
 export const OBSERVER_STATUS_TIMEOUT_MS = 5_000;
 
@@ -75,4 +75,30 @@ export async function observerStatus(home: string, env: ObserverEnv, now: number
   } catch (err) {
     return fail(`${bin} status: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+// ---------- s09b: POST /observer/pause | /observer/resume ----------
+
+export type ObserverControlResult = { ok: true; body: ObserverControlResponse } | { ok: false; error: string };
+
+/** Runs `offload-observer pause|resume --home HOME` (5 s timeout), then reads the status again for the reply. */
+export async function observerControl(home: string, action: "pause" | "resume", env: ObserverEnv, now: number): Promise<ObserverControlResult> {
+  const bin = observerBin(env);
+  if (!existsSync(bin)) return { ok: false, error: missingBinMessage(bin, action) };
+  let proc;
+  try {
+    proc = Bun.spawn([bin, action, "--home", home], { env: observerChildEnv(home, env), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  } catch (err) {
+    return { ok: false, error: `${bin} ${action} failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    proc.kill();
+  }, OBSERVER_STATUS_TIMEOUT_MS);
+  const [, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+  clearTimeout(timer);
+  if (timedOut) return { ok: false, error: `${bin} ${action} timed out after ${OBSERVER_STATUS_TIMEOUT_MS} ms` };
+  if (code !== 0) return { ok: false, error: `${bin} ${action} exited ${code}: ${stderr.trim().slice(0, 300)}` };
+  return { ok: true, body: { version: API_VERSION, action, ok: true, observer: await observerStatus(home, env, now) } };
 }

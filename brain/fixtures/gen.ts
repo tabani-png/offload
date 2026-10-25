@@ -390,12 +390,16 @@ function weekend(b: DayBuilder, rng: Rng, saturday: boolean): void {
 
 // ---------- public API ----------
 
-function addDays(day: DayLabel, n: number): { label: DayLabel; start: number; weekday: number } {
+/** Local days, like the observer (s09b): `start` is LOCAL midnight and `label` the local date. Before s09b this used
+ * Date.UTC, so the fixture's 08:30 morning was 08:30 UTC (04:30 in Toronto, 13:30 in Karachi) and the timeline showed
+ * the week shifted by the zone's offset. `at(h)` is a local wall-clock time on that day (DST-safe). */
+function addDays(day: DayLabel, n: number): { label: DayLabel; start: number; weekday: number; at: (hours: number) => number } {
   const [y, m, d] = day.split("-").map(Number);
   if (y === undefined || m === undefined || d === undefined) throw new Error(`bad day ${day}`);
-  const start = Date.UTC(y, m - 1, d + n);
-  const date = new Date(start);
-  return { label: date.toISOString().slice(0, 10), start, weekday: date.getUTCDay() };
+  const date = new Date(y, m - 1, d + n);
+  const label = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  const at = (hours: number) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), Math.floor(hours), Math.round((hours % 1) * 60)).getTime();
+  return { label, start: date.getTime(), weekday: date.getDay(), at };
 }
 
 export function generateFixture(opts: FixtureOptions = {}): FixtureDay[] {
@@ -403,9 +407,9 @@ export function generateFixture(opts: FixtureOptions = {}): FixtureDay[] {
   const startDay = opts.startDay ?? "2026-10-12";
   const out: FixtureDay[] = [];
   for (let i = 0; i < (opts.days ?? 7); i++) {
-    const { label, start, weekday: wd } = addDays(startDay, i);
+    const { label, start, weekday: wd, at } = addDays(startDay, i);
     const rng = mulberry32(seed * 1000 + i);
-    const b = new DayBuilder(rng, start + 8.5 * 3_600_000);
+    const b = new DayBuilder(rng, at(8.5));
     if (wd === 0 || wd === 6) {
       b.t = start;
       weekend(b, rng, wd === 6);

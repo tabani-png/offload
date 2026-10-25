@@ -1,16 +1,17 @@
 // The brain's local API: Bun.serve on 127.0.0.1, bearer token, read-only GET routes (brain/API.md).
 import { localDay, migrateBrainKeys, startPurgeSchedule } from "../store/vault.ts";
 import type { ObserverEnv } from "../store/observer.ts";
-import { observerStatus } from "./observer-route.ts";
+import { observerControl, observerStatus } from "./observer-route.ts";
+import { SCHEDULER_INTERVAL_MS, schedulerTick, type SchedulerTick } from "./scheduler.ts";
 import { randomBytes } from "node:crypto";
 import { analyzeHome, type Analysis, type AnalyzeOptions } from "../analyze.ts";
 import { DAY_RE, storeFingerprint } from "../store/reader.ts";
 import type { Env } from "../connectors/config.ts";
-import { AgentSdkModel, type Model } from "../models/model.ts";
+import { AgentSdkModel, StubModel, type Model } from "../models/model.ts";
 import { AgentSdkExecutor, type Executor } from "../workflows/executor.ts";
 import { dashboard } from "../workflows/service.ts";
 import { toEvidence, toInsights, toStatus, toTimeline } from "./dto.ts";
-import { BRAIN_READY_PREFIX, type BrainReadyDTO } from "./types.ts";
+import { BRAIN_READY_PREFIX, MODEL_HEADER, type BrainReadyDTO, type ModelLabel } from "./types.ts";
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
 import { workflowRoute } from "./workflow-routes.ts";
 
@@ -21,7 +22,7 @@ export interface BrainOptions {
   analyze?: Omit<AnalyzeOptions, "reviewSeconds" | "now">;
   /** s05: model for drafts and cards (default: Agent SDK), executor for approved batches (default: Agent SDK),
    * env for connector secrets (default process.env). Tests pass StubModel and ScriptedExecutor. */
-  workflows?: { model?: Model; executor?: Executor; env?: Env };
+  workflows?: { model?: Model; executor?: Executor; env?: Env; modelLabel?: ModelLabel };
   /** OFFLOAD_OBSERVER_BIN for GET /observer (default process.env). */
   observerEnv?: ObserverEnv;
   /** Startup and purge log lines (default stderr, so nothing precedes the ready line on stdout). */
@@ -32,6 +33,26 @@ export interface Brain {
   handle(req: Request): Promise<Response>;
   /** Resolves when background work (sending approved batches) has finished. */
   idle(): Promise<void>;
+  /** s09b: one pass of the run loop at `now()` (api/scheduler.ts). `serve` calls it every SCHEDULER_INTERVAL_MS. */
+  schedulerTick(): Promise<SchedulerTick>;
+  /** "stub" or "real": on every response (MODEL_HEADER, and `model` in 2xx JSON object bodies). */
+  readonly modelLabel: ModelLabel;
+}
+
+/** Adds the model label: the header on every response, `model` on 2xx JSON object bodies that do not have one. */
+async function labelled(res: Response, label: ModelLabel): Promise<Response> {
+  const headers = new Headers(res.headers);
+  headers.set(MODEL_HEADER, label);
+  if (res.status < 200 || res.status >= 300 || !(headers.get("content-type") ?? "").startsWith("application/json")) return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+  const text = await res.text();
+  let out = text;
+  try {
+    const v: unknown = JSON.parse(text);
+    if (typeof v === "object" && v !== null && !Array.isArray(v) && !("model" in v)) out = JSON.stringify({ ...v, model: label });
+  } catch {
+    // Not JSON after all: pass it through.
+  }
+  return new Response(out, { status: res.status, statusText: res.statusText, headers });
 }
 
 export const MIN_TOKEN_LENGTH = 32;
@@ -92,10 +113,14 @@ export function createBrain(opts: BrainOptions): Brain {
 
   const background = new Set<Promise<unknown>>();
   const env = opts.workflows?.env ?? process.env;
+  const model = opts.workflows?.model ?? new AgentSdkModel();
+  const modelLabel: ModelLabel = opts.workflows?.modelLabel ?? (model instanceof StubModel ? "stub" : "real");
+  const observerEnv = opts.observerEnv ?? process.env;
   const wctx = {
     home: opts.home,
     env,
-    model: opts.workflows?.model ?? new AgentSdkModel(),
+    model,
+    modelLabel,
     executor: opts.workflows?.executor ?? new AgentSdkExecutor(),
     now,
     analysis: () => analysis(undefined),
@@ -114,10 +139,19 @@ export function createBrain(opts: BrainOptions): Brain {
     // Workflow routes take POST and DELETE; everything else is read-only.
     const wf = await workflowRoute(req, path, wctx);
     if (wf !== null) return wf;
+    // s09b: pause / resume the observer through its CLI.
+    const ctl = /^\/observer\/([a-z]+)$/.exec(path);
+    if (ctl !== null) {
+      const action = ctl[1];
+      if (action !== "pause" && action !== "resume") return error(404, "not_found");
+      if (req.method !== "POST") return error(405, "method_not_allowed", "use POST");
+      const r = await observerControl(opts.home, action, observerEnv, now());
+      return r.ok ? json(200, r.body) : error(409, "conflict", r.error);
+    }
     if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed");
 
     if (path === "/status") return json(200, toStatus(await analysis(undefined), now()));
-    if (path === "/observer") return json(200, await observerStatus(opts.home, opts.observerEnv ?? process.env, now()));
+    if (path === "/observer") return json(200, await observerStatus(opts.home, observerEnv, now()));
     if (path === "/dashboard") return json(200, dashboard(await analysis(undefined), opts.home, env, now()));
     if (path === "/insights") {
       const review = parseReviewSeconds(url.searchParams.get("reviewSeconds"));
@@ -140,16 +174,24 @@ export function createBrain(opts: BrainOptions): Brain {
     return error(404, "not_found");
   }
 
+  let ticking: Promise<SchedulerTick> | null = null;
   return {
+    modelLabel,
     async idle(): Promise<void> {
       while (background.size > 0) await Promise.all([...background]);
     },
+    schedulerTick(): Promise<SchedulerTick> {
+      // One pass at a time: a slow tick (drafting a batch) is not overlapped by the next interval.
+      if (ticking !== null) return ticking;
+      ticking = schedulerTick(wctx, opts.log ?? ((l: string) => console.error(l))).finally(() => (ticking = null));
+      return ticking;
+    },
     async handle(req: Request): Promise<Response> {
       try {
-        return secure(await route(req));
+        return secure(await labelled(await route(req), modelLabel));
       } catch (err) {
         console.error("brain: request failed", req.method, new URL(req.url).pathname, err);
-        return secure(error(500, "internal"));
+        return secure(await labelled(error(500, "internal"), modelLabel));
       }
     },
   };
@@ -162,7 +204,8 @@ export interface RunningBrain {
   stop(): Promise<void>;
 }
 
-export async function startBrainServer(opts: BrainOptions & { port?: number }): Promise<RunningBrain> {
+/** `schedulerIntervalMs`: how often the run loop ticks (default SCHEDULER_INTERVAL_MS; 0 turns it off). */
+export async function startBrainServer(opts: BrainOptions & { port?: number; schedulerIntervalMs?: number }): Promise<RunningBrain> {
   const brain = createBrain(opts);
   const log = opts.log ?? ((l: string) => console.error(l));
   const now = opts.now ?? Date.now;
@@ -176,6 +219,11 @@ export async function startBrainServer(opts: BrainOptions & { port?: number }): 
   }
   // Brain artefacts with OCR or mail text: purged at startup and every hour (store/vault.ts, REVIEW-1 H4).
   const stopPurge = startPurgeSchedule(opts.home, now, { log });
+  // s09b run loop: starts due workflows (only active ones; see api/scheduler.ts). First tick right away.
+  const interval = opts.schedulerIntervalMs ?? SCHEDULER_INTERVAL_MS;
+  const tick = () => void brain.schedulerTick().catch((err: unknown) => log(`brain: scheduler failed: ${err instanceof Error ? err.message : String(err)}`));
+  const timer = interval > 0 ? setInterval(tick, interval) : null;
+  if (timer !== null) setTimeout(tick, 0);
   const listener = Bun.serve({
     hostname: LOOPBACK,
     port: opts.port ?? 0,
@@ -191,6 +239,7 @@ export async function startBrainServer(opts: BrainOptions & { port?: number }): 
     port,
     url: `http://${LOOPBACK}:${port}/`,
     stop: async () => {
+      if (timer !== null) clearInterval(timer);
       stopPurge();
       await listener.stop(true);
     },

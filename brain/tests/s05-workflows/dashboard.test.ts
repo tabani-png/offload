@@ -51,7 +51,7 @@ describe("s05 dashboard", () => {
     const b = d.automations.find((x) => x.id === w.outreach.id)!;
     expect(b.state).toBe("needs_you"); // Gmail is not connected (no connectors.json)
     expect(b.status).toBe("approved");
-    expect(b.needsYou).toEqual(["connect Gmail"]);
+    expect(b.needsYou).toEqual(["Connect Gmail so this can send."]); // s09b: full sentences
     expect(b.measured?.daysAfter).toBe(4);
     expect(d.totals.estimatedHoursSavedPerWeek).toBeCloseTo(b.estimatedHoursSavedPerWeek, 1);
     expect(d.totals.measuredHoursSavedPerWeek).toBe(b.measuredHoursSavedPerWeek);

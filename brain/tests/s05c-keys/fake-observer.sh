@@ -1,7 +1,7 @@
 #!/bin/bash
 # Fake offload-observer for brain tests: wrap-key / unwrap-key / status --json with the real CLI's contract
 # (engine/README.md "Brain keys"), minus the Keychain. Keys are kept as base64 text in keys/brain-NAME.key.
-# FAKE_OBSERVER_LOG: append each argv line. FAKE_OBSERVER_FAIL_UNWRAP=1: unwrap-key exits 1. FAKE_OBSERVER_STATUS: file printed by `status`. FAKE_OBSERVER_EXIT: status exit.
+# FAKE_OBSERVER_LOG: append each argv line. pause / resume (s09b): create / remove HOME/paused; FAKE_OBSERVER_CONTROL_EXIT: their exit. FAKE_OBSERVER_FAIL_UNWRAP=1: unwrap-key exits 1. FAKE_OBSERVER_STATUS: file printed by `status`. FAKE_OBSERVER_EXIT: status exit.
 [ -n "$FAKE_OBSERVER_LOG" ] && echo "$*" >> "$FAKE_OBSERVER_LOG"
 cmd="$1"; shift
 home="$OFFLOAD_HOME"; name=""
@@ -33,6 +33,12 @@ case "$cmd" in
     mkdir -p "$home/keys"; chmod 700 "$home/keys"
     printf 'FAKEOKW1\n%s\n' "$input" > "$f"; chmod 600 "$f"
     echo "$input"; exit 0 ;;
+  pause|resume)
+    code="${FAKE_OBSERVER_CONTROL_EXIT:-0}"
+    [ "$code" != "0" ] && { echo "$cmd: observer is not running" >&2; exit "$code"; }
+    mkdir -p "$home"
+    if [ "$cmd" = "pause" ]; then : > "$home/paused"; else rm -f "$home/paused"; fi
+    exit 0 ;;
   status)
     [ -n "$FAKE_OBSERVER_STATUS" ] && cat "$FAKE_OBSERVER_STATUS"
     exit "${FAKE_OBSERVER_EXIT:-0}" ;;

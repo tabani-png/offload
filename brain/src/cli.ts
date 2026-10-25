@@ -1,6 +1,8 @@
 // brain CLI.
 //   bun run brain/src/cli.ts analyze --home DIR [--top N] [--review-seconds S] [--json]
-//   bun run brain/src/cli.ts serve   --home DIR [--port P]        (first stdout line: OFFLOAD_BRAIN_READY {"port":N,"token":"..."})
+//   bun run brain/src/cli.ts serve   --home DIR [--port P] [--model stub|real]   (first stdout line: OFFLOAD_BRAIN_READY {"port":N,"token":"..."})
+//     --model real (default) = Claude via the Agent SDK; stub = the deterministic test model, every response labelled
+//     `model: "stub"` (demos). `claude` is accepted as an alias for real everywhere.
 //   bun run brain/src/cli.ts tone build --home DIR [--source fixture|mcp] [--model stub|claude] [--force]
 //   bun run brain/src/cli.ts tone test  --home DIR --hold-back N [--source fixture|mcp] [--model stub|claude]
 //   bun run brain/src/cli.ts tone pairs --home DIR [--answers]       (prints the latest sealed blind-test pairs)
@@ -23,7 +25,7 @@ import { readWorkflow } from "./workflows/store.ts";
 
 const USAGE = `usage:
   bun run brain/src/cli.ts analyze --home DIR [--top N] [--review-seconds S] [--json]
-  bun run brain/src/cli.ts serve --home DIR [--port P]
+  bun run brain/src/cli.ts serve --home DIR [--port P] [--model stub|real]
   bun run brain/src/cli.ts tone build --home DIR [--source fixture|mcp] [--model stub|claude] [--force]
   bun run brain/src/cli.ts tone test --home DIR --hold-back N [--source fixture|mcp] [--model stub|claude]
   bun run brain/src/cli.ts tone pairs --home DIR [--answers]
@@ -45,7 +47,7 @@ interface Args {
   workflow: string;
   facts: string;
   limit: number | undefined;
-  model: "stub" | "claude";
+  model: "stub" | "real";
   source: "fixture" | "mcp";
   force: boolean;
   holdBack: number;
@@ -62,7 +64,7 @@ function parse(argv: readonly string[]): Args {
     rest = rest.slice(1);
   } else if (first === "analyze" || first === "serve" || first === "draft" || first === "dry-run") command = first;
   else throw new UsageError(`unknown command ${first ?? "(none)"}`);
-  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "claude", source: "fixture", force: false, holdBack: 0, answers: false };
+  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "real", source: "fixture", force: false, holdBack: 0, answers: false };
   const num = (flag: string, v: string | undefined, min: number, max: number): number => {
     const n = Number(v);
     if (v === undefined || !Number.isFinite(n) || n < min || n > max) throw new UsageError(`${flag} must be a number in [${min}, ${max}]`);
@@ -88,8 +90,8 @@ function parse(argv: readonly string[]): Args {
     else if (a === "--answers") args.answers = true;
     else if (a === "--model") {
       const v = rest[++i];
-      if (v !== "stub" && v !== "claude") throw new UsageError("--model must be stub or claude");
-      args.model = v;
+      if (v !== "stub" && v !== "real" && v !== "claude") throw new UsageError("--model must be stub or real (claude is an alias for real)");
+      args.model = v === "stub" ? "stub" : "real";
     } else if (a === "--source") {
       const v = rest[++i];
       if (v !== "fixture" && v !== "mcp") throw new UsageError("--source must be fixture or mcp");
@@ -250,7 +252,9 @@ async function runCommand(args: Args): Promise<number> {
   }
   const { token, generated } = resolveToken(process.env);
   if (generated) console.error("brain: no OFFLOAD_TOKEN set; generated one (it is in the ready line)");
-  const srv = await startBrainServer({ home: args.home, token, port: args.port });
+  const model = modelOf(args);
+  if (args.model === "stub") console.error("brain: --model stub: drafts come from the deterministic test model (labelled model: \"stub\")");
+  const srv = await startBrainServer({ home: args.home, token, port: args.port, workflows: { model, modelLabel: args.model } });
   // The first stdout line, machine-readable; startup logs went to stderr (brain/API.md "Connection").
   process.stdout.write(formatReadyLine(srv.port, token) + "\n");
   console.log(`brain listening on ${srv.url}`);

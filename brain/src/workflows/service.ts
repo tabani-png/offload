@@ -17,7 +17,7 @@ import { insightConnectors } from "../api/dto.ts";
 import { CONNECTORS, connectorById } from "../connectors/catalog.ts";
 import { catalogStatus, loadConnectorsConfig, missingEnv, type ConnectorStatus, type Env } from "../connectors/config.ts";
 import { roleOfTool } from "./allowlist.ts";
-import { shortHash, type Batch } from "./batch.ts";
+import type { Batch } from "./batch.ts";
 import { pendingLiveBatch } from "./runner.ts";
 import { nextCronRun } from "./schedule.ts";
 import { listBatches, listWorkflows, readText, workflowDir } from "./store.ts";
@@ -38,11 +38,23 @@ export function workflowConnectors(wf: WorkflowJson, status: Record<string, Conn
   });
 }
 
+/** What a connector is for in this workflow, for the needs-you sentence: its send step, its log step, or the rest. */
+function purposeOf(wf: WorkflowJson, connectorId: string): string {
+  const steps = wf.steps.filter((s) => s.connector === connectorId);
+  if (steps.some((s) => s.type === "send")) return "send";
+  if (steps.some((s) => s.type === "log")) return "log what it sent";
+  return "run";
+}
+
+/** needsYou reasons are full sentences written for a person (s09b): "Connect Gmail so this can send." */
 export function stateOf(wf: WorkflowJson, connectors: readonly WorkflowConnectorDTO[], pending: Batch | null): { state: WorkflowState; needsYou: string[] } {
   if (wf.status !== "active") return { state: wf.status, needsYou: [] };
   const needsYou: string[] = [];
-  if (pending !== null) needsYou.push(`batch ${shortHash(pending.hash)} (${pending.items.length} ${pending.items.length === 1 ? "email" : "emails"}) waits for your review`);
-  for (const c of connectors) if (c.required && c.status !== "connected") needsYou.push(`connect ${c.name}${c.status === "missing_env" ? " (its env var is not set)" : ""}`);
+  if (pending !== null) needsYou.push(`A new batch of ${pending.items.length} is ready for review.`);
+  for (const c of connectors) {
+    if (!c.required || c.status === "connected") continue;
+    needsYou.push(`Connect ${c.name} so this can ${purposeOf(wf, c.id)}.${c.status === "missing_env" ? " Its sign-in setting is not set yet." : ""}`);
+  }
   return { state: needsYou.length > 0 ? "needs_you" : "active", needsYou };
 }
 
@@ -172,6 +184,7 @@ export function dashboard(a: Analysis, home: string, env: Env, now: number = Dat
       pendingBatch: s.pendingBatch,
       lastRunAt: s.lastRunAt,
       nextRunAt: s.nextRunAt,
+      taskId: wf.taskId,
     };
   });
   const running = automations.filter((x) => x.state === "active" || x.state === "needs_you");

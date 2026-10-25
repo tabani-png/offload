@@ -5,7 +5,12 @@ Changes inside v1 are additive only.
 
 ## Connection
 - Base URL `http://127.0.0.1:<port>/`. The listener binds 127.0.0.1 only.
-- Start: `bun run brain/src/cli.ts serve --home "$OFFLOAD_HOME" [--port P]` (`--port 0` or none = a free port).
+- Start: `bun run brain/src/cli.ts serve --home "$OFFLOAD_HOME" [--port P] [--model stub|real]` (`--port 0` or none =
+  a free port). `--model real` (default) drafts with Claude through the Agent SDK; `--model stub` uses the
+  deterministic offline test model (demos, e2e: no model cost). `claude` is an alias for `real` (s09b).
+- Model label (s09b): every response has the header `x-offload-model: stub|real` (`MODEL_HEADER`), and every 2xx JSON
+  object body gets `model: "stub" | "real"` (`ModelLabelled`) unless it already has one. Show stub drafts as
+  "sample drafts". A stored dry run keeps the label of the model that wrote it.
 - Ready line (s05c): the FIRST line on stdout is exactly
   `OFFLOAD_BRAIN_READY {"port":N,"token":"..."}` (`BRAIN_READY_PREFIX`, one space, then `BrainReadyDTO` as JSON).
   Nothing is printed on stdout before it; startup, migration and purge logs go to stderr. Read stdout up to the first
@@ -15,7 +20,8 @@ Changes inside v1 are additive only.
 - Auth: every request needs `Authorization: Bearer <token>`. The token is `OFFLOAD_TOKEN` (at least 32 chars) or, when
   unset, a fresh 256-bit token (it is in the ready line). The app passes its per-launch token in the env.
 - Host must be `127.0.0.1` or `localhost` (any port). An `Origin` header, if sent, must equal `http://<host>`.
-- GET (and HEAD) everywhere; POST, PUT and DELETE only on `/workflows…` (s05, s05c). Bodies are `application/json`,
+- GET (and HEAD) everywhere; POST, PUT and DELETE only on `/workflows…` (s05, s05c); POST on `/observer/pause` and
+  `/observer/resume` (s09b). Bodies are `application/json`,
   at most 64 KB. No CORS. Every response is `cache-control: no-store`, `x-content-type-options: nosniff`.
 
 | status | body `error` | when |
@@ -87,6 +93,10 @@ reasons: a batch waits for review, a required connector is missing), `arithmetic
 observed hours/week on the task in the store on full days before vs after activation (activation day left out), with
 its arithmetic; null until both sides have a day. `measuredHoursSavedPerWeek` = `measured.hoursSavedPerWeek`.
 `totals` sum active and needs_you automations. `suggestions`: the top 3 insights not yet automated.
+s09b: each automation has `taskId` (the task its workflow automates; timeline spans carry the same id). `needsYou`
+reasons are full sentences for a person, shown as they are: "A new batch of 3 is ready for review.",
+"Connect Gmail so this can send." (`… so this can log what it sent.` for a log connector, `… so this can run.`
+otherwise; a server whose env var is missing adds " Its sign-in setting is not set yet.").
 
 ## Workflows (s05)
 A workflow is a folder `$OFFLOAD_HOME/workflows/<id>/`: `SKILL.md`, `workflow.json`, `facts.md` (the only facts drafts
@@ -112,6 +122,7 @@ top of `active` when a batch waits or a connector is missing. Auto-run is off by
 | `GET /workflows` | | `WorkflowsResponse` |
 | `GET /workflows/:id` | | `WorkflowDetailDTO` (steps, SKILL.md, facts, batches, `pendingItems` for review) |
 | `POST /workflows/:id/dry-run` | `{ limit? 1..50 }` | `DryRunResponse` |
+| `GET /workflows/:id/dry-runs/latest` | | `DryRunResponse`: the last dry run, opened from its sealed file for this response only; no model call. 404 when there is none or it was purged (older than 7 local days) (s09b) |
 | `POST /workflows/:id/run` | | `RunResponse` (201): the next live batch, pending your review (409 until active) |
 | `POST /workflows/:id/approve` | `{ batchHash }` | `ApproveResponse`: dry-run hash → `activated`; live hash → `sending` |
 | `POST /workflows/:id/pause` / `resume` | | `WorkflowSummaryDTO`. Pause also stops a running batch before its next item |
@@ -137,7 +148,16 @@ read the typed steps in workflow.json and the allowlist (`src/workflows/allowlis
 Run times on `WorkflowSummaryDTO` and `AutomationDTO` (s05c): `lastRunAt` = `createdAt` of the newest live batch
 (null before the first `run`); `nextRunAt` = the next due minute of the workflow's cron schedule in local time, only
 while the workflow is active (or needs_you); null when the schedule is manual, paused or not yet approved. The brain
-computes when a schedule is due; nothing fires it on its own yet (a batch is made by `POST /workflows/:id/run`).
+computes when a schedule is due; since s09b the `serve` run loop fires it (below).
+
+Run loop (s09b, `src/api/scheduler.ts`): `serve` ticks every 30 s (and once at start). A workflow whose cron slot came
+due since the later of its activation and its last handled slot (`lastScheduledAt` in workflow.json) starts ONLY when
+its stored status is `active`. Auto-run off: the next live batch is drafted and left pending; the dashboard shows
+needs_you "A new batch of N is ready for review." and nothing is sent until you approve that hash. Auto-run on: the
+loop approves that exact batch hash (a one-use token, as `POST /approve` gives) and sends it through the gate, but only
+when every required connector is connected; otherwise the batch stays pending. Nothing is ever sent without an
+approved batch hash. Each slot is handled once: missed slots are not replayed, slots passing while paused (or while a
+batch waits) are skipped, a pending batch is never replaced, and resuming does not catch up.
 
 Dry run: the task's newest real instances from the store (recipient and subject from OCR), our draft next to the OCR
 excerpt of what you wrote, and per instance `estimate { observedMinutes, reviewSeconds, savedMinutes }`, computed in
@@ -162,6 +182,11 @@ Runs `offload-observer status --json --home HOME` (5 s timeout) and returns its 
 macOS permissions (`screenRecording`, `accessibility`, `inputMonitoring`; `permissionsSource` heartbeat, probe or
 unknown) also at the top level. Always 200: a missing binary, non-zero exit, timeout, non-JSON output or another
 schemaVersion gives `available: false`, `status: null` and the reason in `error`.
+
+## POST /observer/pause, POST /observer/resume → `ObserverControlResponse` (s09b)
+Runs `offload-observer pause|resume --home HOME` (5 s timeout); on exit 0 answers 200 with `{ action, ok: true,
+observer }`, where `observer` is a fresh `GET /observer` report. A missing binary, a timeout or a non-zero exit is a
+409 `conflict` with the reason (stderr) in `message`. Other methods 405; other actions 404.
 
 ## GET /connectors → `ConnectorsResponse`
 Servers from `$OFFLOAD_HOME/connectors.json` (`configErrors` when it is invalid), every catalog id with

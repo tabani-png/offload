@@ -215,6 +215,9 @@ export interface AutomationDTO {
   lastRunAt: number | null;
   /** Next time the workflow's cron schedule is due (local time); null when manual, not active, or paused. */
   nextRunAt: number | null;
+  // ---- added in s09b (additive) ----
+  /** The observed task this workflow automates (same as the insight's and the timeline spans' taskId). */
+  taskId: string;
 }
 
 /** Observed time on the task in the store, full local days before vs after activation (activation day excluded). */
@@ -373,6 +376,9 @@ export interface DryRunResponse {
   totals: { instances: number; observedMinutes: number; reviewMinutes: number; savedMinutes: number; arithmetic: string };
   gateLog: GateDecisionDTO[];
   warnings: string[];
+  /** s09b: which model wrote the drafts. Stored with the sealed dry run, so a later GET keeps the original label.
+   * Absent on dry runs sealed before s09b. */
+  model?: ModelLabel;
 }
 
 export interface ApproveResponse {
@@ -501,6 +507,29 @@ export interface ObserverResponse {
   /** Same as status.permissions; null when unknown or unavailable. */
   permissions: ObserverPermissionsDTO | null;
   status: ObserverStatusDTO | null;
+}
+
+// ---------- s09b: model label, observer control ----------
+
+/** Which model writes drafts: `stub` = the deterministic offline test model (`serve --model stub`, demos: show the
+ * drafts as "sample drafts"); `real` = Claude through the Agent SDK (default). */
+export type ModelLabel = "stub" | "real";
+
+/** Every response from the brain carries this header with the ModelLabel. Every 2xx JSON object body also gets a
+ * `model: ModelLabel` field (`ModelLabelled`) unless it already has one (a stored dry run keeps its own). */
+export const MODEL_HEADER = "x-offload-model";
+
+export interface ModelLabelled {
+  model: ModelLabel;
+}
+
+/** POST /observer/pause and /observer/resume: the observer CLI ran and exited 0; `observer` is a fresh GET /observer.
+ * A missing binary or a non-zero exit is a 409 `conflict` with the reason in `message`. */
+export interface ObserverControlResponse {
+  version: ApiVersion;
+  action: "pause" | "resume";
+  ok: true;
+  observer: ObserverResponse;
 }
 
 // ---------- errors ----------

@@ -58,4 +58,7 @@ export interface WorkflowJson {
   insight: { name: string; kind: string; connectors: ConnectorDTO[] };
   lastDryRunAt: number | null;
   lastDryRunHash: string | null;
+  /** s09b: the last time the serve run loop handled a due cron slot (started it, or skipped it while paused or with a
+   * batch waiting). Absent until the first slot. */
+  lastScheduledAt?: number | null;
 }

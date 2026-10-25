@@ -1,11 +1,12 @@
 // s05 routes: workflows, dry run, approval, run, pause/resume, delete, connectors (brain/API.md).
 // s05c: GET/PUT /workflows/:id/tone (the style card) and /workflows/:id/skill (SKILL.md text only).
+// s09b: GET /workflows/:id/dry-runs/latest (the last sealed dry run, opened for the response only).
 // Writes are POST/PUT/DELETE with a JSON body of at most 64 KB. The approval gate itself lives in workflows/gate.ts.
 import type { Analysis } from "../analyze.ts";
 import { loadConnectorsConfig, toMcpServers, type Env } from "../connectors/config.ts";
 import type { Model } from "../models/model.ts";
 import { draftWorkflow, NotFoundError } from "../workflows/drafter.ts";
-import { dryRun, DryRunError } from "../workflows/dryrun.ts";
+import { dryRun, DryRunError, readLastDryRun } from "../workflows/dryrun.ts";
 import type { Executor } from "../workflows/executor.ts";
 import { approveBatch, executeBatch, prepareLiveBatch, releaseUnknown, requestCancel, RunError } from "../workflows/runner.ts";
 import { batchSummary, connectorStatus, connectorsResponse, detailOf, summaryOf } from "../workflows/service.ts";
@@ -14,7 +15,7 @@ import { applySkillUpdate, SkillEditError, skillDTO } from "../workflows/skill.t
 import { MAX_TONE_CARD_BYTES, readStyleCard, writeStyleCard, type StyleCard } from "../tone/pack.ts";
 import type { WorkflowJson } from "../workflows/types.ts";
 import { error, json } from "./http.ts";
-import { API_VERSION, type ApproveResponse, type RunResponse, type ToneCardDTO, type WorkflowsResponse } from "./types.ts";
+import { API_VERSION, type ApproveResponse, type ModelLabel, type RunResponse, type ToneCardDTO, type WorkflowsResponse } from "./types.ts";
 
 export const MAX_BODY_BYTES = 64 * 1024;
 
@@ -22,6 +23,8 @@ export interface WorkflowContext {
   home: string;
   env: Env;
   model: Model;
+  /** s09b: "stub" when `model` is the deterministic test model, else "real". */
+  modelLabel: ModelLabel;
   executor: Executor;
   now: () => number;
   analysis: () => Promise<Analysis>;
@@ -101,6 +104,16 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
     return json(created ? 201 : 200, detailOf(ctx.home, workflow, status(), ctx.now()));
   }
 
+  const latest = /^\/workflows\/([^/]+)\/dry-runs\/latest$/.exec(path);
+  if (latest !== null) {
+    methods(req, "GET");
+    const wf = mustWorkflow(ctx.home, latest[1]!);
+    // Opened with the day's brain key for this response only; a purged (older than 7 local days) one reads as none.
+    const last = readLastDryRun(ctx.home, wf.id, ctx.now());
+    if (last === null) throw new HttpError(404, "not_found", "no dry run in the last 7 days: run one");
+    return json(200, last);
+  }
+
   const m = /^\/workflows\/([^/]+)(?:\/([a-z-]+))?$/.exec(path);
   if (m === null) throw new HttpError(404, "not_found", "unknown path");
   const id = m[1]!;
@@ -135,7 +148,7 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
     case "dry-run": {
       const limit = b.limit;
       if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 50)) throw new HttpError(400, "bad_request", "limit must be an integer in [1, 50]");
-      return json(200, await dryRun({ home: ctx.home, analysis: await ctx.analysis(), workflowId: wf.id, model: ctx.model, now: ctx.now, ...(limit === undefined ? {} : { limit }) }));
+      return json(200, await dryRun({ home: ctx.home, analysis: await ctx.analysis(), workflowId: wf.id, model: ctx.model, modelLabel: ctx.modelLabel, now: ctx.now, ...(limit === undefined ? {} : { limit }) }));
     }
     case "run": {
       const batch = await prepareLiveBatch({ home: ctx.home, workflowId: wf.id, model: ctx.model, now: ctx.now });
@@ -174,6 +187,8 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
         } else if (w.status === "paused") {
           w.status = w.activatedAt === null ? "ready_for_review" : "active";
           w.pausedAt = null;
+          // s09b: slots missed while paused are not caught up by the run loop.
+          w.lastScheduledAt = now;
         }
       }, now);
       return json(200, summaryOf(ctx.home, updated, status(), ctx.now()));
@@ -206,7 +221,8 @@ function toneDTO(wf: WorkflowJson, card: StyleCard): ToneCardDTO {
   return { version: API_VERSION, workflowId: wf.id, bucket: card.bucket, text: card.text, edited: card.edited, path: card.path, updatedAt: card.updatedAt, maxBytes: MAX_TONE_CARD_BYTES };
 }
 
-async function sendBatch(ctx: WorkflowContext, id: string, hash: string, token: string | null, connectors: ReadonlyArray<{ id: string; required: boolean }>): Promise<void> {
+/** Sends one live batch through the gate with the connectors.json MCP servers. Used by approve, run and the s09b run loop. */
+export async function sendBatch(ctx: WorkflowContext, id: string, hash: string, token: string | null, connectors: ReadonlyArray<{ id: string; required: boolean }>): Promise<void> {
   const { config } = loadConnectorsConfig(ctx.home);
   let mcpServers;
   try {

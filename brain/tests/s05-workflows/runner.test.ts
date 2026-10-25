@@ -48,8 +48,8 @@ describe("s05 runner", () => {
     expect(b.items[0]!.body.startsWith("Hi Anna,")).toBe(true);
     const s = summaryOf(w.home, readWorkflow(w.home, w.outreach.id)!, connectorStatus(w.home, {}));
     expect(s.state).toBe("needs_you");
-    expect(s.needsYou.join(" ")).toContain("waits for your review");
-    expect(s.needsYou.join(" ")).toContain("connect Gmail");
+    expect(s.needsYou.join(" ")).toContain("is ready for review."); // s09b wording
+    expect(s.needsYou.join(" ")).toContain("Connect Gmail so this can send.");
     // Asking again returns the same pending batch.
     expect((await prepareLiveBatch({ home: w.home, workflowId: w.outreach.id, model: w.model })).hash).toBe(b.hash);
   });
