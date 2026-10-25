@@ -18,7 +18,8 @@ import { loadConnectorsConfig, type Env } from "./config.ts";
 import { readSim, resolutionMethods, SpawnLinkRunner, type LinkRunner, type Method } from "./link.ts";
 import { McpProbe, SdkMcpLister, type McpLister } from "./mcp-probe.ts";
 import { DefaultSecretReader, redact, type SecretReader } from "./secrets.ts";
-import { allCapabilities, CATALOG_TARGETS, catalogTarget, isAppTargetId, SCREEN_READ, type ChainTarget } from "./targets.ts";
+import { allCapabilities, CATALOG_TARGETS, catalogTarget, isAppTargetId, SCREEN_READ, toolkitOfUniverseId, universeTarget, type ChainTarget } from "./targets.ts";
+import { readUniverse } from "./universe.ts";
 
 export type Health = ChainHealthDTO;
 
@@ -246,6 +247,12 @@ export function rememberTargets(home: string, targets: readonly ChainTarget[], n
 export function knownTarget(home: string, id: string, now: number = Date.now()): ChainTarget | null {
   const c = catalogTarget(id);
   if (c !== null) return c;
+  // s17: any toolkit of the Composio universe index (never Composio's own helper toolkit).
+  const tk = toolkitOfUniverseId(id);
+  if (tk !== null) {
+    const t = tk === "composio" ? undefined : readUniverse(home)?.toolkits[tk];
+    return t === undefined ? null : universeTarget(t);
+  }
   if (!isAppTargetId(id)) return null;
   const t = readChainFile(home).targets[id];
   return fresh(t, now) ? plainTarget(t) : null;

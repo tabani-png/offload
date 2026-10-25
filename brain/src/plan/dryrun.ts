@@ -17,6 +17,7 @@ import { buildActions, buildFields, round1, shapeOf, sourceText } from "./output
 import { predictedSteps } from "./probe.ts";
 import { draftTextStep } from "./text-step.ts";
 import { commitFor, missingWords } from "./commit-fields.ts";
+import { readSchema, readUniverse } from "../connectors/universe.ts";
 
 export interface GeneralDryRunOptions {
   home: string;
@@ -77,6 +78,7 @@ export async function generalDryRun(o: GeneralDryRunOptions): Promise<GeneralDry
   const facts = (o.facts ?? "").split("\n").filter((l) => /^[a-z][\w ]{0,30}:\s*\S/i.test(l.trim())).join("\n");
   const out: GeneralDryRunInstanceDTO[] = [];
   const items: BatchItem[] = [];
+  const universe = readUniverse(o.home);
   for (const inst of ev.instances.slice(0, o.limit)) {
     let built;
     if (sh.outputType === "form_fields" || sh.outputType === "rows") built = buildFields(sh, inst);
@@ -99,7 +101,10 @@ export async function generalDryRun(o: GeneralDryRunOptions): Promise<GeneralDry
     if (toolName !== undefined) built.ours.summary = `${built.ours.summary} (with ${toolName})`;
     // s16: the commit in the labelled form the chosen tool's gate policy binds; missing labels are said plainly.
     const chosenTool = commitTool === undefined || commitTool.chosen.startsWith("screen:") ? null : commitTool.chosen;
-    const spec = commitFor(chosenTool, built.commit?.verb ?? "save", built.ours, inst);
+    const spec = commitFor(chosenTool, built.commit?.verb ?? "save", built.ours, inst, (slug) => readSchema(o.home, slug), (slug) => {
+      const t = universe?.tools[slug];
+      return t === undefined ? {} : { destructive: t.destructive, name: t.name };
+    });
     built.commit = spec;
     if (spec.missing.length > 0) built.warnings.push(`Set up once before ${toolName ?? "the tool"} can save this: ${missingWords(spec.missing)}.`);
     const observedMinutes = round1(inst.minutes);

@@ -5,6 +5,8 @@
 // Gate semantics are not touched here: this only fills the fields an approved item carries.
 import type { OutputDTO } from "../api/s14-types.ts";
 import type { InstanceEvidence } from "./evidence.ts";
+import type { SchemaRecord } from "../connectors/universe.ts";
+import { GENERIC_VERB_PREFIX, genericPreview, genericReview, genericVerb, isGenericVerb, type GenericReview } from "../workflows/generic.ts";
 
 export interface CommitSpec {
   tool: string;
@@ -12,6 +14,8 @@ export interface CommitSpec {
   fields: Array<[string, string]>;
   /** Labels the item still needs before the gate can bind it (set once in the tool's setup, or looked up). */
   missing: string[];
+  /** s17: a universe tool (composio:<SLUG>): every field the call would carry, in plain words. */
+  review?: GenericReview;
 }
 
 /** Plain words for a missing label, for the needs-you line. */
@@ -49,7 +53,15 @@ const first = (re: RegExp, xs: readonly string[]) => {
 const field = (out: OutputDTO, re: RegExp) => out.fields.find((f) => re.test(f.label) && f.value !== null)?.value ?? undefined;
 
 /** The labelled commit for the chosen tool, or the plain one (computer use, sheets) with the output's own fields. */
-export function commitFor(tool: string | null, verb: string, ours: OutputDTO, inst: InstanceEvidence): CommitSpec {
+export function commitFor(tool: string | null, verb: string, ours: OutputDTO, inst: InstanceEvidence, schemaOf?: (slug: string) => SchemaRecord | null, meta?: (slug: string) => { destructive?: boolean; name?: string }): CommitSpec {
+  // s17: a tool from the Composio universe: the output's fields matched to the tool's schema, every field reviewed.
+  if (tool !== null && isGenericVerb(tool)) {
+    const slug = tool.slice(GENERIC_VERB_PREFIX.length);
+    const rec = schemaOf?.(slug) ?? null;
+    if (rec === null) return { tool, verb: genericVerb(slug), fields: [], missing: ["the tool's fields (not fetched yet)"] };
+    const p = genericPreview(rec, ours);
+    return { tool, verb: genericVerb(slug), fields: p.fields, missing: p.missing, review: genericReview(p.args, rec, meta?.(slug) ?? {}) };
+  }
   const ids = idsOf(inst);
   const text = ours.text ?? "";
   const fields: Array<[string, string]> = [];

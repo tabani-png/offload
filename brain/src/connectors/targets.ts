@@ -150,5 +150,20 @@ export function targetForProfile(p: Pick<TaskProfile, "app" | "appName" | "host"
 /** Every capability a target offers to a caller, reads first. */
 export const allCapabilities = (t: ChainTarget) => [...t.reads, ...t.sends, ...t.logs];
 
+// ---------- s17: universe targets (any Composio toolkit) ----------
+
+/** A Composio toolkit from the universe index: `tk-<toolkit>`. */
+export const UNIVERSE_PREFIX = "tk-";
+export const isUniverseId = (id: string) => /^tk-[a-z0-9][a-z0-9_-]{0,63}$/.test(id);
+export const universeTargetId = (toolkit: string) => `${UNIVERSE_PREFIX}${toolkit}`;
+export const toolkitOfUniverseId = (id: string): string | null => (isUniverseId(id) ? id.slice(UNIVERSE_PREFIX.length) : null);
+/** What a universe target offers: its read tools and its commit tools (each commit through generic exact approval). */
+export const GENERIC_READ = "composio.read";
+export const GENERIC_COMMIT = "composio.commit";
+
+export function universeTarget(tk: { slug: string; name: string }): ChainTarget {
+  return { id: universeTargetId(tk.slug), name: tk.name, catalog: false, bundleIds: [], hosts: [], toolkit: tk.slug, reads: [GENERIC_READ], sends: [GENERIC_COMMIT], logs: [] };
+}
+
 /** True when `id` looks like an app target id (`app-…` or `web-…`). */
 export const isAppTargetId = (id: string) => /^(app|web)-[a-z0-9-]{1,40}$/.test(id);

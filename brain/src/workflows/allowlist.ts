@@ -77,6 +77,13 @@ export interface ToolPolicy {
   fields?: Readonly<Record<string, FieldSpec>>;
   /** The arguments the gate expects for one approved item (before canonicalisation). null = cannot be built. */
   expected?: (item: BatchItem, ctx: { batchHash: string; crmSheet?: CrmSheet }) => Record<string, unknown> | null;
+  /** s17: a generic exact-approval policy (workflows/generic.ts) for a Composio tool without a hand-written policy.
+   * Bound to `server`; used only when the static table has no policy for the tool name at all. */
+  generic?: true;
+  /** s17: replaces the FieldSpec canonicalisation (generic policies validate against the tool's input schema). */
+  canonical?: (input: Record<string, unknown>) => { canonical: string; hash: string } | { reason: string };
+  /** s17: why `expected` gave null for this item, in plain words (e.g. the schema changed since approval). */
+  whyNot?: (item: BatchItem) => string | null;
 }
 
 const GMAIL_MCP_SEND_FIELDS: Record<string, FieldSpec> = {
@@ -494,13 +501,41 @@ export const DEFAULT_SERVERS: Readonly<Record<string, readonly string[]>> = {
 };
 
 /** Never allowed, whatever a server calls them: multiplexers, shells, code runners, forward. */
-const NEVER_RE = /multi_?execute|execute|remote_?bash|bash|shell|workbench|eval|run_?action|proxy|forward|_run_|^run_/i;
+export const NEVER_RE = /multi_?execute|execute|remote_?bash|bash|shell|workbench|eval|run_?action|proxy|forward|_run_|^run_/i;
 /** Reply and draft tools are denied by name too, except these exact static names (s16): each binds the thread or
  * ticket to the approved item, or only creates a draft. A dynamic policy (api, computer) never gets the exception. */
-const NAMED_RE = /reply|draft/i;
+export const NAMED_RE = /reply|draft/i;
 export const REVIEWED_NAMES: ReadonlySet<string> = new Set(["GMAIL_CREATE_EMAIL_DRAFT", "OUTLOOK_CREATE_DRAFT", "ZENDESK_REPLY_ZENDESK_TICKET", "INTERCOM_REPLY_TO_CONVERSATION", "INTERCOM_REPLY_TICKET"]);
 /** Input keys that carry a nested tool call or code. */
-const NESTED_KEY_RE = /^(tools?|tool_?slug|tool_?name|tool_?calls?|actions?|command|cmd|script|code|slug)$/i;
+export const NESTED_KEY_RE = /^(tools?|tool_?slug|tool_?name|tool_?calls?|actions?|command|cmd|script|code|slug)$/i;
+
+/** s16 "still denied on purpose" (brain/CONNECTORS.md): commits no approved item can bind (campaign-wide launches,
+ * payments, ledger posts, legacy duplicates). s17: never given a generic policy either. */
+export const DENIED_ON_PURPOSE: ReadonlySet<string> = new Set([
+  "INSTANTLY_ACTIVATE_CAMPAIGN",
+  "SMARTLEAD_UPDATE_CAMPAIGN_STATUS",
+  "SMARTLEAD_CREATE_CAMPAIGN",
+  "QUICKBOOKS_CREATE_BILL_PAYMENT",
+  "XERO_POST_INVOICE_UPDATE",
+  "HUBSPOT_CREATE_ENGAGEMENT",
+  "SLACK_CHAT_POST_MESSAGE",
+  "SLACK_SEND_EPHEMERAL_MESSAGE",
+  "INSTANTLY_CREATE_LEAD",
+  "GMAIL_SEND_DRAFT",
+  "GMAIL_UPDATE_DRAFT",
+  "OUTLOOK_SEND_DRAFT",
+]);
+
+/** s17: why a tool name is never allowed (meta, shell, forward, unreviewed reply/draft), or null. */
+export function neverAllowedName(tool: string): string | null {
+  if (NEVER_RE.test(tool)) return "a meta, shell, code or forward tool";
+  if (NAMED_RE.test(tool) && !REVIEWED_NAMES.has(tool)) return "a reply or draft tool whose effect the arguments do not show";
+  if (DENIED_ON_PURPOSE.has(tool)) return "a commit that no single approved item can bind";
+  return null;
+}
+
+/** s17: true when the static table (hand-written s05b / s13 / s16 policies) has a policy for this tool name. */
+export const hasStaticPolicy = (tool: string): boolean => TOOL_POLICIES.some((p) => p.tool === tool);
 
 export function splitMcpName(name: string): { server: string; tool: string } | null {
   const parts = name.split("__");
@@ -531,9 +566,12 @@ export function policyFor(name: string, servers: Readonly<Record<string, readonl
   const covers = Object.hasOwn(servers, mcp.server) ? servers[mcp.server] : undefined;
   if (covers === undefined || !Array.isArray(covers)) return { reason: `server ${mcp.server} is not a connected server: not on the allowlist` };
   // s13: dynamic policies are bound to one server; a server with bound policies never falls back to the static table.
-  const bound = extra.filter((x) => x.server === mcp.server);
+  // s17: generic exact-approval policies are bound to their server too, but never replace the static table on it.
+  const bound = extra.filter((x) => x.server === mcp.server && x.generic !== true);
   const pool = bound.length > 0 ? bound : TOOL_POLICIES;
-  const p = pool.find((x) => x.tool === mcp.tool && covers.includes(x.connector));
+  let p = pool.find((x) => x.tool === mcp.tool && covers.includes(x.connector));
+  // s17: a generic policy only for a tool the static table does not know at all (hand-written policies take precedence).
+  if (p === undefined && !hasStaticPolicy(mcp.tool) && !DENIED_ON_PURPOSE.has(mcp.tool)) p = extra.find((x) => x.generic === true && x.server === mcp.server && x.tool === mcp.tool && covers.includes(x.connector));
   if (p === undefined) return { reason: `${mcp.tool} on ${mcp.server} is not on the allowlist (unknown tools are denied)` };
   if (NAMED_RE.test(p.tool) && p.server !== undefined) return never;
   return p;
@@ -629,7 +667,7 @@ function canonValue(key: string, spec: FieldSpec, v: unknown): { value: unknown 
   }
 }
 
-function sortedJson(x: unknown): string {
+export function sortedJson(x: unknown): string {
   if (Array.isArray(x)) return `[${x.map(sortedJson).join(",")}]`;
   if (typeof x === "object" && x !== null) {
     return `{${Object.keys(x)
@@ -659,6 +697,7 @@ function canonObject(fields: Readonly<Record<string, FieldSpec>>, input: Record<
 }
 
 export function canonicalArgs(p: ToolPolicy, input: Record<string, unknown>): { canonical: string; hash: string } | { reason: string } {
+  if (p.canonical !== undefined) return isPlainObject(input) ? p.canonical(input) : { reason: "arguments must be an object" };
   const fields = p.fields;
   if (fields === undefined) return { reason: `${p.tool} has no argument schema` };
   if (!isPlainObject(input)) return { reason: "arguments must be an object" };
@@ -682,6 +721,8 @@ export function expectedArgs(p: ToolPolicy, item: BatchItem, ctx: { batchHash: s
 export function expectedHash(p: ToolPolicy, item: BatchItem, ctx: { batchHash: string; crmSheet?: CrmSheet }): { hash: string } | { reason: string } {
   const args = expectedArgs(p, item, ctx);
   if (args === null) {
+    const why = p.whyNot?.(item) ?? null;
+    if (why !== null) return { reason: why };
     if (p.connector === "google-sheets" && p.role === "log" && ctx.crmSheet === undefined) return { reason: "no CRM sheet is configured for this workflow (workflow.json inputs.crmSheet)" };
     return { reason: p.expected === undefined ? `${p.tool} has no expected arguments` : `approved item ${item.key} is not a ${p.commitVerb ?? "send"} item with the fields ${p.tool} needs` };
   }

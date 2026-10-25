@@ -9,10 +9,21 @@ import { genericCommit, genericPolicy } from "../../src/workflows/generic.ts";
 import { makeBatch, type Batch, type BatchItem } from "../../src/workflows/batch.ts";
 import { createGate, type Gate, type GateAction, type GateContext } from "../../src/workflows/gate.ts";
 import type { ToolPolicy } from "../../src/workflows/allowlist.ts";
-import { tempHome } from "../helpers.ts";
+import { tempHome as helperHome } from "../helpers.ts";
 import { FakeRunner, ok } from "../s10e-ui-round4/setup.ts";
 
-export { FakeRunner, ok, tempHome };
+export { FakeRunner, ok };
+
+const cleanups: Array<() => void> = [];
+/** A fresh temp home (removed when the test process exits). */
+export function tempHome(): string {
+  const h = helperHome();
+  cleanups.push(h.cleanup);
+  return h.home;
+}
+process.on("exit", () => {
+  for (const c of cleanups.splice(0)) c();
+});
 export { BANNED_RE } from "../s10e-ui-round4/setup.ts";
 
 export const NOW = Date.UTC(2026, 9, 25, 9, 0, 0);
@@ -28,6 +39,7 @@ export const LINEAR_TOOLS = fx("tools-linear.json");
 export const STRIPE_TOOLS = fx("tools-stripe.json");
 export const LINEAR_SCHEMA_OUT = fx("schema-LINEAR_CREATE_LINEAR_ISSUE.json");
 export const STRIPE_SCHEMA_OUT = fx("schema-STRIPE_CREATE_REFUND.json");
+export const COMMENT_SCHEMA_OUT = fx("schema-LINEAR_CREATE_LINEAR_COMMENT.json");
 
 export const fail = (code = 1, stdout = "", stderr = ""): LinkRunResult => ({ code, stdout, stderr, timedOut: false });
 export const missing: LinkRunResult = { code: null, stdout: "", stderr: "", timedOut: false, spawnError: "ENOENT" };
@@ -89,6 +101,7 @@ export function universeCli(o: CliOptions = {}): FakeRunner {
     }
     if (key === "execute LINEAR_CREATE_LINEAR_ISSUE" && argv[3] === "--get-schema") return ok(LINEAR_SCHEMA_OUT);
     if (key === "execute STRIPE_CREATE_REFUND" && argv[3] === "--get-schema") return ok(STRIPE_SCHEMA_OUT);
+    if (key === "execute LINEAR_CREATE_LINEAR_COMMENT" && argv[3] === "--get-schema") return ok(COMMENT_SCHEMA_OUT);
     if (key === "connections list") return ok(ACTIVE(argv[4] ?? "", o.askEveryCall === true));
     if (argv[1] === "link" && argv.includes("--list")) return ok("linear  ACTIVE\n");
     if (argv[1] === "link") return ok("Open https://connect.composio.dev/link/ln_test to sign in\n");

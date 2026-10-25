@@ -10,7 +10,7 @@ import { connectionsPath, connectionIdFor, keychainRefFor, readConnections } fro
 import type { LinkRunResult } from "../../src/connectors/link.ts";
 import { syncUniverse } from "../../src/connectors/universe.ts";
 import { StubModel } from "../../src/models/model.ts";
-import { readWorkflow } from "../../src/workflows/store.ts";
+import { listBatches, readApprovals, readWorkflow } from "../../src/workflows/store.ts";
 import { FakeLister, FakeSecrets, fakeFetch } from "../s13-connector-chain/setup.ts";
 import { freshHome, NOW as S14_NOW } from "../s14-any-task-workflows/setup.ts";
 import { FakeRunner, NOW, ok, SECRET, syncedHome, tempHome, TOKEN, universeCli } from "./setup.ts";
@@ -393,22 +393,25 @@ describe("s17 build", () => {
     const insight = v2.insights.find((i) => (i.profile.understanding?.surfaces ?? []).some((s) => s.host === "acme.zendesk.com"))!;
     const r = await post<ConnectionBuildDTO>(w, "/connections/tk-linear/build", { insightId: insight.id });
     expect(r.status).toBe(200);
-    expect(r.body.dryRun.commitTool).toBe("composio:LINEAR_CREATE_LINEAR_ISSUE");
-    expect(r.body.dryRun.missing).toContain("team_id");
+    // A ticket reply maps to a comment in Linear (the step's words), with the reply text in its body.
+    expect(r.body.dryRun.commitTool).toBe("composio:LINEAR_CREATE_LINEAR_COMMENT");
+    expect(r.body.dryRun.missing).toEqual(["issueId"]);
     const wf = readWorkflow(w.home, r.body.workflow.id)!;
-    const commitStep = wf.tools!.find((t) => t.chosen === "composio:LINEAR_CREATE_LINEAR_ISSUE")!;
+    const commitStep = wf.tools!.find((t) => t.chosen === "composio:LINEAR_CREATE_LINEAR_COMMENT")!;
     expect(commitStep.chosenBy).toBe("user");
+    expect(commitStep.options.length).toBeLessThanOrEqual(3);
+    expect(commitStep.options.slice(0, 2).map((o) => o.id)).toEqual(["zendesk", "intercom"]);
     // The schema was fetched (read-only) before the dry run, and nothing was executed.
-    expect(w.runner.calls.some((c) => c.argv.join(" ") === "composio execute LINEAR_CREATE_LINEAR_ISSUE --get-schema")).toBe(true);
+    expect(w.runner.calls.some((c) => c.argv.join(" ") === "composio execute LINEAR_CREATE_LINEAR_COMMENT --get-schema")).toBe(true);
     expect(w.runner.calls.some((c) => c.argv[1] === "execute" && !c.argv.includes("--get-schema"))).toBe(false);
   });
 
   test("BUILD: building never sends: no live batch, no execute, no approval", async () => {
     const { w } = await supportWorld();
     const r = await post<ConnectionBuildDTO>(w, "/connections/zendesk/build");
-    const dir = join(w.home, "workflows", r.body.workflow.id, "batches");
-    const live = existsSync(dir) ? readdirSync(dir).filter((f) => f.includes("live")) : [];
-    expect(live).toEqual([]);
+    const batches = listBatches(w.home, r.body.workflow.id, S14_NOW);
+    expect(batches.filter((b) => b.kind === "live")).toEqual([]);
+    expect(readApprovals(w.home, r.body.workflow.id)).toEqual({});
     expect(w.runner.calls.some((c) => c.argv[1] === "execute" && !c.argv.includes("--get-schema"))).toBe(false);
     expect(r.body.dryRun.sent).toBe(0);
   });
