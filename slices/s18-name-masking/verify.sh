@@ -68,6 +68,7 @@ for f in $touched; do
     brain/src/plan/text-step.ts|brain/src/plan/dryrun.ts|brain/src/tone/draft.ts) ;;
     brain/src/workflows/runner.ts|brain/src/workflows/dryrun.ts|brain/API.md|plan/adr/0010-name-masking.md) ;;
     brain/tests/s18-name-masking/*|slices/s18-name-masking/*) ;;
+    brain/tests/s05b-runner/idempotency.test.ts) ;;  # the H3 fix ported from S2-02 (SPEC "Scope changes")
     *) fail "s18 commit touched out-of-scope $f";;
   esac
 done

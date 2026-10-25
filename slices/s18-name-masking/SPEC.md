@@ -5,7 +5,7 @@ depends_on: [s11-perception (frame notes), s12-understanding (span descriptions,
 parallel_safe: true
 human_gated: false
 verify: bash slices/s18-name-masking/verify.sh
-paths_in_scope: [brain/src/privacy/**, brain/src/grouping/normalize.ts (maskText keeps person placeholders), brain/src/models/router.ts, brain/src/models/model.ts (ModelRequest.names, stub sign-off pattern), brain/src/vision/notes.ts (maskFields), brain/src/vision/prompt.ts (context hint), brain/src/understanding/describe.ts, brain/src/plan/text-step.ts, brain/src/plan/dryrun.ts, brain/src/tone/draft.ts, brain/src/workflows/runner.ts (run-scoped map only), brain/src/workflows/dryrun.ts (run-scoped map only), brain/API.md, plan/adr/0010-name-masking.md, brain/tests/s18-name-masking/**, slices/s18-name-masking/**]
+paths_in_scope: [brain/src/privacy/**, brain/src/grouping/normalize.ts (maskText keeps person placeholders), brain/src/models/router.ts, brain/src/models/model.ts (ModelRequest.names, stub sign-off pattern), brain/src/vision/notes.ts (maskFields), brain/src/vision/prompt.ts (context hint), brain/src/understanding/describe.ts, brain/src/plan/text-step.ts, brain/src/plan/dryrun.ts, brain/src/tone/draft.ts, brain/src/workflows/runner.ts (run-scoped map only), brain/src/workflows/dryrun.ts (run-scoped map only), brain/API.md, plan/adr/0010-name-masking.md, brain/tests/s18-name-masking/**, brain/tests/s05b-runner/idempotency.test.ts (ported H3 fix, see Scope changes), slices/s18-name-masking/**]
 paths_out_of_scope: [app/**, engine/**, packet/**, schemas/**, brain/fixtures/**, brain/package.json, brain/bun.lock, every other test folder]
 ---
 
@@ -99,3 +99,8 @@ Drafts reach the batch with real names (restored by the router), so the approved
 typecheck; the s18 suite (>= 40 tests) passes with every tag present and passing; measured false-positive and
 false-negative rates printed and within bounds; the full brain suite passes; the masker imports no model and no
 network code; no s18 commit touches an out-of-scope path.
+
+## Scope changes
+- 2026-10-25: `brain/tests/s05b-runner/idempotency.test.ts` gets the H3 fix ported unchanged from S2-02 (PR #3,
+  ba887f9): the test no longer probes the real `npx gmail-mcp` chain, which waited out the 5 s probe timeout wherever
+  npx is installed and made the full brain suite red on main. Needed for this slice's "full brain suite passes" check.
