@@ -456,9 +456,10 @@ struct S14CopyTests {
     #expect(s14InternalWords(["the approval gate"]) == ["the approval gate"])  // the check itself bites
   }
 
-  @Test("the helper line says local only and no number changes")
+  @Test("the helper line says it is context only, that it reaches Claude prompts, and that no number changes")
   func helper() {
-    #expect(ContextStepState.helper.contains("on this Mac") && ContextStepState.helper.contains("never changes a number"))
+    #expect(ContextStepState.helper.contains("context") && ContextStepState.helper.contains("Claude") && ContextStepState.helper.contains("never changes a number"))
+    #expect(!ContextStepState.helper.contains("nowhere else"))
   }
 }
 

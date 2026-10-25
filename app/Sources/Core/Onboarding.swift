@@ -40,7 +40,7 @@ struct OnboardingFlow: Equatable, Sendable {
     "Anything older than 7 days: deleted",
   ]
 
-  static let localNote = "Everything stays on this Mac, encrypted. A model sees only what a draft needs, when you ask for one."
+  static let localNote = "Everything is kept on this Mac, encrypted. With a Claude account set up, masked text, and masked screens, go to that account to read and draft. Nothing else leaves."
 
   static let comeBackBody = "Offload needs a few ordinary workdays to see what repeats. When a task starts to repeat, a dot appears on the rail. Nothing to do until then."
 

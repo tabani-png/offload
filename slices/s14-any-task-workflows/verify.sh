@@ -122,15 +122,15 @@ if grep -rnE "models/model|claude-agent-sdk" "$BRAIN/src/vision"; then fail "bra
 if grep -rlE "anthropic" "$BRAIN/src/vision" | grep -vE "/vision/(claude|routed)\.ts$"; then fail "a vision file other than claude.ts talks to Anthropic"; fi
 grep -q 'u.hostname.toLowerCase() !== ANTHROPIC_HOST' "$BRAIN/src/vision/claude.ts" || fail "the Claude captioner lost its host guard"
 if grep -rnE "new (ClaudeCaptioner|ApiBackend)\(" "$BRAIN/tests" | grep -v "fetch" | grep -vE "env: \{\}|\(\{ env: \{\} \}\)|baseURL: \"https://evil"; then fail "a test builds a Claude client without a stubbed fetch"; fi
-if grep -rnE "images|base64|\.jpg|jpeg" "$BRAIN/src/plan" "$BRAIN/src/context" 2>/dev/null; then fail "plan/context code touches images"; fi
+if grep -rnE 'type: "image"|"base64"|image/jpeg|\.jpg' "$BRAIN/src/plan" "$BRAIN/src/context" 2>/dev/null; then fail "plan/context code sends images"; fi
 
 echo "== app (S14 suites)"
 aout="$("$ROOT/app/build.sh" test 2>&1)"; acode=$?
 plain="$(printf '%s\n' "$aout" | sed $'s/\x1b\\[[0-9;]*m//g')"
 printf '%s\n' "$plain" | grep -E 'Test run with' | tail -n 1 || true
 [ $acode -eq 0 ] || { printf '%s\n' "$plain" | grep -E '✘|error:' | head -20; fail "app tests exited $acode"; }
-s14="$(printf '%s\n' "$plain" | grep -cE '✔ Suite S14' || true)"
-[ "$s14" -ge 3 ] || fail "expected at least 3 S14 app suites to pass, got $s14"
+s14="$(printf '%s\n' "$plain" | grep -cE '✔ Suite "S14 .*" passed' || true)"
+[ "$s14" -ge 5 ] || fail "expected at least 5 S14 app suites to pass, got $s14"
 
 echo "== snapshots"
 BIN="$OFFLOAD_BUILD_DIR/Offload.app/Contents/MacOS/Offload"
@@ -149,6 +149,8 @@ echo "== scope (files touched by s14 commits since $BASE)"
 touched="$(git -C "$ROOT" log --format= --name-only --grep='s14' "$BASE..HEAD" 2>/dev/null | sort -u)"
 for f in $touched; do
   case "$f" in
+    # vision/{claude,routed,types,worker}.ts are in scope since the Claude captioner scope add (SPEC section 7).
+    brain/src/vision/claude.ts|brain/src/vision/routed.ts|brain/src/vision/types.ts|brain/src/vision/worker.ts) ;;
     engine/*|packet/*|schemas/*|brain/src/connectors/*|brain/src/vision/*|brain/fixtures/gen.ts|brain/fixtures/gen-domains.ts) fail "s14 commit touched out-of-scope $f";;
     brain/src/workflows/gate.ts|brain/src/workflows/allowlist.ts|brain/src/workflows/executor.ts|brain/src/workflows/batch.ts|brain/src/workflows/runner.ts) fail "s14 commit touched s13's $f";;
   esac

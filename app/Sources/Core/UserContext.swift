@@ -1,7 +1,8 @@
 import Foundation
 
 // s14 (CONTEXT): the optional onboarding question "What do you do?". Role and industry are only context for how
-// Offload names steps and drafts text. They go to the local brain (PUT /context) and nowhere else, and they never
+// Offload names steps and drafts text. They go to the local brain (PUT /context), which passes them to model prompts
+// (Claude through the router) inside a marked context block, and they never
 // change a number (brain/src/api/s14-types.ts UserContextDTO, ContextResponse).
 
 /// UserContextDTO. Absent keys mean "not set".
@@ -59,7 +60,7 @@ struct ContextStepState: Equatable, Sendable {
 
   static let title = "What do you do?"
   static let intro = "Optional. A word or two helps Offload name the work it finds the way you would."
-  static let helper = "Only used as context for naming steps and drafting. It goes to the brain on this Mac and nowhere else, and it never changes a number."
+  static let helper = "Only used as context when Offload names steps and drafts text, including in requests to Claude. It never changes a number."
 
   private(set) var role = ""
   private(set) var industry = ""
