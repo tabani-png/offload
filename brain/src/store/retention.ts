@@ -21,6 +21,8 @@ import { appendLedger, ledgerContacted } from "../workflows/runner.ts";
 import { addressHash } from "../workflows/autorun.ts";
 import { listWorkflowIds, workflowDir } from "../workflows/store.ts";
 import { isExpired, localDay, purgeExpired, type PurgeOptions, type PurgeResult } from "./vault.ts";
+import { purgeOutbox } from "../sync/outbox.ts";
+import { purgeRefs } from "../sync/evidence-key.ts";
 
 export interface PurgeAllResult extends PurgeResult {
   /** Unedited tone cards deleted with their expired corpus. */
@@ -29,6 +31,8 @@ export interface PurgeAllResult extends PurgeResult {
   labelsMoved: number;
   /** Addresses added to contacted ledgers from plain (pre-s10b) live batches. */
   ledgered: number;
+  /** S2-02: sync outbox day files (and evidence-ref maps) older than 7 days. */
+  syncFiles: number;
 }
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -98,7 +102,12 @@ export function purgeAll(home: string, now: number, opts: PurgeOptions = {}): Pu
   const labelsMoved = migrateLabels(home, now);
   // s13: app targets of the connector chain (observed app names / hosts) older than 7 days, with their decisions.
   if (existsSync(chainPath(home))) rememberTargets(home, [], now);
+  // S2-02: queued sync objects and the local evidence-ref maps follow the same 7-day rule (purge-log line per day).
+  const outbox = purgeOutbox(home, now);
+  const refs = purgeRefs(home, now);
+  const syncFiles = outbox.files + refs.length;
+  if (syncFiles > 0) log(`brain: purge removed ${outbox.files} sync outbox file(s) and ${refs.length} evidence-ref map(s) older than 7 days`);
   rotateIfLarge(join(home, "purge-log.jsonl"));
   if (toneCards + labelsMoved + ledgered > 0) log(`brain: purge removed ${toneCards} generated tone card(s), moved ${labelsMoved} observed name(s) into the sealed store, journalled ${ledgered} contacted address(es)`);
-  return { ...res, toneCards, labelsMoved, ledgered };
+  return { ...res, toneCards, labelsMoved, ledgered, syncFiles };
 }

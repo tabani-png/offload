@@ -17,6 +17,8 @@ import { BRAIN_READY_PREFIX, CAPTIONER_OFF, MODEL_HEADER, type BrainReadyDTO, ty
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
 import { workflowRoute } from "./workflow-routes.ts";
 import { s14Route } from "./s14-routes.ts";
+import { syncRoute } from "./sync-routes.ts";
+import { SyncClient, type SyncDeps } from "../sync/client.ts";
 import { contextStamp, readUserContext } from "../context/store.ts";
 import { isMethod, Linker, LinkNotFound, METHODS, simPath, type LinkRunner, type Method } from "../connectors/link.ts";
 import { chainDeps, ChainResolver, knownTarget, toChainDTO, type ChainDeps, type MethodProbe } from "../connectors/chain.ts";
@@ -60,6 +62,9 @@ export interface BrainOptions {
   /** s11: the caption worker (vision/worker.ts). Its status is `captioner` in GET /status; startBrainServer starts
    * and stops it. Absent = `serve --captioner off`. */
   vision?: VisionHandle;
+  /** S2-02 company sync: overrides for the sync client (control URL, fetch, browser opener, signer). Default: the
+   * client reads OFFLOAD_CONTROL_URL and stays "not_configured" without it. Nothing is sent before "Connect". */
+  sync?: Omit<SyncDeps, "home" | "analysis"> & { analysis?: SyncDeps["analysis"] };
   /** s17: re-sync the Composio app list when it is older than a day (real model, `serve` only; read-only commands). */
   universe?: { autoRefresh?: boolean };
 }
@@ -83,6 +88,8 @@ export interface Brain {
   /** s13: the connector chain and the computer-use sessions (tests). */
   readonly chain: ChainResolver;
   readonly computer: ComputerSessions;
+  /** S2-02: the company sync client. */
+  readonly sync: SyncClient;
   /** s17: starts a background re-sync of the Composio app list when it is stale (real model). True when one runs. */
   refreshUniverseIfStale(): boolean;
 }
@@ -231,6 +238,8 @@ export function createBrain(opts: BrainOptions): Brain {
     const d = mode === "peek" ? resolver.peek(t.id) : await resolver.resolve(t, { refresh: mode === "refresh" });
     return d === null ? dto : { ...dto, chain: toChainDTO(t, d, simulated) };
   };
+  // S2-02: the sync client. It reads the analysis only for baselines and working time, and flushes after each run.
+  const sync = new SyncClient({ home: opts.home, now, ...(opts.log === undefined ? {} : { log: opts.log }), analysis: () => analysis(undefined), ...(opts.sync ?? {}) });
   const wctx = {
     home: opts.home,
     env,
@@ -240,7 +249,13 @@ export function createBrain(opts: BrainOptions): Brain {
     now,
     analysis: () => analysis(undefined),
     background: (p: Promise<unknown>) => {
-      const tracked = p.catch((err: unknown) => console.error("brain: background run failed", err)).finally(() => background.delete(tracked));
+      const tracked = p
+        .catch((err: unknown) => console.error("brain: background run failed", err))
+        .finally(() => {
+          background.delete(tracked);
+          // S2-02: run outcomes go out after each run (ADR 0103 §4), when this Mac is connected and not paused.
+          if (sync.active()) void sync.afterRun();
+        });
       background.add(tracked);
     },
     chain: {
@@ -275,6 +290,9 @@ export function createBrain(opts: BrainOptions): Brain {
     // s14: context, general drafting and plan choice (api/s14-routes.ts); null = not one of its routes.
     const s14 = await s14Route(req, path, { home: opts.home, env, model, modelLabel, now, analysis: () => analysis(undefined), ...(router === undefined ? {} : { router }) });
     if (s14 !== null) return s14;
+    // S2-02: company sync (status, connect, pause/resume, preview, notice ack) and POST /workflows/:id/share.
+    const sr = await syncRoute(req, path, sync);
+    if (sr !== null) return sr;
     // Workflow routes take POST and DELETE; everything else is read-only.
     const wf = await workflowRoute(req, path, wctx);
     if (wf !== null) return wf;
@@ -360,6 +378,7 @@ export function createBrain(opts: BrainOptions): Brain {
     modelLabel,
     chain: resolver,
     computer: sessions,
+    sync,
     refreshUniverseIfStale: () => (universeStatus(readUniverse(opts.home), now()).stale ? startUniverseRefresh(connCtx) : false),
     linkIdle: () => linker.idle(),
     async idle(): Promise<void> {
@@ -415,6 +434,8 @@ export async function startBrainServer(opts: BrainOptions & { port?: number; sch
   if (opts.universe?.autoRefresh === true) setTimeout(() => void brain.refreshUniverseIfStale(), 0);
   // s11: the caption worker polls for keyframes in the background (local captioner only).
   const stopVision = opts.vision?.start?.() ?? (() => {});
+  // S2-02: background sync flushes (a no-op until this Mac is connected to a company).
+  const stopSync = brain.sync.start();
   const listener = Bun.serve({
     hostname: LOOPBACK,
     port: opts.port ?? 0,
@@ -433,6 +454,7 @@ export async function startBrainServer(opts: BrainOptions & { port?: number; sch
       if (timer !== null) clearInterval(timer);
       if (universeTimer !== null) clearInterval(universeTimer);
       stopVision();
+      stopSync();
       stopPurge();
       await listener.stop(true);
     },

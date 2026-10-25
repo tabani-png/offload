@@ -105,7 +105,9 @@ describe("s05b runner: idempotency, single flight, cancel", () => {
     writeFileSync(join(w.home, "connectors.json"), JSON.stringify({ version: 1, servers: { gmail: { type: "stdio", command: "npx", args: ["gmail-mcp"], catalog: ["gmail"] } } }));
     const stub = new StubModel();
     const slow: Model = { complete: async (r: ModelRequest) => (await Bun.sleep(15), stub.complete(r)) };
-    const brain = createBrain({ home: w.home, token: "t".repeat(40), now: () => NOW + 30, workflows: { model: slow, executor: executor(), env: {} } });
+    // No real chain probes: the configured gmail server is `npx gmail-mcp`, and probing it waits out the 5 s probe
+    // timeout wherever npx is installed. The default executor sends.
+    const brain = createBrain({ home: w.home, token: "t".repeat(40), now: () => NOW + 30, workflows: { model: slow, executor: executor(), env: {} }, chain: { probes: new Map() } });
     const run = () => brain.handle(new Request(`http://127.0.0.1:4545/workflows/${w.outreach.id}/run`, { method: "POST", headers: { authorization: `Bearer ${"t".repeat(40)}` } }));
     const [r1, r2] = await Promise.all([run(), run()]);
     await brain.idle();
