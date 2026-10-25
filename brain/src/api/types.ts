@@ -194,24 +194,204 @@ export interface AutomationDTO {
   id: string;
   insightId: string;
   name: string;
+  /** Legacy 4-value status, kept for v1 clients. New clients read `state`. */
   status: AutomationStatus;
   connectors: ConnectorDTO[];
   estimatedHoursSavedPerWeek: number;
-  /** null until a week of measured runs exists. */
+  /** null until the store has a full day before and after activation. */
   measuredHoursSavedPerWeek: number | null;
+  // ---- added in s05 (additive) ----
+  /** The workflow id (same as `id`). */
+  workflowId: string;
+  state: WorkflowState;
+  /** Why the state is needs_you, in plain words. Empty otherwise. */
+  needsYou: string[];
+  /** Arithmetic behind estimatedHoursSavedPerWeek, show verbatim. */
+  arithmetic: string;
+  measured: MeasuredSavingDTO | null;
+  pendingBatch: BatchSummaryDTO | null;
+}
+
+/** Observed time on the task in the store, full local days before vs after activation (activation day excluded). */
+export interface MeasuredSavingDTO {
+  activatedAt: number;
+  daysBefore: number;
+  daysAfter: number;
+  hoursPerWeekBefore: number;
+  hoursPerWeekAfter: number;
+  hoursSavedPerWeek: number;
+  /** e.g. "before: 24.1 h over 4 days = 42.2 h/wk; after: 1.2 h over 2 days = 4.2 h/wk → saves 38.0 h/wk" */
+  arithmetic: string;
 }
 
 export interface DashboardResponse {
   version: ApiVersion;
   automations: AutomationDTO[];
+  /** Sums over active (and needs_you) automations; measured is null when none has a measurement. */
   totals: { estimatedHoursSavedPerWeek: number; measuredHoursSavedPerWeek: number | null };
   /** Top insights not yet automated, for the "next up" row. */
   suggestions: Array<{ insightId: string; name: string; weeklyHoursSaved: number }>;
 }
 
+// ---------- workflows (s05) ----------
+
+/** drafting = folder being written; ready_for_review = drafted, waiting for a dry run and your approval;
+ * active = approved and running; paused = stopped by you; needs_you = active but a batch waits for review or a
+ * required connector is missing. */
+export type WorkflowState = "drafting" | "ready_for_review" | "active" | "paused" | "needs_you";
+
+export type WorkflowStepType = "read" | "draft" | "approval_gate" | "send" | "log";
+
+export type ConnectorStatus = "connected" | "missing_env" | "missing";
+
+export interface WorkflowStepDTO {
+  id: string;
+  type: WorkflowStepType;
+  title: string;
+  detail: string;
+  connector: string | null;
+  /** Passes the approval gate. */
+  sideEffect: boolean;
+  script?: string;
+}
+
+export interface WorkflowConnectorDTO {
+  id: string;
+  name: string;
+  how: ConnectorHow;
+  required: boolean;
+  status: ConnectorStatus;
+}
+
+export type BatchKind = "dry_run" | "live";
+export type BatchState = "pending" | "approved" | "sending" | "sent" | "partial" | "failed";
+
+export interface BatchSummaryDTO {
+  /** sha256 over workflow, kind and every recipient, subject and body. Approve with this exact value. */
+  hash: string;
+  kind: BatchKind;
+  state: BatchState;
+  createdAt: number;
+  approvedAt: number | null;
+  items: number;
+  sent: number;
+}
+
+export interface BatchItemDTO {
+  key: string;
+  to: string;
+  subject: string;
+  body: string;
+  warnings: string[];
+}
+
+export interface WorkflowSummaryDTO {
+  id: string;
+  insightId: string;
+  taskId: string;
+  kind: string;
+  name: string;
+  description: string;
+  state: WorkflowState;
+  needsYou: string[];
+  autoRun: boolean;
+  createdAt: number;
+  activatedAt: number | null;
+  connectors: WorkflowConnectorDTO[];
+  estimatedHoursSavedPerWeek: number;
+  arithmetic: string;
+  pendingBatch: BatchSummaryDTO | null;
+  lastDryRunAt: number | null;
+}
+
+export interface WorkflowDetailDTO extends WorkflowSummaryDTO {
+  /** Folder on this Mac. */
+  path: string;
+  skillMd: string;
+  facts: string;
+  steps: WorkflowStepDTO[];
+  schedule: { type: "manual" } | { type: "cron"; cron: string; timezone: string; note: string };
+  trigger: { type: "manual" | "schedule" | "new_email"; detail: string };
+  batchSize: number;
+  models: { draft: string; cheap: string };
+  batches: BatchSummaryDTO[];
+  /** Items of the pending batch, for the review screen. Empty when none. */
+  pendingItems: BatchItemDTO[];
+}
+
+export interface WorkflowsResponse {
+  version: ApiVersion;
+  workflows: WorkflowSummaryDTO[];
+}
+
+export interface GateDecisionDTO {
+  at: number;
+  tool: string;
+  toolClass: "read" | "side_effect" | "builtin";
+  decision: "allow" | "deny";
+  reason: string;
+  itemKey?: string;
+}
+
+export interface DryRunInstanceDTO {
+  instanceId: string;
+  day: Day;
+  start: number;
+  recipient: { email: string; firstName: string; org: string };
+  subject: string;
+  /** Our draft; null when the workflow kind has no drafting dry run yet. */
+  draft: string | null;
+  /** What the user really did, from OCR text (masked by the observer). */
+  observed: { excerpt: string; minutes: number; eventIds: string[] };
+  estimate: { observedMinutes: number; reviewSeconds: number; savedMinutes: number };
+  examplesUsed: string[];
+  warnings: string[];
+}
+
+export interface DryRunResponse {
+  version: ApiVersion;
+  workflowId: string;
+  ranAt: number;
+  /** Approving this hash marks the workflow reviewed (active). A dry-run batch can never be sent. */
+  batchHash: string;
+  instances: DryRunInstanceDTO[];
+  /** Instances without a parsable recipient in their OCR text. */
+  skipped: number;
+  sideEffects: { attempted: number; denied: number };
+  totals: { instances: number; observedMinutes: number; reviewMinutes: number; savedMinutes: number; arithmetic: string };
+  gateLog: GateDecisionDTO[];
+  warnings: string[];
+}
+
+export interface ApproveResponse {
+  version: ApiVersion;
+  workflowId: string;
+  batchHash: string;
+  kind: BatchKind;
+  /** dry_run: the workflow is now active. live: sending started in the background. */
+  result: "activated" | "sending";
+  workflow: WorkflowSummaryDTO;
+}
+
+export interface RunResponse {
+  version: ApiVersion;
+  workflowId: string;
+  batch: BatchSummaryDTO;
+  items: BatchItemDTO[];
+}
+
+export interface ConnectorsResponse {
+  version: ApiVersion;
+  configPath: string;
+  configErrors: string[];
+  servers: Array<{ name: string; transport: "stdio" | "http"; catalog: string[]; status: "connected" | "missing_env"; missingEnv: string[] }>;
+  catalog: Array<{ id: string; name: string; how: ConnectorHow; status: ConnectorStatus; servers: string[] }>;
+  insights: Array<{ insightId: string; name: string; ready: boolean; connectors: Array<{ id: string; name: string; role: "primary" | "also"; status: ConnectorStatus }> }>;
+}
+
 // ---------- errors ----------
 
-export type ErrorCode = "unauthorized" | "forbidden" | "not_found" | "method_not_allowed" | "bad_request" | "internal";
+export type ErrorCode = "unauthorized" | "forbidden" | "not_found" | "method_not_allowed" | "bad_request" | "conflict" | "payload_too_large" | "internal";
 
 export interface ErrorResponse {
   error: ErrorCode;

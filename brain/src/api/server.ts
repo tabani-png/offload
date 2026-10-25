@@ -2,18 +2,28 @@
 import { randomBytes } from "node:crypto";
 import { analyzeHome, type Analysis, type AnalyzeOptions } from "../analyze.ts";
 import { DAY_RE, storeFingerprint } from "../store/reader.ts";
-import { toDashboard, toEvidence, toInsights, toStatus, toTimeline } from "./dto.ts";
+import type { Env } from "../connectors/config.ts";
+import { AgentSdkModel, type Model } from "../models/model.ts";
+import { AgentSdkExecutor, type Executor } from "../workflows/executor.ts";
+import { dashboard } from "../workflows/service.ts";
+import { toEvidence, toInsights, toStatus, toTimeline } from "./dto.ts";
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
+import { workflowRoute } from "./workflow-routes.ts";
 
 export interface BrainOptions {
   home: string;
   token: string;
   now?: () => number;
   analyze?: Omit<AnalyzeOptions, "reviewSeconds" | "now">;
+  /** s05: model for drafts and cards (default: Agent SDK), executor for approved batches (default: Agent SDK),
+   * env for connector secrets (default process.env). Tests pass StubModel and ScriptedExecutor. */
+  workflows?: { model?: Model; executor?: Executor; env?: Env };
 }
 
 export interface Brain {
   handle(req: Request): Promise<Response>;
+  /** Resolves when background work (sending approved batches) has finished. */
+  idle(): Promise<void>;
 }
 
 export const MIN_TOKEN_LENGTH = 32;
@@ -51,16 +61,34 @@ export function createBrain(opts: BrainOptions): Brain {
     return hit;
   };
 
+  const background = new Set<Promise<unknown>>();
+  const env = opts.workflows?.env ?? process.env;
+  const wctx = {
+    home: opts.home,
+    env,
+    model: opts.workflows?.model ?? new AgentSdkModel(),
+    executor: opts.workflows?.executor ?? new AgentSdkExecutor(),
+    now,
+    analysis: () => analysis(undefined),
+    background: (p: Promise<unknown>) => {
+      const tracked = p.catch((err: unknown) => console.error("brain: background run failed", err)).finally(() => background.delete(tracked));
+      background.add(tracked);
+    },
+  };
+
   async function route(req: Request): Promise<Response> {
     const refused = gate(req);
     if (refused !== null) return refused;
     if (!authorized(req, opts.token)) return error(401, "unauthorized");
-    if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed");
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
+    // Workflow routes take POST and DELETE; everything else is read-only.
+    const wf = await workflowRoute(req, path, wctx);
+    if (wf !== null) return wf;
+    if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed");
 
     if (path === "/status") return json(200, toStatus(await analysis(undefined), now()));
-    if (path === "/dashboard") return json(200, toDashboard(await analysis(undefined)));
+    if (path === "/dashboard") return json(200, dashboard(await analysis(undefined), opts.home, env));
     if (path === "/insights") {
       const review = parseReviewSeconds(url.searchParams.get("reviewSeconds"));
       if (review === "invalid") return error(400, "bad_request", "reviewSeconds must be a number in (0, 600]");
@@ -83,6 +111,9 @@ export function createBrain(opts: BrainOptions): Brain {
   }
 
   return {
+    async idle(): Promise<void> {
+      while (background.size > 0) await Promise.all([...background]);
+    },
     async handle(req: Request): Promise<Response> {
       try {
         return secure(await route(req));

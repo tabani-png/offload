@@ -43,8 +43,12 @@ function figure(f: Figure): FigureDTO {
   return { value: f.value, unit: f.unit, display: display(f), eventCount: f.eventIds.length };
 }
 
-function connector(c: Connector, role: ConnectorDTO["role"]): ConnectorDTO {
+export function connectorDTO(c: Connector, role: ConnectorDTO["role"]): ConnectorDTO {
   return { id: c.id, name: c.name, how: c.how, reach: c.reach, role, ...(c.limits === undefined ? {} : { limits: c.limits }) };
+}
+
+export function insightConnectors(i: Insight): ConnectorDTO[] {
+  return [...(i.connectors.primary === null ? [] : [connectorDTO(i.connectors.primary, "primary")]), ...i.connectors.also.map((c) => connectorDTO(c, "also"))];
 }
 
 function statFigures(s: TaskStats): Record<Exclude<FigureName, "saving">, Figure> {
@@ -89,7 +93,7 @@ function insightDTO(a: Analysis, i: Insight): InsightDTO {
     },
     score: { value: i.score.value, formula: "volume × sameness × reachability × (1 − judgement) × (1 − risk/2)", factors: { ...i.score.factors } },
     judge: { judgement: i.judge.judgement, risk: i.judge.risk, reasons: [...i.judge.reasons] },
-    connectors: [...(i.connectors.primary === null ? [] : [connector(i.connectors.primary, "primary")]), ...i.connectors.also.map((c) => connector(c, "also"))],
+    connectors: insightConnectors(i),
     identifiers: {
       counterpartyCount: i.profile.identifiers.counterparties.length,
       domainCount: i.profile.identifiers.domains.length,
