@@ -76,13 +76,15 @@ export interface LinkRunResult {
 
 /** Runs one command for a sign-in. Tests inject a fake and assert the exact argv; the default spawns it. */
 export interface LinkRunner {
-  run(argv: readonly string[], opts: { timeoutMs: number; env: Record<string, string> }): Promise<LinkRunResult>;
+  /** s17: `maxBytes` raises the output cap for listings (default 64 KB). */
+  run(argv: readonly string[], opts: { timeoutMs: number; env: Record<string, string>; maxBytes?: number }): Promise<LinkRunResult>;
 }
 
 const OUTPUT_CAP = 64 * 1024;
 
 export class SpawnLinkRunner implements LinkRunner {
-  async run(argv: readonly string[], opts: { timeoutMs: number; env: Record<string, string> }): Promise<LinkRunResult> {
+  async run(argv: readonly string[], opts: { timeoutMs: number; env: Record<string, string>; maxBytes?: number }): Promise<LinkRunResult> {
+    const cap = Math.min(opts.maxBytes ?? OUTPUT_CAP, 32 * 1024 * 1024);
     let proc: ReturnType<typeof Bun.spawn>;
     try {
       proc = Bun.spawn([...argv], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: opts.env });
@@ -94,7 +96,7 @@ export class SpawnLinkRunner implements LinkRunner {
       timedOut = true;
       proc.kill();
     }, opts.timeoutMs);
-    const read = async (s: ReadableStream<Uint8Array> | number | undefined | null) => (s instanceof ReadableStream ? (await new Response(s).text()).slice(0, OUTPUT_CAP) : "");
+    const read = async (s: ReadableStream<Uint8Array> | number | undefined | null) => (s instanceof ReadableStream ? (await new Response(s).text()).slice(0, cap) : "");
     try {
       const [stdout, stderr, code] = await Promise.all([read(proc.stdout), read(proc.stderr), proc.exited]);
       return { code: timedOut ? null : code, stdout, stderr, timedOut };

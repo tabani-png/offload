@@ -318,8 +318,9 @@ async function build(ctx: ConnectionsContext, info: ConnectionInfo, body: Record
     }
   }
   if (pick !== null) tools = chooseTool(tools, pick.stepId, pick.optionId, template) ?? tools;
-  // A tool approved field by field: its fields are read (read-only) so the dry run can show every one of them.
-  if (pick !== null && isGenericVerb(pick.optionId)) await fetchSchema({ home: ctx.home, runner: ctx.resolver.deps.runner, env: ctx.env, now, slug: pick.optionId.slice(GENERIC_VERB_PREFIX.length) });
+  // A tool approved field by field: its fields are read (read-only) so the dry run can show every one of them. The
+  // demo (stub model) never runs Composio: it uses a cached schema or says the fields are not fetched yet.
+  if (pick !== null && isGenericVerb(pick.optionId) && ctx.modelLabel === "real") await fetchSchema({ home: ctx.home, runner: ctx.resolver.deps.runner, env: ctx.env, now, slug: pick.optionId.slice(GENERIC_VERB_PREFIX.length) });
   wf = updateWorkflow(
     ctx.home,
     wf.id,
@@ -385,7 +386,13 @@ export async function connectionsRoute(req: Request, path: string, url: URL, ctx
   }
   const m = /^\/connections\/([^/]+)(?:\/(setup|test|build))?$/.exec(path);
   if (m === null) return error(404, "not_found");
-  const info = connectionInfo(decodeURIComponent(m[1]!), readUniverse(ctx.home));
+  let raw: string;
+  try {
+    raw = decodeURIComponent(m[1]!);
+  } catch {
+    return error(404, "not_found", "unknown connection id");
+  }
+  const info = connectionInfo(raw, readUniverse(ctx.home));
   if (info === null) return error(404, "not_found", "unknown connection id");
   const action = m[2];
   if (action === undefined) {

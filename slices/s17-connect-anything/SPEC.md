@@ -105,9 +105,15 @@ rules), `brain/src/workflows/chain-executor.ts`, `brain/src/workflows/drafter.ts
 `app/build.sh` (test list), `app/snapshots/connections-*.png`, `slices/s17-connect-anything/**`.
 
 ## paths_out_of_scope
-`brain/src/workflows/gate.ts` (unchanged: the generic policy plugs into the existing decision order),
+`brain/src/workflows/gate.ts` (the decision order is unchanged; see Scope changes),
 `brain/src/workflows/runner.ts`, `batch.ts`, `executor.ts`, `engine/**`, `packet/**`, `schemas/**`, every other
 slice's tests, `app/Sources/Surfaces/ConnectSheet.swift` and `Core/Connect.swift` (reused as they are).
+
+## Scope changes
+- `brain/src/workflows/gate.ts`: one line in `matchItem`. When a generic tool's arguments do not fit its fresh schema
+  and an approved item carries an older schema hash, the deny reason is the schema change ("the tool's fields changed
+  since you approved it") instead of the first validation error. The call is denied in both cases; nothing else in the
+  gate changes.
 
 ## Acceptance (tag = test name prefix in `brain/tests/s17-connect-anything/` and `S17 ...` Swift suites)
 - UNIVERSE: sync unions seed queries, lists every toolkit's tools, writes a versioned index, keeps the old index when
@@ -149,7 +155,11 @@ and committed connections snapshots; CONNECTORS.md and API.md sections; the smok
 
 ## Real smoke (opt-in, not in verify.sh)
 `OFFLOAD_S17_SMOKE=1 bun run brain/src/cli.ts universe sync --home <tmp>` then `universe schema LINEAR_CREATE_LINEAR_ISSUE`.
-Read-only commands only. Result on this Mac (composio CLI 0.4.2, 2026-10-25): SMOKE_PENDING
+Read-only commands only. Result on this Mac (composio CLI 0.4.2, 2026-10-25): **1,651 toolkits, 65,602 tools**,
+complete (no toolkit failed), 1,687 read-only CLI commands, 3 min 16 s, index 29 MB. Classes: read 37,069, commit
+27,634, draft 77, denied 822 (every tool of the `composio` helper toolkit, execute / bash / workbench / proxy /
+forward / reply names, the s16 denied list). Schema fetch: `LINEAR_CREATE_LINEAR_ISSUE` 12 fields, required
+`team_id`, `title`, sha256 `e8847a7d…59f2e`. Nothing was executed; no account was touched.
 
 ## Gaps (not done here)
 - Plan workflows still have no live batches (s14): the generic commit is previewed in their dry runs, and executed

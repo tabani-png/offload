@@ -8,7 +8,7 @@
 //   $OFFLOAD_HOME/composio-universe/schemas/<SLUG>.json
 // A failed sync never replaces a good index; a toolkit whose listing fails keeps its previous tools.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { neverAllowedName, sortedJson } from "../workflows/allowlist.ts";
 import { ensureDir, writePrivate } from "../workflows/store.ts";
@@ -23,6 +23,8 @@ export const UNIVERSE_SEEDS: readonly string[] = ["e", "o", "u", "n", "r", "l", 
 export const UNIVERSE_LIST_TIMEOUT_MS = 60_000;
 export const UNIVERSE_SCHEMA_TIMEOUT_MS = 20_000;
 const DESCRIPTION_MAX = 400;
+/** A full toolkit listing or a big toolkit's tools run to a few MB of JSON. */
+const LISTING_MAX_BYTES = 16 * 1024 * 1024;
 /** A Composio tool slug: upper-case letters, digits and underscores. Anything else never reaches the CLI. */
 export const SLUG_RE = /^[A-Z][A-Z0-9_]{1,119}$/;
 const TOOLKIT_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -95,22 +97,41 @@ type Obj = Record<string, unknown>;
 const isObj = (x: unknown): x is Obj => typeof x === "object" && x !== null && !Array.isArray(x);
 const str = (x: unknown, max = DESCRIPTION_MAX) => (typeof x === "string" ? x.slice(0, max) : "");
 
-/** The index, or null when there is none or it cannot be trusted (bad JSON, other version). */
+/** The real index is tens of MB: parsed once per file version (path, size, mtime) and shared. */
+const cache = new Map<string, { stamp: string; idx: UniverseIndex | null }>();
+
+/** The index, or null when there is none or it cannot be trusted (bad JSON, other version). Callers must not mutate it. */
 export function readUniverse(home: string): UniverseIndex | null {
   const p = indexPath(home);
-  if (!existsSync(p)) return null;
+  if (!existsSync(p)) {
+    cache.delete(p);
+    return null;
+  }
+  let stamp: string;
   try {
-    const v = JSON.parse(readFileSync(p, "utf8")) as Partial<UniverseIndex>;
-    if (v.version !== UNIVERSE_VERSION || !isObj(v.toolkits) || !isObj(v.tools) || typeof v.syncedAt !== "number") return null;
-    return v as UniverseIndex;
+    const st = statSync(p);
+    stamp = `${st.size}:${st.mtimeMs}:${st.ino}`;
   } catch {
     return null;
   }
+  const hit = cache.get(p);
+  if (hit !== undefined && hit.stamp === stamp) return hit.idx;
+  let idx: UniverseIndex | null = null;
+  try {
+    const v = JSON.parse(readFileSync(p, "utf8")) as Partial<UniverseIndex>;
+    if (v.version === UNIVERSE_VERSION && isObj(v.toolkits) && isObj(v.tools) && typeof v.syncedAt === "number") idx = v as UniverseIndex;
+  } catch {
+    idx = null;
+  }
+  if (cache.size > 8) cache.clear();
+  cache.set(p, { stamp, idx });
+  return idx;
 }
 
 export function writeUniverse(home: string, idx: UniverseIndex): void {
   ensureDir(universeDir(home));
   writePrivate(indexPath(home), JSON.stringify(idx) + "\n");
+  cache.delete(indexPath(home));
 }
 
 export interface UniverseStatus {
@@ -193,7 +214,7 @@ async function pool<T>(items: readonly T[], n: number, fn: (x: T) => Promise<voi
 /** One full read-only sync. Throws UniverseSyncError (and keeps the old index) when no toolkit could be listed. */
 export async function syncUniverse(o: SyncOptions): Promise<SyncResult> {
   const run = readOnlyRunner(o.runner);
-  const opts = { timeoutMs: o.timeoutMs ?? UNIVERSE_LIST_TIMEOUT_MS, env: linkEnv(o.env) };
+  const opts = { timeoutMs: o.timeoutMs ?? UNIVERSE_LIST_TIMEOUT_MS, env: linkEnv(o.env), maxBytes: LISTING_MAX_BYTES };
   const prior = readUniverse(o.home);
   let commands = 0;
   const exec = async (argv: string[]) => {
@@ -258,10 +279,7 @@ export async function toolkitAuthModes(o: { home: string; runner: LinkRunner; en
   if (!isObj(v)) return null;
   const modes = (Array.isArray(v.auth_modes) ? v.auth_modes : Array.isArray(v.auth_schemes) ? v.auth_schemes : []).filter((m): m is string => typeof m === "string").slice(0, 20);
   const fresh = readUniverse(o.home);
-  if (fresh?.toolkits[o.toolkit] !== undefined) {
-    fresh.toolkits[o.toolkit]!.authModes = modes;
-    writeUniverse(o.home, fresh);
-  }
+  if (fresh?.toolkits[o.toolkit] !== undefined) writeUniverse(o.home, { ...fresh, toolkits: { ...fresh.toolkits, [o.toolkit]: { ...fresh.toolkits[o.toolkit]!, authModes: modes } } });
   return modes;
 }
 
@@ -325,7 +343,7 @@ export async function fetchSchema(o: FetchSchemaOptions): Promise<SchemaRecord |
   const maxAge = o.maxAgeMs ?? UNIVERSE_TTL_MS;
   const cached = readSchema(o.home, o.slug);
   if (cached !== null && maxAge > 0 && o.now() - cached.fetchedAt < maxAge) return cached;
-  const r = await readOnlyRunner(o.runner).run(["composio", "execute", o.slug, "--get-schema"], { timeoutMs: o.timeoutMs ?? UNIVERSE_SCHEMA_TIMEOUT_MS, env: linkEnv(o.env) });
+  const r = await readOnlyRunner(o.runner).run(["composio", "execute", o.slug, "--get-schema"], { timeoutMs: o.timeoutMs ?? UNIVERSE_SCHEMA_TIMEOUT_MS, env: linkEnv(o.env), maxBytes: LISTING_MAX_BYTES });
   if (failed(r)) return null;
   const rec = parseSchemaOutput(r.stdout, o.now());
   if (rec === null || rec.slug !== o.slug) return null;

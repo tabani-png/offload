@@ -389,7 +389,7 @@ describe("s17 build", () => {
   });
 
   test("BUILD: with an insight named, any app's tool is added to the commit step, chosen and previewed field by field", async () => {
-    const { w, v2 } = await supportWorld();
+    const { w, v2 } = await supportWorld("real");
     const insight = v2.insights.find((i) => (i.profile.understanding?.surfaces ?? []).some((s) => s.host === "acme.zendesk.com"))!;
     const r = await post<ConnectionBuildDTO>(w, "/connections/tk-linear/build", { insightId: insight.id });
     expect(r.status).toBe(200);
@@ -414,6 +414,22 @@ describe("s17 build", () => {
     expect(readApprovals(w.home, r.body.workflow.id)).toEqual({});
     expect(w.runner.calls.some((c) => c.argv[1] === "execute" && !c.argv.includes("--get-schema"))).toBe(false);
     expect(r.body.dryRun.sent).toBe(0);
+  });
+
+  test("BUILD: the demo model never runs Composio while building; a universe tool's fields are then not fetched yet", async () => {
+    const { w, v2 } = await supportWorld("stub");
+    const insight = v2.insights.find((i) => (i.profile.understanding?.surfaces ?? []).some((s) => s.host === "acme.zendesk.com"))!;
+    const before = w.runner.calls.length;
+    const r = await post<ConnectionBuildDTO>(w, "/connections/tk-linear/build", { insightId: insight.id });
+    expect(r.status).toBe(200);
+    expect(r.body.dryRun.commitTool).toBe("composio:LINEAR_CREATE_LINEAR_COMMENT");
+    expect(r.body.dryRun.missing).toEqual(["the tool's fields (not fetched yet)"]);
+    expect(w.runner.calls.length).toBe(before);
+  });
+
+  test("CONNECTIONS: a malformed id is a 404, never a crash", async () => {
+    const w = await world();
+    expect((await w.call<ErrorResponse>("/connections/%E0%A4%A")).status).toBe(404);
   });
 
   test("BUILD: an unknown insight id is a 404; a bad body is a 400", async () => {
