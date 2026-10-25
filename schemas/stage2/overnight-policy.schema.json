@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/overnight-policy.schema.json",
+  "title": "Overnight policy (ADR 0106).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "workflowId",
+    "version",
+    "mode",
+    "recipients",
+    "templateHash",
+    "maxCommitsPerNight",
+    "maxPerRecipientPerWeek",
+    "sendWindow",
+    "attachmentsAllowed",
+    "budgetCentsPerNight",
+    "dryRunNights",
+    "dryRunNightsDone",
+    "circuitBreakers",
+    "state",
+    "trippedReason",
+    "ownerPersonId"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "workflowId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "mode": {
+      "enum": [
+        "drafts_only",
+        "preapproved"
+      ]
+    },
+    "recipients": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "emails",
+        "domains",
+        "repliesToThreadsStartedByIdentity"
+      ],
+      "properties": {
+        "emails": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 254
+          },
+          "maxItems": 1000
+        },
+        "domains": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 253
+          },
+          "maxItems": 100
+        },
+        "repliesToThreadsStartedByIdentity": {
+          "type": "boolean"
+        }
+      }
+    },
+    "templateHash": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "maxCommitsPerNight": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 500
+    },
+    "maxPerRecipientPerWeek": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 7
+    },
+    "sendWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "startHour",
+        "endHour",
+        "days",
+        "recipientTimezone"
+      ],
+      "properties": {
+        "startHour": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 23
+        },
+        "endHour": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 24
+        },
+        "days": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 7
+          },
+          "maxItems": 7,
+          "minItems": 1
+        },
+        "recipientTimezone": {
+          "type": "boolean"
+        }
+      }
+    },
+    "attachmentsAllowed": {
+      "type": "boolean"
+    },
+    "budgetCentsPerNight": {
+      "$ref": "common.schema.json#/$defs/cents"
+    },
+    "dryRunNights": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 30
+    },
+    "dryRunNightsDone": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "circuitBreakers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bounceRatePct",
+        "negativeReplySpike",
+        "consecutiveFailures"
+      ],
+      "properties": {
+        "bounceRatePct": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "negativeReplySpike": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "consecutiveFailures": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        }
+      }
+    },
+    "state": {
+      "enum": [
+        "active",
+        "tripped",
+        "paused"
+      ]
+    },
+    "trippedReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 200
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ownerPersonId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    }
+  }
+}

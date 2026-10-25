@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/baseline-sample.schema.json",
+  "title": "Sync object: observed manual durations for one workflow version. Durations and opaque refs only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "createdAt",
+    "workflowId",
+    "version",
+    "windowStart",
+    "windowEnd",
+    "instances"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/ulid"
+    },
+    "kind": {
+      "const": "baseline_sample"
+    },
+    "createdAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "workflowId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "windowStart": {
+      "$ref": "common.schema.json#/$defs/day"
+    },
+    "windowEnd": {
+      "$ref": "common.schema.json#/$defs/day"
+    },
+    "instances": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "instanceRef",
+          "activeSeconds",
+          "day"
+        ],
+        "properties": {
+          "instanceRef": {
+            "$ref": "common.schema.json#/$defs/instanceRef"
+          },
+          "activeSeconds": {
+            "$ref": "common.schema.json#/$defs/seconds"
+          },
+          "day": {
+            "$ref": "common.schema.json#/$defs/day"
+          }
+        }
+      },
+      "maxItems": 500,
+      "minItems": 1
+    }
+  }
+}

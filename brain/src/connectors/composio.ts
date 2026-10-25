@@ -9,7 +9,9 @@
 // (`mcp__composio_cli__<SLUG>`, the composio policies of allowlist.ts), and only on allow runs
 // `composio execute <SLUG> -d <json> --account <id>`. A failed call stops the method (the item is unknown, never
 // retried); the chain hands the never-attempted items to the next method.
-import { TOOL_POLICIES, type ToolPolicy } from "../workflows/allowlist.ts";
+import { expectedArgs, TOOL_POLICIES, type ToolPolicy } from "../workflows/allowlist.ts";
+import type { BatchItem } from "../workflows/batch.ts";
+import type { GateAction } from "../workflows/gate.ts";
 import type { ExecJob, ExecResult, Executor, ToolCallRecord } from "../workflows/executor.ts";
 import { CHAIN_WORDS, result, type ChainDeps, type MethodProbe, type ProbeResult } from "./chain.ts";
 import type { Env } from "./config.ts";
@@ -174,9 +176,13 @@ export class ComposioProbe implements MethodProbe {
 
 // ---------- executor ----------
 
-/** The composio policy for a declared action through a connector, or null. */
-export function composioPolicy(connector: string, role: "send" | "log"): ToolPolicy | null {
-  return TOOL_POLICIES.find((p) => p.flavor === "composio" && p.connector === connector && p.role === role) ?? null;
+/** The composio policy for a declared action through a connector, or null. s16: a connector can have several commit
+ * tools (Intercom ticket and conversation replies); with an item, the one whose expected arguments the item can be
+ * expressed in (its commit verb and fields) is chosen. Without an item: the first, to say whether there is one. */
+export function composioPolicy(connector: string, role: GateAction["role"], item?: BatchItem, ctx: { batchHash: string; crmSheet?: { spreadsheetId: string; range: string } } = { batchHash: "" }): ToolPolicy | null {
+  const all = TOOL_POLICIES.filter((p) => p.flavor === "composio" && p.connector === connector && p.role === role);
+  if (item === undefined) return all[0] ?? null;
+  return all.find((p) => expectedArgs(p, item, ctx) !== null) ?? null;
 }
 
 export class MethodFailed extends Error {}
@@ -200,17 +206,18 @@ export class ComposioCliExecutor implements Executor {
     if (failedRun(v)) throw new MethodFailed(v.spawnError !== undefined ? "the Composio command is not installed" : "Composio did not answer");
     const toolCalls: ToolCallRecord[] = [];
     const actions = job.actions ?? [{ role: "send" as const, connector: "gmail" }];
-    // The send must be possible here before any item is used (otherwise the chain moves on with nothing consumed).
-    for (const a of actions.filter((x) => x.role === "send"))
-      if (composioPolicy(a.connector, "send") === null || this.o.accounts[a.connector] === undefined) throw new MethodFailed(`Composio has no usable send for ${a.connector}`);
+    // The commit must be possible here before any item is used (otherwise the chain moves on with nothing consumed).
+    for (const a of actions.filter((x) => x.role === "send" || x.role === "draft"))
+      if (composioPolicy(a.connector, a.role) === null || this.o.accounts[a.connector] === undefined) throw new MethodFailed(`Composio has no usable ${a.role} for ${a.connector}`);
     for (const item of job.batch.items) {
       if (job.only !== undefined && !job.only.has(item.key)) continue;
       if (job.signal?.aborted === true) break;
       for (const a of [...actions].sort((x, y) => (x.role === y.role ? 0 : x.role === "send" ? -1 : 1))) {
-        const p = composioPolicy(a.connector, a.role);
+        const ctx = { batchHash: job.batch.hash, ...(job.crmSheet === undefined ? {} : { crmSheet: job.crmSheet }) };
+        const p = composioPolicy(a.connector, a.role, item, ctx);
         const account = this.o.accounts[a.connector];
         if (p === null || account === undefined) continue;
-        const args = p.expected?.(item, { batchHash: job.batch.hash, ...(job.crmSheet === undefined ? {} : { crmSheet: job.crmSheet }) }) ?? null;
+        const args = expectedArgs(p, item, ctx);
         if (args === null) continue;
         const tool = `mcp__${COMPOSIO_CLI_SERVER}__${p.tool}`;
         const { result: perm, decision } = job.gate.check(tool, args);

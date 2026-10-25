@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/workflow-definition.schema.json",
+  "title": "Workflow definition: a proposal from a device (kind workflow_proposal) or a registry version. No facts values, recipients, tone examples or tokens (ADR 0104).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "createdAt",
+    "localWorkflowId",
+    "workflowId",
+    "version",
+    "name",
+    "description",
+    "trigger",
+    "steps",
+    "skillMd",
+    "factsKeys",
+    "limits",
+    "definitionHash"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/ulid"
+    },
+    "kind": {
+      "const": "workflow_proposal"
+    },
+    "createdAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "localWorkflowId": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "the brain's workflow id on the proposing Mac"
+    },
+    "workflowId": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "name": {
+      "$ref": "common.schema.json#/$defs/name"
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "cron",
+        "timezone"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "manual",
+            "cron",
+            "event"
+          ]
+        },
+        "cron": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timezone": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "detail",
+          "class",
+          "capability",
+          "connection",
+          "gate"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z0-9_-]+$"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 600
+          },
+          "class": {
+            "$ref": "common.schema.json#/$defs/stepClass"
+          },
+          "capability": {
+            "$ref": "common.schema.json#/$defs/capability"
+          },
+          "connection": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "ownership",
+                  "connectionId",
+                  "label"
+                ],
+                "properties": {
+                  "kind": {
+                    "$ref": "common.schema.json#/$defs/connectionKind"
+                  },
+                  "ownership": {
+                    "$ref": "common.schema.json#/$defs/ownership"
+                  },
+                  "connectionId": {
+                    "oneOf": [
+                      {
+                        "$ref": "common.schema.json#/$defs/uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "type": "string",
+                    "maxLength": 120
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gate": {
+            "enum": [
+              "none",
+              "approval",
+              "overnight_policy"
+            ]
+          }
+        }
+      },
+      "maxItems": 40,
+      "minItems": 1
+    },
+    "skillMd": {
+      "type": "string",
+      "maxLength": 32768,
+      "description": "SKILL.md text after masking"
+    },
+    "factsKeys": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 80
+      },
+      "maxItems": 50
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxItemsPerRun",
+        "maxRunsPerDay"
+      ],
+      "properties": {
+        "maxItemsPerRun": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "maxRunsPerDay": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 48
+        }
+      }
+    },
+    "definitionHash": {
+      "$ref": "common.schema.json#/$defs/sha256"
+    }
+  }
+}

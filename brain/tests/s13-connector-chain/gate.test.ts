@@ -23,7 +23,7 @@ const all = () => ({
 /** For every method: the send tool and the exact arguments for an item. */
 const methods = (item = ITEM) => [
   { name: "mcp", tool: "mcp__gmail__send_email", args: { to: item.to, subject: item.subject, body: item.body } },
-  { name: "composio", tool: `mcp__${COMPOSIO_CLI_SERVER}__GMAIL_SEND_EMAIL`, args: { recipient_email: item.to, subject: item.subject, body: item.body } },
+  { name: "composio", tool: `mcp__${COMPOSIO_CLI_SERVER}__GMAIL_SEND_EMAIL`, args: { recipient_email: item.to, subject: item.subject, body: item.body, include_signature: false } },
   { name: "api", tool: `mcp__${apiServer("gmail")}__users.messages.send`, args: { to: item.to, subject: item.subject, body: item.body } },
   { name: "computer", tool: `mcp__${CSERVER}__commit`, args: { app: "gmail", verb: "send", fields: expectedCommit(item).fields } },
 ];

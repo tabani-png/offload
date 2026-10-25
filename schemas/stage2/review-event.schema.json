@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/review-event.schema.json",
+  "title": "Sync object or DTO: measured human time on one run (hs-1 residual).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "createdAt",
+    "runId",
+    "reviewSeconds",
+    "editSeconds",
+    "fixSeconds",
+    "itemsEdited",
+    "decision",
+    "surface"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/ulid"
+    },
+    "kind": {
+      "const": "review_event"
+    },
+    "createdAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "runId": {
+      "$ref": "common.schema.json#/$defs/ulid"
+    },
+    "reviewSeconds": {
+      "$ref": "common.schema.json#/$defs/seconds"
+    },
+    "editSeconds": {
+      "$ref": "common.schema.json#/$defs/seconds"
+    },
+    "fixSeconds": {
+      "$ref": "common.schema.json#/$defs/seconds"
+    },
+    "itemsEdited": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "decision": {
+      "enum": [
+        "approved",
+        "approved_with_edits",
+        "rejected",
+        "partial",
+        "policy_committed"
+      ]
+    },
+    "surface": {
+      "enum": [
+        "mac_review",
+        "web_digest",
+        "mac_fixup",
+        "broker"
+      ]
+    }
+  }
+}

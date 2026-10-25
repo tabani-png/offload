@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/device-enrollment.schema.json",
+  "title": "POST /v1/devices/enroll request and response",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enrollmentCode",
+        "deviceName",
+        "appVersion",
+        "publicKeyJwk"
+      ],
+      "properties": {
+        "enrollmentCode": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 16
+        },
+        "deviceName": {
+          "$ref": "common.schema.json#/$defs/name"
+        },
+        "appVersion": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "publicKeyJwk": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kty",
+            "crv",
+            "x",
+            "y"
+          ],
+          "properties": {
+            "kty": {
+              "const": "EC"
+            },
+            "crv": {
+              "const": "P-256"
+            },
+            "x": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "y": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deviceId",
+        "personId",
+        "tenantId",
+        "enrolledAt"
+      ],
+      "properties": {
+        "deviceId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "personId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "tenantId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "enrolledAt": {
+          "$ref": "common.schema.json#/$defs/tsMs"
+        }
+      }
+    },
+    "tokenRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deviceId",
+        "nonce",
+        "signature"
+      ],
+      "properties": {
+        "deviceId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "nonce": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "signature": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "base64url ES256 over the UTF-8 bytes of nonce"
+        }
+      }
+    },
+    "challenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonce",
+        "expiresAt"
+      ],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "expiresAt": {
+          "$ref": "common.schema.json#/$defs/tsMs"
+        }
+      }
+    },
+    "tokenResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accessToken",
+        "expiresAt"
+      ],
+      "properties": {
+        "accessToken": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "expiresAt": {
+          "$ref": "common.schema.json#/$defs/tsMs"
+        }
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "personId",
+        "name",
+        "appVersion",
+        "enrolledAt",
+        "lastSyncAt",
+        "state"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "personId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "name": {
+          "$ref": "common.schema.json#/$defs/name"
+        },
+        "appVersion": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "enrolledAt": {
+          "$ref": "common.schema.json#/$defs/tsMs"
+        },
+        "lastSyncAt": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/tsMs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "active",
+            "revoked"
+          ]
+        }
+      }
+    }
+  }
+}

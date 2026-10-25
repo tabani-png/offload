@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/adoption-report.schema.json",
+  "title": "GET /v1/metrics/adoption",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scope",
+    "period",
+    "value"
+  ],
+  "properties": {
+    "scope": {
+      "$ref": "common.schema.json#/$defs/scope"
+    },
+    "period": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "toExclusive"
+      ],
+      "properties": {
+        "from": {
+          "$ref": "common.schema.json#/$defs/day"
+        },
+        "toExclusive": {
+          "$ref": "common.schema.json#/$defs/day"
+        }
+      }
+    },
+    "value": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "peopleWithActiveWorkflow",
+            "peopleTotal",
+            "workflowsActive",
+            "runsPerWeek",
+            "successRate",
+            "rejectionRate",
+            "medianResidualSeconds"
+          ],
+          "properties": {
+            "peopleWithActiveWorkflow": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "peopleTotal": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "workflowsActive": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "runsPerWeek": {
+              "type": "number",
+              "minimum": 0
+            },
+            "successRate": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "rejectionRate": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "medianResidualSeconds": {
+              "$ref": "common.schema.json#/$defs/seconds"
+            }
+          }
+        },
+        {
+          "$ref": "common.schema.json#/$defs/suppressed"
+        }
+      ]
+    }
+  }
+}

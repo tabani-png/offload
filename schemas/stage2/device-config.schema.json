@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/device-config.schema.json",
+  "title": "GET /v1/sync/config: what this device may send now.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "personId",
+    "tenantId",
+    "jurisdiction",
+    "requiredNotice",
+    "allowedKinds",
+    "features",
+    "workingTimeStartsAt",
+    "killSwitch",
+    "minAppVersion",
+    "flushSeconds"
+  ],
+  "properties": {
+    "personId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "tenantId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "jurisdiction": {
+      "$ref": "common.schema.json#/$defs/jurisdiction"
+    },
+    "requiredNotice": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "noticeVersionId",
+            "title",
+            "markdown",
+            "features"
+          ],
+          "properties": {
+            "noticeVersionId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "title": {
+              "$ref": "common.schema.json#/$defs/name"
+            },
+            "markdown": {
+              "type": "string",
+              "maxLength": 65536
+            },
+            "features": {
+              "type": "array",
+              "items": {
+                "$ref": "common.schema.json#/$defs/feature"
+              },
+              "maxItems": 3
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "allowedKinds": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "notice_ack",
+          "run_outcome",
+          "review_event",
+          "baseline_sample",
+          "daily_aggregate",
+          "working_time_aggregate",
+          "workflow_proposal"
+        ]
+      },
+      "maxItems": 7
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflow_metrics",
+        "per_person_views",
+        "working_time"
+      ],
+      "properties": {
+        "workflow_metrics": {
+          "type": "boolean"
+        },
+        "per_person_views": {
+          "type": "boolean"
+        },
+        "working_time": {
+          "type": "boolean"
+        }
+      }
+    },
+    "workingTimeStartsAt": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/tsMs"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "killSwitch": {
+      "type": "boolean"
+    },
+    "minAppVersion": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "flushSeconds": {
+      "type": "integer",
+      "minimum": 60,
+      "maximum": 86400
+    }
+  }
+}

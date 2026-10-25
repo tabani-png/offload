@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/hours-saved-report.schema.json",
+  "title": "GET /v1/metrics/hours-saved (hs-1, ADR 0109)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "computation",
+    "inputsDigest",
+    "scope",
+    "period",
+    "total",
+    "children",
+    "topWorkflows",
+    "anomalies",
+    "final"
+  ],
+  "properties": {
+    "computation": {
+      "const": "hs-1"
+    },
+    "inputsDigest": {
+      "$ref": "common.schema.json#/$defs/sha256"
+    },
+    "scope": {
+      "$ref": "common.schema.json#/$defs/scope"
+    },
+    "period": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "toExclusive",
+        "timezone"
+      ],
+      "properties": {
+        "from": {
+          "$ref": "common.schema.json#/$defs/day"
+        },
+        "toExclusive": {
+          "$ref": "common.schema.json#/$defs/day"
+        },
+        "timezone": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    },
+    "total": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "seconds",
+            "hours",
+            "byGrade",
+            "bySource",
+            "byRuntime",
+            "overnightSeconds",
+            "runs",
+            "people"
+          ],
+          "properties": {
+            "seconds": {
+              "$ref": "common.schema.json#/$defs/seconds"
+            },
+            "hours": {
+              "type": "number",
+              "minimum": 0
+            },
+            "byGrade": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "A",
+                "B",
+                "C"
+              ],
+              "properties": {
+                "A": {
+                  "$ref": "common.schema.json#/$defs/seconds"
+                },
+                "B": {
+                  "$ref": "common.schema.json#/$defs/seconds"
+                },
+                "C": {
+                  "$ref": "common.schema.json#/$defs/seconds"
+                }
+              }
+            },
+            "bySource": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observed",
+                "user_estimate"
+              ],
+              "properties": {
+                "observed": {
+                  "$ref": "common.schema.json#/$defs/seconds"
+                },
+                "user_estimate": {
+                  "$ref": "common.schema.json#/$defs/seconds"
+                }
+              }
+            },
+            "byRuntime": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mac",
+                "cloud"
+              ],
+              "properties": {
+                "mac": {
+                  "$ref": "common.schema.json#/$defs/seconds"
+                },
+                "cloud": {
+                  "$ref": "common.schema.json#/$defs/seconds"
+                }
+              }
+            },
+            "overnightSeconds": {
+              "$ref": "common.schema.json#/$defs/seconds"
+            },
+            "runs": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "success",
+                "failed",
+                "cancelled",
+                "rejected",
+                "capped"
+              ],
+              "properties": {
+                "success": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "failed": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cancelled": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "rejected": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "capped": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "people": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "$ref": "common.schema.json#/$defs/suppressed"
+        }
+      ]
+    },
+    "children": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scope",
+          "label",
+          "value"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "common.schema.json#/$defs/scope"
+          },
+          "label": {
+            "$ref": "common.schema.json#/$defs/name"
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "seconds",
+                  "hours",
+                  "byGrade",
+                  "bySource",
+                  "byRuntime",
+                  "overnightSeconds",
+                  "runs",
+                  "people"
+                ],
+                "properties": {
+                  "seconds": {
+                    "$ref": "common.schema.json#/$defs/seconds"
+                  },
+                  "hours": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "byGrade": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "A",
+                      "B",
+                      "C"
+                    ],
+                    "properties": {
+                      "A": {
+                        "$ref": "common.schema.json#/$defs/seconds"
+                      },
+                      "B": {
+                        "$ref": "common.schema.json#/$defs/seconds"
+                      },
+                      "C": {
+                        "$ref": "common.schema.json#/$defs/seconds"
+                      }
+                    }
+                  },
+                  "bySource": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "observed",
+                      "user_estimate"
+                    ],
+                    "properties": {
+                      "observed": {
+                        "$ref": "common.schema.json#/$defs/seconds"
+                      },
+                      "user_estimate": {
+                        "$ref": "common.schema.json#/$defs/seconds"
+                      }
+                    }
+                  },
+                  "byRuntime": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "mac",
+                      "cloud"
+                    ],
+                    "properties": {
+                      "mac": {
+                        "$ref": "common.schema.json#/$defs/seconds"
+                      },
+                      "cloud": {
+                        "$ref": "common.schema.json#/$defs/seconds"
+                      }
+                    }
+                  },
+                  "overnightSeconds": {
+                    "$ref": "common.schema.json#/$defs/seconds"
+                  },
+                  "runs": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "success",
+                      "failed",
+                      "cancelled",
+                      "rejected",
+                      "capped"
+                    ],
+                    "properties": {
+                      "success": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "failed": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "cancelled": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "rejected": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "capped": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "people": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              {
+                "$ref": "common.schema.json#/$defs/suppressed"
+              }
+            ]
+          }
+        }
+      },
+      "maxItems": 500
+    },
+    "topWorkflows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workflowId",
+          "name",
+          "jobRoleId",
+          "grade",
+          "seconds"
+        ],
+        "properties": {
+          "workflowId": {
+            "$ref": "common.schema.json#/$defs/uuid"
+          },
+          "name": {
+            "$ref": "common.schema.json#/$defs/name"
+          },
+          "jobRoleId": {
+            "oneOf": [
+              {
+                "$ref": "common.schema.json#/$defs/uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "grade": {
+            "enum": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "seconds": {
+            "$ref": "common.schema.json#/$defs/seconds"
+          }
+        }
+      },
+      "maxItems": 10
+    },
+    "anomalies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "workflowId",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "enum": [
+              "residual_zero_share",
+              "small_baseline",
+              "outcome_disagreement"
+            ]
+          },
+          "workflowId": {
+            "oneOf": [
+              {
+                "$ref": "common.schema.json#/$defs/uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      },
+      "maxItems": 100
+    },
+    "final": {
+      "type": "boolean",
+      "description": "false until the nightly recompute matched"
+    }
+  }
+}

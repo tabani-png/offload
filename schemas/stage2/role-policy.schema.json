@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/role-policy.schema.json",
+  "title": "Policy per job role (S2-07): tools, approvals, budgets, model limits.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "jobRoleId",
+    "allowedCapabilities",
+    "approvers",
+    "sessionBudgetCents",
+    "dailyBudgetCents",
+    "maxItemsPerBatch",
+    "models",
+    "updatedAt",
+    "updatedBy"
+  ],
+  "properties": {
+    "jobRoleId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "allowedCapabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/capability"
+      },
+      "maxItems": 200
+    },
+    "approvers": {
+      "enum": [
+        "runner",
+        "dept_lead",
+        "runner_or_dept_lead"
+      ]
+    },
+    "sessionBudgetCents": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "dailyBudgetCents": {
+      "$ref": "common.schema.json#/$defs/cents"
+    },
+    "maxItemsPerBatch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "design",
+        "steps"
+      ],
+      "properties": {
+        "design": {
+          "enum": [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5"
+          ]
+        },
+        "steps": {
+          "enum": [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5"
+          ]
+        }
+      }
+    },
+    "updatedAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "updatedBy": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    }
+  }
+}

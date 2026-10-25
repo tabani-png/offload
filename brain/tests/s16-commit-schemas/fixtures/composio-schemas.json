@@ -1,0 +1,2823 @@
+{
+ "source": "composio execute <SLUG> --get-schema (composio CLI 0.4.2), read-only, 2026-10-25",
+ "tools": {
+  "AIRTABLE_CREATE_RECORD": {
+   "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+     "baseId": {
+      "description": "Required. The unique identifier of the Airtable base (e.g., 'appXXXXXXXXXXXXXX'). Use AIRTABLE_LIST_BASES to find available base IDs.",
+      "examples": [
+       "appHPvgqYXl3LNHXq"
+      ],
+      "title": "Base Id",
+      "type": "string"
+     },
+     "fields": {
+      "additionalProperties": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        },
+        {
+         "type": "number"
+        },
+        {
+         "type": "boolean"
+        },
+        {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        {
+         "items": {
+          "additionalProperties": false,
+          "description": "Attachment object for creating/updating records in Airtable.\nUsed with multipleAttachments field type.",
+          "properties": {
+           "filename": {
+            "anyOf": [
+             {
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ],
+            "default": null,
+            "description": "Optional filename for the attachment. If not provided, Airtable infers it from the URL.",
+            "title": "Filename"
+           },
+           "url": {
+            "description": "The URL of the attachment to upload. Airtable will download and store the file.",
+            "title": "Url",
+            "type": "string"
+           }
+          },
+          "required": [
+           "url"
+          ],
+          "title": "AirtableAttachmentWrite",
+          "type": "object"
+         },
+         "type": "array"
+        },
+        {
+         "items": {
+          "additionalProperties": false,
+          "description": "Collaborator reference for creating/updating records in Airtable.\nUsed with singleCollaborator and multipleCollaborators field types.\nSpecify either 'id' or 'email' to identify the collaborator.",
+          "properties": {
+           "email": {
+            "anyOf": [
+             {
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ],
+            "default": null,
+            "description": "The email address of the collaborator. Use when user ID is not known.",
+            "title": "Email"
+           },
+           "id": {
+            "anyOf": [
+             {
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ],
+            "default": null,
+            "description": "The unique user ID of the collaborator (e.g., 'usrXXXXXXXXXXXXXX'). Preferred over email.",
+            "title": "Id"
+           }
+          },
+          "title": "AirtableCollaboratorWrite",
+          "type": "object"
+         },
+         "type": "array"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Collaborator reference for creating/updating records in Airtable.\nUsed with singleCollaborator and multipleCollaborators field types.\nSpecify either 'id' or 'email' to identify the collaborator.",
+         "properties": {
+          "email": {
+           "anyOf": [
+            {
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ],
+           "default": null,
+           "description": "The email address of the collaborator. Use when user ID is not known.",
+           "title": "Email"
+          },
+          "id": {
+           "anyOf": [
+            {
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ],
+           "default": null,
+           "description": "The unique user ID of the collaborator (e.g., 'usrXXXXXXXXXXXXXX'). Preferred over email.",
+           "title": "Id"
+          }
+         },
+         "title": "AirtableCollaboratorWrite",
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Barcode object for creating/updating records in Airtable.\nUsed with barcode field type.",
+         "properties": {
+          "text": {
+           "description": "The text/value encoded in the barcode.",
+           "title": "Text",
+           "type": "string"
+          },
+          "type": {
+           "anyOf": [
+            {
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ],
+           "default": null,
+           "description": "The barcode type/format (e.g., 'code39', 'upca', 'ean13', 'qr').",
+           "title": "Type"
+          }
+         },
+         "required": [
+          "text"
+         ],
+         "title": "AirtableBarcodeWrite",
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "description": "A dictionary of field names (or IDs) and their values for the new record. Field names must exactly match those in the table schema (case-sensitive). Field IDs (e.g., 'fldXXXXXXXXXXXXXX') are preferred for stability, but are UNIQUE to each base and table. IMPORTANT: Use AIRTABLE_GET_BASE_SCHEMA with the specific baseId to discover valid field names, IDs, types, and options before creating records. Note: Fields with null, empty string, or boolean false values are automatically omitted from the request. Field type value requirements: - singleSelect: Must be a plain string option name (e.g., 'High'). DO NOT pass dict objects like {'id': 'selXXX'} or {'name': 'High'} - pass only the plain string. - multipleSelects: Must be an array of exact option names (e.g., ['Bug', 'Feature']). - checkbox: Use true to check. Omit or pass false to leave unchecked. - number/currency/percent: Must be a numeric value (int or float). Currency strings with symbols (e.g., '$100', '\u00a3689') are auto-converted. Plain numeric strings are NOT auto-converted - pass actual numbers or use typecast=true. - rating: Must be an integer. String numbers like '9' are auto-converted to integers. - date: Must be ISO 8601 format 'YYYY-MM-DD'. - dateTime: Must be ISO 8601 format (e.g., '2024-01-15T14:30:00.000Z', '2024-01-15T14:30:00+00:00'). Common formats like '2024-01-15 14:30:00', 'Jan 15, 2024', '01/15/2024' are auto-converted to ISO 8601. - singleLineText/multilineText/richText: Must be a string. - email/url/phoneNumber: Must be a string in appropriate format. - multipleAttachments: Must be an array of attachment objects with 'url' field. - singleCollaborator: Must be an object with 'id' or 'email' of a valid collaborator. - multipleRecordLinks: Must be an array of record IDs (e.g., ['recXXX', 'recYYY']). - duration: Must be a number representing total seconds (e.g., 278 for 4 minutes 38 seconds). Common conversions: 1 minute = 60, 1 hour = 3600, 1h30m = 5400. Time strings like 'H:MM:SS' or ISO 8601 duration (e.g., 'PT4M38S') are auto-converted to seconds.",
+      "examples": [
+       "{\"Name\": \"New Task\", \"Status\": \"Todo\", \"Notes\": \"Complete by EOD\"}",
+       "{\"Title\": \"Bug Fix\", \"Priority\": \"High\", \"Tags\": [\"Bug\", \"Urgent\"], \"Completed\": true}"
+      ],
+      "title": "Fields",
+      "type": "object"
+     },
+     "returnFieldsByFieldId": {
+      "default": false,
+      "description": "If true, the returned field objects will use field IDs as keys instead of field names. Using field IDs is recommended for integrations that need to be resilient to field name changes. Default is false, which returns field names as keys.",
+      "examples": [
+       true,
+       false
+      ],
+      "title": "Return Fields By Field Id",
+      "type": "boolean"
+     },
+     "tableIdOrName": {
+      "description": "Required. The table ID (e.g., 'tblXXXXXXXXXXXXXX') or table name (e.g., 'Tasks', 'Meal Plan') where the record will be created. Table names with spaces and special characters are supported. This is separate from baseId and must be provided. Use AIRTABLE_GET_BASE_SCHEMA to find table IDs/names within a base.",
+      "examples": [
+       "tblUkxCONS303zkN7",
+       "MyTableName",
+       "Meal Plan"
+      ],
+      "title": "Table Id Or Name",
+      "type": "string"
+     },
+     "typecast": {
+      "default": false,
+      "description": "When set to true, enables automatic data conversion from strings to appropriate field types. For example, if a singleSelect field receives a value that doesn't match an existing option, Airtable will create a new option with that value. Also converts string numbers to numeric types. Default is false, which requires exact type matching.",
+      "examples": [
+       true,
+       false
+      ],
+      "title": "Typecast",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "baseId",
+     "tableIdOrName"
+    ],
+    "title": "CreateRecordRequest",
+    "type": "object"
+   },
+   "version": "20261013_00"
+  },
+  "ATTIO_CREATE_NOTE": {
+   "inputSchema": {
+    "properties": {
+     "content": {
+      "description": "The content of the note",
+      "examples": [
+       "Discussed project timeline and next steps"
+      ],
+      "title": "Content",
+      "type": "string"
+     },
+     "created_at": {
+      "description": "Optional timestamp for when the note was created (ISO 8601 format)",
+      "examples": [
+       "2023-12-25T10:30:00Z"
+      ],
+      "title": "Created At",
+      "type": "string"
+     },
+     "parent_object": {
+      "description": "The object type the note is associated with. Standard object types include 'people', 'companies', 'deals', 'users', 'workspaces'.",
+      "examples": [
+       "people",
+       "companies",
+       "deals",
+       "users",
+       "workspaces"
+      ],
+      "title": "Parent Object",
+      "type": "string"
+     },
+     "parent_record_id": {
+      "description": "**MUST BE A VALID UUID** - The unique identifier of the specific record within the object. Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (32 hexadecimal characters with hyphens). Do NOT use placeholder strings like 'COMPANY_ID' or 'RECORD_ID' - only actual UUIDs are accepted. Obtain this value from previous API responses (e.g., ATTIO_CREATE_RECORD, ATTIO_FIND_RECORD, ATTIO_LIST_RECORDS).",
+      "examples": [
+       "f3b2962b-febb-4e01-8431-f7ffb4d87e5e"
+      ],
+      "title": "Parent Record Id",
+      "type": "string"
+     },
+     "title": {
+      "description": "The title of the note",
+      "examples": [
+       "Meeting Notes",
+       "Follow-up Required"
+      ],
+      "title": "Title",
+      "type": "string"
+     }
+    },
+    "required": [
+     "parent_object",
+     "parent_record_id",
+     "title",
+     "content"
+    ],
+    "title": "CreateNoteRequest",
+    "type": "object"
+   },
+   "version": "20261023_00"
+  },
+  "GMAIL_CREATE_EMAIL_DRAFT": {
+   "inputSchema": {
+    "properties": {
+     "attachment": {
+      "anyOf": [
+       {
+        "file_uploadable": true,
+        "format": "path",
+        "title": "FileUploadable",
+        "type": "string"
+       },
+       {
+        "items": {
+         "file_uploadable": true,
+         "format": "path",
+         "title": "FileUploadable",
+         "type": "string"
+        },
+        "type": "array"
+       }
+      ],
+      "description": "File(s) to attach to the email. Accepts a single file or a list of files. Total message size including base64-encoded attachments must be under 25 MB; use shareable links (e.g., Google Drive) for larger files.",
+      "human_parameter_description": "Upload file(s) you want to include with the email. Can be a single file or multiple files.",
+      "human_parameter_name": "Attachment(s)",
+      "title": "Attachment"
+     },
+     "bcc": {
+      "default": [],
+      "description": "Blind Carbon Copy (BCC) recipients' email addresses. Each must be a valid email address (e.g., 'user@example.com') or display name format (e.g., 'Bob Jones <user@example.com>'). Plain names without email addresses are NOT valid. Optional for drafts (recipients can be added later before sending).",
+      "examples": [
+       [
+        "bcc.recipient@example.com",
+        "BCC User <bcc.user@example.com>"
+       ]
+      ],
+      "items": {
+       "type": "string"
+      },
+      "title": "Bcc",
+      "type": "array"
+     },
+     "body": {
+      "description": "Email body content (plain text or HTML); `is_html` must be True if HTML. Optional - drafts can be created without a body and edited later before sending. Can also be provided as 'message_body'.",
+      "examples": [
+       "Hello Team,\n\nPlease find the attached report for your review.\n\nBest regards,\nYour Name",
+       "<h1>Meeting Confirmation</h1><p>This email confirms our meeting scheduled for next Tuesday.</p>"
+      ],
+      "human_parameter_description": "Write the main content of your email here. This can be plain text or HTML, depending on your preference.",
+      "human_parameter_name": "Email Body",
+      "title": "Body",
+      "type": "string"
+     },
+     "cc": {
+      "default": [],
+      "description": "Carbon Copy (CC) recipients' email addresses. Each must be a valid email address (e.g., 'user@example.com') or display name format (e.g., 'John Doe <user@example.com>'). Plain names without email addresses are NOT valid. Optional for drafts (recipients can be added later before sending).",
+      "examples": [
+       [
+        "cc.recipient1@example.com",
+        "CC User <cc.recipient2@example.com>"
+       ]
+      ],
+      "items": {
+       "type": "string"
+      },
+      "title": "Cc",
+      "type": "array"
+     },
+     "extra_recipients": {
+      "default": [],
+      "description": "Additional 'To' recipients' email addresses (not Cc or Bcc). Each must be a valid email address (e.g., 'user@example.com'), display name format (e.g., 'Jane Doe <user@example.com>'), or 'me' for the authenticated user. Plain names without email addresses are NOT valid. Should only be used if recipient_email is also provided.",
+      "examples": [
+       [
+        "jane.doe@example.com",
+        "Jane Doe <jane.doe@example.com>"
+       ]
+      ],
+      "items": {
+       "type": "string"
+      },
+      "title": "Extra Recipients",
+      "type": "array"
+     },
+     "include_signature": {
+      "default": true,
+      "description": "Append the sender's Gmail signature (the 'Send mail as' signature configured in Gmail settings) to the message body, ahead of any quoted or forwarded content. Skipped when the body already ends with that signature, when no signature is configured, or when the connection lacks permission to read Gmail settings. Set to false to send the body exactly as provided.",
+      "human_parameter_description": "Append the sender's configured Gmail signature to the message.",
+      "human_parameter_name": "Include Gmail signature?",
+      "title": "Include Signature",
+      "type": "boolean"
+     },
+     "is_html": {
+      "default": false,
+      "description": "Set to True if `body` is already formatted HTML. When False, plain text newlines are auto-converted to <br/> tags. Both modes result in HTML email; this flag controls whether the body content is treated as raw HTML or plain text that gets HTML formatting applied.",
+      "examples": [
+       true,
+       false
+      ],
+      "human_parameter_description": "Set to True if your email body is already HTML. When False, plain text formatting (newlines, tabs) will be automatically converted to HTML for proper display.",
+      "human_parameter_name": "Is HTML?",
+      "title": "Is Html",
+      "type": "boolean"
+     },
+     "recipient_email": {
+      "description": "Primary recipient's email address. Must be a valid email address (e.g., 'user@example.com') or display name format (e.g., 'John Doe <user@example.com>'). A plain name without an email address (e.g., 'John Doe') is NOT valid - the '@' symbol and domain are required. Optional for drafts (recipients can be added later before sending). Use extra_recipients if you want to send to multiple recipients.",
+      "examples": [
+       "john.doe@example.com",
+       "John Doe <john.doe@example.com>"
+      ],
+      "title": "Recipient Email",
+      "type": "string"
+     },
+     "subject": {
+      "description": "Email subject line. Optional - drafts can be created without a subject and edited later before sending. When creating a draft reply to an existing thread (thread_id provided), leave this empty to stay in the same thread. Setting a subject will create a NEW thread instead.",
+      "examples": [
+       "Project Update Q3",
+       "Meeting Reminder"
+      ],
+      "human_parameter_description": "Enter the subject of your email. This helps the recipient understand what the email is about.",
+      "human_parameter_name": "Subject",
+      "title": "Subject",
+      "type": "string"
+     },
+     "thread_id": {
+      "description": "ID of an existing Gmail thread to reply to; omit for new thread. If the thread ID is invalid or inaccessible, the draft will be created as a new thread instead of failing.",
+      "examples": [
+       "17f45ec49a9c3f1b"
+      ],
+      "human_parameter_description": "If you want to reply to an ongoing conversation, provide the thread ID here. Leave it blank for a new message.",
+      "human_parameter_name": "Thread ID",
+      "title": "Thread Id",
+      "type": "string"
+     },
+     "user_id": {
+      "default": "me",
+      "description": "User's email address or 'me' for the authenticated user.",
+      "examples": [
+       "me",
+       "user@example.com"
+      ],
+      "human_parameter_description": "Provide the user ID or the email address of the user. Use 'me' to refer to the currently authenticated user.",
+      "human_parameter_name": "User ID",
+      "title": "User Id",
+      "type": "string"
+     }
+    },
+    "title": "CreateEmailDraftRequest",
+    "type": "object"
+   },
+   "version": "20261023_00"
+  },
+  "GMAIL_SEND_EMAIL": {
+   "inputSchema": {
+    "properties": {
+     "attachment": {
+      "anyOf": [
+       {
+        "file_uploadable": true,
+        "format": "path",
+        "title": "FileUploadable",
+        "type": "string"
+       },
+       {
+        "items": {
+         "file_uploadable": true,
+         "format": "path",
+         "title": "FileUploadable",
+         "type": "string"
+        },
+        "type": "array"
+       }
+      ],
+      "description": "File(s) to attach. Accepts a single file or a list of files. IMPORTANT: mimetype MUST contain a '/' separator - single words like 'pdf' or 'new' are invalid. Gmail API limits: total message size must not exceed ~25 MB after base64 encoding. Omit or set to null for no attachment. Empty attachment objects (with all fields empty/whitespace) are treated as no attachment.",
+      "human_parameter_description": "If you want to send file(s) with your email, provide them here. Can be a single file or a list of files. The mimetype must be in 'type/subtype' format (e.g., 'application/pdf' for PDFs, 'image/png' for PNG files). Total size of all attachments should be under 20 MB before encoding.",
+      "human_parameter_name": "File(s) to attach",
+      "title": "Attachment"
+     },
+     "bcc": {
+      "default": [],
+      "description": "Blind Carbon Copy (BCC) recipients' email addresses. At least one of 'to'/'recipient_email', 'cc', or 'bcc' must be provided.",
+      "examples": [
+       [
+        "auditor@example.com"
+       ]
+      ],
+      "human_parameter_description": "Enter email addresses of people you want to receive the email without the main recipients knowing.",
+      "human_parameter_name": "BCC recipients' email addresses",
+      "items": {
+       "type": "string"
+      },
+      "title": "Bcc",
+      "type": "array"
+     },
+     "body": {
+      "description": "Email content (plain text or HTML). Either subject or body must be provided for the email to be sent. If HTML, `is_html` must be `True`.",
+      "examples": [
+       "Hello team, let's discuss the project updates tomorrow.",
+       "<h1>Welcome!</h1><p>Thank you for signing up.</p>",
+       ""
+      ],
+      "human_parameter_description": "Write the main message of your email here. It can be plain text or formatted HTML.",
+      "human_parameter_name": "Email content",
+      "title": "Body",
+      "type": "string"
+     },
+     "cc": {
+      "default": [],
+      "description": "Carbon Copy (CC) recipients' email addresses. At least one of 'to'/'recipient_email', 'cc', or 'bcc' must be provided.",
+      "examples": [
+       [
+        "manager@example.com",
+        "teamlead@example.com"
+       ]
+      ],
+      "human_parameter_description": "Provide email addresses of people you want to inform about the email without them being the main recipient.",
+      "human_parameter_name": "CC recipients' email addresses",
+      "items": {
+       "type": "string"
+      },
+      "title": "Cc",
+      "type": "array"
+     },
+     "extra_recipients": {
+      "default": [],
+      "description": "Additional 'To' recipients' email addresses (not Cc or Bcc). Should only be used if recipient_email is also provided.",
+      "examples": [
+       [
+        "jane.doe@example.com",
+        "support@example.com"
+       ]
+      ],
+      "human_parameter_description": "List extra email addresses for other recipients you want to send the email to.",
+      "human_parameter_name": "Additional 'To' recipients' email addresses",
+      "items": {
+       "type": "string"
+      },
+      "title": "Extra Recipients",
+      "type": "array"
+     },
+     "from_email": {
+      "description": "Sender email address for the 'From' header. Provide the connected account's primary email address or a verified alias configured in Gmail's 'Send mail as' settings. When omitted, the action attempts to resolve the primary email address from the authenticated Gmail profile.",
+      "examples": [
+       "alias@example.com",
+       "marketing@company.com"
+      ],
+      "human_parameter_description": "Specify the sender's primary email address or a verified 'Send mail as' alias. Provide this explicitly when the sender cannot be resolved from the connected Gmail account.",
+      "human_parameter_name": "Sender email address (alias)",
+      "title": "From Email",
+      "type": "string"
+     },
+     "include_signature": {
+      "default": true,
+      "description": "Append the sender's Gmail signature (the 'Send mail as' signature configured in Gmail settings) to the message body, ahead of any quoted or forwarded content. Skipped when the body already ends with that signature, when no signature is configured, or when the connection lacks permission to read Gmail settings. Set to false to send the body exactly as provided.",
+      "human_parameter_description": "Append the sender's configured Gmail signature to the message.",
+      "human_parameter_name": "Include Gmail signature?",
+      "title": "Include Signature",
+      "type": "boolean"
+     },
+     "is_html": {
+      "default": false,
+      "description": "Set to `True` if the email body contains HTML tags.",
+      "human_parameter_description": "Indicate whether the content of your email is formatted with HTML.",
+      "human_parameter_name": "Does the email body contain HTML?",
+      "title": "Is Html",
+      "type": "boolean"
+     },
+     "recipient_email": {
+      "description": "Primary recipient's email address. You can also use 'to' as an alias for this parameter. At least one of 'to'/'recipient_email', 'cc', or 'bcc' must be provided. Use extra_recipients if you want to send to multiple recipients. Use the special value 'me' to send to your own authenticated email address. Must be a full user@domain address; 'me' is not valid here and will fail.",
+      "examples": [
+       "john@doe.com",
+       "me"
+      ],
+      "human_parameter_description": "Enter the main email address of the person you want to send the email to. Use 'me' to send to yourself.",
+      "human_parameter_name": "Primary recipient's email address",
+      "title": "Recipient Email",
+      "type": "string"
+     },
+     "subject": {
+      "description": "Subject line of the email. Either subject or body must be provided for the email to be sent.",
+      "examples": [
+       "Project Update Meeting",
+       "Your Weekly Newsletter"
+      ],
+      "human_parameter_description": "This is the title of your email that summarizes its content.",
+      "human_parameter_name": "Email subject line",
+      "title": "Subject",
+      "type": "string"
+     },
+     "user_id": {
+      "default": "me",
+      "description": "User's email address; the literal 'me' refers to the authenticated user.",
+      "examples": [
+       "user@example.com",
+       "me"
+      ],
+      "human_parameter_description": "This is the email address of the user whose mailbox you want to access. You can use 'me' to refer to your own mailbox.",
+      "human_parameter_name": "User ID",
+      "title": "User Id",
+      "type": "string"
+     }
+    },
+    "title": "SendEmailRequest",
+    "type": "object"
+   },
+   "version": "20261023_00"
+  },
+  "GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND": {
+   "inputSchema": {
+    "properties": {
+     "includeValuesInResponse": {
+      "description": "Determines if the update response should include the values of the cells that were appended. By default, responses do not include the updated values.",
+      "examples": [
+       true
+      ],
+      "human_parameter_description": "Decide if you want the response to include the values that were just added.",
+      "human_parameter_name": "Include Values in Response?",
+      "title": "Include Values In Response",
+      "type": "boolean"
+     },
+     "insertDataOption": {
+      "description": "How the input data should be inserted.",
+      "enum": [
+       "OVERWRITE",
+       "INSERT_ROWS"
+      ],
+      "examples": [
+       "INSERT_ROWS"
+      ],
+      "human_parameter_description": "Select whether to overwrite existing data or insert rows for the new data.",
+      "human_parameter_name": "Insert Data Option",
+      "title": "Insert Data Option",
+      "type": "string"
+     },
+     "majorDimension": {
+      "description": "How to interpret the 2D values array. Use ROWS for row-wise data (most common for appends). Use COLUMNS for column-wise data. Example: if A1=1,B1=2,A2=3,B2=4 then majorDimension=ROWS yields [[1,2],[3,4]] and majorDimension=COLUMNS yields [[1,3],[2,4]].",
+      "enum": [
+       "ROWS",
+       "COLUMNS"
+      ],
+      "examples": [
+       "ROWS"
+      ],
+      "human_parameter_description": "Indicate if your data is organized in rows or columns.",
+      "human_parameter_name": "Major Dimension",
+      "title": "Major Dimension",
+      "type": "string"
+     },
+     "range": {
+      "description": "A1 notation range used to locate a logical table. New rows are appended after the last row of that table within this range. First call GOOGLESHEETS_GET_SHEET_NAMES with this exact spreadsheet_id and use one of the returned sheet names; sheet names are case-sensitive and default names like 'Sheet1' are unsafe guesses. Valid formats: exact sheet name only (e.g., 'Sales Data'), sheet-qualified column range (e.g., 'Sales Data!A:D'), or sheet-qualified cell range (e.g., 'Sales Data!A1:D100'). Do not pass bare ranges like 'A:F' or 'A1:D100' because they omit the sheet name. If the needed sheet is not returned, create it or ask the user instead of inventing a name. Sheet names with spaces need single quotes (auto-added). IMPORTANT: The append may land in different columns than specified due to API table detection. For strict column placement, use GOOGLESHEETS_SPREADSHEETS_VALUES_UPDATE instead. Always check updates.updatedRange in the response to verify where data was actually written.",
+      "examples": [
+       "Sales Data",
+       "Sales Data!A:D",
+       "Sales Data!A1:D100",
+       "'Email Summary'!A:E",
+       "Email Summary!A:E"
+      ],
+      "human_parameter_description": "Call GOOGLESHEETS_GET_SHEET_NAMES first, then use an exact returned sheet name in formats like 'Sales Data!A:D' or 'Sales Data!A1:D100'. Do not use bare ranges like 'A:F' or guessed default names like 'Sheet1' unless returned by that action. WARNING: The API may append to different columns than specified due to table detection logic. Always check the response to verify where data was written.",
+      "human_parameter_name": "Range",
+      "title": "Range",
+      "type": "string"
+     },
+     "responseDateTimeRenderOption": {
+      "description": "Determines how dates, times, and durations in the response should be rendered. This is ignored if responseValueRenderOption is FORMATTED_VALUE. The default dateTime render option is SERIAL_NUMBER.",
+      "enum": [
+       "SERIAL_NUMBER",
+       "FORMATTED_STRING"
+      ],
+      "examples": [
+       "SERIAL_NUMBER"
+      ],
+      "human_parameter_description": "Select how you want dates and times in the response to be formatted.",
+      "human_parameter_name": "Response DateTime Render Option",
+      "title": "Response Date Time Render Option",
+      "type": "string"
+     },
+     "responseValueRenderOption": {
+      "description": "Determines how values in the response should be rendered. The default render option is FORMATTED_VALUE.",
+      "enum": [
+       "FORMATTED_VALUE",
+       "UNFORMATTED_VALUE",
+       "FORMULA"
+      ],
+      "examples": [
+       "FORMATTED_VALUE"
+      ],
+      "human_parameter_description": "Choose how you want the values in the response to be displayed.",
+      "human_parameter_name": "Response Value Render Option",
+      "title": "Response Value Render Option",
+      "type": "string"
+     },
+     "spreadsheetId": {
+      "description": "The spreadsheet ID (typically 44 characters containing letters, numbers, hyphens, and underscores). Found in the URL between /d/ and /edit. NOT the sheet name (tab name) - that belongs in the 'range' parameter.",
+      "examples": [
+       "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+      ],
+      "human_parameter_description": "Provide the unique identifier of the spreadsheet from its URL (e.g., '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms'). This is NOT the sheet name - use the 'range' parameter for sheet names.",
+      "human_parameter_name": "Spreadsheet ID",
+      "minLength": 30,
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "title": "Spreadsheet Id",
+      "type": "string"
+     },
+     "valueInputOption": {
+      "description": "How the input data should be interpreted.",
+      "enum": [
+       "RAW",
+       "USER_ENTERED"
+      ],
+      "examples": [
+       "USER_ENTERED"
+      ],
+      "human_parameter_description": "Choose how the data you provide should be interpreted\u2014raw or as user-entered values.",
+      "human_parameter_name": "Value Input Option",
+      "title": "Value Input Option",
+      "type": "string"
+     },
+     "values": {
+      "description": "2D array of values to append. Typically, each inner list is a ROW (majorDimension=ROWS). Use null/None for empty cells.",
+      "examples": [
+       [
+        [
+         "A1_val1",
+         "A1_val2"
+        ],
+        [
+         "A2_val1",
+         "A2_val2"
+        ]
+       ]
+      ],
+      "human_parameter_description": "Provide the data you want to append as a list of lists where each inner list represents a row.",
+      "human_parameter_name": "Values",
+      "items": {
+       "items": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "type": "integer"
+         },
+         {
+          "type": "number"
+         },
+         {
+          "type": "boolean"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "type": "array"
+      },
+      "title": "Values",
+      "type": "array"
+     }
+    },
+    "required": [
+     "spreadsheetId",
+     "range",
+     "valueInputOption",
+     "values"
+    ],
+    "title": "SpreadsheetsValuesAppendRequest",
+    "type": "object"
+   },
+   "version": "20261018_00"
+  },
+  "GREENHOUSE_MOVE_APPLICATION": {
+   "inputSchema": {
+    "description": "Request schema for moving a Greenhouse application to a new stage.",
+    "properties": {
+     "email_from_user_id": {
+      "description": "The id of the Greenhouse user whose email address should appear as the sender on any notifications sent as a result of this move.",
+      "examples": [
+       987654321
+      ],
+      "title": "Email From User Id",
+      "type": "integer"
+     },
+     "from_stage_id": {
+      "description": "The id of the job interview stage the application is currently in. Required as a guard: Greenhouse rejects the move if this does not match the application's present stage, preventing stale or duplicate move requests.",
+      "examples": [
+       5346855009
+      ],
+      "title": "From Stage Id",
+      "type": "integer"
+     },
+     "id": {
+      "description": "The id of the application to move to a different interview stage.",
+      "examples": [
+       34750829009
+      ],
+      "title": "Id",
+      "type": "integer"
+     },
+     "to_job_id": {
+      "description": "The id of a different job to transfer the application to. When supplied, Greenhouse moves the candidate to that job. Mutually exclusive with to_stage_id in most workflows.",
+      "examples": [
+       123456789
+      ],
+      "title": "To Job Id",
+      "type": "integer"
+     },
+     "to_stage_id": {
+      "description": "The id of the job interview stage the application should be moved to within the same job. When omitted (and to_job_id is also omitted), Greenhouse automatically advances the application to the next stage.",
+      "examples": [
+       5346857009
+      ],
+      "title": "To Stage Id",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "id",
+     "from_stage_id"
+    ],
+    "title": "MoveApplicationRequest",
+    "type": "object"
+   },
+   "version": "20261010_00"
+  },
+  "HUBSPOT_CREATE_ENGAGEMENT": {
+   "inputSchema": {
+    "description": "Flattened agent-facing request for a legacy aggregate engagement.",
+    "properties": {
+     "active": {
+      "description": "Optional active state for the engagement.",
+      "title": "Active",
+      "type": "boolean"
+     },
+     "association_owner_ids": {
+      "description": "Owner IDs as digit strings to include in the associations object.",
+      "items": {
+       "pattern": "^\\d+$",
+       "type": "string"
+      },
+      "title": "Association Owner Ids",
+      "type": "array"
+     },
+     "attachment_ids": {
+      "description": "HubSpot file IDs as digit strings; each is sent as an object with an integer id field.",
+      "items": {
+       "pattern": "^\\d+$",
+       "type": "string"
+      },
+      "title": "Attachment Ids",
+      "type": "array"
+     },
+     "company_ids": {
+      "description": "Company IDs as digit strings to associate with the engagement.",
+      "items": {
+       "pattern": "^\\d+$",
+       "type": "string"
+      },
+      "title": "Company Ids",
+      "type": "array"
+     },
+     "contact_ids": {
+      "description": "Contact IDs as digit strings to associate with the engagement.",
+      "items": {
+       "pattern": "^\\d+$",
+       "type": "string"
+      },
+      "title": "Contact Ids",
+      "type": "array"
+     },
+     "deal_ids": {
+      "description": "Deal IDs as digit strings to associate with the engagement.",
+      "items": {
+       "pattern": "^\\d+$",
+       "type": "string"
+      },
+      "title": "Deal Ids",
+      "type": "array"
+     },
+     "engagement_type": {
+      "description": "Legacy engagement kind; metadata requirements vary by this value.",
+      "enum": [
+       "EMAIL",
+       "CALL",
+       "MEETING",
+       "TASK",
+       "NOTE"
+      ],
+      "examples": [
+       "NOTE",
+       "CALL"
+      ],
+      "title": "Engagement Type",
+      "type": "string"
+     },
+     "metadata": {
+      "additionalProperties": true,
+      "description": "Type-specific metadata using HubSpot's exact keys for the selected EMAIL, CALL, MEETING, TASK, or NOTE engagement type. For NOTE, body is the note text and is limited to 65,536 characters.",
+      "title": "Metadata",
+      "type": "object"
+     },
+     "owner_id": {
+      "description": "HubSpot owner ID as a digit string.",
+      "pattern": "^\\d+$",
+      "title": "Owner Id",
+      "type": "string"
+     },
+     "ticket_ids": {
+      "description": "Ticket IDs as digit strings to associate with the engagement.",
+      "items": {
+       "pattern": "^\\d+$",
+       "type": "string"
+      },
+      "title": "Ticket Ids",
+      "type": "array"
+     },
+     "timestamp_ms": {
+      "description": "Engagement occurrence time as Unix milliseconds.",
+      "examples": [
+       1725840000000
+      ],
+      "minimum": 0,
+      "title": "Timestamp Ms",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "engagement_type"
+    ],
+    "title": "CreateEngagementRequest",
+    "type": "object"
+   },
+   "version": "20261023_00"
+  },
+  "HUBSPOT_CREATE_NOTE": {
+   "inputSchema": {
+    "description": "Request schema for creating a HubSpot note with optional associations.",
+    "properties": {
+     "associations": {
+      "description": "List of associations to link with the note (e.g., contacts, deals, companies).",
+      "items": {
+       "anyOf": [
+        {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        {
+         "properties": {},
+         "title": "BaseModel",
+         "type": "object"
+        }
+       ]
+      },
+      "title": "Associations",
+      "type": "array"
+     },
+     "custom_properties": {
+      "additionalProperties": true,
+      "description": "A dictionary of custom properties. Boolean-type fields accept 'Yes'/'No', 'true'/'false', 'on'/'off', 'y'/'n' and Python booleans, which are auto-converted to string values ('true'/'false') for HubSpot API compatibility. Numeric strings ('0', '1', '2', etc.) are preserved as-is for number fields.",
+      "title": "Custom Properties",
+      "type": "object"
+     },
+     "hs_attachment_ids": {
+      "description": "Semicolon-separated list of file attachment IDs.",
+      "examples": [
+       "24332474034;24332474044"
+      ],
+      "title": "Hs Attachment Ids",
+      "type": "string"
+     },
+     "hs_note_body": {
+      "description": "Text content of the note (up to 65,536 characters).",
+      "examples": [
+       "Discussed contract details and next steps."
+      ],
+      "title": "Hs Note Body",
+      "type": "string"
+     },
+     "hs_timestamp": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "description": "Creation time of the note. Either an ISO-8601 UTC timestamp (e.g., '2021-11-12T15:48:22Z') or Unix milliseconds since epoch.",
+      "examples": [
+       "2021-11-12T15:48:22Z",
+       1636730902000
+      ],
+      "title": "Hs Timestamp"
+     },
+     "hubspot_owner_id": {
+      "description": "HubSpot user ID to assign as the creator/owner of this note.",
+      "examples": [
+       "14240720"
+      ],
+      "title": "Hubspot Owner Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "hs_timestamp"
+    ],
+    "title": "CreateNoteRequest",
+    "type": "object"
+   },
+   "version": "20261023_00"
+  },
+  "INSTANTLY_ACTIVATE_CAMPAIGN": {
+   "inputSchema": {
+    "description": "Request to activate or resume a paused campaign",
+    "properties": {
+     "id": {
+      "description": "UUID of the campaign to activate",
+      "examples": [
+       "4691e3f2-753d-42dd-9a0f-b3328e912927"
+      ],
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "title": "Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "id"
+    ],
+    "title": "ActivateCampaignRequest",
+    "type": "object"
+   },
+   "version": "20261021_00"
+  },
+  "INSTANTLY_ADD_LEADS_BULK": {
+   "inputSchema": {
+    "description": "Request parameters for adding leads in bulk to a campaign or list.",
+    "properties": {
+     "blocklist_id": {
+      "description": "Blocklist ID to check against when adding leads",
+      "examples": [
+       "019b4a38-79ae-79d6-8583-291a9c06f950"
+      ],
+      "title": "Blocklist Id",
+      "type": "string"
+     },
+     "campaign_id": {
+      "description": "UUID of the campaign to add leads to. Either campaign_id or list_id is required.",
+      "examples": [
+       "4691e3f2-753d-42dd-9a0f-b3328e912927"
+      ],
+      "title": "Campaign Id",
+      "type": "string"
+     },
+     "leads": {
+      "description": "List of leads to add. Each lead must have at least an email address.",
+      "examples": [
+       [
+        {
+         "email": "test.lead@example.com",
+         "first_name": "Test",
+         "last_name": "Lead"
+        }
+       ]
+      ],
+      "items": {
+       "description": "Individual lead information for bulk add operation.",
+       "properties": {
+        "company_domain": {
+         "description": "Company domain of the lead",
+         "examples": [
+          "example.com"
+         ],
+         "title": "Company Domain",
+         "type": "string"
+        },
+        "company_name": {
+         "description": "Company name of the lead",
+         "examples": [
+          "Example Corp"
+         ],
+         "title": "Company Name",
+         "type": "string"
+        },
+        "custom_variables": {
+         "additionalProperties": true,
+         "description": "Custom metadata for the lead. Values must be string, number, boolean, or null. Objects or arrays are not allowed as values.",
+         "examples": [
+          {
+           "leadScore": 42,
+           "plan": "pro"
+          }
+         ],
+         "title": "Custom Variables",
+         "type": "object"
+        },
+        "email": {
+         "description": "Email address of the lead (required)",
+         "examples": [
+          "test.lead@example.com"
+         ],
+         "title": "Email",
+         "type": "string"
+        },
+        "first_name": {
+         "description": "First name of the lead",
+         "examples": [
+          "Test"
+         ],
+         "title": "First Name",
+         "type": "string"
+        },
+        "last_name": {
+         "description": "Last name of the lead",
+         "examples": [
+          "Lead"
+         ],
+         "title": "Last Name",
+         "type": "string"
+        },
+        "personalization": {
+         "description": "Custom personalization message for the lead",
+         "examples": [
+          "Following up on our previous conversation"
+         ],
+         "title": "Personalization",
+         "type": "string"
+        },
+        "phone": {
+         "description": "Phone number of the lead",
+         "examples": [
+          "+1234567890"
+         ],
+         "title": "Phone",
+         "type": "string"
+        },
+        "website": {
+         "description": "Website URL of the lead",
+         "examples": [
+          "https://example.com"
+         ],
+         "title": "Website",
+         "type": "string"
+        }
+       },
+       "required": [
+        "email"
+       ],
+       "title": "LeadInfo",
+       "type": "object"
+      },
+      "title": "Leads",
+      "type": "array"
+     },
+     "list_id": {
+      "description": "UUID of the list to add leads to. Either campaign_id or list_id is required.",
+      "examples": [
+       "01956fbd-0eb1-72db-a565-82977a586084"
+      ],
+      "title": "List Id",
+      "type": "string"
+     },
+     "skip_if_in_campaign": {
+      "description": "Skip adding the lead if it already exists in the campaign",
+      "examples": [
+       true
+      ],
+      "title": "Skip If In Campaign",
+      "type": "boolean"
+     },
+     "skip_if_in_list": {
+      "description": "Skip adding the lead if it already exists in the list",
+      "examples": [
+       false
+      ],
+      "title": "Skip If In List",
+      "type": "boolean"
+     },
+     "skip_if_in_workspace": {
+      "description": "Skip adding the lead if it already exists in the workspace",
+      "examples": [
+       true
+      ],
+      "title": "Skip If In Workspace",
+      "type": "boolean"
+     },
+     "verify": {
+      "description": "Verify leads on import",
+      "examples": [
+       false
+      ],
+      "title": "Verify",
+      "type": "boolean"
+     },
+     "verify_leadfinder": {
+      "description": "Verify leads for the lead finder",
+      "examples": [
+       false
+      ],
+      "title": "Verify Leadfinder",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "leads"
+    ],
+    "title": "AddLeadsBulkRequest",
+    "type": "object"
+   },
+   "version": "20261021_00"
+  },
+  "INSTANTLY_CREATE_LEAD": {
+   "inputSchema": {
+    "description": "Request parameters for creating a new lead. At least one field should be provided.",
+    "properties": {
+     "campaign": {
+      "description": "UUID of the campaign to associate the lead with",
+      "examples": [
+       "01956fbd-0eb1-72db-a565-82977a586084"
+      ],
+      "title": "Campaign",
+      "type": "string"
+     },
+     "company_name": {
+      "description": "Company name of the lead",
+      "examples": [
+       "Example Inc."
+      ],
+      "title": "Company Name",
+      "type": "string"
+     },
+     "custom_variables": {
+      "additionalProperties": true,
+      "description": "Custom variables for the lead as a key/value map. Values must be scalars (string, number, boolean, or null); nested objects or arrays are not allowed. These will be stored on the lead's payload and can be used in campaigns.",
+      "examples": [
+       {
+        "isBeta": true,
+        "leadScore": 42,
+        "plan": "pro"
+       }
+      ],
+      "title": "Custom Variables",
+      "type": "object"
+     },
+     "email": {
+      "description": "Email address of the lead",
+      "examples": [
+       "jane.doe@example.com"
+      ],
+      "title": "Email",
+      "type": "string"
+     },
+     "first_name": {
+      "description": "First name of the lead",
+      "examples": [
+       "Jane"
+      ],
+      "title": "First Name",
+      "type": "string"
+     },
+     "last_name": {
+      "description": "Last name of the lead",
+      "examples": [
+       "Doe"
+      ],
+      "title": "Last Name",
+      "type": "string"
+     },
+     "lt_interest_status": {
+      "description": "Lead interest status; allowed values: 0=Out of Office, 1=Interested, 2=Meeting Booked, 3=Meeting Completed, 4=Closed, -1=Not Interested, -2=Wrong Person, -3=Lost",
+      "enum": [
+       -3,
+       -2,
+       -1,
+       0,
+       1,
+       2,
+       3,
+       4
+      ],
+      "examples": [
+       1,
+       -1
+      ],
+      "title": "Lt Interest Status",
+      "type": "integer"
+     },
+     "personalization": {
+      "description": "Personalized note or message for the lead",
+      "examples": [
+       "Following up on our previous conversation..."
+      ],
+      "title": "Personalization",
+      "type": "string"
+     },
+     "phone": {
+      "description": "Phone number of the lead",
+      "examples": [
+       "+1234567890"
+      ],
+      "title": "Phone",
+      "type": "string"
+     },
+     "website": {
+      "description": "Website URL of the lead",
+      "examples": [
+       "https://example.com"
+      ],
+      "title": "Website",
+      "type": "string"
+     }
+    },
+    "title": "CreateLeadRequest",
+    "type": "object"
+   },
+   "version": "20261021_00"
+  },
+  "INTERCOM_REPLY_TICKET": {
+   "inputSchema": {
+    "description": "Request schema for ReplyTicket",
+    "properties": {
+     "admin_id": {
+      "description": "Admin identifier for admin replies. Required when replying as an admin.",
+      "examples": [
+       "8226930"
+      ],
+      "title": "Admin Id",
+      "type": "string"
+     },
+     "attachment_urls": {
+      "description": "List of URLs of attachments to include in the reply",
+      "examples": [
+       [
+        "https://example.com/file.pdf"
+       ]
+      ],
+      "items": {
+       "type": "string"
+      },
+      "title": "Attachment Urls",
+      "type": "array"
+     },
+     "body": {
+      "description": "The content of the reply. HTML is supported for notes.",
+      "examples": [
+       "Thank you for your inquiry. We are reviewing your request and will get back to you shortly."
+      ],
+      "title": "Body",
+      "type": "string"
+     },
+     "created_at": {
+      "description": "Unix timestamp for when the reply was created. Optional, used for contact replies.",
+      "examples": [
+       1672531200
+      ],
+      "title": "Created At",
+      "type": "integer"
+     },
+     "email": {
+      "description": "Contact's email address for contact replies. Used when replying as a contact.",
+      "examples": [
+       "user@example.com"
+      ],
+      "title": "Email",
+      "type": "string"
+     },
+     "intercom_user_id": {
+      "description": "Contact identifier from Intercom for contact replies. Used when replying as a contact.",
+      "examples": [
+       "5f9c0a1e2b1d3c0001a3b4c5"
+      ],
+      "title": "Intercom User Id",
+      "type": "string"
+     },
+     "message_type": {
+      "description": "Type of message to send. Must be 'comment', 'note', or 'quick_reply'",
+      "examples": [
+       "comment",
+       "note",
+       "quick_reply"
+      ],
+      "title": "Message Type",
+      "type": "string"
+     },
+     "ticket_id": {
+      "description": "The unique identifier for the ticket to reply to",
+      "examples": [
+       "215472278547564"
+      ],
+      "title": "Ticket Id",
+      "type": "string"
+     },
+     "user_id": {
+      "description": "External contact identifier for contact replies. Used when replying as a contact.",
+      "examples": [
+       "user_123"
+      ],
+      "title": "User Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "ticket_id",
+     "message_type",
+     "body"
+    ],
+    "title": "ReplyTicketRequest",
+    "type": "object"
+   },
+   "version": "20261010_00"
+  },
+  "INTERCOM_REPLY_TO_CONVERSATION": {
+   "inputSchema": {
+    "properties": {
+     "admin_id": {
+      "description": "ID of the admin sending the reply. Required - must be explicitly provided.",
+      "examples": [
+       "123456"
+      ],
+      "title": "Admin Id",
+      "type": "string"
+     },
+     "attachment_urls": {
+      "description": "List of attachment URLs to include in the reply URLs must be publicly accessible (no auth required); private or oversized URLs will cause the request to fail.",
+      "examples": [
+       [
+        "https://example.com/file.pdf"
+       ]
+      ],
+      "items": {
+       "type": "string"
+      },
+      "title": "Attachment Urls",
+      "type": "array"
+     },
+     "conversation_id": {
+      "description": "The ID of the conversation to reply to",
+      "examples": [
+       "123456789"
+      ],
+      "title": "Conversation Id",
+      "type": "string"
+     },
+     "message_body": {
+      "description": "The message content to send as a reply",
+      "examples": [
+       "Thank you for contacting us. How can I help you today?"
+      ],
+      "title": "Message Body",
+      "type": "string"
+     },
+     "message_type": {
+      "default": "comment",
+      "description": "Type of message: comment, note, or assignment",
+      "examples": [
+       "comment",
+       "note",
+       "assignment"
+      ],
+      "title": "Message Type",
+      "type": "string"
+     }
+    },
+    "required": [
+     "conversation_id",
+     "message_body",
+     "admin_id"
+    ],
+    "title": "ReplyToConversationRequest",
+    "type": "object"
+   },
+   "version": "20261010_00"
+  },
+  "OUTLOOK_CREATE_DRAFT": {
+   "inputSchema": {
+    "properties": {
+     "attachment": {
+      "anyOf": [
+       {
+        "file_uploadable": true,
+        "format": "path",
+        "title": "FileUploadable",
+        "type": "string"
+       },
+       {
+        "items": {
+         "file_uploadable": true,
+         "format": "path",
+         "title": "FileUploadable",
+         "type": "string"
+        },
+        "type": "array"
+       }
+      ],
+      "description": "Optional file(s) to attach. Accepts a single file or a list of files.",
+      "human_parameter_description": "File(s) to include with your draft, like documents or images. Provide a single file or a list of files.",
+      "human_parameter_name": "Attachment",
+      "title": "Attachment"
+     },
+     "bcc_recipients": {
+      "default": [],
+      "description": "Optional list of BCC (blind carbon copy) recipient email addresses. Must be provided as an array of strings, e.g., [\"bcc@example.com\"].",
+      "examples": [
+       [
+        "stakeholder@example.com"
+       ]
+      ],
+      "human_parameter_description": "People who should receive a hidden copy. Other recipients won't see these addresses.",
+      "human_parameter_name": "BCC Recipients",
+      "items": {
+       "type": "string"
+      },
+      "title": "Bcc Recipients",
+      "type": "array"
+     },
+     "body": {
+      "description": "Content of the email draft; use `is_html` to specify if HTML or plain text.",
+      "examples": [
+       "Let's meet to discuss the project."
+      ],
+      "human_parameter_description": "What you want to say in the email. Write your message here; turn on 'Is HTML' if you want to include formatting like bold text or links.",
+      "human_parameter_name": "Body",
+      "title": "Body",
+      "type": "string"
+     },
+     "cc_recipients": {
+      "default": [],
+      "description": "Optional list of CC (carbon copy) recipient email addresses. Must be provided as an array of strings, e.g., [\"cc@example.com\"].",
+      "examples": [
+       [
+        "manager@example.com"
+       ]
+      ],
+      "human_parameter_description": "People you want to keep in the loop. They'll receive a copy of the email but aren't the primary recipients.",
+      "human_parameter_name": "CC Recipients",
+      "items": {
+       "type": "string"
+      },
+      "title": "Cc Recipients",
+      "type": "array"
+     },
+     "is_html": {
+      "default": false,
+      "description": "Specifies if the `body` is HTML. If `False`, `body` is plain text. Set to `True` when `body` contains HTML markup; otherwise markup renders as literal text.",
+      "human_parameter_description": "Choose whether your message body uses rich formatting (HTML) or plain text. Turn this on if you want styles, links, or images to render.",
+      "human_parameter_name": "Is HTML",
+      "title": "Is Html",
+      "type": "boolean"
+     },
+     "subject": {
+      "description": "Subject line for the email draft.",
+      "examples": [
+       "Team Meeting"
+      ],
+      "human_parameter_description": "The subject line you want people to see in their inbox. Keep it short and clear so recipients know what the email is about.",
+      "human_parameter_name": "Subject",
+      "maxLength": 255,
+      "minLength": 1,
+      "title": "Subject",
+      "type": "string"
+     },
+     "to_recipients": {
+      "default": [],
+      "description": "Optional list of primary 'To' recipient email addresses. Must be provided as an array of strings, e.g., [\"user@example.com\"] for a single recipient or [\"user1@example.com\", \"user2@example.com\"] for multiple recipients. Do not pass as a JSON-encoded string. Can be omitted when creating a draft to be completed later. To send the draft, at least one valid address must be present across `to_recipients`, `cc_recipients`, or `bcc_recipients`.",
+      "examples": [
+       [
+        "johndoe@example.com",
+        "janedoe@example.com"
+       ]
+      ],
+      "human_parameter_description": "The main people you're emailing. Enter one or more email addresses as an array. Leave empty if you'll add recipients later.",
+      "human_parameter_name": "To Recipients",
+      "items": {
+       "type": "string"
+      },
+      "title": "To Recipients",
+      "type": "array"
+     },
+     "user_id": {
+      "description": "User ID (GUID) or user principal name (email) for S2S (app-only) authentication. Required when using application permissions. If not provided, defaults to '/me' endpoint for delegated authentication.",
+      "examples": [
+       "43f0c14d-bca8-421f-b762-c3d8dd75be1f",
+       "user@example.com"
+      ],
+      "human_parameter_description": "The ID or email address of the user whose mailbox you want to access. Required for server-to-server authentication.",
+      "human_parameter_name": "User ID",
+      "title": "User Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "subject",
+     "body"
+    ],
+    "title": "CreateEmailDraftRequest",
+    "type": "object"
+   },
+   "version": "20261022_00"
+  },
+  "OUTLOOK_SEND_EMAIL": {
+   "inputSchema": {
+    "properties": {
+     "attachment": {
+      "anyOf": [
+       {
+        "file_uploadable": true,
+        "format": "path",
+        "title": "FileUploadable",
+        "type": "string"
+       },
+       {
+        "items": {
+         "file_uploadable": true,
+         "format": "path",
+         "title": "FileUploadable",
+         "type": "string"
+        },
+        "type": "array"
+       }
+      ],
+      "description": "File(s) to attach. Accepts a single file or a list of files.",
+      "human_parameter_description": "Attach one or more files to include with your email, like documents or images.",
+      "human_parameter_name": "Attachment",
+      "title": "Attachment"
+     },
+     "bcc_emails": {
+      "default": [],
+      "description": "List of email addresses for BCC recipients. Each email should be a separate string in the array. Do NOT pass comma-separated values as a single string.",
+      "examples": [
+       [
+        "manager@example.com",
+        "supervisor@example.com"
+       ],
+       [
+        "hr@company.com"
+       ]
+      ],
+      "human_parameter_description": "People you want to copy without other recipients seeing their addresses. Add each email separately.",
+      "human_parameter_name": "BCC Emails",
+      "items": {
+       "type": "string"
+      },
+      "title": "Bcc Emails",
+      "type": "array"
+     },
+     "body": {
+      "description": "The content of the email body as a plain string (plain text or HTML based on `is_html`). Do not pass structured objects; provide only the raw text/HTML content.",
+      "examples": [
+       "Hello team, please find the attached report.",
+       "<h1>Project Phoenix</h1><p>Initial proposal attached.</p>"
+      ],
+      "human_parameter_description": "What you want to say in the email. Enter plain text or include HTML if you turn on HTML format.",
+      "human_parameter_name": "Email Body",
+      "title": "Body",
+      "type": "string"
+     },
+     "cc_emails": {
+      "default": [],
+      "description": "List of email addresses for CC recipients. Each email should be a separate string in the array. Do NOT pass comma-separated values as a single string.",
+      "examples": [
+       [
+        "jane.doe@example.com",
+        "cc.recipient@example.com"
+       ],
+       [
+        "team@company.com"
+       ]
+      ],
+      "human_parameter_description": "People you want to keep in the loop. Add each email separately so they receive a copy.",
+      "human_parameter_name": "CC Emails",
+      "items": {
+       "type": "string"
+      },
+      "title": "Cc Emails",
+      "type": "array"
+     },
+     "from_address": {
+      "description": "Optional From address to set on the message (send as/on behalf). Provide a single email address. Requires appropriate mailbox permissions.",
+      "examples": [
+       "shared.mailbox@contoso.com",
+       "alias@example.com"
+      ],
+      "human_parameter_description": "Email address to appear in the From field. Use when sending as or on behalf of another mailbox (requires permissions).",
+      "human_parameter_name": "From Address",
+      "title": "From Address",
+      "type": "string"
+     },
+     "is_html": {
+      "default": false,
+      "description": "Specifies if the email body is HTML; `True` for HTML, `False` for plain text.",
+      "examples": [
+       "true",
+       "false"
+      ],
+      "human_parameter_description": "Turn this on if your message includes HTML formatting (headings, links, bold). Leave off for plain text.",
+      "human_parameter_name": "HTML Format",
+      "title": "Is Html",
+      "type": "boolean"
+     },
+     "save_to_sent_items": {
+      "default": true,
+      "description": "Indicates if the email should be saved in 'Sent Items'.",
+      "examples": [
+       "true",
+       "false"
+      ],
+      "human_parameter_description": "Choose whether to keep a copy of this message in your Sent folder.",
+      "human_parameter_name": "Save to Sent",
+      "title": "Save To Sent Items",
+      "type": "boolean"
+     },
+     "subject": {
+      "description": "The subject line of the email.",
+      "examples": [
+       "Project Update",
+       "Important Announcement"
+      ],
+      "human_parameter_description": "What you want the email to be titled so recipients know what it's about.",
+      "human_parameter_name": "Email Subject",
+      "maxLength": 255,
+      "minLength": 1,
+      "title": "Subject",
+      "type": "string"
+     },
+     "to": {
+      "description": "The primary recipient's email address(es). You can provide a single email or multiple emails separated by commas. Valid email addresses will be extracted from strings containing extra text. Format: name@domain.com",
+      "examples": [
+       "recipient@example.com",
+       "john.doe@company.com",
+       "alice@example.com, bob@example.com"
+      ],
+      "human_parameter_description": "Who you want to send the email to. Enter one address or multiple separated by commas.",
+      "human_parameter_name": "Recipient Email(s)",
+      "title": "To",
+      "type": "string"
+     },
+     "to_name": {
+      "description": "The display name of the primary recipient.",
+      "examples": [
+       "Valued Customer",
+       "John Doe"
+      ],
+      "human_parameter_description": "The display name for the main recipient so their name appears alongside their email address.",
+      "human_parameter_name": "Recipient Name",
+      "title": "To Name",
+      "type": "string"
+     },
+     "user_id": {
+      "default": "me",
+      "description": "The user's email address or the alias 'me' to represent the authenticated user.",
+      "examples": [
+       "me",
+       "specific.user@example.com"
+      ],
+      "human_parameter_description": "The email address or ID of the mailbox to send from. Use 'me' to send from your own account.",
+      "human_parameter_name": "User ID",
+      "title": "User Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "subject",
+     "body",
+     "to"
+    ],
+    "title": "SendEmailRequest",
+    "type": "object"
+   },
+   "version": "20261022_00"
+  },
+  "QUICKBOOKS_CREATE_BILL": {
+   "inputSchema": {
+    "description": "Request parameters to create a new bill in QuickBooks.",
+    "properties": {
+     "APAccountRef": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Reference to the Accounts Payable account. Format: {'value': 'account_id'}. If not specified, uses the default AP account.",
+      "title": "Ap Account Ref",
+      "type": "object"
+     },
+     "CurrencyRef": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Reference to the currency. Format: {'value': 'USD'}.",
+      "title": "Currency Ref",
+      "type": "object"
+     },
+     "DepartmentRef": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Reference to the department. Format: {'value': 'department_id'}.",
+      "title": "Department Ref",
+      "type": "object"
+     },
+     "DocNumber": {
+      "description": "Reference number for the bill (e.g., vendor invoice number).",
+      "title": "Doc Number",
+      "type": "string"
+     },
+     "DueDate": {
+      "description": "Date when payment for the bill is due in YYYY-MM-DD format.",
+      "title": "Due Date",
+      "type": "string"
+     },
+     "ExchangeRate": {
+      "description": "Currency exchange rate for multi-currency transactions.",
+      "title": "Exchange Rate",
+      "type": "number"
+     },
+     "GlobalTaxCalculation": {
+      "description": "Method in which tax is applied. Valid values: TaxExcluded, TaxInclusive, NotApplicable.",
+      "title": "Global Tax Calculation",
+      "type": "string"
+     },
+     "Line": {
+      "description": "List of line items for the bill. At least one line item is required. Each line must specify DetailType, Amount, and the appropriate detail object.",
+      "items": {
+       "description": "Input model for a bill line item.",
+       "properties": {
+        "AccountBasedExpenseLineDetail": {
+         "additionalProperties": false,
+         "description": "Detail for account-based expense line items.",
+         "properties": {
+          "AccountRef": {
+           "additionalProperties": false,
+           "description": "Reference to the expense account for this line item.",
+           "properties": {
+            "name": {
+             "description": "The name of the referenced account (e.g., 'Checking', 'Unapplied Cash Payment Income').",
+             "title": "Name",
+             "type": "string"
+            },
+            "value": {
+             "description": "The ID of the referenced account (e.g., '35', '87').",
+             "title": "Value",
+             "type": "string"
+            }
+           },
+           "required": [
+            "value"
+           ],
+           "title": "Account Ref",
+           "type": "object"
+          },
+          "BillableStatus": {
+           "description": "Billable status of the expense. Valid values: Billable, NotBillable, HasBeenBilled.",
+           "title": "Billable Status",
+           "type": "string"
+          },
+          "ClassRef": {
+           "additionalProperties": {
+            "type": "string"
+           },
+           "description": "Reference to the class for this line item. Format: {'value': 'class_id'}.",
+           "title": "Class Ref",
+           "type": "object"
+          },
+          "CustomerRef": {
+           "additionalProperties": {
+            "type": "string"
+           },
+           "description": "Reference to the customer if this expense is billable to a customer. Format: {'value': 'customer_id'}.",
+           "title": "Customer Ref",
+           "type": "object"
+          },
+          "TaxCodeRef": {
+           "additionalProperties": {
+            "type": "string"
+           },
+           "description": "Reference to the tax code for this line item. Format: {'value': 'tax_code_id'}.",
+           "title": "Tax Code Ref",
+           "type": "object"
+          }
+         },
+         "required": [
+          "AccountRef"
+         ],
+         "title": "AccountBasedExpenseLineDetail",
+         "type": "object"
+        },
+        "Amount": {
+         "description": "Monetary amount of the line item in the currency of the bill.",
+         "title": "Amount",
+         "type": "number"
+        },
+        "Description": {
+         "description": "Free-form text description of the line item.",
+         "title": "Description",
+         "type": "string"
+        },
+        "DetailType": {
+         "description": "Type of line item. Valid values: AccountBasedExpenseLineDetail, ItemBasedExpenseLineDetail.",
+         "title": "Detail Type",
+         "type": "string"
+        },
+        "ItemBasedExpenseLineDetail": {
+         "additionalProperties": false,
+         "description": "Detail for item-based expense line items.",
+         "properties": {
+          "BillableStatus": {
+           "description": "Billable status of the expense. Valid values: Billable, NotBillable, HasBeenBilled.",
+           "title": "Billable Status",
+           "type": "string"
+          },
+          "ClassRef": {
+           "additionalProperties": {
+            "type": "string"
+           },
+           "description": "Reference to the class for this line item. Format: {'value': 'class_id'}.",
+           "title": "Class Ref",
+           "type": "object"
+          },
+          "CustomerRef": {
+           "additionalProperties": {
+            "type": "string"
+           },
+           "description": "Reference to the customer if this expense is billable to a customer. Format: {'value': 'customer_id'}.",
+           "title": "Customer Ref",
+           "type": "object"
+          },
+          "ItemRef": {
+           "additionalProperties": false,
+           "description": "Reference to the item for this line item.",
+           "properties": {
+            "name": {
+             "description": "Name of the item.",
+             "title": "Name",
+             "type": "string"
+            },
+            "value": {
+             "description": "Unique identifier for the item.",
+             "title": "Value",
+             "type": "string"
+            }
+           },
+           "required": [
+            "value"
+           ],
+           "title": "Item Ref",
+           "type": "object"
+          },
+          "Qty": {
+           "description": "Quantity of the item.",
+           "title": "Qty",
+           "type": "number"
+          },
+          "UnitPrice": {
+           "description": "Unit price of the item.",
+           "title": "Unit Price",
+           "type": "number"
+          }
+         },
+         "required": [
+          "ItemRef"
+         ],
+         "title": "ItemBasedExpenseLineDetail",
+         "type": "object"
+        },
+        "LineNum": {
+         "description": "Position of the line in the collection of transaction lines. QuickBooks assigns this automatically if not provided.",
+         "title": "Line Num",
+         "type": "integer"
+        }
+       },
+       "required": [
+        "DetailType",
+        "Amount"
+       ],
+       "title": "BillLineInput",
+       "type": "object"
+      },
+      "minItems": 1,
+      "title": "Line",
+      "type": "array"
+     },
+     "PrivateNote": {
+      "description": "User-entered private note about the bill.",
+      "title": "Private Note",
+      "type": "string"
+     },
+     "SalesTermRef": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Reference to the payment terms. Format: {'value': 'term_id'}. Defines when payment is due.",
+      "title": "Sales Term Ref",
+      "type": "object"
+     },
+     "TxnDate": {
+      "description": "Date of the transaction in YYYY-MM-DD format. Defaults to the current date if not provided.",
+      "title": "Txn Date",
+      "type": "string"
+     },
+     "VendorRef": {
+      "additionalProperties": false,
+      "description": "Reference to the vendor from whom the bill is received. Required field.",
+      "properties": {
+       "name": {
+        "description": "Name of the vendor. This is optional and for reference only.",
+        "title": "Name",
+        "type": "string"
+       },
+       "value": {
+        "description": "Unique identifier for the vendor. Use QUICKBOOKS_CREATE_VENDOR or QUICKBOOKS_READ_VENDOR to get valid vendor IDs.",
+        "title": "Value",
+        "type": "string"
+       }
+      },
+      "required": [
+       "value"
+      ],
+      "title": "Vendor Ref",
+      "type": "object"
+     },
+     "minorversion": {
+      "description": "QuickBooks API minor version number (e.g., 65, 70, 75). If not specified, uses the default version.",
+      "title": "Minorversion",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "VendorRef",
+     "Line"
+    ],
+    "title": "CreateBillRequest",
+    "type": "object"
+   },
+   "version": "20260721_00"
+  },
+  "SALESFORCE_CREATE_TASK": {
+   "inputSchema": {
+    "properties": {
+     "activity_date": {
+      "description": "Due date for the task in YYYY-MM-DD format. Do not use full datetimes or natural-language strings like 'yesterday'; only YYYY-MM-DD is accepted.",
+      "examples": [
+       "2025-12-31",
+       "2025-09-15"
+      ],
+      "human_parameter_description": "When the task should be completed, in YYYY-MM-DD format. Set a date to keep the task on schedule.",
+      "human_parameter_name": "Due Date",
+      "title": "Activity Date",
+      "type": "string"
+     },
+     "composio_execution_message": {
+      "description": "Internal field used to communicate processing details.",
+      "title": "Composio Execution Message",
+      "type": "string"
+     },
+     "custom_fields": {
+      "additionalProperties": true,
+      "description": "Dictionary of custom field API names and their values. Custom field names typically end with '__c' (e.g., 'Priority_Level__c': 'Critical').",
+      "examples": [
+       {
+        "Custom_Priority__c": "Critical",
+        "Follow_Up_Required__c": true
+       },
+       {
+        "External_ID__c": "EXT-12345"
+       }
+      ],
+      "human_parameter_description": "Add any custom fields specific to your Salesforce org. Use the API name of each field (usually ending in '__c') as the key, and set its value.",
+      "human_parameter_name": "Custom Fields",
+      "title": "Custom Fields",
+      "type": "object"
+     },
+     "description": {
+      "default": "",
+      "description": "Detailed description or notes for the task.",
+      "examples": [
+       "Call to discuss renewal options",
+       "Follow up on pricing questions from last meeting",
+       "Send updated proposal with discount options"
+      ],
+      "human_parameter_description": "Any notes or details that explain what needs to be done. Include context or next steps to make the task clear.",
+      "human_parameter_name": "Task Description",
+      "title": "Description",
+      "type": "string"
+     },
+     "is_reminder_set": {
+      "default": false,
+      "description": "Whether to set a reminder for this task.",
+      "human_parameter_description": "Turn this on if you want Salesforce to remind you about the task. You'll be prompted at the reminder time you set.",
+      "human_parameter_name": "Set Reminder",
+      "title": "Is Reminder Set",
+      "type": "boolean"
+     },
+     "owner_id": {
+      "default": "",
+      "description": "ID of the user who owns the task. Defaults to current user if not specified.",
+      "examples": [
+       "005XXXXXXXXXXXXXXX"
+      ],
+      "human_parameter_description": "Who should be responsible for this task. Leave blank to assign it to yourself, or enter another user's Salesforce ID.",
+      "human_parameter_name": "Task Owner ID",
+      "title": "Owner Id",
+      "type": "string"
+     },
+     "priority": {
+      "default": "Normal",
+      "description": "Priority level of the task.",
+      "examples": [
+       "High",
+       "Normal",
+       "Low"
+      ],
+      "human_parameter_description": "How important the task is compared to other work. Use this to signal urgency.",
+      "human_parameter_name": "Task Priority",
+      "title": "Priority",
+      "type": "string"
+     },
+     "reminder_date_time": {
+      "description": "Date and time for the reminder in ISO format (YYYY-MM-DDTHH:MM:SS). Required if is_reminder_set is true. Interpreted according to org/user timezone, not UTC.",
+      "examples": [
+       "2025-12-30T09:00:00",
+       "2025-09-14T14:30:00"
+      ],
+      "human_parameter_description": "When the reminder should pop up, in YYYY-MM-DDTHH:MM:SS format. Required only if you enable reminders.",
+      "human_parameter_name": "Reminder Date/Time",
+      "title": "Reminder Date Time",
+      "type": "string"
+     },
+     "status": {
+      "default": "Not Started",
+      "description": "Status of the task. Must be a valid picklist value; arbitrary strings trigger validation errors.",
+      "examples": [
+       "Not Started",
+       "In Progress",
+       "Completed",
+       "Waiting on someone else",
+       "Deferred"
+      ],
+      "human_parameter_description": "How far along the task is. Choose the current state so others know its progress.",
+      "human_parameter_name": "Task Status",
+      "title": "Status",
+      "type": "string"
+     },
+     "subject": {
+      "description": "Subject/title of the task.",
+      "examples": [
+       "Follow up on opportunity",
+       "Call customer",
+       "Send proposal",
+       "Schedule meeting",
+       "Review contract"
+      ],
+      "human_parameter_description": "The short title of the task you want to create. Make it clear so you can quickly recognize what needs to be done.",
+      "human_parameter_name": "Task Subject",
+      "title": "Subject",
+      "type": "string"
+     },
+     "what_id": {
+      "default": "",
+      "description": "ID of the related record (Account, Opportunity, Case, etc.) this task is associated with. Accepts Account IDs (prefix '001'), Opportunity IDs (prefix '006'), Case IDs (prefix '500'), and other business object IDs.",
+      "examples": [
+       "001XXXXXXXXXXXXXXX",
+       "006XXXXXXXXXXXXXXX",
+       "500XXXXXXXXXXXXXXX"
+      ],
+      "human_parameter_description": "The related record you want to associate with this task, like an account, opportunity, or case. Linking it helps keep the task in the right context.",
+      "human_parameter_name": "Related Record ID",
+      "title": "What Id",
+      "type": "string"
+     },
+     "who_id": {
+      "default": "",
+      "description": "ID of the Contact or Lead this task is associated with. Only accepts Contact IDs (prefix '003') or Lead IDs (prefix '00Q'). Do NOT use Account/Opportunity/Case IDs here; use what_id for those. Swapping who_id and what_id creates orphaned tasks that won't appear on contact/lead timelines. Accepts only a single ID; create separate task records for multiple contacts.",
+      "examples": [
+       "003XXXXXXXXXXXXXXX",
+       "00QXXXXXXXXXXXXXXX"
+      ],
+      "human_parameter_description": "The contact or lead this task is about. Provide their Salesforce ID if you want the task tied to a specific person.",
+      "human_parameter_name": "Contact/Lead ID",
+      "title": "Who Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "subject"
+    ],
+    "title": "CreateTaskRequest",
+    "type": "object"
+   },
+   "version": "20261023_00"
+  },
+  "SLACK_CHAT_POST_MESSAGE": {
+   "inputSchema": {
+    "description": "Request schema for `SendMessage`",
+    "properties": {
+     "attachments": {
+      "description": "This is Slack's legacy 'secondary attachments' field for adding rich formatting elements like colored sidebars, structured fields, and author info to messages. Pass as a JSON string array. NOT for file/image uploads. To send a message with attachments of files or images, use the 'SLACK_UPLOAD_OR_CREATE_A_FILE_IN_SLACK' instead.",
+      "examples": [
+       "[{\"fallback\": \"Summary text\", \"color\": \"#36a64f\", \"title\": \"Title\", \"text\": \"Attachment content\", \"fields\": [{\"title\": \"Field\", \"value\": \"Value\", \"short\": true}]}]"
+      ],
+      "human_parameter_description": "NOT for uploading files or images. This adds rich formatting elements like colored sidebars and structured fields to your message. To share actual files, images, or documents, use the 'Upload or create a file in Slack' action instead. Most users should use markdown_text for formatting.",
+      "human_parameter_name": "Rich Message Formatting (Legacy)",
+      "title": "Attachments",
+      "type": "string"
+     },
+     "blocks": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       }
+      ],
+      "description": "DEPRECATED: Use `markdown_text` field instead. Block Kit layout blocks for rich/interactive messages. Accepts either a URL-encoded JSON string or a list of block dictionaries. See Slack API Block Kit docs for structure.",
+      "examples": [
+       "%5B%7B%22type%22%3A%20%22section%22%2C%20%22text%22%3A%20%7B%22type%22%3A%20%22mrkdwn%22%2C%20%22text%22%3A%20%22Hello%2C%20world%21%22%7D%7D%5D",
+       [
+        {
+         "text": {
+          "text": "Hello, world!",
+          "type": "mrkdwn"
+         },
+         "type": "section"
+        }
+       ]
+      ],
+      "human_parameter_description": "A Block Kit layout for advanced formatting. Accepts URL-encoded JSON string or a list of block objects. Use this only if you already have a blocks payload; otherwise prefer markdown_text.",
+      "human_parameter_name": "Blocks (Deprecated)",
+      "title": "Blocks"
+     },
+     "channel": {
+      "description": "ID or name of the channel, private group, or IM channel to send the message to. Can be specified as either 'channel' or 'channel_id'. Do NOT include the '#' prefix (e.g., use 'general' not '#general') - any leading '#' will be automatically stripped. For DMs, use the channel ID returned by SLACK_OPEN_DM (starts with 'D'); usernames, emails, and user IDs are not valid DM targets. IMPORTANT: org-wide (Enterprise Grid) tokens cannot resolve channel names \u2014 Slack returns `team_not_found`. Pass the channel ID (e.g., 'C0ABC12345') instead; use SLACK_LIST_ALL_CHANNELS to find IDs.",
+      "examples": [
+       "C1234567890",
+       "general"
+      ],
+      "human_parameter_description": "Where to send the message\u2014enter a channel name (like general) or a channel ID (like C1234567890). You can also use a DM or private group. Do not include the '#' prefix; it will be automatically removed if provided.",
+      "human_parameter_name": "Channel",
+      "title": "Channel",
+      "type": "string"
+     },
+     "link_names": {
+      "description": "Automatically hyperlink channel names (e.g., #channel) and usernames (e.g., @user) in message text. Defaults to `false` for bot messages.",
+      "human_parameter_description": "Automatically turn #channel and @user mentions in your text into clickable links.",
+      "human_parameter_name": "Auto-Link Names",
+      "title": "Link Names",
+      "type": "boolean"
+     },
+     "markdown_text": {
+      "description": "PREFERRED: Write your message in markdown for nicely formatted display. Supports: headers (# ## ###), bold (**text** or __text__), italic (*text* or _text_), strikethrough (~~text~~), inline code (`code`), code blocks (```), links ([text](url)), block quotes (>), lists (- item, 1. item), dividers (--- or ***), context blocks (:::context with images), and section buttons (:::section-button). IMPORTANT: Use \\n for line breaks (e.g., 'Line 1\\nLine 2'), not actual newlines. USER MENTIONS: To tag users, use their user ID with <@USER_ID> format (e.g., <@U1234567890>), not username. NOTE: Slack enforces a 50-block limit per message. Very long messages with extensive formatting may exceed this limit. If your message is very long, consider splitting it into multiple shorter messages or using simpler formatting.",
+      "examples": [
+       "# Status Update\n\nSystem is **running smoothly** with *excellent* performance.\n\n```bash\nkubectl get pods\n```\n\n> All services operational \u2705",
+       "## Daily Report\n\n- **Deployments**: 5 successful\n- *Issues*: 0 critical\n- ~~Maintenance~~: **Completed**\n\n---\n\n**Next**: Monitor for 24h"
+      ],
+      "human_parameter_description": "Write the message you want to send, using Markdown for formatting. We'll automatically format it for Slack and convert it to the right blocks.",
+      "human_parameter_name": "Message Content (Markdown)",
+      "title": "Markdown Text",
+      "type": "string"
+     },
+     "mrkdwn": {
+      "description": "Controls Slack mrkdwn formatting for the top-level `text` field ONLY. Set to `false` to disable formatting (text appears as-is with literal asterisks, underscores, etc.). Default `true` enables mrkdwn formatting (*bold*, _italic_, etc.). NOTE: This parameter has NO effect on `blocks` or `markdown_text` - block content always uses its own formatting rules.",
+      "human_parameter_description": "Controls formatting for the plain text field only. Set to false to show text exactly as typed (e.g., *word* appears literally instead of bold). Has no effect when using markdown_text or blocks.",
+      "human_parameter_name": "Enable Markdown",
+      "title": "Mrkdwn",
+      "type": "boolean"
+     },
+     "parse": {
+      "const": "full",
+      "description": "Message text parsing behavior. Set to 'full' to parse as user-typed (auto-links @mentions, #channels). Omit for default behavior (no special parsing).",
+      "examples": [
+       "full"
+      ],
+      "human_parameter_description": "Control how Slack interprets your text. Use 'full' to auto-link mentions and channels; otherwise leave as 'none' for no special parsing.",
+      "human_parameter_name": "Parse Mode",
+      "title": "Parse",
+      "type": "string"
+     },
+     "reply_broadcast": {
+      "description": "If `true` for a threaded reply, also posts to main channel. Defaults to `false`.",
+      "human_parameter_description": "If you're replying in a thread, turn this on to also share the reply in the main channel.",
+      "human_parameter_name": "Broadcast Reply to Channel",
+      "title": "Reply Broadcast",
+      "type": "boolean"
+     },
+     "text": {
+      "description": "DEPRECATED: This sends raw text only, use markdown_text field. Primary textual content. Recommended fallback if using `blocks` or `attachments`. Supports mrkdwn unless `mrkdwn` is `false`.",
+      "examples": [
+       "Hello from your friendly bot!",
+       "Reminder: Team meeting at 3 PM today."
+      ],
+      "human_parameter_description": "Plain-text version of your message. Prefer markdown_text for formatting; use this only as a simple fallback.",
+      "human_parameter_name": "Plain Text (Deprecated)",
+      "title": "Text",
+      "type": "string"
+     },
+     "thread_ts": {
+      "description": "Timestamp (`ts`) of an existing message to make this a threaded reply. Use `ts` of the parent message, not another reply. Example: '1476746824.000004'.",
+      "examples": [
+       "1618033790.001500"
+      ],
+      "human_parameter_description": "Paste the timestamp of the message you want to reply to in a thread (for example 1618033790.001500).",
+      "human_parameter_name": "Thread Timestamp",
+      "title": "Thread Ts",
+      "type": "string"
+     },
+     "unfurl_links": {
+      "description": "Enable unfurling of text-based URLs. Defaults `false` for bots, `true` if `as_user` is `true`.",
+      "human_parameter_description": "Show previews for regular links you include in the message. Turn on to expand links; turn off to keep them compact.",
+      "human_parameter_name": "Unfurl Links",
+      "title": "Unfurl Links",
+      "type": "boolean"
+     },
+     "unfurl_media": {
+      "description": "Enable media previews (images, videos) from URLs. Set to `true` (default) to show media previews, `false` to hide them.",
+      "human_parameter_description": "Show image and video previews from links in your message. Enabled by default. Set to false to hide media previews.",
+      "human_parameter_name": "Show Media Previews",
+      "title": "Unfurl Media",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "channel"
+    ],
+    "title": "SendMessageRequest",
+    "type": "object"
+   },
+   "version": "20261023_00"
+  },
+  "SLACK_SEND_MESSAGE": {
+   "inputSchema": {
+    "additionalProperties": false,
+    "description": "Request schema for `SendMessage`",
+    "properties": {
+     "blocks": {
+      "description": "Use this instead of `markdown_text` only when you need Slack Block Kit capabilities that Markdown cannot express: buttons, approval/reject actions, select menus, checkboxes, radio buttons, date/time pickers, overflow menus, interactive workflow payloads, section accessories, image/video blocks, context rows, two-column fields, multiple action buttons in one row, or rich card-like layouts. Provide raw Slack Block Kit JSON as an array. For normal prose generated by an LLM inside a blocks payload, prefer a Slack markdown block: {'type': 'markdown', 'text': '# Heading\\n\\nBody text'}. Do not use this together with `markdown_text`. If these blocks are the visible content, provide `fallback_text` when notification/accessibility fallback matters.",
+      "examples": [
+       [
+        {
+         "text": "# Deploy approval\n\nApprove or reject production.",
+         "type": "markdown"
+        },
+        {
+         "elements": [
+          {
+           "action_id": "approve_prod",
+           "text": {
+            "text": "Approve",
+            "type": "plain_text"
+           },
+           "type": "button",
+           "value": "approve_prod"
+          }
+         ],
+         "type": "actions"
+        }
+       ]
+      ],
+      "human_parameter_description": "Raw Slack Block Kit blocks for interactive or structured layouts. Use Markdown Text for ordinary messages.",
+      "human_parameter_name": "Slack Block Kit Blocks",
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "title": "Blocks",
+      "type": "array"
+     },
+     "channel": {
+      "description": "ID or name of the channel, private group, or IM channel to send the message to. Can be specified as either 'channel' or 'channel_id'. Do NOT include the '#' prefix (e.g., use 'general' not '#general') - any leading '#' will be automatically stripped. For DMs, use the channel ID returned by SLACK_OPEN_DM (starts with 'D'); usernames, emails, and user IDs are not valid DM targets. IMPORTANT: org-wide (Enterprise Grid) tokens cannot resolve channel names \u2014 Slack returns `team_not_found`. Pass the channel ID (e.g., 'C0ABC12345') instead; use SLACK_LIST_ALL_CHANNELS to find IDs.",
+      "examples": [
+       "C1234567890",
+       "general"
+      ],
+      "human_parameter_description": "Where to send the message\u2014enter a channel name (like general) or a channel ID (like C1234567890). You can also use a DM or private group. Do not include the '#' prefix; it will be automatically removed if provided.",
+      "human_parameter_name": "Channel",
+      "title": "Channel",
+      "type": "string"
+     },
+     "fallback_text": {
+      "description": "Optional only when using `blocks`. Maps to Slack's top-level `text` field for notifications, accessibility, search previews, and clients that cannot render blocks. This should be a short plain-text summary of the block content, not another visible message body. Omit it if you want Slack to infer fallback text from supported blocks.",
+      "examples": [
+       "Deploy approval requested for production."
+      ],
+      "human_parameter_description": "Optional plain-text notification/accessibility fallback for block messages.",
+      "human_parameter_name": "Fallback Text",
+      "title": "Fallback Text",
+      "type": "string"
+     },
+     "markdown_text": {
+      "description": "Use this for normal LLM-written message content. Pass standard Markdown exactly as written; this tool sends it to Slack's native `markdown_text` argument without converting it to blocks. Do not use this together with `blocks`. Supports Slack's native markdown handling for headings, bold, italic, links, lists, code, quotes, dividers, tables, and task lists. Slack collapses literal empty Markdown lines; to force visible blank spacer rows, put a non-breaking space on each spacer line, e.g. `a\\n\\u00a0\\n\\u00a0\\n\\u00a0\\nb`. For Slack mentions, use explicit entity syntax such as <@USER_ID>, <#CHANNEL_ID>, or <!subteam^GROUP_ID>; do not rely on @name or #name auto-linking. Use `blocks` instead when you need buttons, selects, checkboxes, image blocks, context rows, fields, accessories, or other interactive/layout controls.",
+      "examples": [
+       "# Status Update\n\nSystem is **running smoothly** with *excellent* performance.\n\n```bash\nkubectl get pods\n```\n\n> All services operational \u2705",
+       "| Metric | Status |\n|---|---|\n| p95 latency | improved |\n| error rate | stable |",
+       "a\n\u00a0\n\u00a0\n\u00a0\nb"
+      ],
+      "human_parameter_description": "Write the message in standard Markdown. It is sent directly to Slack's native markdown_text field.",
+      "human_parameter_name": "Message Content (Markdown)",
+      "title": "Markdown Text",
+      "type": "string"
+     },
+     "reply_broadcast": {
+      "description": "If `true` for a threaded reply, also posts to main channel. Defaults to `false`.",
+      "human_parameter_description": "If you're replying in a thread, turn this on to also share the reply in the main channel.",
+      "human_parameter_name": "Broadcast Reply to Channel",
+      "title": "Reply Broadcast",
+      "type": "boolean"
+     },
+     "thread_ts": {
+      "description": "Timestamp (`ts`) of an existing message to make this a threaded reply. Use `ts` of the parent message, not another reply. Example: '1476746824.000004'.",
+      "examples": [
+       "1618033790.001500"
+      ],
+      "human_parameter_description": "Paste the timestamp of the message you want to reply to in a thread (for example 1618033790.001500).",
+      "human_parameter_name": "Thread Timestamp",
+      "title": "Thread Ts",
+      "type": "string"
+     },
+     "unfurl_links": {
+      "description": "Enable unfurling of text-based URLs. Defaults `false` for bots, `true` if `as_user` is `true`.",
+      "human_parameter_description": "Show previews for regular links you include in the message. Turn on to expand links; turn off to keep them compact.",
+      "human_parameter_name": "Unfurl Links",
+      "title": "Unfurl Links",
+      "type": "boolean"
+     },
+     "unfurl_media": {
+      "description": "Enable media previews (images, videos) from URLs. Set to `true` (default) to show media previews, `false` to hide them.",
+      "human_parameter_description": "Show image and video previews from links in your message. Enabled by default. Set to false to hide media previews.",
+      "human_parameter_name": "Show Media Previews",
+      "title": "Unfurl Media",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "channel"
+    ],
+    "title": "SendMessageRequest",
+    "type": "object"
+   },
+   "version": "20261023_00"
+  },
+  "SMARTLEAD_RESUME_CAMPAIGN_LEAD": {
+   "inputSchema": {
+    "properties": {
+     "campaign_id": {
+      "description": "Campaign containing the paused lead.",
+      "examples": [
+       12345
+      ],
+      "minimum": 1,
+      "title": "Campaign Id",
+      "type": "integer"
+     },
+     "lead_id": {
+      "description": "Paused lead to resume.",
+      "examples": [
+       67890
+      ],
+      "minimum": 1,
+      "title": "Lead Id",
+      "type": "integer"
+     },
+     "resume_lead_with_delay_days": {
+      "description": "Days to wait before resuming; omit to use the sequence default.",
+      "examples": [
+       7
+      ],
+      "title": "Resume Lead With Delay Days",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "campaign_id",
+     "lead_id"
+    ],
+    "title": "ResumeCampaignLeadRequest",
+    "type": "object"
+   },
+   "version": "20261023_00"
+  },
+  "SMARTLEAD_SEND_SINGLE_EMAIL": {
+   "inputSchema": {
+    "properties": {
+     "attachments": {
+      "description": "Files to attach, each with a filename, base64-encoded content, and provider-required mimeType.",
+      "items": {
+       "properties": {
+        "content": {
+         "description": "Base64-encoded attachment content.",
+         "examples": [
+          "SGVsbG8="
+         ],
+         "minLength": 1,
+         "title": "Content",
+         "type": "string"
+        },
+        "filename": {
+         "description": "Attachment filename, including its extension.",
+         "examples": [
+          "invoice.pdf"
+         ],
+         "minLength": 1,
+         "title": "Filename",
+         "type": "string"
+        },
+        "mimeType": {
+         "description": "MIME type of the attachment.",
+         "examples": [
+          "application/pdf"
+         ],
+         "minLength": 1,
+         "title": "Mime Type",
+         "type": "string"
+        }
+       },
+       "required": [
+        "filename",
+        "content",
+        "mimeType"
+       ],
+       "title": "SingleEmailAttachment",
+       "type": "object"
+      },
+      "title": "Attachments",
+      "type": "array"
+     },
+     "body": {
+      "description": "HTML or plain-text email body.",
+      "examples": [
+       "<h1>Hello!</h1>"
+      ],
+      "minLength": 1,
+      "title": "Body",
+      "type": "string"
+     },
+     "from_email": {
+      "description": "Sender email address; provide exactly one of this or from_email_id.",
+      "examples": [
+       "sender@example.com"
+      ],
+      "format": "email",
+      "title": "From Email",
+      "type": "string"
+     },
+     "from_email_id": {
+      "description": "Smartlead sender account ID; provide exactly one of this or from_email.",
+      "examples": [
+       12345
+      ],
+      "minimum": 1,
+      "title": "From Email Id",
+      "type": "integer"
+     },
+     "from_name": {
+      "description": "Sender display name.",
+      "examples": [
+       "Smartlead Team"
+      ],
+      "minLength": 1,
+      "title": "From Name",
+      "type": "string"
+     },
+     "reply_to": {
+      "description": "Reply-to email address.",
+      "examples": [
+       "support@example.com"
+      ],
+      "format": "email",
+      "title": "Reply To",
+      "type": "string"
+     },
+     "subject": {
+      "description": "Email subject.",
+      "examples": [
+       "Welcome to Smartlead"
+      ],
+      "minLength": 1,
+      "title": "Subject",
+      "type": "string"
+     },
+     "to": {
+      "description": "Recipient email address.",
+      "examples": [
+       "recipient@example.com"
+      ],
+      "format": "email",
+      "title": "To",
+      "type": "string"
+     }
+    },
+    "required": [
+     "to",
+     "subject",
+     "body"
+    ],
+    "title": "SendSingleEmailRequest",
+    "type": "object"
+   },
+   "version": "20261023_00"
+  },
+  "SMARTLEAD_UPDATE_CAMPAIGN_STATUS": {
+   "inputSchema": {
+    "properties": {
+     "campaign_id": {
+      "description": "Campaign to update.",
+      "examples": [
+       12345
+      ],
+      "minimum": 1,
+      "title": "Campaign Id",
+      "type": "integer"
+     },
+     "status": {
+      "description": "New campaign status. STOPPED permanently stops the campaign and cannot be undone; START can begin sending emails.",
+      "enum": [
+       "START",
+       "PAUSED",
+       "STOPPED",
+       "ARCHIVED"
+      ],
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "campaign_id",
+     "status"
+    ],
+    "title": "UpdateCampaignStatusRequest",
+    "type": "object"
+   },
+   "version": "20261023_00"
+  },
+  "XERO_CREATE_INVOICE": {
+   "inputSchema": {
+    "description": "Request schema for creating an invoice in Xero.",
+    "properties": {
+     "ContactID": {
+      "description": "Xero Contact ID (UUID). At least one of contact_id or contact_name must be provided.",
+      "title": "Contact Id",
+      "type": "string"
+     },
+     "ContactName": {
+      "description": "Contact name. At least one of contact_id or contact_name must be provided.",
+      "maxLength": 255,
+      "title": "Contact Name",
+      "type": "string"
+     },
+     "CurrencyCode": {
+      "description": "Currency code (e.g., USD, EUR).",
+      "title": "Currency Code",
+      "type": "string"
+     },
+     "Date": {
+      "description": "Invoice date in YYYY-MM-DD format.",
+      "title": "Date",
+      "type": "string"
+     },
+     "DueDate": {
+      "description": "Due date in YYYY-MM-DD format.",
+      "title": "Due Date",
+      "type": "string"
+     },
+     "InvoiceNumber": {
+      "description": "Invoice number (auto-generated if not provided). WARNING: If this matches an existing invoice number, Xero will attempt to UPDATE that invoice instead of creating a new one. Omit this field to ensure a new invoice is created, or ensure the number is unique.",
+      "title": "Invoice Number",
+      "type": "string"
+     },
+     "LineItems": {
+      "description": "List of line items for the invoice.",
+      "items": {
+       "description": "Line item for an invoice.",
+       "properties": {
+        "AccountCode": {
+         "description": "Account code reference.",
+         "title": "Account Code",
+         "type": "string"
+        },
+        "AccountID": {
+         "description": "Associated account ID (UUID) related to line item.",
+         "title": "Account Id",
+         "type": "string"
+        },
+        "Description": {
+         "description": "Line item description. Must be at least 1 char long. Can create line item with just description.",
+         "title": "Description",
+         "type": "string"
+        },
+        "DiscountAmount": {
+         "description": "Discount amount (ACCREC invoices and quotes only).",
+         "title": "Discount Amount",
+         "type": "number"
+        },
+        "DiscountRate": {
+         "description": "Percentage discount (ACCREC invoices only).",
+         "title": "Discount Rate",
+         "type": "number"
+        },
+        "ItemCode": {
+         "description": "Item code reference.",
+         "title": "Item Code",
+         "type": "string"
+        },
+        "LineAmount": {
+         "description": "Can provide when Quantity or UnitAmount omitted; reflects discounted price.",
+         "title": "Line Amount",
+         "type": "number"
+        },
+        "LineItemID": {
+         "description": "LineItem unique ID (UUID).",
+         "title": "Line Item Id",
+         "type": "string"
+        },
+        "Quantity": {
+         "description": "LineItem quantity.",
+         "title": "Quantity",
+         "type": "number"
+        },
+        "TaxAmount": {
+         "description": "Auto-calculated tax percentage; can be overridden if incorrect.",
+         "title": "Tax Amount",
+         "type": "number"
+        },
+        "TaxType": {
+         "description": "Tax type from TaxRates.",
+         "title": "Tax Type",
+         "type": "string"
+        },
+        "Tracking": {
+         "description": "Optional tracking categories; maximum 2 elements per line item.",
+         "items": {
+          "description": "Tracking category for line items.",
+          "properties": {
+           "Name": {
+            "description": "Name of the tracking category.",
+            "title": "Name",
+            "type": "string"
+           },
+           "Option": {
+            "description": "Selected tracking option.",
+            "title": "Option",
+            "type": "string"
+           }
+          },
+          "title": "TrackingCategory",
+          "type": "object"
+         },
+         "title": "Tracking",
+         "type": "array"
+        },
+        "UnitAmount": {
+         "description": "LineItem unit amount.",
+         "title": "Unit Amount",
+         "type": "number"
+        }
+       },
+       "title": "InvoiceLineItem",
+       "type": "object"
+      },
+      "title": "Line Items",
+      "type": "array"
+     },
+     "Reference": {
+      "description": "Reference or purchase order number.",
+      "title": "Reference",
+      "type": "string"
+     },
+     "Status": {
+      "description": "Invoice status.",
+      "enum": [
+       "DRAFT",
+       "SUBMITTED",
+       "AUTHORISED"
+      ],
+      "title": "Status",
+      "type": "string"
+     },
+     "Type": {
+      "description": "Invoice type: ACCREC (accounts receivable/sales) or ACCPAY (accounts payable/bills).",
+      "enum": [
+       "ACCREC",
+       "ACCPAY"
+      ],
+      "title": "Type",
+      "type": "string"
+     },
+     "tenant_id": {
+      "description": "Xero tenant/organization ID. If not provided, uses the first connected tenant. In multi-org setups, pass the same tenant_id consistently across all Xero tool calls.",
+      "title": "Tenant Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "Type",
+     "LineItems"
+    ],
+    "title": "CreateInvoiceRequest",
+    "type": "object"
+   },
+   "version": "20261015_00"
+  },
+  "ZENDESK_REPLY_ZENDESK_TICKET": {
+   "inputSchema": {
+    "description": "Request model for replying to a Zendesk ticket.",
+    "properties": {
+     "assignee_id": {
+      "description": "The ID of the agent to assign the ticket to",
+      "human_parameter_description": "The ID of the agent you want to assign this ticket to. Leave empty to keep the current assignment.",
+      "human_parameter_name": "Assignee ID",
+      "title": "Assignee Id",
+      "type": "integer"
+     },
+     "body": {
+      "default": "",
+      "description": "Comment content Must contain only the final reply text \u2014 do not include draft reasoning or mixed content.",
+      "human_parameter_description": "What you want to say in the reply. This text will be added as a comment on the ticket.",
+      "human_parameter_name": "Comment Body",
+      "title": "Body",
+      "type": "string"
+     },
+     "public": {
+      "default": true,
+      "description": "Whether the comment is public or internal Public comments are customer-facing and trigger email notifications to the requester; set to false for internal agent notes to prevent unintended customer visibility.",
+      "human_parameter_description": "Choose whether your comment is visible to the requester. Turn this on for customer-facing replies, or off for internal notes.",
+      "human_parameter_name": "Public Comment",
+      "title": "Public",
+      "type": "boolean"
+     },
+     "ticket_id": {
+      "description": "ID of the ticket to reply to. Note: Closed tickets cannot be updated.",
+      "human_parameter_description": "The ID number of the ticket you want to reply to. Use the ID from Zendesk so your comment is added to the correct ticket. Note: You cannot reply to closed tickets.",
+      "human_parameter_name": "Ticket ID",
+      "title": "Ticket Id",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "ticket_id"
+    ],
+    "title": "ReplyZendeskTicketRequest",
+    "type": "object"
+   },
+   "version": "20260916_00"
+  }
+ }
+}

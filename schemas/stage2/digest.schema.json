@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/digest.schema.json",
+  "title": "Morning digest DTO (ADR 0106 \u00a75).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "personId",
+    "day",
+    "ran",
+    "waiting",
+    "autoCommitted",
+    "trips",
+    "suggestions",
+    "totalCostCents"
+  ],
+  "properties": {
+    "personId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "day": {
+      "$ref": "common.schema.json#/$defs/day"
+    },
+    "ran": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "runId",
+          "workflowId",
+          "outcome",
+          "drafts",
+          "costCents"
+        ],
+        "properties": {
+          "runId": {
+            "$ref": "common.schema.json#/$defs/ulid"
+          },
+          "workflowId": {
+            "$ref": "common.schema.json#/$defs/uuid"
+          },
+          "outcome": {
+            "$ref": "common.schema.json#/$defs/runOutcome"
+          },
+          "drafts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "costCents": {
+            "$ref": "common.schema.json#/$defs/cents"
+          }
+        }
+      },
+      "maxItems": 200
+    },
+    "waiting": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "batchHash",
+          "workflowId",
+          "items"
+        ],
+        "properties": {
+          "batchHash": {
+            "$ref": "common.schema.json#/$defs/sha256"
+          },
+          "workflowId": {
+            "$ref": "common.schema.json#/$defs/uuid"
+          },
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "maxItems": 200
+    },
+    "autoCommitted": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "batchHash",
+          "policyId",
+          "items"
+        ],
+        "properties": {
+          "batchHash": {
+            "$ref": "common.schema.json#/$defs/sha256"
+          },
+          "policyId": {
+            "$ref": "common.schema.json#/$defs/uuid"
+          },
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "maxItems": 200
+    },
+    "trips": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "policyId",
+          "reason"
+        ],
+        "properties": {
+          "policyId": {
+            "$ref": "common.schema.json#/$defs/uuid"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      },
+      "maxItems": 50
+    },
+    "suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "class",
+          "estimatedMinutes",
+          "label"
+        ],
+        "properties": {
+          "title": {
+            "$ref": "common.schema.json#/$defs/name"
+          },
+          "class": {
+            "$ref": "common.schema.json#/$defs/stepClass"
+          },
+          "estimatedMinutes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "label": {
+            "const": "estimated"
+          }
+        }
+      },
+      "maxItems": 20
+    },
+    "totalCostCents": {
+      "$ref": "common.schema.json#/$defs/cents"
+    }
+  }
+}
