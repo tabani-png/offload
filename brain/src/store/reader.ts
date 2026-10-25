@@ -1,7 +1,9 @@
 // Reads the observer store (docs/store-contract.md). Plain `.jsonl` and encrypted `.jsonl.enc` are both supported.
 // Bad lines are never dropped silently: each one is returned with its file, line number and reason.
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { DayLabel, OffloadEvent } from "../types.ts";
 import { decryptLine, KEY_BYTES, LineCryptoError } from "./crypto.ts";
 import { validateEvent } from "./schema.ts";
@@ -29,6 +31,38 @@ export interface DayRead {
   blankLines: number;
   /** Day-level problems (e.g. missing key). The affected lines are also in `bad`. */
   errors: string[];
+  /** How the encrypted file was read: raw 32-byte key in-process, or wrapped key via `offload-observer export-day`. */
+  keyMode?: "raw" | "wrapped";
+}
+
+export type ReaderEnv = Readonly<Record<string, string | undefined>>;
+
+export interface ReadOptions {
+  /** OFFLOAD_OBSERVER_BIN (observer binary for wrapped keys) and OFFLOAD_KEYS. Default process.env. */
+  env?: ReaderEnv;
+}
+
+/** engine/.build/offload-observer next to this repo's brain/, unless OFFLOAD_OBSERVER_BIN says otherwise. */
+export function observerBin(env: ReaderEnv): string {
+  const given = env.OFFLOAD_OBSERVER_BIN;
+  if (given !== undefined && given !== "") return given;
+  return fileURLToPath(new URL("../../../engine/.build/offload-observer", import.meta.url));
+}
+
+const EXPORT_TIMEOUT_MS = 60_000;
+
+/** Plain lines of a keychain-wrapped day from the observer (the only process that can unwrap the key). */
+function exportDay(home: string, day: DayLabel, env: ReaderEnv): { lines: string[] } | { error: string } {
+  const bin = observerBin(env);
+  if (!existsSync(bin)) return { error: `wrapped day key needs the observer to export ${day}, but ${bin} does not exist (build the engine or set OFFLOAD_OBSERVER_BIN)` };
+  const childEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) childEnv[k] = v;
+  for (const [k, v] of Object.entries(env)) if (v !== undefined) childEnv[k] = v;
+  childEnv.OFFLOAD_HOME = home;
+  const r = spawnSync(bin, ["export-day", day, "--home", home], { env: childEnv, encoding: "utf8", timeout: EXPORT_TIMEOUT_MS, maxBuffer: 512 * 1024 * 1024 });
+  if (r.error !== undefined) return { error: `${bin} export-day ${day} failed: ${r.error.message}` };
+  if (r.status !== 0) return { error: `${bin} export-day ${day} exited ${r.status ?? r.signal}: ${(r.stderr ?? "").trim().slice(0, 300)}` };
+  return { lines: splitLines(r.stdout ?? "") };
 }
 
 export interface StoreRead {
@@ -116,7 +150,8 @@ function loadKey(home: string, day: DayLabel): { key: Buffer } | { error: string
   return { key };
 }
 
-export function readDay(home: string, day: DayLabel): DayRead {
+export function readDay(home: string, day: DayLabel, opts: ReadOptions = {}): DayRead {
+  const env = opts.env ?? process.env;
   const plain = join(daysDir(home), `${day}.jsonl`);
   const enc = join(daysDir(home), `${day}.jsonl.enc`);
   const hasPlain = existsSync(plain);
@@ -136,28 +171,37 @@ export function readDay(home: string, day: DayLabel): DayRead {
   if (hasEnc) {
     result.files.push(enc);
     const lines = splitLines(readFileSync(enc, "utf8"));
-    const loaded = loadKey(home, day);
-    if ("error" in loaded) result.errors.push(loaded.error);
-    lines.forEach((line, i) => {
-      result.totalLines += 1;
-      if (line.trim() === "") {
-        result.blankLines += 1;
-        return;
-      }
-      if ("error" in loaded) {
-        sink.bad.push({ day, file: enc, line: i + 1, reason: "decrypt_failed", detail: loaded.error });
-        return;
-      }
-      let json: string;
-      try {
-        json = decryptLine(loaded.key, line);
-      } catch (err) {
-        if (!(err instanceof LineCryptoError)) throw err;
-        sink.bad.push({ day, file: enc, line: i + 1, reason: err.reason === "invalid_base64" ? "invalid_base64" : "decrypt_failed", detail: err.message });
-        return;
-      }
-      acceptJson(sink, enc, i + 1, json);
-    });
+    const kp = keyPath(home, day);
+    const wrapped = existsSync(kp) && statSync(kp).size !== KEY_BYTES;
+    if (wrapped && env.OFFLOAD_KEYS !== "file") {
+      readWrapped(home, day, enc, lines, env, sink, result);
+    } else {
+      const loaded: { key: Buffer } | { error: string } = wrapped
+        ? { error: `key file ${kp} is not a raw ${KEY_BYTES}-byte key and OFFLOAD_KEYS=file forbids the observer export` }
+        : loadKey(home, day);
+      if (!wrapped && "key" in loaded) result.keyMode = "raw";
+      if ("error" in loaded) result.errors.push(loaded.error);
+      lines.forEach((line, i) => {
+        result.totalLines += 1;
+        if (line.trim() === "") {
+          result.blankLines += 1;
+          return;
+        }
+        if ("error" in loaded) {
+          sink.bad.push({ day, file: enc, line: i + 1, reason: "decrypt_failed", detail: loaded.error });
+          return;
+        }
+        let json: string;
+        try {
+          json = decryptLine(loaded.key, line);
+        } catch (err) {
+          if (!(err instanceof LineCryptoError)) throw err;
+          sink.bad.push({ day, file: enc, line: i + 1, reason: err.reason === "invalid_base64" ? "invalid_base64" : "decrypt_failed", detail: err.message });
+          return;
+        }
+        acceptJson(sink, enc, i + 1, json);
+      });
+    }
   }
 
   if (hasPlain) {
@@ -176,9 +220,28 @@ export function readDay(home: string, day: DayLabel): DayRead {
   return result;
 }
 
-export function readStore(home: string, opts: { windowDays?: number } = {}): StoreRead {
+function readWrapped(home: string, day: DayLabel, enc: string, lines: readonly string[], env: ReaderEnv, sink: LineSink, result: DayRead): void {
+  result.keyMode = "wrapped";
+  const encLines = lines.filter((l) => l.trim() !== "").length;
+  result.totalLines += lines.length;
+  result.blankLines += lines.length - encLines;
+  const exported = exportDay(home, day, env);
+  if ("error" in exported) {
+    result.errors.push(exported.error);
+    // Loud: every encrypted line of the day is a bad line with the reason.
+    lines.forEach((line, i) => {
+      if (line.trim() !== "") sink.bad.push({ day, file: enc, line: i + 1, reason: "decrypt_failed", detail: exported.error });
+    });
+    return;
+  }
+  const out = exported.lines.filter((l) => l.trim() !== "");
+  if (out.length !== encLines) result.errors.push(`export-day ${day} returned ${out.length} of ${encLines} lines in ${enc}`);
+  out.forEach((line, i) => acceptJson(sink, `${enc} (export-day)`, i + 1, line));
+}
+
+export function readStore(home: string, opts: { windowDays?: number; env?: ReaderEnv } = {}): StoreRead {
   const window = opts.windowDays ?? 7;
-  const days = listDays(home).slice(-window).map((d) => readDay(home, d));
+  const days = listDays(home).slice(-window).map((d) => readDay(home, d, opts.env === undefined ? {} : { env: opts.env }));
   return {
     home,
     days,
