@@ -24,7 +24,7 @@ git -C "$ROOT" diff --quiet "$BASE" -- brain/src/workflows/gate.ts brain/src/wor
 echo "ok gate.ts and allowlist.ts are byte-identical"
 
 echo "== connect is a flow, not an alert"
-if grep -rn "is not ready yet" "$ROOT/app/Sources" >/dev/null; then fail "an old 'not ready yet' connect message is still in app/Sources"; fi
+if grep -rnE "(Connecting accounts|Signing in) from inside Offload is not ready yet|NSAlert.*Connect" "$ROOT/app/Sources" >/dev/null; then fail "the old connect alert is still in app/Sources"; fi
 grep -q "struct ConnectSheet" "$ROOT/app/Sources/Surfaces/ConnectSheet.swift" || fail "no ConnectSheet"
 grep -q "connectors/" "$ROOT/app/Sources/Core/HTTPBrainClient.swift" || fail "HTTPBrainClient has no connect link route"
 if grep -n "beginSheet" "$ROOT/app/Sources/Surfaces/Windows.swift" >/dev/null; then fail "Windows.swift still uses beginSheet (sheets are in-window)"; fi
