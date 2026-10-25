@@ -220,6 +220,8 @@ describe("s17 generic policy", () => {
     const b = makeBatch("wf", "live", [genericItem(LINEAR_RECORD, { ...ISSUE_ARGS, priority: 3 })], NOW).hash;
     expect(a).not.toBe(b);
     expect(parseGenericCommit({ ...item, commit: { verb: "send", fields: [] } })).toBeNull();
+    // A hand-made item whose bytes are not canonical (CRLF, unsorted keys) is not an approved call.
+    expect(parseGenericCommit({ commit: { verb: item.commit!.verb, fields: [["schema", LINEAR_RECORD.hash], ["args", JSON.stringify({ title: "a\r\nb", team_id: "t" })]] } })).toBeNull();
   });
 });
 

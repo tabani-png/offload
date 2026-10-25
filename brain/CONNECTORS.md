@@ -338,7 +338,8 @@ above a hand-checked one, and never as the default pick while a hand-checked one
   other item, any `key` / `secret` / `token` / `password` / `value` field and any secret-looking value. A test without
   a health check only checks the item exists (`security find-generic-password -s -a`, no `-w`); with `baseUrl` and
   `healthPath` it reads the key in memory for one GET and never reads the answer's body.
-- Connector server: an https address (headers as Keychain or env references) or a command (env as references);
-  tested with `tools/list`, nothing called.
+- Connector server: an https address without query or fragment (headers as Keychain references, or env references
+  named `OFFLOAD_CONN_*`) or a command started through npx, uvx, bunx, node, python3 or docker with no code-passing
+  flag; tested with `tools/list` (no redirects), nothing called.
 `$OFFLOAD_HOME/connections.json` (0600) holds methods, references and the last test, never a secret.
 Not verified here: the Keychain read by `security` of an item the app created asks the person once for access.

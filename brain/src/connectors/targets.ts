@@ -154,7 +154,7 @@ export const allCapabilities = (t: ChainTarget) => [...t.reads, ...t.sends, ...t
 
 /** A Composio toolkit from the universe index: `tk-<toolkit>`. */
 export const UNIVERSE_PREFIX = "tk-";
-export const isUniverseId = (id: string) => /^tk-[a-z0-9][a-z0-9_-]{0,63}$/.test(id);
+export const isUniverseId = (id: string) => /^tk-[a-z0-9][a-z0-9_-]{0,63}$/.test(id) && !["constructor", "prototype", "__proto__", "hasownproperty", "tostring", "valueof"].includes(id.slice(3));
 export const universeTargetId = (toolkit: string) => `${UNIVERSE_PREFIX}${toolkit}`;
 export const toolkitOfUniverseId = (id: string): string | null => (isUniverseId(id) ? id.slice(UNIVERSE_PREFIX.length) : null);
 /** What a universe target offers: its read tools and its commit tools (each commit through generic exact approval). */

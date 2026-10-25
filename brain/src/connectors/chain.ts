@@ -250,7 +250,8 @@ export function knownTarget(home: string, id: string, now: number = Date.now()):
   // s17: any toolkit of the Composio universe index (never Composio's own helper toolkit).
   const tk = toolkitOfUniverseId(id);
   if (tk !== null) {
-    const t = tk === "composio" ? undefined : readUniverse(home)?.toolkits[tk];
+    const idx = readUniverse(home);
+    const t = tk === "composio" || idx === null || !Object.hasOwn(idx.toolkits, tk) ? undefined : idx.toolkits[tk];
     return t === undefined ? null : universeTarget(t);
   }
   if (!isAppTargetId(id)) return null;

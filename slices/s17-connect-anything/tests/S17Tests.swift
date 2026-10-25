@@ -241,6 +241,18 @@ struct S17SecretTests {
     #expect(body.contains("\"method\":\"api_key\""))
   }
 
+  @Test("the Keychain item comes from the connection id, never from the brain's answer")
+  func derivedItem() async throws {
+    let store = FakeSecretStore()
+    let t = StubTransport(["POST /connections/tk-linear/setup": (200, Data(S17Wire.detailJSON.utf8))])
+    let c = HTTPBrainClient(endpoint: BrainEndpointBox(BrainEndpoint(baseURL: URL(string: "http://127.0.0.1:5000/")!, token: String(repeating: "t", count: 40))), transport: t)
+    var d = S17Fixture.detail()
+    d.keychainService = "offload.connection.gmail"
+    _ = try await ConnectionKeySaver.save(S17Fixture.key, detail: d, store: store, client: c)
+    #expect(Array(store.saved.keys) == ["offload.connection.tk-linear/api-key"])
+    #expect(ConnectionKeySaver.keychainItem(for: "../x") == nil)
+  }
+
   @Test("a value that is not one plain key is refused before anything is stored or sent")
   func refuses() async {
     let store = FakeSecretStore()

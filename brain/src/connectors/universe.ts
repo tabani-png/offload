@@ -269,8 +269,8 @@ export async function syncUniverse(o: SyncOptions): Promise<SyncResult> {
 /** Composio's auth modes for a toolkit (`dev toolkits info`, read-only), cached in the index; null when unknown. */
 export async function toolkitAuthModes(o: { home: string; runner: LinkRunner; env: Env; toolkit: string; timeoutMs?: number }): Promise<string[] | null> {
   const idx = readUniverse(o.home);
-  const tk = idx?.toolkits[o.toolkit];
-  if (tk === undefined || idx === null) return null;
+  if (idx === null || !Object.hasOwn(idx.toolkits, o.toolkit)) return null;
+  const tk = idx.toolkits[o.toolkit]!;
   if (tk.authModes !== undefined) return tk.authModes;
   if (!TOOLKIT_RE.test(o.toolkit)) return null;
   const r = await readOnlyRunner(o.runner).run(["composio", "dev", "toolkits", "info", o.toolkit], { timeoutMs: o.timeoutMs ?? UNIVERSE_SCHEMA_TIMEOUT_MS, env: linkEnv(o.env) });
@@ -416,6 +416,8 @@ export function searchTools(idx: UniverseIndex, q: string, o: { toolkit?: string
 }
 
 export const toolsOf = (idx: UniverseIndex, toolkit: string): UniverseTool[] => Object.values(idx.tools).filter((t) => t.toolkit === toolkit);
+/** An own toolkit entry (never a prototype name such as "constructor"). */
+export const toolkitOf = (idx: UniverseIndex | null, slug: string): UniverseToolkit | undefined => (idx !== null && Object.hasOwn(idx.toolkits, slug) ? idx.toolkits[slug] : undefined);
 
 /** The toolkit for an app name or host, when one matches it well (exact name / slug, or a host label). */
 export function toolkitForApp(idx: UniverseIndex, nameOrHost: string): UniverseToolkit | null {

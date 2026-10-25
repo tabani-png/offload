@@ -175,8 +175,20 @@ enum ConnectionKeySaver {
   static func save(_ value: String, detail: ConnectionDetail, store: SecretStore, client: BrainClient) async throws -> ConnectionDetail {
     let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
     if let p = APIKeyEntry.problem(v) { throw SecretStoreError.invalid(p) }
-    try store.save(v, service: detail.keychainService, account: detail.keychainAccount)
-    return try await client.setupConnection(id: detail.row.id, .apiKey(service: detail.keychainService, account: detail.keychainAccount, baseURL: nil, healthPath: nil))
+    // The item is derived here from the connection id, never taken from the brain's answer: a wrong answer can
+    // never make the app overwrite another connection's key.
+    guard let item = keychainItem(for: detail.row.id) else { throw SecretStoreError.invalid("That connection cannot hold a key.") }
+    try store.save(v, service: item.service, account: item.account)
+    return try await client.setupConnection(id: detail.row.id, .apiKey(service: item.service, account: item.account, baseURL: nil, healthPath: nil))
+  }
+
+  static let servicePrefix = "offload.connection."
+  static let account = "api-key"
+
+  /// `offload.connection.<id>` / `api-key` for a plain connection id; nil for anything else.
+  static func keychainItem(for id: String) -> (service: String, account: String)? {
+    guard id.range(of: "^[a-z0-9][a-z0-9_-]{0,66}$", options: .regularExpression) != nil else { return nil }
+    return (servicePrefix + id, account)
   }
 }
 

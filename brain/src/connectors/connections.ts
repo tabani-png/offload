@@ -85,8 +85,8 @@ export function connectionInfo(id: string, idx: UniverseIndex | null): Connectio
     return { id, name: c.name, toolkit: tk, description: idx?.toolkits[tk]?.description ?? "", catalog: c };
   }
   const tk = toolkitOfUniverseId(id);
-  if (tk === null || tk === "composio") return null;
-  const t = idx?.toolkits[tk];
+  if (tk === null || tk === "composio" || idx === null || !Object.hasOwn(idx.toolkits, tk)) return null;
+  const t = idx.toolkits[tk];
   if (t === undefined) return null;
   // A toolkit the catalog maps is reached through its catalog id.
   if (connectionIdFor(tk) !== id) return null;
@@ -102,7 +102,7 @@ export function readConnections(home: string): Record<string, ConnectionRecord> 
     const v = JSON.parse(readFileSync(p, "utf8")) as { version?: unknown; connections?: unknown };
     if (v.version !== 1 || typeof v.connections !== "object" || v.connections === null) return {};
     const out: Record<string, ConnectionRecord> = {};
-    for (const [id, r] of Object.entries(v.connections as Record<string, ConnectionRecord>)) if ((connectorById(id) !== undefined || isUniverseId(id)) && SETUP_METHODS.includes(r.method)) out[id] = r;
+    for (const [id, r] of Object.entries(v.connections as Record<string, ConnectionRecord>)) if (isObj(r) && (connectorById(id) !== undefined || isUniverseId(id)) && SETUP_METHODS.includes(r.method)) out[id] = r;
     return out;
   } catch {
     return {};
@@ -128,6 +128,13 @@ const HEADER_RE = /^[A-Za-z0-9-]{1,64}$/;
 const ENV_NAME_RE = /^[A-Z_][A-Z0-9_]{0,63}$/;
 const ACCOUNT_RE = /^[A-Za-z0-9._@:+-]{1,64}$/;
 const PATH_RE = /^\/[A-Za-z0-9/_.~-]{0,200}$/;
+/** Settings a connection may name (fromEnv). */
+export const CONN_ENV_PREFIX = "OFFLOAD_CONN_";
+/** Programs a connector server may be started with; shells and code-from-arguments are refused. */
+const SERVER_PROGRAMS = new Set(["npx", "uvx", "bunx", "node", "python3", "docker"]);
+const CODE_FLAGS = /^(-c|-e|-p|--eval|--print|--exec|-x)$|^--(eval|exec|print)=/;
+/** Header names that change the request itself, never a sign-in. */
+const RESERVED_HEADERS = /^(host|cookie|content-length|transfer-encoding|connection|upgrade|te|trailer|proxy-.*)$/i;
 
 function httpsUrl(where: string, raw: unknown): string {
   if (typeof raw !== "string" || raw.length > 500) throw new SetupError(`${where} must be an address`);
@@ -141,6 +148,8 @@ function httpsUrl(where: string, raw: unknown): string {
   const loopback = u.hostname === "127.0.0.1" || u.hostname === "localhost";
   if (u.protocol !== "https:" && !(u.protocol === "http:" && loopback)) throw new SetupError(`${where} must start with https:// (plain http only on this Mac)`);
   if (u.username !== "" || u.password !== "") throw new SetupError(`${where} must not carry a user name or password`);
+  if (u.search !== "" || u.hash !== "") throw new SetupError(`${where} must not carry a query or fragment: a sign-in goes in the Keychain`);
+  if (u.pathname.split("/").some((seg) => seg.length >= 16 && /[A-Za-z]/.test(seg) && /[0-9]/.test(seg))) throw new SetupError(`${where} looks like it carries a secret in its path: put the secret in the Keychain and name it instead`);
   return raw;
 }
 
@@ -150,7 +159,8 @@ function ref(where: string, raw: unknown, id: string, account?: string): SecretR
   const err = secretRefError(where, raw);
   if (err !== null) throw new SetupError(err);
   if ("fromEnv" in raw) {
-    if (typeof raw.fromEnv !== "string" || !ENV_NAME_RE.test(raw.fromEnv)) throw new SetupError(`${where}.fromEnv must be a setting name`);
+    // Only settings made for connections: never one the brain already holds for itself (a model key, its own token).
+    if (typeof raw.fromEnv !== "string" || !ENV_NAME_RE.test(raw.fromEnv) || !raw.fromEnv.startsWith(CONN_ENV_PREFIX)) throw new SetupError(`${where}.fromEnv must be a setting whose name starts with ${CONN_ENV_PREFIX}`);
     return { fromEnv: raw.fromEnv };
   }
   const kc = raw.keychain as { service: string; account: string };
@@ -165,7 +175,7 @@ function refMap(where: string, raw: unknown, id: string, keyRe: RegExp): Record<
   if (!isObj(raw)) throw new SetupError(`${where} must be a map of names to references`);
   const out: Record<string, SecretRef> = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (!keyRe.test(k)) throw new SetupError(`${where} has a name that is not allowed`);
+    if (!keyRe.test(k) || RESERVED_HEADERS.test(k)) throw new SetupError(`${where} has a name that is not allowed`);
     out[k] = ref(`${where}.${k}`, v, id);
   }
   if (Object.keys(out).length > 20) throw new SetupError(`${where} has too many entries`);
@@ -217,7 +227,7 @@ export function parseSetup(id: string, toolkit: string | null, body: Obj, now: n
     }
     let header: string | null = null;
     if (body.header !== undefined && body.header !== null && body.header !== "") {
-      if (typeof body.header !== "string" || !HEADER_RE.test(body.header)) throw new SetupError("header must be a header name");
+      if (typeof body.header !== "string" || !HEADER_RE.test(body.header) || RESERVED_HEADERS.test(body.header)) throw new SetupError("header must be a sign-in header name");
       header = body.header;
     }
     return { ...base, api: { secret, baseUrl, healthPath, header } };
@@ -231,6 +241,11 @@ export function parseSetup(id: string, toolkit: string | null, body: Obj, now: n
   if (typeof body.command !== "string" || body.command.trim() === "" || body.command.length > 200 || /[\n\r]/.test(body.command)) throw new SetupError("command must be one program name or path");
   const args = body.args === undefined ? [] : body.args;
   if (!Array.isArray(args) || args.length > 40 || !args.every((a) => typeof a === "string" && a.length <= 500)) throw new SetupError("args must be a list of words");
+  // The test starts this program: only a package runner or an interpreter running a named package, never a shell, and
+  // never code passed in the arguments.
+  const program = body.command.trim();
+  if (!SERVER_PROGRAMS.has(program)) throw new SetupError(`command must be one of ${[...SERVER_PROGRAMS].join(", ")} (a shell or another program is not started)`);
+  if ((args as string[]).some((a) => CODE_FLAGS.test(a))) throw new SetupError("args must not pass code to run");
   return { ...base, server: { type: "stdio", command: body.command, args: args as string[], env: refMap("env", body.env, id, ENV_NAME_RE) } };
 }
 

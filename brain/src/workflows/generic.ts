@@ -192,7 +192,11 @@ export function parseGenericCommit(item: Pick<BatchItem, "commit">): GenericItem
   if (schema === undefined || argsJson === undefined || !/^[0-9a-f]{64}$/.test(schema) || c.fields.length !== 2) return null;
   try {
     const args = JSON.parse(argsJson) as unknown;
-    return isObj(args) ? { slug: c.verb.slice(GENERIC_VERB_PREFIX.length), schemaHash: schema, args, argsJson } : null;
+    if (!isObj(args)) return null;
+    // Only canonical bytes: what is executed is exactly what was hashed and shown (NFC, LF, sorted keys).
+    const norm = anyJson(args, "", 0);
+    if ("reason" in norm || sortedJson(norm.value) !== argsJson) return null;
+    return { slug: c.verb.slice(GENERIC_VERB_PREFIX.length), schemaHash: schema, args, argsJson };
   } catch {
     return null;
   }

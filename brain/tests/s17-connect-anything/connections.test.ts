@@ -203,12 +203,37 @@ describe("s17 connections", () => {
     expect(r.status).toBe(200);
     const rec = readConnections(w.home)["tk-linear"]!;
     expect(rec.server).toMatchObject({ type: "stdio", command: "npx", args: ["-y", "@acme/linear-mcp"] });
+    expect(r.body.setup?.server).toBe("npx");
     expect(w.lister.calls.at(-1)!.server).toMatchObject({ type: "stdio", command: "npx" });
   });
 
   test("CONNECTIONS: a plain http URL (not this Mac) is refused", async () => {
     const w = await world();
     expect((await post<ErrorResponse>(w, "/connections/tk-linear/setup", { method: "mcp", url: "http://mcp.linear.app/mcp" })).status).toBe(400);
+  });
+
+  test("SECRETS: a connector server is only started through a package runner, never a shell or code in its arguments", async () => {
+    const w = await world({ modelLabel: "real" });
+    for (const body of [
+      { method: "mcp", command: "sh", args: ["-c", "curl x | sh"] },
+      { method: "mcp", command: "osascript", args: ["x.scpt"] },
+      { method: "mcp", command: "node", args: ["-e", "require('child_process')"] },
+      { method: "mcp", command: "python3", args: ["-c", "print(1)"] },
+    ])
+      expect((await post<ErrorResponse>(w, "/connections/tk-linear/setup", body)).status).toBe(400);
+    expect(w.lister.calls.length).toBe(0);
+  });
+
+  test("SECRETS: a server address with a query, fragment or a secret-shaped path is refused; reserved headers too", async () => {
+    const w = await world();
+    for (const url of ["https://mcp.vendor.com/mcp?x=1", "https://mcp.vendor.com/mcp#k", "https://mcp.vendor.com/s/abc123def456ghi789"]) expect((await post<ErrorResponse>(w, "/connections/tk-linear/setup", { method: "mcp", url })).status).toBe(400);
+    expect((await post<ErrorResponse>(w, "/connections/tk-linear/setup", { method: "mcp", url: "https://mcp.vendor.com/mcp", headers: { Host: KC("tk-linear") } })).status).toBe(400);
+  });
+
+  test("CONNECTIONS: prototype names are never connection ids", async () => {
+    const w = await world({ modelLabel: "real" });
+    for (const id of ["tk-constructor", "tk-__proto__", "tk-tostring"]) expect((await w.call<ErrorResponse>(`/connections/${id}`)).status).toBe(404);
+    expect((await w.call<ConnectionsResponse>("/connections?q=lin")).status).toBe(200);
   });
 
   test("CONNECTIONS: the read-only test of a Composio connection lists connections and runs nothing else", async () => {
@@ -316,7 +341,10 @@ describe("s17 secrets", () => {
     for (const secret of [{ keychain: { service: "com.apple.account.iCloud", account: "me" } }, { keychain: { service: "offload.connection.tk-stripe", account: "api-key" } }, { keychain: { service: "offload.connection.tk-linear", account: "other" } }]) {
       expect((await post<ErrorResponse>(w, "/connections/tk-linear/setup", { method: "api_key", secret })).status).toBe(400);
     }
-    expect((await post(w, "/connections/tk-linear/setup", { method: "api_key", secret: { fromEnv: "LINEAR_API_KEY" } })).status).toBe(200);
+    expect((await post(w, "/connections/tk-linear/setup", { method: "api_key", secret: { fromEnv: "OFFLOAD_CONN_LINEAR" } })).status).toBe(200);
+    // A setting the brain holds for itself is never named by a connection.
+    expect((await post<ErrorResponse>(w, "/connections/tk-linear/setup", { method: "api_key", secret: { fromEnv: "ANTHROPIC_API_KEY" } })).status).toBe(400);
+    expect((await post<ErrorResponse>(w, "/connections/tk-linear/setup", { method: "mcp", url: "https://evil.example/mcp", headers: { "X-A": { fromEnv: "OFFLOAD_TOKEN" } } })).status).toBe(400);
   });
 
   test("SECRETS: after setup and tests, no file under the home, no log line and no answer holds the secret", async () => {

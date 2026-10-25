@@ -83,7 +83,13 @@ dry run), s16 (hand-written commit policies, the reply/draft name rule).
    test reads the item only in memory for one request (`security find-generic-password ... -w`, s13's reader) or checks
    that it exists without reading it (`security find-generic-password -s -a`, no `-w`). Connector servers: https URL
    or a command with arguments, scanned with s05's secret patterns, headers and env values only as references; the
-   test lists its tools (`tools/list`, nothing called).
+   test lists its tools (`tools/list`, nothing called). Review hardening (independent security review, 2026-10-25): an env
+   reference must name an `OFFLOAD_CONN_*` setting (never one the brain holds for itself, such as a model key); a
+   command must be one of npx, uvx, bunx, node, python3, docker, with no code-passing flag (-c, -e, --eval, ...);
+   addresses carry no query, fragment or secret-shaped path segment; reserved headers (Host, Cookie, ...) are refused;
+   the HTTP probe follows no redirect; the detail echoes a command's name, never its arguments; prototype names are
+   never ids; the app derives the Keychain item from the connection id itself and ignores the brain's answer for it;
+   a generic item whose bytes are not canonical is not an approved call.
 9. **Build workflow, no extra steps.** `POST /connections/:id/build {insightId?}`: the insight is the given one, else
    the top insight whose task happens in that app (host / app name vs toolkit), else 409 with plain words. It drafts
    the workflow (s14 general plan, or the s05 template), picks the connection for the step it fits (the existing
@@ -95,7 +101,7 @@ dry run), s16 (hand-written commit policies, the reply/draft name rule).
     allows it. Plan workflows still have no live batches (s14 gap); this path is exercised with constructed batches.
 
 ## paths_in_scope
-`brain/src/connectors/{universe,connections,composio,targets,chain,link,config}.ts`, `brain/src/workflows/generic.ts`,
+`brain/src/connectors/{universe,connections,composio,targets,chain,link,config,mcp-probe}.ts` (mcp-probe: no redirects), `brain/src/workflows/generic.ts`,
 `brain/src/workflows/allowlist.ts` (policy lookup only: generic fallback after the static table, export of the name
 rules), `brain/src/workflows/chain-executor.ts`, `brain/src/workflows/drafter.ts` (universe passed to recommendations),
 `brain/src/plan/{tools,commit-fields,dryrun}.ts`, `brain/src/api/{connections-routes,server,types,workflow-routes}.ts`,

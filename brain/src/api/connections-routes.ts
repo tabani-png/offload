@@ -15,7 +15,7 @@ import { catalogStatus, loadConnectorsConfig, type ConnectorStatus, type Env } f
 import { CONNECTORS } from "../connectors/catalog.ts";
 import { LinkNotFound, readSim, type Linker } from "../connectors/link.ts";
 import { universeTargetId } from "../connectors/targets.ts";
-import { fetchSchema, matchScore, readUniverse, syncUniverse, toolkitAuthModes, toolsOf, universeStatus, type UniverseIndex, type UniverseTool } from "../connectors/universe.ts";
+import { fetchSchema, matchScore, toolkitOf, readUniverse, syncUniverse, toolkitAuthModes, toolsOf, universeStatus, type UniverseIndex, type UniverseTool } from "../connectors/universe.ts";
 import { readUserContext } from "../context/store.ts";
 import { DEFAULT_MODELS, loadModelConfig, type Model, type ModelConfig } from "../models/model.ts";
 import { chooseTool, universeOption, universeTools, type StepToolsDTO, type ToolOptionDTO } from "../plan/tools.ts";
@@ -173,7 +173,7 @@ async function detail(ctx: ConnectionsContext, info: ConnectionInfo): Promise<Co
   let idx = readUniverse(ctx.home);
   const w = statusWorld(ctx);
   // Composio's auth modes: read-only `dev toolkits info`, real model only; the demo answers from the cache.
-  let modes: string[] | null = info.toolkit === null ? null : (idx?.toolkits[info.toolkit]?.authModes ?? null);
+  let modes: string[] | null = info.toolkit === null ? null : (toolkitOf(idx, info.toolkit)?.authModes ?? null);
   if (modes === null && info.toolkit !== null && ctx.modelLabel === "real") {
     modes = await toolkitAuthModes({ home: ctx.home, runner: ctx.resolver.deps.runner, env: ctx.env, toolkit: info.toolkit });
     idx = readUniverse(ctx.home);
@@ -195,7 +195,8 @@ async function detail(ctx: ConnectionsContext, info: ConnectionInfo): Promise<Co
             method: rec.method,
             startedAt: rec.startedAt,
             secretRef: rec.api !== undefined ? secretWhere(rec.api.secret) : null,
-            server: rec.server === undefined ? null : rec.server.type === "http" ? rec.server.url : [rec.server.command, ...rec.server.args].join(" "),
+            // The command only: arguments are never echoed (they may carry what the scan missed).
+            server: rec.server === undefined ? null : rec.server.type === "http" ? rec.server.url : rec.server.command,
             test: rec.test,
           },
     keychain: keychainRefFor(info.id),
