@@ -178,13 +178,17 @@ struct ReviewCopy: Equatable, Sendable {
   var diffNote: String
   var items: [Item]
   var emptyDryRun: String
+  /// s14: "With Instantly and Google Sheets": the tools this dry run stood for.
+  var dryRunWith: String?
+  /// s14: each step's tool suggestion, by step id.
+  var tools: [String: ToolsCopy] = [:]
 
   init(workflow w: Workflow, dryRun: DryRun?, running: Bool = false) {
     status = w.state.label
     title = w.name
     summary = PlainWords.clean(w.summary)
     savingChip = Figures.saves(value: w.estimatedHoursPerWeek, arithmetic: w.arithmetic.isEmpty ? nil : w.arithmetic)
-    schedule = ScheduleCopy.line(summary: w.schedule.summary, batchSize: w.schedule.batchSize)
+    schedule = ScheduleCopy.line(summary: w.schedule.summary, batchSize: w.schedule.batchSize, unit: w.plan == nil ? "emails" : "items")
     let gates = w.steps.filter(\.isGate).count
     stepsTrailing = "\(w.steps.count) steps" + (gates > 0 ? " · you approve each batch" : "")
     steps = w.steps.enumerated().map { i, s in
@@ -228,6 +232,9 @@ struct ReviewCopy: Equatable, Sendable {
       dryRunTrailing = running ? "Re-doing last week's real examples…" : ""
     }
     emptyDryRun = running ? "Re-doing last week's real examples…" : "No dry run yet. Press R to run one."
+    dryRunWith = ToolsCopy.with(dryRun?.tools)
+    if let with = dryRunWith, dryRun != nil { dryRunTrailing = "\(with) · \(dryRunTrailing)" }
+    for t in w.tools { tools[t.stepId] = ToolsCopy(t, connectors: w.connectors) }
     items = (dryRun?.items ?? []).map {
       Item(id: $0.id, who: $0.recipient.display, subject: Self.subject($0.subject, org: $0.recipient.org),
            time: Figures.itemTime(observedMinutes: $0.observedMinutes, reviewSeconds: $0.reviewSeconds),
@@ -249,7 +256,8 @@ struct ReviewCopy: Equatable, Sendable {
 
   var allStrings: [String] {
     [status, title, summary, savingChip ?? "", schedule, stepsTitle, stepsTrailing, dryRunTitle, dryRunTrailing,
-     sampleChip ?? "", oursTitle, diffNote, emptyDryRun]
+     sampleChip ?? "", oursTitle, diffNote, emptyDryRun, dryRunWith ?? ""]
+      + tools.values.flatMap(\.allStrings)
       + steps.flatMap { [$0.number, $0.title, $0.detail, $0.place] }
       + items.flatMap { [$0.who, $0.subject, $0.time, $0.saved, $0.theirsTitle, $0.check ?? ""] }
   }
@@ -437,4 +445,183 @@ extension TimelineLayout {
 
   /// Tick hours, every 2 h from the start, the end included.
   var ticks: [Int] { Array(stride(from: startHour, through: endHour, by: 2)) }
+}
+
+// MARK: s14 plan and generic dry run
+
+/// The review's steps for a general workflow: the chosen variant's typed steps, and the choice between the two
+/// variants with how closely each matched what you did last week.
+struct PlanCopy: Equatable, Sendable {
+  struct Step: Equatable, Sendable, Identifiable {
+    var id: String
+    var number: String
+    var type: PlanStepType
+    var badge: String
+    var title: String
+    var detail: String
+    /// The capability need in plain words ("create bill in Xero"), tertiary.
+    var need: String?
+    /// Where it runs: the target app or site, or "On this Mac" for local steps.
+    var place: String
+    /// Commit steps: nothing is written before you approve.
+    var approval: Bool
+    /// Conditional steps: "Runs when the invoice names a purchase order".
+    var when: String?
+  }
+
+  struct Choice: Equatable, Sendable, Identifiable {
+    var id: String
+    var number: Int
+    /// "Every step you take · 97% of your steps"
+    var title: String
+    var summary: String
+    /// The probe's arithmetic for this variant.
+    var arithmetic: String
+    var chosen: Bool
+  }
+
+  var stepsTitle = "Steps"
+  var stepsTrailing: String
+  var steps: [Step]
+  var choicesTitle = "Two ways to do it"
+  var choicesTrailing = "Press 1 or 2 to choose"
+  var choices: [Choice]
+  /// Why this one: the probe's reason, or that you picked it.
+  var reason: String
+  /// Text-producing outputs show "Your voice"; fields, rows and records do not.
+  var writesText: Bool
+
+  static let approvalNote = "after your approval"
+  static let localPlace = "On this Mac"
+
+  init(plan: WorkflowPlan) {
+    let chosen = plan.chosenVariant
+    let list = chosen?.steps ?? []
+    steps = list.enumerated().map { i, s in
+      let when = s.when.map(Self.when)
+      return Step(id: s.id, number: "\(i + 1)", type: s.kind, badge: s.kind.badge, title: PlainWords.clean(s.title),
+                  detail: PlainWords.clean(s.detail), need: s.capability.map { PlainWords.clean($0.need) },
+                  place: s.capability?.targetName ?? Self.localPlace, approval: s.gated || s.kind == .commit, when: when)
+    }
+    let approvals = steps.filter(\.approval).count
+    stepsTrailing = "\(steps.count) steps" + (approvals > 0 ? " · nothing is saved before you approve" : "")
+    choices = plan.variants.enumerated().map { i, v in
+      let score = plan.score(v.id)
+      let title = score.map { "\(v.label) · \(Format.percent($0.agreement)) of your steps" } ?? v.label
+      return Choice(id: v.id, number: i + 1, title: title, summary: PlainWords.clean(v.summary),
+                    arithmetic: score?.arithmetic ?? "", chosen: v.id == (chosen?.id ?? plan.chosen))
+    }
+    let why = plan.reason.trimmingCharacters(in: .whitespaces)
+    if plan.pickedByYou {
+      reason = "You picked this one." + (why.isEmpty ? "" : " The dry run measured: \(why).")
+    } else {
+      reason = why.isEmpty ? "Picked by the dry run." : "Picked by the dry run: \(why)."
+    }
+    writesText = plan.output?.writesText ?? false
+  }
+
+  /// "when the invoice names a purchase order" → "Runs when the invoice names a purchase order".
+  static func when(_ s: String) -> String {
+    let t = s.trimmingCharacters(in: .whitespaces)
+    let lower = t.lowercased()
+    if lower.hasPrefix("when ") || lower.hasPrefix("if ") || lower.hasPrefix("only ") { return "Runs " + lower.prefix(1) + t.dropFirst() }
+    return BrainError.sentence(t)
+  }
+
+  var allStrings: [String] {
+    var out: [String] = [stepsTitle, stepsTrailing, choicesTitle, choicesTrailing, reason, Self.approvalNote, Self.localPlace]
+    for st in steps { out += [st.number, st.badge, st.title, st.detail, st.need ?? "", st.place, st.when ?? ""] }
+    for c in choices { out += [c.title, c.summary, c.arithmetic] }
+    return out
+  }
+}
+
+/// The generic dry run: per instance, what Offload would do next to what you did, and how many fields match.
+struct GeneralDryRunCopy: Equatable, Sendable {
+  struct Row: Equatable, Sendable, Identifiable {
+    var id: String { label + "|" + value }
+    var label: String
+    var value: String
+    /// The screen showed the field was filled but not its value.
+    var hidden: Bool
+    /// "What you did" rows whose value differs from Offload's for the same label (an amber dot marks them).
+    var differs = false
+  }
+
+  struct Side: Equatable, Sendable {
+    var title: String
+    var summary: String
+    var rows: [Row]
+    var text: String?
+    var actions: [String]
+  }
+
+  struct Item: Equatable, Sendable, Identifiable {
+    var id: String
+    var heading: String
+    var time: String
+    var saved: String
+    var ours: Side
+    var theirs: Side
+    /// "5 of 5 match"
+    var matchChip: String
+    /// The brain's arithmetic, verbatim.
+    var matchLine: String
+    /// Green when every field matches, amber when one differs (colour is state only).
+    var matchRole: StatusRole
+    var warnings: [String]
+  }
+
+  static let oursTitle = "What Offload would do"
+  static let hiddenValue = "filled, value not visible"
+
+  var items: [Item]
+  var totals: String
+  var trailing: String
+
+  init(_ g: GeneralDryRun, ranAt: Date) {
+    items = g.instances.map { i in
+      var theirs = Self.side("What you did · \(Format.weekdayClock(i.startDate))", i.theirs)
+      let ours = Dictionary(i.ours.fields.map { ($0.label.lowercased(), $0.value) }, uniquingKeysWith: { a, _ in a })
+      for k in theirs.rows.indices where !theirs.rows[k].hidden {
+        if let o = ours[theirs.rows[k].label.lowercased()], let v = o, v != theirs.rows[k].value { theirs.rows[k].differs = true }
+      }
+      return Item(id: i.instanceId, heading: i.ours.summary, time: Figures.itemTime(observedMinutes: i.estimate.observedMinutes,
+                                                                            reviewSeconds: i.estimate.reviewSeconds),
+           saved: Figures.minutesSaved(i.estimate.savedMinutes),
+           ours: Self.side(Self.oursTitle, i.ours),
+           theirs: theirs,
+           matchChip: "\(i.match.matched) of \(i.match.total) match", matchLine: i.match.arithmetic,
+           matchRole: Self.role(i.match), warnings: i.warnings)
+    }
+    totals = g.totals.arithmetic
+    let n = g.instances.count
+    let what = n == 1 ? "1 real example from last week" : "\(n) real examples from last week"
+    trailing = "\(what) · ran \(Format.clock(ranAt)) · nothing was saved"
+  }
+
+  static func role(_ m: GeneralDryRunInstance.Match) -> StatusRole {
+    m.total > 0 && m.matched >= m.total ? .done : .needsYou
+  }
+
+  static func side(_ title: String, _ o: PlanOutput) -> Side {
+    Side(title: title, summary: o.summary,
+         rows: o.fields.map { Row(label: $0.label, value: $0.value ?? hiddenValue, hidden: $0.value == nil) },
+         text: o.text.flatMap { $0.isEmpty ? nil : $0 },
+         actions: o.actions.map { $0.prefix(1).uppercased() + $0.dropFirst() })
+  }
+
+  var allStrings: [String] {
+    var out: [String] = [Self.oursTitle, Self.hiddenValue, totals, trailing]
+    for i in items {
+      out += [i.heading, i.time, i.saved, i.matchChip, i.matchLine]
+      out += i.warnings
+      for side in [i.ours, i.theirs] {
+        out += [side.title, side.summary] + side.actions
+        out += side.rows.flatMap { [$0.label, $0.value] }
+        if let t = side.text { out.append(t) }
+      }
+    }
+    return out
+  }
 }

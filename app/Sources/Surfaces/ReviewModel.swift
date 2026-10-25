@@ -35,6 +35,11 @@ final class ReviewModel: ObservableObject {
   @Published private(set) var connect: ConnectSession?
   /// s10e: "Edit notes" under the voice facts shows the text box.
   @Published var editingVoice = false
+  /// s14: POST /workflows/:id/plan is in flight.
+  @Published private(set) var choosingPlan = false
+  /// s14: keyboard focus on a step's tool row (T), and a POST /workflows/:id/tools in flight.
+  @Published private(set) var toolFocus: ToolFocus?
+  @Published private(set) var choosingTool = false
   var onOpenURL: ((URL) -> Void)?
 
   var onApproved: ((Workflow) -> Void)?
@@ -162,6 +167,69 @@ final class ReviewModel: ObservableObject {
                     gates: w.steps.filter(\.isGate).map(\.id),
                     limits: .init(descriptionChars: 400, titleChars: 80, detailChars: 400))
   }
+
+  /// s14: the typed plan of a general workflow, and the generic dry run. nil for the email workflows.
+  var planCopy: PlanCopy? { workflow.plan.map { PlanCopy(plan: $0) } }
+  var generalCopy: GeneralDryRunCopy? {
+    guard let d = dryRun, let g = d.general else { return nil }
+    return GeneralDryRunCopy(g, ranAt: d.ranAt)
+  }
+
+  /// s14: keep the other variant (1 or 2, or a click). The brain answers with the workflow detail.
+  func choosePlan(_ variant: String) {
+    guard let plan = workflow.plan, plan.chosen != variant, !choosingPlan,
+          let v = plan.variants.first(where: { $0.id == variant }) else { return }
+    choosingPlan = true
+    let id = workflow.id
+    Task {
+      defer { choosingPlan = false }
+      do {
+        var w = try await client.choosePlan(workflowId: id, variant: variant)
+        w.toneCard = workflow.toneCard
+        w.toneEdited = workflow.toneEdited
+        if w.batchHash.isEmpty { w.batchHash = workflow.batchHash }
+        flow.replaceWorkflow(w)
+        message = "Using \(v.label.lowercased()). Press R to run the dry run with it."
+      } catch {
+        message = "The plan was not changed. \(BrainError.message(for: error))"
+      }
+    }
+  }
+
+  /// s14: T moves the focus to the next step's tool row.
+  func focusNextTool() { toolFocus = ToolFocus.next(after: toolFocus, tools: workflow.tools) }
+  func moveTool(_ delta: Int) { toolFocus?.move(delta, tools: workflow.tools) }
+  func clearToolFocus() { toolFocus = nil }
+
+  /// ↩ on a focused tool row: keep the option under the focus.
+  func confirmTool() {
+    guard let f = toolFocus else { return }
+    if let p = f.pick(workflow.tools) { chooseTool(stepId: p.stepId, toolId: p.toolId) } else { toolFocus = nil }
+  }
+
+  /// Keep another tool for a step. The brain resets the dry run, so the review asks for a new one.
+  func chooseTool(stepId: String, toolId: String) {
+    guard !choosingTool, let t = workflow.tools.first(where: { $0.stepId == stepId }), t.chosen != toolId else { return }
+    choosingTool = true
+    let id = workflow.id
+    Task {
+      defer { choosingTool = false }
+      do {
+        var w = try await client.chooseTool(workflowId: id, stepId: stepId, toolId: toolId)
+        w.toneCard = workflow.toneCard
+        w.toneEdited = workflow.toneEdited
+        flow.replaceWorkflow(w)
+        dryRun = nil
+        toolFocus = nil
+        message = ToolsCopy.changed
+      } catch {
+        message = "The tool was not changed. \(BrainError.message(for: error))"
+      }
+    }
+  }
+
+  /// Snapshots: the focus on a step's row at an option.
+  func previewToolFocus(_ f: ToolFocus?) { toolFocus = f }
 
   /// Every string the window shows (s10a).
   var copy: ReviewCopy { ReviewCopy(workflow: workflow, dryRun: dryRun, running: runningDryRun) }

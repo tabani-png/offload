@@ -87,7 +87,44 @@ enum Snapshotter {
       ("card-undo", card(undo)),
       ("card-empty", card(empty)),
       ("scene", AnyView(Scene(state: base, now: now, rail: rail))),
-    ] + s08Surfaces() + s09aSurfaces() + s10eSurfaces()
+    ] + s08Surfaces() + s09aSurfaces() + s10eSurfaces() + s14Surfaces()
+  }
+
+  // MARK: s14 fixtures
+
+  static func s14Surfaces() -> [(String, AnyView)] {
+    var filled = ContextStepState()
+    filled.choose(.role, "Bookkeeper")
+    filled.set(.industry, "Accounting for small clinics")
+    let plan = ReviewModel(workflow: MockBrainClient.billWorkflow, dryRun: MockBrainClient.billDryRun,
+                           client: MockBrainClient(), clock: { reviewNow })
+    return [
+      ("onboarding-context", onboardingChrome(onboardingModel(.context))),
+      ("onboarding-context-filled", onboardingChrome(onboardingModel(.context, context: filled))),
+      ("onboarding-context-claude", onboardingChrome(onboardingModel(.context, context: filled, claudeVision: true))),
+      ("dashboard-observing-claude", {
+        var d = MockBrainClient.sampleDashboard
+        d.observing.captioner = CaptionerStatus(enabled: true, captioner: "claude", model: "claude-sonnet-5-5", healthy: true,
+                                                usage: .init(frames: 42, inputTokens: 61_200, outputTokens: 8_400, lastFrame: nil))
+        let m = dashboardModel(section: .observing, data: d)
+        m.claudeVision = true
+        return dashboardScene(m)
+      }()),
+      ("dashboard-models", {
+        var d = MockBrainClient.sampleDashboard
+        d.observing.models = ModelsStatus(backend: "api", metered: true, month: "2026-10", spentUsd: 1.24, budgetUsd: 20,
+                                          captionsLocal: true, blocked: false, needsYou: nil, routes: [:])
+        return dashboardScene(dashboardModel(section: .observing, data: d))
+      }()),
+      ("review-tools", {
+        let m = ReviewModel(workflow: MockBrainClient.outreachToolsWorkflow, dryRun: MockBrainClient.outreachToolsDryRun,
+                            client: MockBrainClient(), clock: { reviewNow })
+        m.previewToolFocus(ToolFocus(stepId: "s7", index: 1))
+        return reviewChrome(m) { ReviewView(model: m, parts: [.steps]) }
+      }()),
+      ("review-plan", reviewChrome(plan) { ReviewView(model: plan, parts: [.header, .steps, .tone]) }),
+      ("review-dryrun-general", reviewChrome(plan) { ReviewView(model: plan, parts: [.dryRun]) }),
+    ]
   }
 
   // MARK: s10e fixtures
@@ -136,9 +173,10 @@ enum Snapshotter {
   // MARK: s09a fixtures
 
   static func onboardingModel(_ step: OnboardingStep, permissions: [PermissionState]? = nil,
-                              granted: [PermissionState]? = nil) -> OnboardingModel {
+                              granted: [PermissionState]? = nil, context: ContextStepState? = nil,
+                              claudeVision: Bool = false) -> OnboardingModel {
     let m = OnboardingModel(readPermissions: { [] })
-    m.preview(step: step, permissions: permissions, granted: granted)
+    m.preview(step: step, permissions: permissions, granted: granted, context: context, claudeVision: claudeVision)
     return m
   }
 

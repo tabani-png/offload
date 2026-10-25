@@ -18,6 +18,22 @@ final class DashboardModel: ObservableObject {
   /// s10e: the connect sheet while it is up, and which week the timeline shows.
   @Published private(set) var connect: ConnectSession?
   @Published var week: TimelineWeek = .this
+  /// s14: needs-you lines that belong to Offload itself, not to an automation (local models not running).
+  @Published var notices: [String] = []
+  /// s14: the Claude captioner opt-in, and a tertiary note when the change waits for the next launch.
+  @Published var claudeVision = false
+  @Published var claudeVisionNote: String?
+  var onClaudeVision: ((Bool) -> Void)?
+
+  /// Offload's own needs-you lines plus the captioner's (GET /status captioner.needsYou).
+  var allNotices: [String] {
+    notices + [data?.observing.captioner?.needsYouLine, data?.observing.models?.needsYouLine].compactMap { $0 }
+  }
+
+  func toggleClaudeVision() {
+    claudeVision.toggle()
+    onClaudeVision?(claudeVision)
+  }
 
   /// A sheet is up (auto-send or connect): the window behind is dimmed and keys go to the sheet.
   var sheetUp: Bool { autoSend != nil || connect != nil }

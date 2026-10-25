@@ -158,10 +158,11 @@ enum ScheduleCopy {
 
   /// "Weekdays at 09:00, up to 8 emails a batch." or, for a full sentence from the brain,
   /// "Weekdays at 09:00 a new batch is drafted and waits for your review. Up to 20 emails a batch."
-  static func line(summary: String, batchSize: Int) -> String {
+  /// s14: `unit` is "items" for a general (plan) workflow, which may not write email at all.
+  static func line(summary: String, batchSize: Int, unit: String = "emails") -> String {
     let n = note(summary)
     guard batchSize > 0 else { return n.isEmpty ? "Runs when you start it." : "\(n)." }
-    let batch = "up to \(Figures.count(batchSize, "emails")) a batch"
+    let batch = "up to \(Figures.count(batchSize, unit)) a batch"
     if n.isEmpty { return BrainError.sentence(batch) }
     if n.split(separator: " ").count > 5 { return "\(n). \(BrainError.sentence(batch))" }
     return "\(n), \(batch)."

@@ -272,6 +272,29 @@ struct HTTPBrainClient: BrainClient {
     }
   }
 
+  // MARK: s14
+
+  /// GET /context: your role and industry and the brain's suggestion chips.
+  func getContext() async throws -> ContextResponse { try await get(ContextResponse.self, "context") }
+
+  /// PUT /context {role?, industry?}: only the keys with a value are sent (the app never sends an empty body).
+  func putContext(_ context: UserContext) async throws -> ContextResponse {
+    try await call(ContextResponse.self, "PUT", "context", body: context.body)
+  }
+
+  /// POST /workflows/:id/plan {variant}: keep the other variant; the brain answers with the workflow detail.
+  func choosePlan(workflowId: String, variant: String) async throws -> Workflow {
+    let dto = try await call(WorkflowDTO.self, "POST", "workflows/\(Self.segment(workflowId))/plan", body: PlanChoice.body(variant))
+    return dto.toWorkflow(dryRunHash: dto.pendingDryRunHash)
+  }
+
+  /// POST /workflows/:id/tools {stepId, toolId}: keep another tool for a step. The detail comes back; its dry run is reset.
+  func chooseTool(workflowId: String, stepId: String, toolId: String) async throws -> Workflow {
+    let dto = try await call(WorkflowDTO.self, "POST", "workflows/\(Self.segment(workflowId))/tools",
+                             body: ToolFocus.body(stepId: stepId, toolId: toolId))
+    return dto.toWorkflow(dryRunHash: dto.pendingDryRunHash)
+  }
+
   /// Permission rows: the brain's GET /observer first, then the app's own observer CLI.
   func permissionRows() async -> [PermissionState] {
     if let r = try? await observer() { return r.permissionRows() }
@@ -375,7 +398,7 @@ enum DashboardComposer {
     let observing = ObservingState(
       state: ObserverState(wire: s.observer.state), daysStored: s.store.days.count, keepDays: s.retention.keepDays,
       nextPurgeDay: s.retention.nextPurgeDay, nextPurgeAt: s.retention.nextPurgeAt.map(BrainWire.date(ms:)),
-      permissions: permissions)
+      permissions: permissions, captioner: s.captioner, models: s.models)
     return DashboardData(automations: autos, hours: d.hoursSaved, observing: observing, tasks: tasks, days: days)
   }
 }

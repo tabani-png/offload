@@ -5,12 +5,14 @@ import Foundation
 // who wants to see an insight now.
 
 enum OnboardingStep: Int, CaseIterable, Sendable {
-  case watches, permissions, comeBack
+  /// s14: `context` is the optional "What do you do?" step (role and industry), between permissions and come back.
+  case watches, permissions, context, comeBack
 
   var title: String {
     switch self {
     case .watches: return "Offload watches how you work, on this Mac"
     case .permissions: return "Allow what it needs"
+    case .context: return ContextStepState.title
     case .comeBack: return "Come back in a few days"
     }
   }
@@ -23,6 +25,8 @@ struct OnboardingFlow: Equatable, Sendable {
   private(set) var permissions: [PermissionState] = PermissionState.unknownRows
   /// Kinds that turned on while this window was open, for the tick.
   private(set) var justGranted: Set<PermissionKind> = []
+  /// s14: the context step's two fields.
+  var context = ContextStepState()
 
   static let watches: [String] = [
     "Which app and window are in front, and for how long",
@@ -48,6 +52,21 @@ struct OnboardingFlow: Equatable, Sendable {
     if let p = OnboardingStep(rawValue: step.rawValue - 1) { step = p }
   }
 
+  /// s14: Continue on the context step: moves on and returns what to send (nil when both fields are empty).
+  mutating func continueContext() -> UserContext? {
+    guard step == .context else { return nil }
+    let c = context.context
+    next()
+    return c
+  }
+
+  /// s14: Skip on the context step: moves on, the fields are cleared and nothing is sent.
+  mutating func skipContext() {
+    guard step == .context else { return }
+    context = ContextStepState()
+    next()
+  }
+
   var isLast: Bool { step == .comeBack }
   var isFirst: Bool { step == .watches }
 
@@ -70,6 +89,7 @@ struct OnboardingFlow: Equatable, Sendable {
     switch step {
     case .watches: return "Continue"
     case .permissions: return requiredMissing.isEmpty ? "Continue" : "Continue for now"
+    case .context: return "Continue"
     case .comeBack: return "Done"
     }
   }

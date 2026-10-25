@@ -107,6 +107,10 @@ struct Workflow: Codable, Equatable, Identifiable, Sendable {
   var autoRun: Bool = false
   /// s10d: the workflow's folder on this Mac (GET /workflows/:id `path`), for "Show in Finder".
   var path: String = ""
+  /// s14: the general workflow's typed plan (GET /workflows/:id `plan`). nil for the email workflows.
+  var plan: WorkflowPlan? = nil
+  /// s14: tool suggestions per step (GET /workflows/:id `tools`). Empty from older brains.
+  var tools: [StepTools] = []
 
   var gate: WorkflowStep? { steps.first(where: \.isGate) }
 
@@ -146,6 +150,10 @@ struct DryRun: Codable, Equatable, Sendable {
   var batchHash: String = ""
   /// s09b: which model wrote the drafts ("stub" = the offline sample model, "real" = Claude). nil from older brains.
   var model: String? = nil
+  /// s14: the generic dry run (ours against theirs for any output type). nil for the email workflows.
+  var general: GeneralDryRun? = nil
+  /// s14: the tool each step stood for in this dry run.
+  var tools: [DryRunTool]? = nil
 
   /// Drafts from the stub model are samples, and the window says so.
   var isSample: Bool { model == "stub" }

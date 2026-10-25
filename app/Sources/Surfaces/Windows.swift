@@ -137,6 +137,28 @@ final class ReviewWindowController: TitledWindowController {
   override func handleKey(_ e: NSEvent) -> Bool {
     guard owns(e) else { return false }
     let editing = (e.window?.firstResponder as? NSTextView)?.isEditable == true
+    // s14: T focuses the next step's tool row; while one is focused, ← → pick, ↩ keeps it, esc leaves the row.
+    if model.sheet == nil, !editing, e.flags.intersection([.command, .control, .option]).isEmpty {
+      if e.charactersIgnoringModifiers?.lowercased() == "t", !model.workflow.tools.isEmpty {
+        model.focusNextTool()
+        return true
+      }
+      if model.toolFocus != nil {
+        switch e.keyCode {
+        case 123: model.moveTool(-1); return true
+        case 124: model.moveTool(1); return true
+        case ReviewKey.escapeKeyCode: model.clearToolFocus(); return true
+        default:
+          if ReviewKey.returnKeyCodes.contains(e.keyCode) { model.confirmTool(); return true }
+        }
+      }
+    }
+    // s14: 1 and 2 keep the plan's first or second variant (only with no sheet up and nothing being typed).
+    if model.sheet == nil, !editing, e.flags.intersection([.command, .control, .option]).isEmpty,
+       let v = PlanChoice.variant(forKey: e.charactersIgnoringModifiers ?? "", plan: model.workflow.plan) {
+      model.choosePlan(v)
+      return true
+    }
     guard let key = ReviewKey(characters: e.charactersIgnoringModifiers ?? "", keyCode: e.keyCode,
                               command: e.flags.contains(.command), control: e.flags.contains(.control),
                               option: e.flags.contains(.option), textEditing: editing) else { return false }

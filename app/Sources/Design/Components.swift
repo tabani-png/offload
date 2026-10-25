@@ -412,3 +412,49 @@ struct EmptyState: View {
     .accessibilityElement(children: .combine)
   }
 }
+
+// MARK: OptInRow (s14)
+
+/// A labelled on/off switch for an opt-in. Drawn by hand (offscreen snapshots cannot draw an AppKit switch). On is
+/// the working blue (a state); off is the neutral track. Never the white primary.
+struct OptInRow: View {
+  var title: String
+  var isOn: Bool
+  /// Tertiary line under the title ("Applies the next time Offload starts").
+  var note: String? = nil
+  /// The key that toggles it, shown as a Keycap.
+  var key: String? = nil
+  var action: () -> Void
+  @Environment(\.colorScheme) private var scheme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    Button(action: action) {
+      HStack(alignment: .center, spacing: Tokens.Space.s12) {
+        ZStack(alignment: isOn ? .trailing : .leading) {
+          Capsule().fill(isOn ? p.status(.working) : p.track)
+            .overlay(Capsule().strokeBorder(p.ring, lineWidth: Tokens.Layout.hairline))
+          Circle().fill(Color.white.opacity(p.isDark ? Tokens.Ink.primary : 1))
+            .padding(Tokens.Space.nudge)
+        }
+        .frame(width: Tokens.Space.s32, height: Tokens.Space.s20)
+        .animation(reduceMotion ? nil : Motion.outExpo(Tokens.Duration.base), value: isOn)
+        VStack(alignment: .leading, spacing: Tokens.Space.nudge) {
+          Text(title).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink1)
+            .fixedSize(horizontal: false, vertical: true)
+          if let note {
+            Text(note).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        if let key { Keycap(label: key) }
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(PressStyle())
+    .accessibilityLabel(title)
+    .accessibilityValue(isOn ? "On" : "Off")
+    .accessibilityAddTraits(.isToggle)
+  }
+}

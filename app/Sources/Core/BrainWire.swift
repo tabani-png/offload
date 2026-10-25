@@ -51,6 +51,10 @@ struct StatusResponse: Codable, Equatable {
   var store: Store
   var retention: Retention
   var analysis: Analysis
+  /// s11/s14 (optional): the captioner, its Claude usage and what it needs from you.
+  var captioner: CaptionerStatus? = nil
+  /// s14 (optional): the model router: backend, this month's spend and budget, and what it needs from you.
+  var models: ModelsStatus? = nil
 
   func toObserverStatus() -> ObserverStatus {
     ObserverStatus(state: ObserverState(wire: observer.state), daysStored: store.days.count,

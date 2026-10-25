@@ -221,13 +221,27 @@ private struct NeedsYouSection: View {
     let rows = model.automations.filter { $0.state == .needsYou || $0.state == .readyForReview }
     WindowSection(title: "Needs you", trailing: nil) {
       RingBox {
-        if rows.isEmpty {
+        if rows.isEmpty && model.allNotices.isEmpty {
           Text("Nothing needs you. Everything that is on is running.")
             .textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
             .padding(Tokens.Space.s16)
         }
-        ForEach(Array(rows.enumerated()), id: \.element.id) { i, a in
+        // s14: Offload's own lines first (no action here: they clear on their own once the cause is fixed).
+        ForEach(Array(model.allNotices.enumerated()), id: \.offset) { i, line in
           if i > 0 { RowDivider(inset: Tokens.Space.s40) }
+          HStack(alignment: .center, spacing: Tokens.Space.s12) {
+            StatusDot(role: .needsYou, size: Tokens.Size.dot)
+              .frame(width: Tokens.Space.s16, height: Tokens.Space.s16)
+            Text(line).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink1)
+              .fixedSize(horizontal: false, vertical: true)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .padding(.horizontal, Tokens.Space.s16)
+          .padding(.vertical, Tokens.Space.s12)
+          .accessibilityElement(children: .combine)
+        }
+        ForEach(Array(rows.enumerated()), id: \.element.id) { i, a in
+          if i > 0 || !model.allNotices.isEmpty { RowDivider(inset: Tokens.Space.s40) }
           let row = copy.rows.first { $0.id == a.id }
           HStack(alignment: .center, spacing: Tokens.Space.s12) {
             StatusDot(role: .needsYou, size: Tokens.Size.dot)
@@ -705,6 +719,34 @@ private struct ObservingSection: View {
         }
         .padding(.horizontal, Tokens.Space.s16).frame(height: Tokens.Size.row + Tokens.Space.s4)
         RowDivider(inset: Tokens.Space.s16)
+        // s14: the Claude captioner opt-in, and what it read (the brain's numbers, formatted only).
+        VStack(alignment: .leading, spacing: Tokens.Space.s8) {
+          OptInRow(title: ClaudeVisionSetting.label, isOn: model.claudeVision, note: model.claudeVisionNote) {
+            model.toggleClaudeVision()
+          }
+          if let usage = observing.captioner?.usageLine {
+            Text(usage).textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink2)
+              .padding(.leading, Tokens.Space.s32 + Tokens.Space.s12)
+          }
+        }
+        .padding(.horizontal, Tokens.Space.s16).padding(.vertical, Tokens.Space.s12)
+        RowDivider(inset: Tokens.Space.s16)
+        // s14: the model router: this month's Claude spend against the budget, in one plain line.
+        if let models = observing.models {
+          HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+            Text("Models").textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
+              .frame(width: Self.labelColumn, alignment: .leading)
+            VStack(alignment: .leading, spacing: Tokens.Space.nudge) {
+              Text(models.spendLine).textStyle(Tokens.TypeScale.body).monospacedDigit().foregroundStyle(p.ink1)
+              if let line = models.captionsLine {
+                Text(line).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+              }
+            }
+            Spacer()
+          }
+          .padding(.horizontal, Tokens.Space.s16).padding(.vertical, Tokens.Space.s12)
+          RowDivider(inset: Tokens.Space.s16)
+        }
         ForEach(Array(observing.permissions.enumerated()), id: \.element.id) { i, perm in
           if i > 0 { RowDivider(inset: Self.labelColumn + Tokens.Space.s24) }
           PermissionRow(permission: perm, header: i == 0 ? "Permissions" : nil,

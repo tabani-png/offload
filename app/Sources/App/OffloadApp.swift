@@ -53,6 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var qaBackdrop: NSWindow?
   private var refreshTimer: Timer?
   private var lastObserverPaused: Bool?
+  /// s14: the task finder the brain starts with (from the Ollama probe), and a context waiting for the brain.
+  private var understanding = UnderstandingDefaults.decide(probe: nil, environment: [:], demo: true)
+  private var contextOutbox = ContextOutbox()
+  private var lastProbe: OllamaProbeResult?
+  /// The brain runs on the demo week's folder (seeded from onboarding): no captioner or v2 flags there.
+  private var demoActive = false
 
   override init() {
     let env = ProcessInfo.processInfo.environment
@@ -105,6 +111,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     dashboardModel.onOpenInbox = { [weak self] in self?.card.show() }
     dashboardModel.onTogglePause = { [weak self] paused in self?.setObserverPaused(paused) }
     dashboardModel.onOpenURL = { NSWorkspace.shared.open($0) }
+    dashboardModel.claudeVision = ClaudeVisionSetting.load(.standard).enabled
+    dashboardModel.onClaudeVision = { [weak self] on in self?.setClaudeVision(on) }
     dashboardModel.onReveal = { path in
       let url = URL(fileURLWithPath: path)
       if FileManager.default.fileExists(atPath: path) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
@@ -139,7 +147,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     return BrainLaunch.spec(bun: bun, repo: repo, home: home, token: token,
                             baseEnvironment: env, observer: observer.binary,
                             model: BrainLaunch.model(environment: env, demo: demo || options.demo),
-                            logFile: Self.brainLogFile)
+                            logFile: Self.brainLogFile,
+                            // s14: the demo week never gets the v2 flags (the email demo stays as it is).
+                            understanding: (demo || options.demo) ? [] : understanding.arguments)
   }
 
   /// Demo homes use raw key files (OFFLOAD_KEYS=file): nothing touches the real Keychain.
@@ -196,6 +206,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func startBrain() {
     startLogRotation()
     guard options.brain == .spawn else { return }
+    // s14: probe Ollama (1.5 s at most) before choosing the serve flags; the brain starts right after.
+    Task { @MainActor in
+      let env = ProcessInfo.processInfo.environment
+      let probe: OllamaProbeResult? = options.demo ? nil : await Self.probeOllama()
+      lastProbe = probe
+      understanding = UnderstandingDefaults.decide(probe: probe, environment: env, demo: options.demo,
+                                                   claudeVision: ClaudeVisionSetting.load(.standard).enabled)
+      NSLog("Offload: task finder %@ (%@)", understanding.version ?? "default", understanding.reason)
+      dashboardModel.notices = understanding.notice.map { [$0] } ?? []
+      launchBrain()
+    }
+  }
+
+  /// s14: GET http://127.0.0.1:11434/api/tags with a short timeout. Any failure reads as not running.
+  nonisolated static func probeOllama() async -> OllamaProbeResult {
+    let c = URLSessionConfiguration.ephemeral
+    c.timeoutIntervalForRequest = UnderstandingDefaults.probeTimeout
+    c.timeoutIntervalForResource = UnderstandingDefaults.probeTimeout
+    c.connectionProxyDictionary = [:]
+    c.waitsForConnectivity = false
+    let session = URLSession(configuration: c)
+    defer { session.finishTasksAndInvalidate() }
+    var r = URLRequest(url: UnderstandingDefaults.tagsURL, cachePolicy: .reloadIgnoringLocalCacheData,
+                       timeoutInterval: UnderstandingDefaults.probeTimeout)
+    r.httpMethod = "GET"
+    guard let (data, response) = try? await session.data(for: r), (response as? HTTPURLResponse)?.statusCode == 200 else {
+      return .notRunning
+    }
+    return OllamaProbeResult(reachable: true, models: UnderstandingDefaults.parseTags(data))
+  }
+
+  private func launchBrain() {
     purgeOnce(home: home)
     guard let spec = brainSpec(home: home) else {
       endpoint.starting = false
@@ -215,13 +257,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func brainCameUp() async {
+    await sendPendingContext()
     await model.load()
     if dashboard != nil { await dashboardModel.load() }
   }
 
   /// Waits until the supervisor has an endpoint (or gives up), so the first load is not a "not running".
   private func waitForBrain(timeout: TimeInterval) async {
-    guard options.brain == .spawn, supervisor != nil else { return }
+    // s14: the supervisor is created after the Ollama probe, so "starting" also counts as on its way.
+    guard options.brain == .spawn, supervisor != nil || endpoint.starting else { return }
     let deadline = Date().addingTimeInterval(timeout)
     while endpoint.endpoint == nil && Date() < deadline {
       try? await Task.sleep(nanoseconds: 200_000_000)
@@ -290,6 +334,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       self?.onboarding?.window.close()
     }
     m.onDemoWeek = { [weak self] in await self?.useDemoWeek() }
+    // s14: "What do you do?": sent to the brain now, or as soon as it is up.
+    m.onContext = { [weak self] c in self?.submitContext(c) }
+    m.loadContext = { [weak self] in try? await self?.client.getContext() }
+    m.setClaudeVision(initial: ClaudeVisionSetting.load(.standard).enabled)
+    m.onClaudeVision = { [weak self] on in self?.setClaudeVision(on) }
     let c = OnboardingWindowController(model: m)
     c.onClose = { [weak self] in self?.onboarding = nil }
     onboarding = c
@@ -300,6 +349,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       for _ in 1..<max(1, n) { m.next() }
     }
     qaRecord("onboarding", c.window)
+  }
+
+  /// s14: the Claude captioner opt-in. Saved at once; the brain restarts with the new flag when the app supervises
+  /// it on your own folder. Otherwise (attached brain, mock, demo week) it applies the next time Offload starts.
+  private func setClaudeVision(_ on: Bool) {
+    ClaudeVisionSetting(enabled: on).save(.standard)
+    dashboardModel.claudeVision = on
+    onboarding?.model.setClaudeVision(initial: on)
+    understanding = UnderstandingDefaults.decide(probe: lastProbe, environment: ProcessInfo.processInfo.environment,
+                                                 demo: options.demo, claudeVision: on)
+    if !demoActive { dashboardModel.notices = understanding.notice.map { [$0] } ?? [] }
+    guard options.brain == .spawn, !options.demo, !demoActive else {
+      dashboardModel.claudeVisionNote = ClaudeVisionSetting.appliesNextLaunch
+      return
+    }
+    // Still probing Ollama: the launch reads the saved setting.
+    guard let s = supervisor else { dashboardModel.claudeVisionNote = nil; return }
+    guard let spec = brainSpec(home: home) else {
+      dashboardModel.claudeVisionNote = ClaudeVisionSetting.appliesNextLaunch
+      return
+    }
+    NSLog("Offload: restarting the brain for the captioner (%@)", understanding.reason)
+    dashboardModel.claudeVisionNote = nil
+    s.restart(home: home, spec: spec)
+  }
+
+  /// s14: PUT /context. While the brain is starting (or between restarts) the value waits in the outbox and is
+  /// sent when the brain comes up; a refusal (400) is dropped and logged.
+  private func submitContext(_ c: UserContext) {
+    guard !c.isEmpty else { return }
+    contextOutbox.queue(c)
+    Task { await sendPendingContext() }
+  }
+
+  private func sendPendingContext() async {
+    guard let c = contextOutbox.pending else { return }
+    do {
+      _ = try await client.putContext(c)
+      if contextOutbox.pending == c { contextOutbox.settle() }
+    } catch {
+      if !ContextOutbox.shouldRetry(error) {
+        NSLog("Offload: the brain did not take the context: %@", String(describing: error))
+        if contextOutbox.pending == c { contextOutbox.settle() }
+      }
+    }
   }
 
   /// Seeds the fixture week into the demo home (never the real one) and points the brain at it.
@@ -327,11 +421,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     guard ok else { return "The demo week could not be written. Nothing else was changed." }
     home = demo
+    demoActive = true
     observer = ObserverControl(binary: observer.binary, home: demo, environment: Self.environment(demo: true))
     if let s = supervisor, let spec = brainSpec(home: demo, demo: true) {
       s.restart(home: demo, spec: spec)
       await waitForBrain(timeout: 30)
     }
+    // s14: the demo week keeps the simpler task finder on purpose; no line about local models.
+    dashboardModel.notices = []
     await model.load()
     return nil
   }

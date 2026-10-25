@@ -3,7 +3,7 @@
 # Tools' libPackageDescription does not link. No Xcode, no asset catalogs.
 #
 #   app/build.sh                 build app/.build/Offload.app
-#   app/build.sh test [args]     build and run the S06/S07/S08/S09A Swift Testing suites (extra args go to the runner)
+#   app/build.sh test [args]     build and run the S06 … S10E and S14 Swift Testing suites (extra args go to the runner)
 #   app/build.sh snapshot DIR    build, then render every component and surface to PNGs in DIR
 #
 # Layout: Sources/Core is Foundation-only (models, BrainClient, formatting, keyboard + undo state machine,
@@ -47,7 +47,7 @@ build_tests() {
     -F "$FW" -I "$DEVLIB" -L "$DEVLIB" -framework Testing \
     -plugin-path "$CLT/usr/lib/swift/host/plugins/testing" \
     -Xlinker -rpath -Xlinker "$FW" -Xlinker -rpath -Xlinker "$DEVLIB" \
-    $(swift_files "$HERE/Sources/Core" "$ROOT/slices/s06-design-system/tests" "$ROOT/slices/s07-rail-and-card/tests" "$ROOT/slices/s08-review-and-dashboard/tests" "$ROOT/slices/s09a-wiring/tests" "$ROOT/slices/s10a-ui-polish/tests" "$ROOT/slices/s10d-ui-round3/tests" "$ROOT/slices/s10e-ui-round4/tests") \
+    $(swift_files "$HERE/Sources/Core" "$ROOT/slices/s06-design-system/tests" "$ROOT/slices/s07-rail-and-card/tests" "$ROOT/slices/s08-review-and-dashboard/tests" "$ROOT/slices/s09a-wiring/tests" "$ROOT/slices/s10a-ui-polish/tests" "$ROOT/slices/s10d-ui-round3/tests" "$ROOT/slices/s10e-ui-round4/tests" "$ROOT/slices/s14-any-task-workflows/tests") \
     "$main" -o "$OUT/offload-tests"
 }
 

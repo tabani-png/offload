@@ -314,13 +314,13 @@ struct S09AObserverTests {
 
 @Suite("S09A onboarding, demo week, launch options")
 struct S09AOnboardingTests {
-  @Test("three steps, counter, back and next stop at the ends")
+  @Test("four steps (s14 added the context step), counter, back and next stop at the ends")
   func steps() {
     var f = OnboardingFlow()
-    #expect(f.step == .watches && f.step.counter == "1 of 3" && f.isFirst)
+    #expect(f.step == .watches && f.step.counter == "1 of 4" && f.isFirst)
     f.back()
     #expect(f.step == .watches)
-    f.next(); f.next(); f.next()
+    f.next(); f.next(); f.next(); f.next()
     #expect(f.step == .comeBack && f.isLast && f.primaryTitle == "Done")
     #expect(OnboardingStep.comeBack.title == "Come back in a few days")
   }

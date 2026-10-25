@@ -187,6 +187,10 @@ struct ObservingState: Codable, Equatable, Sendable {
   var nextPurgeDay: String?
   var nextPurgeAt: Date?
   var permissions: [PermissionState]
+  /// s14: the brain's captioner (GET /status), when it sent one.
+  var captioner: CaptionerStatus? = nil
+  /// s14: the model router (GET /status `models`), when the brain sent it.
+  var models: ModelsStatus? = nil
 
   var daysLabel: String { "\(min(daysStored, keepDays)) of \(keepDays) days stored" }
 

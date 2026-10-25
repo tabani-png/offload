@@ -155,6 +155,9 @@ struct WorkflowDTO: Codable, Equatable {
   var batchSize: Int?
   var batches: [BatchSummaryDTO]?
   var pendingItems: [BatchItemDTO]?
+  // s14 (optional): the typed plan of a general workflow
+  var plan: WorkflowPlan? = nil
+  var tools: [StepTools]? = nil
 
   /// "Weekdays at 09:00 · 8 a batch". The brain's own note; "Manual" when there is no schedule.
   var scheduleSummary: String {
@@ -179,7 +182,8 @@ struct WorkflowDTO: Codable, Equatable {
       schedule: WorkflowSchedule(summary: scheduleSummary, batchSize: batchSize ?? 0, nextRunAt: nextRunAt.map(BrainWire.date(ms:))),
       steps: steps, skillMarkdown: skillMd ?? "", toneCard: "", nextBatch: (pendingItems ?? []).map { $0.toRecipient() },
       logTarget: logTarget, sendFrom: "your account", estimatedHoursPerWeek: estimatedHoursSavedPerWeek,
-      batchHash: dryRunHash ?? "", needsYou: needsYou, arithmetic: arithmetic, facts: facts ?? "", autoRun: autoRun, path: path ?? "")
+      batchHash: dryRunHash ?? "", needsYou: needsYou, arithmetic: arithmetic, facts: facts ?? "", autoRun: autoRun, path: path ?? "",
+      plan: plan, tools: tools ?? [])
   }
 }
 
@@ -239,10 +243,13 @@ struct DryRunResponse: Codable, Equatable {
   var warnings: [String]
   /// s09b: "stub" | "real"; absent on dry runs sealed before s09b.
   var model: String? = nil
+  /// s14: the generic dry run of a plan workflow; absent for the email workflows.
+  var general: GeneralDryRun? = nil
+  var tools: [DryRunTool]? = nil
 
   func toDryRun() -> DryRun {
     DryRun(workflowId: workflowId, ranAt: BrainWire.date(ms: ranAt), items: instances.map { $0.toItem() },
-           deniedSideEffects: sideEffects.denied, batchHash: batchHash, model: model)
+           deniedSideEffects: sideEffects.denied, batchHash: batchHash, model: model, general: general, tools: tools)
   }
 }
 

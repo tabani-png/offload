@@ -37,7 +37,7 @@ backoff (1 → 30 s) and stops it on quit; a shell guard stops it if the app die
 `--brain-url URL` (token in `OFFLOAD_TOKEN`) attaches to a running brain; `--home DIR` or `OFFLOAD_HOME` picks the
 store; `OFFLOAD_DRYRUN_LIMIT` caps dry-run instances (each one is a model call). Brain stderr:
 `~/Library/Logs/Offload/brain.err.log`. Observer state and permissions come from `offload-observer status --json`;
-Pause calls `pause`/`resume`. First launch shows the 3-step welcome (`--onboarding` forces it, "Use demo week" seeds
+Pause calls `pause`/`resume`. First launch shows the 4-step welcome (s14 adds the optional "What do you do?" step; `--onboarding` forces it, "Use demo week" seeds
 `scratch/demo`). Live e2e: `slices/s09a-wiring/e2e.sh` (one model call), captures in `app/snapshots/live/e2e-*.png`.
 The review window edits the tone card (PUT /workflows/:id/tone) and the SKILL.md words (PUT .../skill); permissions
 come from GET /observer, else the CLI. s09a adds `Core/{HTTPBrainClient,BrainSupervisor,BrainEdits,ObserverControl,Onboarding,ReviewMessages}.swift` and
