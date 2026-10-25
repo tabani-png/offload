@@ -21,6 +21,8 @@ import type { UserContext } from "../types.ts";
 import { readUserContext } from "../context/store.ts";
 import { NameMap } from "../privacy/names.ts";
 import { readNamePolicy, signNames } from "../privacy/policy.ts";
+import { checkPlaybook } from "../playbook/check.ts";
+import { readPlaybook } from "../playbook/store.ts";
 
 export class DryRunError extends Error {}
 
@@ -66,14 +68,18 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
   const out: DryRunInstanceDTO[] = [];
   // s18: one name map per dry run (stable placeholders across instances); the facts `sign:` line is the user's name.
   const names = new NameMap(readNamePolicy(o.home, signNames(factsText)));
+  // s19: an email workflow with a messaging playbook drafts with it, and each draft says whether it follows it.
+  const playbook = emailWorkflow && general === null ? readPlaybook(o.home, wf.id) : null;
   for (const ob of observed) {
     let draft: string | null = null;
     let examplesUsed: string[] = [];
     let itemWarnings: string[] = [];
+    let verdict: DryRunInstanceDTO["playbook"];
     if (emailWorkflow) {
       // The observed subject stands in for the template so the two sides are the same email.
-      const d = await draftInTone({ pack, bucket: wf.bucket, recipient: ob.recipient, subject: ob.subject, facts: factsText, model: o.model, models, names });
+      const d = await draftInTone({ pack, bucket: wf.bucket, recipient: ob.recipient, subject: ob.subject, facts: factsText, model: o.model, models, names, playbook });
       draft = d.body;
+      if (playbook !== null) verdict = checkPlaybook(d.body, playbook);
       examplesUsed = d.examplesUsed;
       itemWarnings = d.warnings;
       items.push({ key: ob.recipient.email, to: ob.recipient.email, subject: ob.subject, body: d.body, sourceInstanceId: ob.instanceId, warnings: d.warnings });
@@ -91,6 +97,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
       estimate: { observedMinutes, reviewSeconds: wf.reviewSecondsPerItem, savedMinutes },
       examplesUsed,
       warnings: itemWarnings,
+      ...(verdict === undefined ? {} : { playbook: verdict }),
     });
   }
   if (!emailWorkflow && general === null) warnings.push("this workflow kind has no drafting dry run yet; showing what you did and the time only");
