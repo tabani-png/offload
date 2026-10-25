@@ -778,3 +778,91 @@ export interface CapabilitiesResponse {
   checkedAt: string;
   capabilities: CapabilityDTO[];
 }
+
+// ---------- s17: the Connections center (GET /connections, brain/API.md "Connections (s17)") ----------
+
+export type ConnectionStatusDTO = "connected" | "needs_you" | "not_set_up";
+export type SetupMethodDTO = "composio" | "api_key" | "mcp";
+
+/** The local index of everything Composio offers (connectors/universe.ts). */
+export interface UniverseStatusDTO {
+  version: number;
+  syncedAt: number | null;
+  stale: boolean;
+  complete: boolean;
+  toolkits: number;
+  tools: number;
+  classes: { read: number; draft: number; commit: number; denied: number };
+  cliVersion: string | null;
+}
+
+export interface ConnectionRowDTO {
+  /** The catalog id when Offload maps the app, else tk-<toolkit>. */
+  id: string;
+  name: string;
+  toolkit: string | null;
+  description: string;
+  status: ConnectionStatusDTO;
+  /** One plain sentence for the row. */
+  statusLine: string;
+  /** Hand-verified by Offload (catalog); false = from the Composio list, approved field by field. */
+  verified: boolean;
+  tools: { read: number; commit: number; denied: number };
+  /** The setup method in use, null when none. */
+  method: SetupMethodDTO | null;
+}
+
+export interface ConnectionsResponse {
+  version: number;
+  query: string;
+  connections: ConnectionRowDTO[];
+  universe: UniverseStatusDTO;
+  /** A plain sentence when the Composio list is not loaded yet, else null. */
+  note: string | null;
+}
+
+export interface ConnectionMethodDTO {
+  method: SetupMethodDTO;
+  title: string;
+  detail: string;
+  steps: string[];
+  /** The one the sheet's primary button uses first. */
+  recommended: boolean;
+}
+
+export interface ConnectionTestDTO {
+  version: number;
+  connectionId: string;
+  ok: boolean;
+  detail: string;
+  tools: number | null;
+  testedAt: number;
+}
+
+export interface ConnectionSetupDTO {
+  method: SetupMethodDTO;
+  startedAt: number;
+  /** Where the secret lives, by name ("Keychain: offload.connection.tk-linear"), never the value. */
+  secretRef: string | null;
+  /** The connector server's address or command, when there is one. */
+  server: string | null;
+  test: { ok: boolean; detail: string; tools: number | null; at: number } | null;
+}
+
+export interface ConnectionDetailDTO extends ConnectionRowDTO {
+  version: number;
+  methods: ConnectionMethodDTO[];
+  /** A few tools by plain name. */
+  sample: { read: string[]; commit: string[] };
+  setup: ConnectionSetupDTO | null;
+  /** Where the app saves this connection's API key (generic password item). */
+  keychain: { service: string; account: string };
+  canBuild: boolean;
+}
+
+export interface ConnectionBuildDTO {
+  version: number;
+  connectionId: string;
+  workflow: WorkflowDetailDTO;
+  dryRun: { instances: number; commitTool: string | null; missing: string[]; sent: 0; warnings: string[] };
+}

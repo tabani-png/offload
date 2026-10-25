@@ -43,6 +43,14 @@ protocol BrainClient: Sendable {
   func choosePlan(workflowId: String, variant: String) async throws -> Workflow
   /// POST /workflows/:id/tools {stepId, toolId}; returns the detail (the dry run is reset).
   func chooseTool(workflowId: String, stepId: String, toolId: String) async throws -> Workflow
+
+  // s17: the Connections center (GET/POST /connections…, Connections.swift). Setup and test only read; build ends in a
+  // dry run. Defaults (an older brain) say "not found".
+  func connections(query: String) async throws -> ConnectionsPage
+  func connection(id: String) async throws -> ConnectionDetail
+  func setupConnection(id: String, _ setup: ConnectionSetup) async throws -> ConnectionDetail
+  func testConnection(id: String) async throws -> ConnectionTest
+  func buildWorkflow(connectionId: String) async throws -> ConnectionBuild
 }
 
 enum BrainError: Error, Equatable {

@@ -1,0 +1,34 @@
+{
+ "slug": "LINEAR_CREATE_LINEAR_COMMENT",
+ "version": "20260924_00",
+ "schemaPath": "~/.composio/tool_definitions/LINEAR_CREATE_LINEAR_COMMENT.json",
+ "inputSchema": {
+  "type": "object",
+  "title": "CreateCommentRequest",
+  "required": [
+   "issueId",
+   "body"
+  ],
+  "properties": {
+   "body": {
+    "type": "string",
+    "title": "Body",
+    "examples": [
+     "This is a comment.",
+     "## Heading\nThis is a **bold** comment with markdown."
+    ],
+    "description": "Non-empty comment content, in plain text or Markdown. Must not be whitespace-only."
+   },
+   "issueId": {
+    "type": "string",
+    "title": "Issue Id",
+    "examples": [
+     "c5748ccf-c67f-4af4-bd74-fe513dc4c054",
+     "ENG-123",
+     "PROJ-456"
+    ],
+    "description": "ID of the Linear issue to add the comment to. Must be in one of two formats: (1) UUID format: a 36-character string with hyphens (e.g., 'c5748ccf-c67f-4af4-bd74-fe513dc4c054'), or (2) Shorthand identifier: team key (alphanumeric, must start with a letter, 1-10 chars) followed by hyphen and issue number (e.g., 'ENG-123', 'PROJ-456'). Use LIST_LINEAR_ISSUES action to retrieve valid issue IDs if needed."
+   }
+  }
+ }
+}
