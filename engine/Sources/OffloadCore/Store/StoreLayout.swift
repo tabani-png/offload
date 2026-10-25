@@ -26,6 +26,10 @@ public struct StoreLayout: Sendable {
     public var pauseFile: URL { home.appendingPathComponent("paused") }
     /// Heartbeat the running observer rewrites every tick; `status` reads it.
     public var statusFile: URL { home.appendingPathComponent("observer-status.json") }
+    /// User-editable exclusions {bundleIds, hosts, titleContains}, merged with the built-ins.
+    public var exclusionsFile: URL { home.appendingPathComponent("exclusions.json") }
+    /// LaunchAgent stdout/stderr.
+    public var logsDir: URL { home.appendingPathComponent("logs", isDirectory: true) }
 
     public func encryptedDayFile(_ day: String) -> URL { daysDir.appendingPathComponent("\(day).jsonl.enc") }
     public func plainDayFile(_ day: String) -> URL { daysDir.appendingPathComponent("\(day).jsonl") }

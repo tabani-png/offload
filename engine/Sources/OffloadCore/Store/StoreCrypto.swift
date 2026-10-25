@@ -15,6 +15,12 @@ public enum StoreError: Error, Equatable {
     case badLine(Int)
     case notFound(String)
     case io(String)
+    /// File key mode met a Keychain-wrapped day key. Payload: the day. Run without `OFFLOAD_KEYS=file`.
+    case keyWrapped(String)
+    /// The Keychain master key is absent or not 32 bytes.
+    case masterKeyMissing
+    /// A Keychain call failed. Payload: the OSStatus.
+    case keychain(Int32)
 }
 
 public enum StoreCrypto {

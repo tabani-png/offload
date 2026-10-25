@@ -25,6 +25,10 @@ public struct ObserverCounters: Equatable, Sendable {
     public var ocrErrors = 0
     public var ocrSkippedUnchanged = 0
     public var ocrSkippedExcluded = 0
+    /// OCR jobs thrown away because the OCR queue was full (oldest first).
+    public var ocrDropped = 0
+    /// OCR results thrown away: asked before a pause/resume, or the window was excluded meanwhile.
+    public var ocrDiscarded = 0
     public var purgedDays = 0
 
     public var totalWritten: Int { written.values.reduce(0, +) }
@@ -38,11 +42,13 @@ public final class Observer {
     private let workspace: WorkspaceSource
     private let idle: IdleSource
     private let input: InputCountSource
-    private let screenText: ScreenTextSource?
+    private let ocr: OCRExecutor?
+    private let exclusions: ExclusionReloader?
     private let pauseState: PauseState
     private let sink: EventSink
     private let retention: Retention?
-    private let policy: ExclusionPolicy
+    /// The exclusion policy in force (reloaded from `exclusions.json` when an ExclusionReloader is given).
+    public private(set) var policy: ExclusionPolicy
     private let masker: Masker
     private let ids: ULIDGenerator
 
@@ -65,21 +71,23 @@ public final class Observer {
     private var inputWindowStart: Date?
     private var loggedErrors = Set<String>()
     private var warnedInputUnavailable = false
+    private var generation = 0
 
     public init(config: ObserverConfig = ObserverConfig(), clock: Clock, workspace: WorkspaceSource, idle: IdleSource,
                 input: InputCountSource, screenText: ScreenTextSource?, pauseState: PauseState, sink: EventSink,
                 retention: Retention?, policy: ExclusionPolicy = .standard, masker: Masker = Masker(),
-                ids: ULIDGenerator = ULIDGenerator()) {
+                ids: ULIDGenerator = ULIDGenerator(), exclusions: ExclusionReloader? = nil, ocr: OCRExecutor? = nil) {
         self.config = config
         self.clock = clock
         self.workspace = workspace
         self.idle = idle
         self.input = input
-        self.screenText = screenText
+        self.ocr = ocr ?? screenText.map { InlineOCRExecutor(source: $0) }
+        self.exclusions = exclusions
         self.pauseState = pauseState
         self.sink = sink
         self.retention = retention
-        self.policy = policy
+        self.policy = exclusions?.policy(now: clock.now) ?? policy
         self.masker = masker
         self.ids = ids
     }
@@ -98,6 +106,7 @@ public final class Observer {
         let now = clock.now
         if let last = lastPurge, now.timeIntervalSince(last) >= config.purgeInterval { runRetention() }
         if inputWindowStart == nil { inputWindowStart = now }
+        if let exclusions { policy = exclusions.policy(now: now) }
 
         let paused = pauseState.isPaused
         if paused != isPaused {
@@ -130,6 +139,9 @@ public final class Observer {
         if !purged.isEmpty, let store = sink as? DayStore { store.forgetKeys() }
     }
 
+    /// When the next scheduled retention run is due.
+    public var nextPurge: Date? { lastPurge?.addingTimeInterval(config.purgeInterval) }
+
     private func resetObservation(now: Date) {
         lastFocus = nil
         lastSnapshot = nil
@@ -138,6 +150,7 @@ public final class Observer {
         lastTextHash = nil
         isIdle = false
         inputWindowStart = now
+        generation += 1  // OCR results asked for before this point are dropped
     }
 
     // MARK: idle
@@ -184,16 +197,33 @@ public final class Observer {
     // MARK: OCR
 
     private func maybeOCR(now: Date, focusChanged: Bool) {
-        guard let screenText, let snap = lastSnapshot, !isIdle else { return }
-        let due = focusChanged || lastOCRAttempt.map { now.timeIntervalSince($0) >= config.ocrInterval } ?? true
-        guard due else { return }
-        lastOCRAttempt = now
-        if policy.evaluate(snap) != nil || snap.secureInputActive {
-            counters.ocrSkippedExcluded += 1
+        guard let ocr else { return }
+        if let snap = lastSnapshot, !isIdle {
+            let due = focusChanged || lastOCRAttempt.map { now.timeIntervalSince($0) >= config.ocrInterval } ?? true
+            if due {
+                lastOCRAttempt = now
+                if policy.evaluate(snap) != nil || snap.secureInputActive {
+                    counters.ocrSkippedExcluded += 1
+                } else {
+                    ocr.submit(OCRJob(snapshot: snap, generation: generation))
+                }
+            }
+        }
+        for result in ocr.drain() { apply(result) }
+        counters.ocrDropped = ocr.dropped
+    }
+
+    /// Masks, dedupes and writes one finished OCR result (on the tick thread).
+    private func apply(_ result: OCRResult) {
+        let snap = result.job.snapshot
+        guard result.job.generation == generation, policy.evaluate(snap) == nil else {
+            counters.ocrDiscarded += 1
             return
         }
         let raw: String?
-        do { raw = try screenText.visibleText(of: snap) } catch {
+        switch result.outcome {
+        case .success(let text): raw = text
+        case .failure(let error):
             counters.ocrErrors += 1
             logOnce("ocr", "screen text failed: \(error)")
             return

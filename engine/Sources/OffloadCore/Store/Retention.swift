@@ -102,7 +102,7 @@ public struct Retention {
         }
     }
 
-    private static func lineCount(_ url: URL) -> Int {
+    static func lineCount(_ url: URL) -> Int {
         do {
             return try Data(contentsOf: url).split(separator: UInt8(ascii: "\n")).filter { !$0.isEmpty }.count
         } catch {

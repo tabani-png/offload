@@ -12,8 +12,14 @@ do {
     exit(2)
 }
 
+let keysMode = KeyMode.fromEnvironment(env)
+let secrets: SecretStore? = keysMode == .keychain ? KeychainSecretStore() : nil
+let executablePath = Bundle.main.executablePath ?? CommandLine.arguments[0]
+
 guard parsed.command == .run else {
-    let code = ObserverCLI.runOffline(parsed, environment: env, now: Date(),
+    let code = ObserverCLI.runOffline(parsed, environment: env, now: Date(), secrets: secrets,
+                                      permissions: parsed.command == .status ? Permissions.state : nil,
+                                      executable: executablePath,
                                       out: { print($0) },
                                       err: { FileHandle.standardError.write(Data(("offload-observer: " + $0 + "\n").utf8)) })
     exit(code)
@@ -25,18 +31,31 @@ do { try layout.ensureDirectories() } catch {
     exit(1)
 }
 let plain = DayStore.plainFromEnvironment(env)
-let policy = ExclusionPolicy.standard
+let vault = DayKeyVault(layout: layout, mode: keysMode, secrets: secrets)
+if keysMode == .keychain {
+    do {
+        _ = try vault.masterKey(create: true)
+        let migrated = try vault.migrateRawKeys()
+        if !migrated.isEmpty { Log.info("keys", "wrapped \(migrated.count) raw day key file(s) with the Keychain master key") }
+    } catch {
+        Log.error("keys", "Keychain master key unavailable (\(error)); not recording. OFFLOAD_KEYS=file uses raw key files")
+        exit(1)
+    }
+}
+let exclusions = ExclusionReloader(file: ExclusionFile(layout: layout))
 let clock = SystemClock()
 let input = LiveInputCounter()
 let permissions = Permissions.state
+// OCR runs on its own serial queue (QueuedOCRExecutor): the first Vision load no longer stalls focus/pause polling.
+let ocr = QueuedOCRExecutor(source: LiveScreenText(policy: .standard))
 let observer = Observer(clock: clock, workspace: LiveWorkspace(), idle: LiveIdle(), input: input,
-                        screenText: LiveScreenText(policy: policy), pauseState: FilePauseControl(layout: layout),
-                        sink: DayStore(layout: layout, plain: plain), retention: Retention(layout: layout),
-                        policy: policy)
+                        screenText: nil, pauseState: FilePauseControl(layout: layout),
+                        sink: DayStore(layout: layout, plain: plain, keys: vault), retention: Retention(layout: layout),
+                        exclusions: exclusions, ocr: ocr)
 let startedAt = Date()
 let pid = ProcessInfo.processInfo.processIdentifier
 
-Log.info("run", "home=\(layout.home.path) plain=\(plain) screenRecording=\(permissions.screenRecording) "
+Log.info("run", "home=\(layout.home.path) plain=\(plain) keys=\(keysMode.rawValue) screenRecording=\(permissions.screenRecording) "
     + "accessibility=\(permissions.accessibility) inputMonitoring=\(permissions.inputMonitoring)")
 if !permissions.screenRecording { Log.info("run", "Screen Recording not granted: OCR is off") }
 if !permissions.accessibility { Log.info("run", "Accessibility not granted: titles fall back to the window server, URLs are off") }
@@ -56,7 +75,7 @@ timer.setEventHandler {
     ticks += 1
     if ticks % 5 == 1 {
         writeHeartbeat(observer.heartbeat(pid: pid, startedAt: startedAt, now: Date(), plain: plain,
-                                          permissions: Permissions.state), layout: layout)
+                                          permissions: Permissions.state, keysMode: keysMode), layout: layout)
     }
 }
 timer.resume()

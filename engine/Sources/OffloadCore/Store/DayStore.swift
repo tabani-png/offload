@@ -8,17 +8,19 @@ public protocol EventSink: AnyObject {
 }
 
 /// Per-day files under `$OFFLOAD_HOME/days`. Encrypted mode: each line is base64(nonce|ct|tag) with the day's key
-/// in `keys/DAY.key` (32 random bytes, 0600). Plain mode (`OFFLOAD_PLAIN=1`): `DAY.jsonl`, same JSON unencrypted.
+/// in `keys/DAY.key` (0600): raw 32 bytes in file key mode, Keychain-wrapped in keychain mode (KeyVault.swift). Plain mode (`OFFLOAD_PLAIN=1`): `DAY.jsonl`, same JSON unencrypted.
 public final class DayStore: EventSink {
     public let layout: StoreLayout
     public let plain: Bool
     public let days: DayCalendar
-    private var keyCache: [String: SymmetricKey] = [:]
+    public let keys: DayKeyVault
 
-    public init(layout: StoreLayout, plain: Bool, days: DayCalendar = DayCalendar()) {
+    /// `keys` nil = raw key files (file mode), as before s02b.
+    public init(layout: StoreLayout, plain: Bool, days: DayCalendar = DayCalendar(), keys: DayKeyVault? = nil) {
         self.layout = layout
         self.plain = plain
         self.days = days
+        self.keys = keys ?? DayKeyVault(layout: layout, mode: .file, secrets: nil)
     }
 
     /// `OFFLOAD_PLAIN=1` selects plain mode.
@@ -77,32 +79,11 @@ public final class DayStore: EventSink {
     // MARK: keys
 
     func key(for day: String, create: Bool) throws -> SymmetricKey {
-        if let k = keyCache[day] { return k }
-        let url = layout.keyFile(day)
-        let fm = FileManager.default
-        if fm.fileExists(atPath: url.path) {
-            let data: Data
-            do { data = try Data(contentsOf: url) } catch { throw StoreError.keyMissing(day) }
-            guard data.count == StoreCrypto.keySize else { throw StoreError.badKey(day) }
-            let key = SymmetricKey(data: data)
-            keyCache[day] = key
-            return key
-        }
-        guard create else { throw StoreError.keyMissing(day) }
-        var bytes = [UInt8](repeating: 0, count: StoreCrypto.keySize)
-        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        guard status == errSecSuccess else { throw StoreError.io("SecRandomCopyBytes status \(status)") }
-        let data = Data(bytes)
-        guard fm.createFile(atPath: url.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
-            throw StoreError.io("create key file for \(day)")
-        }
-        let key = SymmetricKey(data: data)
-        keyCache[day] = key
-        return key
+        try keys.key(for: day, create: create)
     }
 
     /// Drops cached keys (after a purge deleted key files).
-    public func forgetKeys() { keyCache.removeAll() }
+    public func forgetKeys() { keys.forget() }
 
     // MARK: files
 

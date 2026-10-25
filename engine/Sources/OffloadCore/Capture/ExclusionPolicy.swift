@@ -7,6 +7,8 @@ public enum ExclusionReason: String, CaseIterable, Codable, Sendable {
     case denyApp = "deny_app"
     case denyURL = "deny_url"
     case privateWindow = "private_window"
+    /// The window title contains a user-listed substring.
+    case denyTitle = "deny_title"
 }
 
 public struct ExclusionDecision: Equatable, Sendable {
@@ -27,11 +29,15 @@ public struct ExclusionPolicy: Equatable, Codable, Sendable {
     public var deniedURLDomains: [String]
     /// Case-insensitive substrings of a window title that mark a private / incognito window.
     public var privateTitleMarkers: [String]
+    /// Case-insensitive substrings of a window title the user excluded (`exclusions.json` titleContains).
+    public var deniedTitleSubstrings: [String]
 
-    public init(deniedBundleIDs: [String], deniedURLDomains: [String], privateTitleMarkers: [String]) {
+    public init(deniedBundleIDs: [String], deniedURLDomains: [String], privateTitleMarkers: [String],
+                deniedTitleSubstrings: [String] = []) {
         self.deniedBundleIDs = deniedBundleIDs
         self.deniedURLDomains = deniedURLDomains
         self.privateTitleMarkers = privateTitleMarkers
+        self.deniedTitleSubstrings = deniedTitleSubstrings
     }
 
     /// Banking apps known on macOS (native and iOS-on-Apple-silicon). Bundle ids are best effort; extend as found.
@@ -69,6 +75,11 @@ public struct ExclusionPolicy: Equatable, Codable, Sendable {
         if let marker = privateTitleMarkers.first(where: { !Self.isBlank($0) &&
             snapshot.windowTitle.range(of: $0, options: .caseInsensitive) != nil }) {
             return ExclusionDecision(.privateWindow, rule: marker)
+        }
+        if let entry = deniedTitleSubstrings.first(where: { !Self.isBlank($0) &&
+            snapshot.windowTitle.range(of: $0.trimmingCharacters(in: .whitespacesAndNewlines),
+                                       options: .caseInsensitive) != nil }) {
+            return ExclusionDecision(.denyTitle, rule: entry)
         }
         guard let url = snapshot.url, let host = URLScrubber.host(of: url) else { return nil }
         if let rule = Self.matchDomain(host, in: deniedURLDomains) { return ExclusionDecision(.denyURL, rule: rule) }
