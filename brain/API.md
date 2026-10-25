@@ -21,7 +21,7 @@ Changes inside v1 are additive only.
   unset, a fresh 256-bit token (it is in the ready line). The app passes its per-launch token in the env.
 - Host must be `127.0.0.1` or `localhost` (any port). An `Origin` header, if sent, must equal `http://<host>`.
 - GET (and HEAD) everywhere; POST, PUT and DELETE only on `/workflows…` (s05, s05c); POST on `/observer/pause` and
-  `/observer/resume` (s09b); POST on `/connectors/:id/link` (s10e). Bodies are `application/json`,
+  `/observer/resume` (s09b); POST on `/connectors/:id/link` (s10e); POST on `/computer/stop` (s13). Bodies are `application/json`,
   at most 64 KB. No CORS. Every response is `cache-control: no-store`, `x-content-type-options: nosniff`.
 
 | status | body `error` | when |
@@ -222,6 +222,24 @@ observer }`, where `observer` is a fresh `GET /observer` report. A missing binar
 Servers from `$OFFLOAD_HOME/connectors.json` (`configErrors` when it is invalid), every catalog id with
 `connected | missing_env | missing`, and per insight its connectors' status and `ready`. Setup: `brain/CONNECTORS.md`.
 s10e: catalog entries carry `simulated: true|false` while the brain runs with the stub model (a demo sign-in, below).
+s13: `chains: ConnectorChainDTO[]`, one per catalog id plus one per app the insights touch that the catalog does not
+know (`app-<slug>`, `web-<slug>`). Stub model: probed (deterministic demo probes). Real model: from the cache, expired
+ones re-probed in the background; `GET /connectors?refresh=1` probes now. With the real model, a catalog id that an
+unexpired chain decision can commit through (e.g. the Composio CLI with no Composio server) counts as `connected`.
+
+## The connector chain (s13) → `ConnectorChainDTO`
+How Offload reaches one app (brain/CONNECTORS.md "Resolution chain"): `targetId`, `name`, `catalog`, `method` (the
+first healthy method that offers what the app is used for, or null), `health` (`ok | failed | skipped`),
+`capabilities { reads, writes }` of that method (canonical names such as `mail.search`, `mail.send`, `sheet.append`,
+`screen.read`, `ui.commit`), `lastError` (the last run failure, scrubbed), `next` (the method used if this one fails),
+`decidedAt`, `expiresAt` (re-checked after it, 10 min when something works, 2 min when nothing does), `simulated`, and
+`methods[]`: `ChainMethodDTO { method, health, code, reason, reads, writes, tools, lastError, checkedAt, latencyMs }`.
+`code` is machine-readable (`ok`, `no_server`, `missing_env`, `timeout`, `no_allowlisted_tools`, `composio_missing`,
+`no_toolkit`, `not_signed_in`, `reads_only`, `asks_every_call`, `no_api`, `no_health_check`, `no_secret`, `refused`,
+`down`, `computer_off`, `no_permission`, `app_missing`, `run_failed`, `probe_error`, `stub_failed`); `reason` is plain
+words for a person (null when ok); `tools` maps a capability to the tool the gate sees
+(`mcp__gmail__send_email`, `mcp__composio_cli__GMAIL_SEND_EMAIL`, `mcp__api_gmail__users.messages.send`,
+`mcp__computer_gmail__commit`). No secret, server credential or Composio account id is ever in it.
 
 ## POST /connectors/:id/link, GET /connectors/:id/link → `ConnectLinkDTO` (s10e)
 "Connect Gmail" from the app. POST (body `{}` or `{ "restart": true }`) starts a sign-in for one catalog id, GET polls
@@ -248,6 +266,16 @@ every few seconds.", "Gmail is connected.", "The sign-in did not start: Composio
   the fallback chain and computer use by registering, not by editing the route.
 - `GET /connectors/:id/status` returns the same DTO as `GET /connectors/:id/link` (the generic name; GET and HEAD
   only, other methods 405).
+- s13: every link / status answer carries `chain: ConnectorChainDTO` (above). Stub: probed. Real: `/status` probes when
+  the cached decision expired (`?refresh=1` now); `/link` answers from the cache, so a sign-in poll never starts a
+  probe. `:id` may also be an app target id (`app-…`, `web-…`) once `GET /connectors` has seen it in an insight (kept
+  7 days from when it was last seen); its methods are `composio, api, computer`.
+- s13: `api` and `computer` are real ways of connecting now. Both answer at once from the chain's probe: `connected`,
+  or `failed` with the reason in `detail` ("No direct connection is set up for Gmail.", "Using apps on your screen is
+  off until you turn it on."). `next` only names a way that can work for that connector right now (api only when
+  connectors.json `apis` lists it, computer only when computer use is on); with the stub model those two are demo
+  sign-ins when usable. After a Composio sign-in (real model) the id counts as connected once a fresh probe can commit
+  through the Composio CLI, also without a Composio server in connectors.json.
 - GET before any POST: `idle`, or `connected` when the id already is. POST on a connected id answers `connected` and
   starts nothing. POST while a sign-in is waiting returns it; `restart: true` starts a new one.
 - Stub model (`serve --model stub`): a demo sign-in, `simulated: true`. POST → `waiting`, `url` null; GET →
@@ -271,3 +299,12 @@ every few seconds.", "Gmail is connected.", "The sign-in did not start: Composio
   null; GET answers from the catalog status; an auth command that fails ends `failed`.
 - Every command gets only PATH, HOME, USER, LOGNAME, SHELL, TMPDIR and the locale: never `OFFLOAD_TOKEN`, a connector
   secret or a model login. Tests inject a fake runner (`BrainOptions.link.runner`) and never spawn.
+
+## POST /computer/stop, GET /computer/session → `ComputerSessionDTO` (s13)
+Computer use (the last resort of the chain, off until turned on) drives one app at a time. `POST /computer/stop` is the
+kill switch (the app maps Esc and a menu item to it): the run stops before its next action; it answers
+`{ stopped, session }` (`stopped` false when nothing was running). Pausing or deleting the workflow, or moving the
+pointer yourself, stops it the same way. `GET /computer/session`: `{ running, workflowId, targetId, pointer, stopped,
+stopReason }`; `pointer` is the last pointer event `{ x, y, label, action, at }` (screen points, the control's
+Accessibility title) for a Clicky-style overlay glyph. Other methods 405. Every action of a run passed the gate first
+(brain/CONNECTORS.md "The gate for every method").

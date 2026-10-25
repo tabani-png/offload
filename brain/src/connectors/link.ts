@@ -13,6 +13,7 @@ import { join } from "node:path";
 import type { ConnectLinkDTO, ModelLabel } from "../api/types.ts";
 import { executorEnv } from "../workflows/executor.ts";
 import { CONNECTORS, connectorById, type Connector } from "./catalog.ts";
+import { isAppTargetId } from "./targets.ts";
 import { catalogStatus, loadConnectorsConfig, type ConnectorStatus, type ConnectorsConfig, type Env } from "./config.ts";
 
 // ---------- simulated connections (stub model only) ----------
@@ -28,7 +29,7 @@ export function readSim(home: string): Record<string, number> {
     const raw = JSON.parse(readFileSync(p, "utf8")) as { version?: unknown; connected?: unknown };
     if (raw.version !== 1 || typeof raw.connected !== "object" || raw.connected === null) return {};
     const out: Record<string, number> = {};
-    for (const [id, at] of Object.entries(raw.connected as Record<string, unknown>)) if (connectorById(id) !== undefined && typeof at === "number" && Number.isFinite(at)) out[id] = at;
+    for (const [id, at] of Object.entries(raw.connected as Record<string, unknown>)) if ((connectorById(id) !== undefined || isAppTargetId(id)) && typeof at === "number" && Number.isFinite(at)) out[id] = at;
     return out;
   } catch {
     return {};
@@ -149,7 +150,8 @@ export const isMethod = (x: unknown): x is Method => typeof x === "string" && (M
  */
 export function resolutionMethods(connectorId: string, cfg: ConnectorsConfig | null): Method[] {
   const c = connectorById(connectorId);
-  if (c === undefined) return [];
+  // s13: an app the catalog does not know (app-…, web-…): no connector server lists it.
+  if (c === undefined) return isAppTargetId(connectorId) ? ["composio", "api", "computer"] : [];
   const servers = Object.values(cfg?.servers ?? {}).filter((s) => s.catalog.includes(c.id));
   const stdio = servers.some((s) => s.type === "stdio");
   const http = servers.some((s) => s.type === "http");
@@ -216,6 +218,9 @@ export interface LinkMethodContext {
   log?: (line: string) => void;
   /** Background work the method started (tests wait on it through Linker.idle). */
   track(p: Promise<unknown>): void;
+  /** s13: true when the connector chain can commit through this method without a connectors.json server (e.g. the
+   * Composio CLI). Absent = only the catalog status counts. */
+  reachable?: (connectorId: string, method: Method) => Promise<boolean>;
   /** True while `rec` is still this connector's live sign-in (a restart replaces it). */
   isCurrent(rec: LinkProgress): boolean;
 }
@@ -228,6 +233,9 @@ export interface LinkMethod {
   readonly method: Method;
   /** false = a declared seam: start answers failed with "not available yet" and the next method is offered. */
   readonly available: boolean;
+  /** s13: false when this way cannot work for that connector right now (no direct API set up, computer use off), so
+   * it is not offered as `next` and the demo does not pretend it works. Absent = usable. */
+  usable?(connectorId: string): boolean;
   start(ctx: LinkMethodContext): Promise<LinkProgress>;
   /** Called on GET while the progress is waiting; updates it in place. */
   poll(ctx: LinkMethodContext, rec: LinkProgress): Promise<void>;
@@ -300,7 +308,7 @@ export const COMPOSIO_METHOD: LinkMethod = {
     }
     if (!rec.signedIn) return;
     // Re-read: the server may have been added meanwhile.
-    if (catalogStatus(loadConnectorsConfig(ctx.home).config, ctx.env)[c.id] === "connected") markConnected(rec, c.name, ctx.now);
+    if (catalogStatus(loadConnectorsConfig(ctx.home).config, ctx.env)[c.id] === "connected" || (await ctx.reachable?.(c.id, "composio")) === true) markConnected(rec, c.name, ctx.now);
     else rec.message = plain.signedInNotAdded(c.name, "Composio server");
   },
 };
@@ -367,10 +375,10 @@ export function registerLinkMethod(m: LinkMethod, registry: LinkRegistry = LINK_
 }
 
 /** The method to offer after `current` failed: the next available one in `methods`, wrapping around; null if none. */
-export function nextMethod(methods: readonly Method[], current: Method, registry: LinkRegistry = LINK_METHODS): Method | null {
+export function nextMethod(methods: readonly Method[], current: Method, registry: LinkRegistry = LINK_METHODS, usable: (m: Method) => boolean = () => true): Method | null {
   const i = methods.indexOf(current);
   const order = i < 0 ? methods : [...methods.slice(i + 1), ...methods.slice(0, i)];
-  return order.find((m) => m !== current && registry.get(m)?.available === true) ?? null;
+  return order.find((m) => m !== current && registry.get(m)?.available === true && usable(m)) ?? null;
 }
 
 export interface LinkerOptions {
@@ -384,6 +392,10 @@ export interface LinkerOptions {
   log?: (line: string) => void;
   /** Methods by name (default LINK_METHODS). */
   registry?: LinkRegistry;
+  /** s13: see LinkMethodContext.reachable. */
+  reachable?: (connectorId: string, method: Method) => Promise<boolean>;
+  /** s13: a connector for an id the catalog does not know (an app target from a task profile); undefined = unknown. */
+  resolveConnector?: (id: string) => Connector | undefined;
 }
 
 export class Linker {
@@ -409,7 +421,7 @@ export class Linker {
   }
 
   private connector(id: string): Connector {
-    const c = CONNECTORS.find((x) => x.id === id);
+    const c = CONNECTORS.find((x) => x.id === id) ?? this.o.resolveConnector?.(id);
     if (c === undefined) throw new LinkNotFound(`unknown connector ${id}`);
     return c;
   }
@@ -430,6 +442,7 @@ export class Linker {
         this.inflight.add(t);
       },
       isCurrent: (rec) => this.links.get(c.id) === rec,
+      ...(this.o.reachable === undefined ? {} : { reachable: this.o.reachable }),
     };
   }
 
@@ -441,7 +454,7 @@ export class Linker {
       via: viaOf(r.method),
       method: r.method,
       methods: [...methods],
-      next: r.state === "failed" ? nextMethod(methods, r.method, this.registry) : null,
+      next: r.state === "failed" ? nextMethod(methods, r.method, this.registry, (m) => this.registry.get(m)?.usable?.(c.id) ?? true) : null,
       state: r.state,
       url: r.url ?? null,
       simulated: this.simulated,
@@ -468,6 +481,7 @@ export class Linker {
     const impl = this.registry.get(method);
     if (!methods.includes(method)) rec = progress(method, ctx.now, { state: "failed", message: plain.failed(`that way of connecting does not work for ${c.name} yet`), detail: plain.notFor(c.name) });
     else if (impl === undefined || !impl.available) rec = await (impl ?? unavailableMethod(method)).start(ctx);
+    else if (this.simulated && impl.usable?.(c.id) === false) rec = await impl.start(ctx);
     else if (this.simulated) {
       // Deterministic demo sign-in per method; OFFLOAD_STUB_LINK_FAIL makes the listed methods fail.
       rec = stubFailures(this.o.env).has(method)

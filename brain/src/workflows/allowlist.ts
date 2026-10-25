@@ -9,8 +9,13 @@ import { createHash } from "node:crypto";
 import { domainToASCII } from "node:url";
 import type { BatchItem } from "./batch.ts";
 
-export type Role = "read" | "send" | "log";
-export type Flavor = "gmail-mcp" | "composio" | "sheets-mcp" | "calendar-mcp";
+/** read: no side effect. input (s13, computer use only): a local, reversible UI edit (focus a field, type into it)
+ * that needs an approved batch but never uses up an item. send: the item's one commit (send, submit, save, pay, post,
+ * ... for every method). log: the CRM record of an item, only after its send. */
+export type Role = "read" | "input" | "send" | "log";
+/** s13 adds api (a direct HTTP operation from connectors.json `apis`) and computer (computer use). Composio's CLI path
+ * reuses the composio policies under the server name `composio_cli`. */
+export type Flavor = "gmail-mcp" | "composio" | "sheets-mcp" | "calendar-mcp" | "api" | "computer";
 
 /** How one argument is checked and canonicalised. */
 export type FieldSpec =
@@ -39,8 +44,11 @@ export interface ToolPolicy {
   flavor: Flavor;
   tool: string;
   role: Role;
-  /** Checked against a live server on this machine. All false until a human connects an account (CONNECTORS.md). */
+  /** Checked against a live server on this machine (s13: the Composio tools against the live CLI schema). */
   verified: boolean;
+  /** s13: a dynamic policy (api operation, computer use) applies only to calls on this server name. A server with
+   * bound policies resolves only those; the static table never applies to it. */
+  server?: string;
   /** Side-effect tools only: every key the tool may receive. Unknown keys are refused. */
   fields?: Readonly<Record<string, FieldSpec>>;
   /** The arguments the gate expects for one approved item (before canonicalisation). null = cannot be built. */
@@ -71,6 +79,10 @@ const COMPOSIO_SEND_FIELDS: Record<string, FieldSpec> = {
   extra_recipients: { kind: "empty" },
   attachment: { kind: "empty" },
   thread_id: { kind: "empty" },
+  // s13: in the live schema (composio execute GMAIL_SEND_EMAIL --get-schema, 2026-10-25). A different sender or an
+  // appended signature would change what the user approved, so only empty / false.
+  from_email: { kind: "empty" },
+  include_signature: { kind: "fixed", values: [false] },
   is_html: { kind: "fixed", values: [false] },
   user_id: { kind: "fixed", values: ["me"] },
 };
@@ -89,7 +101,7 @@ export const crmRow = (item: BatchItem, batchHash: string): string[] => [item.to
 const sheetRow = (item: BatchItem, ctx: { batchHash: string; crmSheet?: CrmSheet }) =>
   ctx.crmSheet === undefined ? null : { spreadsheetId: ctx.crmSheet.spreadsheetId, range: ctx.crmSheet.range, values: [crmRow(item, ctx.batchHash)] };
 
-const read = (connector: string, flavor: Flavor, tool: string): ToolPolicy => ({ connector, flavor, tool, role: "read", verified: false });
+const read = (connector: string, flavor: Flavor, tool: string, verified = false): ToolPolicy => ({ connector, flavor, tool, role: "read", verified });
 
 export const TOOL_POLICIES: readonly ToolPolicy[] = [
   // Gmail through a local Gmail MCP server (@gongrzhe/server-gmail-autoauth-mcp).
@@ -98,15 +110,15 @@ export const TOOL_POLICIES: readonly ToolPolicy[] = [
   read("gmail", "gmail-mcp", "read_email"),
   read("gmail", "gmail-mcp", "list_email_labels"),
   // Gmail through Composio.
-  { connector: "gmail", flavor: "composio", tool: "GMAIL_SEND_EMAIL", role: "send", verified: false, fields: COMPOSIO_SEND_FIELDS, expected: (i) => ({ recipient_email: i.to, subject: i.subject, body: i.body }) },
-  read("gmail", "composio", "GMAIL_FETCH_EMAILS"),
-  read("gmail", "composio", "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID"),
+  { connector: "gmail", flavor: "composio", tool: "GMAIL_SEND_EMAIL", role: "send", verified: true, fields: COMPOSIO_SEND_FIELDS, expected: (i) => ({ recipient_email: i.to, subject: i.subject, body: i.body }) },
+  read("gmail", "composio", "GMAIL_FETCH_EMAILS", true),
+  read("gmail", "composio", "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", true),
   // The CRM sheet: one append tool per flavour.
-  { connector: "google-sheets", flavor: "composio", tool: "GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND", role: "log", verified: false, fields: SHEET_APPEND_FIELDS, expected: sheetRow },
+  { connector: "google-sheets", flavor: "composio", tool: "GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND", role: "log", verified: true, fields: SHEET_APPEND_FIELDS, expected: sheetRow },
   { connector: "google-sheets", flavor: "sheets-mcp", tool: "append_row", role: "log", verified: false, fields: SHEET_APPEND_FIELDS, expected: sheetRow },
   // Calendar (scheduling replies): reads only.
-  read("google-calendar", "composio", "GOOGLECALENDAR_FIND_FREE_SLOTS"),
-  read("google-calendar", "composio", "GOOGLECALENDAR_EVENTS_LIST"),
+  read("google-calendar", "composio", "GOOGLECALENDAR_FIND_FREE_SLOTS", true),
+  read("google-calendar", "composio", "GOOGLECALENDAR_EVENTS_LIST", true),
   read("google-calendar", "calendar-mcp", "find_free_slots"),
 ];
 
@@ -143,7 +155,7 @@ function nestedKey(x: unknown, depth = 0): string | null {
 }
 
 /** The policy for `mcp__<server>__<tool>`, or why there is none. */
-export function policyFor(name: string, servers: Readonly<Record<string, readonly string[]>> = DEFAULT_SERVERS, input?: Record<string, unknown>): ToolPolicy | { reason: string } {
+export function policyFor(name: string, servers: Readonly<Record<string, readonly string[]>> = DEFAULT_SERVERS, input?: Record<string, unknown>, extra: readonly ToolPolicy[] = []): ToolPolicy | { reason: string } {
   const mcp = splitMcpName(name);
   if (mcp === null) return { reason: "built-in tools are disabled in workflow runs" };
   if (NEVER_RE.test(mcp.tool)) return { reason: `${mcp.tool} is a meta, shell, forward, reply or draft tool: never allowed` };
@@ -153,7 +165,10 @@ export function policyFor(name: string, servers: Readonly<Record<string, readonl
   }
   const covers = Object.hasOwn(servers, mcp.server) ? servers[mcp.server] : undefined;
   if (covers === undefined || !Array.isArray(covers)) return { reason: `server ${mcp.server} is not a connected server: not on the allowlist` };
-  const p = TOOL_POLICIES.find((x) => x.tool === mcp.tool && covers.includes(x.connector));
+  // s13: dynamic policies are bound to one server; a server with bound policies never falls back to the static table.
+  const bound = extra.filter((x) => x.server === mcp.server);
+  const pool = bound.length > 0 ? bound : TOOL_POLICIES;
+  const p = pool.find((x) => x.tool === mcp.tool && covers.includes(x.connector));
   if (p === undefined) return { reason: `${mcp.tool} on ${mcp.server} is not on the allowlist (unknown tools are denied)` };
   return p;
 }
@@ -245,7 +260,7 @@ export function expectedHash(p: ToolPolicy, item: BatchItem, ctx: { batchHash: s
 }
 
 /** Role of a tool name under the default mapping (for summaries of old batch results). */
-export function roleOfTool(name: string, servers?: Readonly<Record<string, readonly string[]>>): Role | null {
-  const p = policyFor(name, servers);
+export function roleOfTool(name: string, servers?: Readonly<Record<string, readonly string[]>>, extra?: readonly ToolPolicy[]): Role | null {
+  const p = policyFor(name, servers, undefined, extra);
   return "reason" in p ? null : p.role;
 }

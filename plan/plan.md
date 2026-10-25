@@ -39,6 +39,8 @@ flowchart LR
 - 0004 Execution layer = Claude Agent SDK + SKILL.md workflows. Gmail MCP first, Composio for long tail. No n8n (licence).
 - 0005 Numbers are deterministic. The model never produces a time or a saving figure.
 - 0006 Every external action passes an approval gate until the user turns on auto-run per workflow.
+- 0007 Perception for any domain; connectors resolve by a chain per app (MCP -> Composio -> API -> computer use).
+- 0008 `@anthropic-ai/sdk` (pinned, already the Agent SDK's peer) for computer use with `computer_toolset_20260801`.
 
 ## Slices
 | id | name | owner type | depends |

@@ -430,6 +430,50 @@ export interface ConnectorsResponse {
   /** s10e: `simulated` is true when the id counts as connected only through a demo sign-in (stub model only). */
   catalog: Array<{ id: string; name: string; how: ConnectorHow; status: ConnectorStatus; servers: string[]; simulated?: boolean }>;
   insights: Array<{ insightId: string; name: string; ready: boolean; connectors: Array<{ id: string; name: string; role: "primary" | "also"; status: ConnectorStatus }> }>;
+  /** s13: the resolution chain of every catalog id and of every app the insights touch (`app-…`, `web-…`). */
+  chains?: ConnectorChainDTO[];
+}
+
+/** s13: the health of one method for one target. skipped always carries a reason. */
+export type ChainHealthDTO = "ok" | "failed" | "skipped";
+
+/** s13: one method of a connector chain. */
+export interface ChainMethodDTO {
+  method: ConnectMethod;
+  health: ChainHealthDTO;
+  /** Machine code, e.g. ok, no_server, missing_env, timeout, no_toolkit, not_signed_in, no_api, computer_off. */
+  code: string;
+  /** Plain words for a person (why it was skipped or failed); null when ok. */
+  reason: string | null;
+  /** Canonical capabilities it offers for this target, e.g. mail.search; writes e.g. mail.send, sheet.append. */
+  reads: string[];
+  writes: string[];
+  /** capability -> the concrete tool, operation or action that does it. */
+  tools: Record<string, string>;
+  /** The last run failure through this method (no content, no secret), null when none. */
+  lastError: string | null;
+  checkedAt: number;
+  latencyMs: number | null;
+}
+
+/** s13: how Offload reaches one app: the method it uses now, its health and capabilities, and what comes next. */
+export interface ConnectorChainDTO {
+  /** A catalog id, or an app target id (`app-<slug>`, `web-<slug>`) for an app the catalog does not know. */
+  targetId: string;
+  name: string;
+  catalog: boolean;
+  /** The first healthy method that offers what this app is used for; null when none. */
+  method: ConnectMethod | null;
+  health: ChainHealthDTO;
+  capabilities: { reads: string[]; writes: string[] };
+  lastError: string | null;
+  /** The method Offload falls back to when this one fails; null when there is none. */
+  next: ConnectMethod | null;
+  decidedAt: number;
+  /** The decision is re-checked after this time (or with ?refresh=1). */
+  expiresAt: number;
+  simulated: boolean;
+  methods: ChainMethodDTO[];
 }
 
 // ---------- s05c: serve handshake, tone card, SKILL.md text, observer ----------
@@ -508,9 +552,21 @@ export interface ConnectLinkDTO {
   message: string;
   startedAt: number | null;
   connectedAt: number | null;
+  /** s13: the resolution chain for this connector (method, health, capabilities, last error, next). */
+  chain?: ConnectorChainDTO;
 }
 
-/** PUT /workflows/:id/tone body. */
+/** s13: GET /computer/session: the computer-use run, the pointer overlay's last event and the kill switch. */
+export interface ComputerSessionDTO {
+  running: boolean;
+  workflowId: string | null;
+  targetId: string | null;
+  /** The last pointer event (Clicky-style glyph): screen point, label of the element, the action. */
+  pointer: { x: number; y: number; label: string; action: string; at: number } | null;
+  stopped: boolean;
+  /** Why the last run stopped (you pressed stop, you moved the pointer, ...), null when it did not. */
+  stopReason: string | null;
+}
 export interface ToneCardUpdate {
   text: string;
 }

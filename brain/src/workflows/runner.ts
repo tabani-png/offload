@@ -18,7 +18,7 @@ import { join } from "node:path";
 import type { Model } from "../models/model.ts";
 import { draftInTone } from "../tone/draft.ts";
 import { loadTonePack } from "../tone/pack.ts";
-import { DEFAULT_SERVERS } from "./allowlist.ts";
+import { DEFAULT_SERVERS, type ToolPolicy } from "./allowlist.ts";
 import { makeBatch, type Batch, type BatchItem, type ItemState } from "./batch.ts";
 import { crmLines, contactedFrom, type CrmEntry } from "./scripts/crm-log.ts";
 import { pickNext, readRecipients } from "./scripts/recipients.ts";
@@ -328,6 +328,8 @@ export interface ExecuteOptions {
   mcpServers?: Parameters<Executor["execute"]>[0]["mcpServers"];
   /** Server name -> catalog ids for those servers (connectors.json). Default: the gate's DEFAULT_SERVERS. */
   servers?: ServerMap;
+  /** s13: dynamic gate policies of the connector chain (api operations, computer use), bound to their servers. */
+  policies?: readonly ToolPolicy[];
   now?: () => number;
 }
 
@@ -398,6 +400,7 @@ export async function executeBatch(o: ExecuteOptions): Promise<Batch> {
       runToken: approved ? o.token : null,
       approvals: (h) => snapshot[h],
       servers: o.servers ?? DEFAULT_SERVERS,
+      ...(o.policies === undefined ? {} : { policies: o.policies }),
       actions: declaredActions(wf),
       ...(wf.inputs.crmSheet === undefined ? {} : { crmSheet: wf.inputs.crmSheet }),
       itemState: (k) => states[k]?.state,
@@ -422,7 +425,17 @@ export async function executeBatch(o: ExecuteOptions): Promise<Batch> {
       persist();
     };
     try {
-      await o.executor.execute({ batch, gate, model: wf.models.cheap, cwd: workflowDir(o.home, wf.id), signal: ac.signal, onToolResult, ...(o.mcpServers === undefined ? {} : { mcpServers: o.mcpServers }) });
+      await o.executor.execute({
+        batch,
+        gate,
+        model: wf.models.cheap,
+        cwd: workflowDir(o.home, wf.id),
+        signal: ac.signal,
+        onToolResult,
+        actions: declaredActions(wf),
+        ...(wf.inputs.crmSheet === undefined ? {} : { crmSheet: wf.inputs.crmSheet }),
+        ...(o.mcpServers === undefined ? {} : { mcpServers: o.mcpServers }),
+      });
     } catch (err) {
       batch.results.push({ key: "*", tool: "executor", ok: false, at: now(), error: err instanceof Error ? err.message : String(err) });
     }

@@ -8,6 +8,7 @@
 //   3. tone cards the user did not edit, once the corpus they were built from has expired;
 //   4. title-derived names left in workflow.json files from before s10b move into the sealed store;
 //   5. purge-log.jsonl rotates at 5 MB.
+import { chainPath, rememberTargets } from "../connectors/chain.ts";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -95,6 +96,8 @@ export function purgeAll(home: string, now: number, opts: PurgeOptions = {}): Pu
   const res = purgeExpired(home, now, { log });
   const toneCards = purgeToneCards(home, now);
   const labelsMoved = migrateLabels(home, now);
+  // s13: app targets of the connector chain (observed app names / hosts) older than 7 days, with their decisions.
+  if (existsSync(chainPath(home))) rememberTargets(home, [], now);
   rotateIfLarge(join(home, "purge-log.jsonl"));
   if (toneCards + labelsMoved + ledgered > 0) log(`brain: purge removed ${toneCards} generated tone card(s), moved ${labelsMoved} observed name(s) into the sealed store, journalled ${ledgered} contacted address(es)`);
   return { ...res, toneCards, labelsMoved, ledgered };

@@ -9,6 +9,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HERE="$ROOT/slices/s10e-ui-round4"
 APP_BUILD="$ROOT/app/build.sh"
 BASE=3fd90ab   # the s10d commit this round starts from
+S10E_LAST=ddfe1f4   # the last s10e commit (s13 extends the gate after it: slices/s13-connector-chain/SPEC.md)
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -18,10 +19,11 @@ BUN="$(command -v bun || echo "$HOME/.bun/bin/bun")"
 
 for f in SPEC.md live-set.txt tests/S10ETests.swift; do [ -s "$HERE/$f" ] || fail "missing $f"; done
 
-echo "== gate unchanged since $BASE"
-git -C "$ROOT" diff --quiet "$BASE" -- brain/src/workflows/gate.ts brain/src/workflows/allowlist.ts \
-  || fail "gate.ts or allowlist.ts changed since $BASE"
-echo "ok gate.ts and allowlist.ts are byte-identical"
+echo "== gate untouched by s10e ($BASE..$S10E_LAST)"
+# The same guarantee as before s13: no s10e commit changed the gate. Later slices may extend it under their own tests.
+git -C "$ROOT" diff --quiet "$BASE" "$S10E_LAST" -- brain/src/workflows/gate.ts brain/src/workflows/allowlist.ts \
+  || fail "gate.ts or allowlist.ts changed within s10e ($BASE..$S10E_LAST)"
+echo "ok gate.ts and allowlist.ts are byte-identical across s10e"
 
 echo "== connect is a flow, not an alert"
 if grep -rnE "(Connecting accounts|Signing in) from inside Offload is not ready yet|NSAlert.*Connect" "$ROOT/app/Sources" >/dev/null; then fail "the old connect alert is still in app/Sources"; fi

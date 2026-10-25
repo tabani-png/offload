@@ -63,8 +63,11 @@ The app's "Connect Gmail" calls `POST /connectors/gmail/link` and polls `GET /co
 Connecting never sends anything: a send still needs an approved batch hash and the allowlist below.
 It works the same for every catalog id (`/connectors/<id>/link`, poll `/connectors/<id>/status`). Each connector has
 an ordered list of methods (`resolutionMethods` in `src/connectors/link.ts`): `mcp` (a connector server on this Mac),
-`composio`, and the not-yet-built `api` and `computer`. The app can pick one with `{ "method": ... }`; when one fails
-the answer names the `next` method to offer.
+`composio`, `api` (a direct connection, s13) and `computer` (computer use, s13). The app can pick one with
+`{ "method": ... }`; when one fails the answer names the `next` method to offer (only a way that can work for that
+connector right now: `api` only when `apis` lists it, `computer` only when computer use is on).
+- `api` and `computer` (s13) answer at once from the chain's probe (below): connected, or failed with the reason
+  ("No direct connection is set up for Gmail.", "Using apps on your screen is off until you turn it on.").
 - Demo (`serve --model stub`): a simulated sign-in. No browser opens, no command runs; after about 2 seconds the id
   counts as connected (kept in `$OFFLOAD_HOME/connect-sim.json`). A demo sign-in has no server, so nothing is ever
   sent through it: a live batch cannot be approved on it, and the executor is never started for it. With the real
@@ -100,8 +103,13 @@ semicolon makes it a list), text NFC with CRLF as LF and otherwise exact. A send
 once per item and only after that item's send. Without `inputs.crmSheet` the sheet log is denied and the local
 `crm-log.csv` is the only CRM record.
 
-**Not verified against a live account on this machine: every name in the table.** They come from the
-`@gongrzhe/server-gmail-autoauth-mcp` README and Composio's toolkit docs. `append_row` and `find_free_slots` are
+**Composio names: verified on this Mac (s13, 2026-10-25, composio CLI 0.4.2, read-only):** `GMAIL_SEND_EMAIL`,
+`GMAIL_FETCH_EMAILS`, `GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID`, `GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND`,
+`GOOGLECALENDAR_FIND_FREE_SLOTS` and `GOOGLECALENDAR_EVENTS_LIST` exist with input schemas (`composio execute <SLUG>
+--get-schema`). `GMAIL_SEND_EMAIL` also takes `from_email` and `include_signature`: the gate accepts them only empty /
+`false` (a different sender or an appended signature is not what you approved). **Not verified: the MCP names**
+(`send_email`, `search_emails`, `read_email`, `list_email_labels`, `append_row`, `find_free_slots`). They come from the
+`@gongrzhe/server-gmail-autoauth-mcp` README. `append_row` and `find_free_slots` are
 placeholders for whichever Sheets / Calendar MCP server you connect. If your server names a tool differently the gate
 denies it (fail closed): add the exact name and its argument schema to `allowlist.ts` with a test, never a pattern.
 Reply-in-thread (the scheduling workflow) has no allowlisted tool yet: it needs a reply tool whose `threadId` is bound
@@ -118,3 +126,99 @@ to the approved item, so live scheduling batches stay off.
 
 Not verified on this machine: the exact Composio MCP URL format and the Gmail MCP server's current tool names. Both
 need the human to connect an account once.
+
+## Resolution chain (s13)
+"If the MCP doesn't work, find a way around it." Per app, Offload tries the ways of reaching it in order and uses the
+first healthy one that can do what the workflow needs (`src/connectors/chain.ts`):
+
+1. **mcp**: a connectors.json server that lists the app. Probe: its env vars are set and a real MCP `tools/list`
+   answers within 5 s. It counts only for the allowlisted tools it really lists (a server with none of them fails).
+2. **composio**: the Composio **CLI** (no Composio MCP server needed). Probe, read-only commands only:
+   `composio tools list <toolkit> --limit 1000` (for an app the catalog does not know, `composio search "<app>"` finds
+   the toolkit), `composio connections list --toolkit <toolkit>` (an ACTIVE account; an `always_allow` one is
+   preferred). An account that asks before every call (`ask_every_call`) is used for reads only, so a send can never
+   hang on a prompt. Sends run deterministically: `composio execute <SLUG> -d <the approved arguments> --account <id>`,
+   each call through the gate first as `mcp__composio_cli__<SLUG>`.
+3. **api**: a direct HTTP connection you describe in `connectors.json` (`apis`, below). Probe: the health request
+   answers 2xx.
+4. **computer**: Offload uses the app on your screen (Accessibility + screenshots, Claude `claude-sonnet-5-5` with the
+   `computer_toolset_20260801` toolset). Last resort, **off until you turn it on** (`OFFLOAD_COMPUTER_REAL=1` for now).
+   Probe: Accessibility and Screen Recording are granted and the app is on this Mac (or its site opens in the browser).
+
+Every method reports health (`ok | failed | skipped`), a plain reason when it is not ok, and its capabilities: canonical
+actions such as `mail.search`, `mail.send`, `sheet.append`, and `screen.read` / `ui.commit` for any app. Decisions are
+cached in `$OFFLOAD_HOME/connector-chain.json` (0600; no secret: methods, codes, reasons, capability and tool names,
+a scrubbed last error) for 10 minutes (2 minutes when nothing works). A run that fails on a method marks it failed for
+2 minutes and the next one is used. Apps from your task profiles that the catalog does not know (`app-<name>`,
+`web-<host>`) are kept there 7 days from when they were last seen, then dropped with their decisions (the purge does
+it too). The stub model (`serve --model stub`) uses deterministic demo probes (nothing runs) kept apart from real ones;
+`OFFLOAD_STUB_CHAIN_FAIL=mcp,composio` makes those demo probes fail.
+
+### Fallback never sends twice
+One approval gate and one item journal cover every method of a run. Each item is written `sending` (and the contacted
+ledger updated) before its call. When a method fails (it throws, or an allowed call fails), only the items still
+`pending`, never attempted, go to the next method. An item that may have gone out is `unknown` and is never retried
+automatically (release it yourself: `POST /workflows/:id/release`). A refusal by the gate is not a failure: nothing
+falls back after a refusal.
+
+### The gate for every method
+Every write of every method is the item's one commit (role `send`) or its log (role `log`), compared by the canonical
+hash of its full arguments with the approved item, once:
+
+| method | tool the gate sees | the arguments it hashes |
+|---|---|---|
+| mcp | `mcp__<server>__send_email` (etc., table above) | the tool's arguments |
+| composio | `mcp__composio_cli__GMAIL_SEND_EMAIL` (the Composio rows above) | `recipient_email`, `subject`, `body` |
+| api | `mcp__api_<app>__<operationId>` | the operation's declared fields |
+| computer | `mcp__computer_<app>__commit` | `{ app, verb, fields }`: the verb of the control and the form as Accessibility shows it at that moment |
+
+Computer use, action by action: reads (screenshot, scroll, pointer moves, wait, the Accessibility outline) are allowed;
+local edits (focus a field, type into it, a click on a control without a commit word, Tab and arrows) need the approved
+batch and use nothing up; a **commit** is any click on a control whose title, description or identifier has a commit
+word (send, submit, save, pay, order, delete, post, publish, share, invite, confirm, OK, yes, apply, schedule, reply,
+forward, upload, create, add, continue, done, ...), any Return or Enter, Cmd+S, or Delete outside a text field. A commit
+is allowed only when its verb and form equal the approved item (an email: verb `send`, fields to / subject / body), so a
+changed field, an extra Cc, "Schedule send" or Return instead of Send are refused. Paste, drag, mouse down/up, held
+keys, other shortcuts, a click where Accessibility cannot say what is under the pointer, and a newline in a one-line
+field are refused. Composio's meta tools (`COMPOSIO_*`, multi-execute, workbench, bash, proxy) are denied on every
+server. Stop: `POST /computer/stop` (the app maps Esc and its menu to it), pausing the workflow, or moving the pointer
+yourself stops the run before its next action. The app can draw a pointer glyph from `GET /computer/session`.
+
+### A direct connection (`apis`)
+```json
+{
+  "version": 1,
+  "servers": {},
+  "apis": {
+    "gmail": {
+      "baseUrl": "https://gmail.googleapis.com",
+      "auth": { "type": "bearer", "keychain": { "service": "offload.gmail", "account": "me" } },
+      "health": { "method": "GET", "path": "/gmail/v1/users/me/profile" },
+      "operations": {
+        "mail.send": {
+          "operationId": "users.messages.send", "method": "POST", "path": "/gmail/v1/users/me/messages/send",
+          "role": "send", "body": "gmail-raw",
+          "fields": { "to": "addresses", "subject": "text", "body": "text" },
+          "map": { "to": "$item.to", "subject": "$item.subject", "body": "$item.body" }
+        }
+      },
+      "openapi": "/Users/me/specs/gmail.json"
+    }
+  }
+}
+```
+- `auth` names the secret, never holds it: `fromEnv: "NAME"` or `keychain: { service, account }` (a generic password
+  item; Offload runs `security find-generic-password -s <service> -a <account> -w` per request and keeps the value in
+  memory only). Raw values, `Bearer ...`, long tokens and `?api_key=` URLs are refused. `type: "header"` adds
+  `header: "x-api-key"`.
+- A write (`role` send or log) must give every argument a schema (`addresses`, `text`, `id`, `rows`, `empty`,
+  `{ "fixed": [...] }`; never `any`) and say where each comes from (`$item.to`, `$item.subject`, `$item.body`,
+  `$item.commit.<label>`, `$crm.row`, `$crm.spreadsheetId`, `$crm.range`, or a literal). `body: "gmail-raw"` builds the
+  RFC 5322 message Gmail's `users.messages.send` takes.
+- `openapi` (optional, a local OpenAPI 3 JSON file): its GET operations add read capabilities `api.<operationId>`.
+  Writes are never taken from it.
+- `baseUrl` is https (plain http only on 127.0.0.1); redirects are refused.
+
+Not verified on this Mac: a direct Gmail API send (no OAuth access token is set up here), and the real computer-use
+driver (`src/connectors/computer/osa-driver.ts`: `screencapture`, `sips`, JXA with the Accessibility bridge). Both are
+covered by tests with fakes only.

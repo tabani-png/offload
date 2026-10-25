@@ -15,7 +15,8 @@ chain works for any app a task profile touches (catalog ids and apps that are no
 `brain/src/workflows/chain-executor.ts`, `brain/src/api/{server,workflow-routes,types}.ts`,
 `brain/src/workflows/service.ts` (connectors response only), `brain/tests/s13-connector-chain/**`,
 `brain/package.json` + `brain/bun.lock` (ADR 0008), `brain/CONNECTORS.md`, `brain/API.md`, `plan/adr/0008-*.md`,
-`slices/s13-connector-chain/**`.
+`plan/plan.md` (ADR list), `brain/src/store/retention.ts` (purge of app targets), `brain/src/connectors/{api-config,
+methods}.ts`, `slices/s13-connector-chain/**`.
 
 ## paths_out_of_scope
 `engine/**`, `brain/src/vision/**` (s11), `brain/src/grouping/**`, `brain/src/understanding/**`,
@@ -30,6 +31,10 @@ fields are additive and ignored by Codable until a UI slice renders them).
   fills both seams (the operator asked for it). The assertions are updated to the new truth (api and computer are
   available methods; `next` after composio is api; a seam still fails "not available yet" through
   `unavailableMethod`). Nothing else in s10e changes.
+
+- Model choice (coordinator, 2026-10-25): s14 builds the shared router (`brain/src/models/router.ts`). s13 does not
+  hardcode a model in the executor: the planner takes an injected `pickModel(route, ctx)` (route `computer.step`),
+  default Sonnet 5.5 (`DEFAULT_COMPUTER_MODEL`), wired to the router at merge. s13 does not create router.ts.
 
 ## Design
 ### 1. Resolution chain (`connectors/chain.ts`)
