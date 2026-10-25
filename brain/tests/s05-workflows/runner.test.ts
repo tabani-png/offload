@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { connectorStatus, summaryOf } from "../../src/workflows/service.ts";
 import { dryRun } from "../../src/workflows/dryrun.ts";
 import { ScriptedExecutor, sendEachItem } from "../../src/workflows/executor.ts";
+import { enableAutoRun } from "../../src/workflows/autorun.ts";
 import { approveBatch, executeBatch, prepareLiveBatch, RunError } from "../../src/workflows/runner.ts";
 import { readBatch, readWorkflow, updateWorkflow } from "../../src/workflows/store.ts";
 import { NOW, world, writeRecipients, type World } from "./setup.ts";
@@ -36,7 +37,7 @@ describe("s05 runner", () => {
     const r = approveBatch(w.home, w.outreach.id, d.batchHash, NOW + 5);
     expect(r.token).toBeNull();
     expect(readWorkflow(w.home, w.outreach.id)).toMatchObject({ status: "active", activatedAt: NOW + 5 });
-    await expect(executeBatch({ home: w.home, workflowId: w.outreach.id, hash: d.batchHash, token: null, executor: executor() })).rejects.toThrow(/never executed/);
+    await expect(executeBatch({ home: w.home, workflowId: w.outreach.id, hash: d.batchHash, token: null, executor: executor(), now: () => NOW + 6 })).rejects.toThrow(/never executed/);
     expect(() => approveBatch(w.home, w.outreach.id, d.batchHash, NOW + 6)).toThrow(/not pending/);
   });
 
@@ -93,7 +94,8 @@ describe("s05 runner", () => {
 
   test("auto-run on: a live batch runs without a token; paused workflows refuse to run", async () => {
     await activate();
-    updateWorkflow(w.home, w.outreach.id, (x) => void (x.autoRun = true), NOW);
+    // s10b N1: auto-run is turned on through enableAutoRun, which pins the recipients it may send to.
+    enableAutoRun(w.home, w.outreach.id, NOW);
     const b = await prepareLiveBatch({ home: w.home, workflowId: w.outreach.id, model: w.model });
     await executeBatch({ home: w.home, workflowId: w.outreach.id, hash: b.hash, token: null, executor: executor() });
     expect(sent).toHaveLength(3);

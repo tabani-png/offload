@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ErrorResponse, ObserverControlResponse } from "../../src/api/types.ts";
-import { FAKE_OBSERVER } from "../s05c-keys/fake.ts";
+import { fakeObserverWith } from "../s05c-keys/fake.ts";
 import { s09bWorld, type S09bWorld } from "./setup.ts";
 
 let w: S09bWorld | null = null;
@@ -21,7 +21,7 @@ async function withFake(extra: Record<string, string> = {}): Promise<{ w: S09bWo
   const log = join(ww.home, "obs.log");
   const status = join(ww.home, "status.json");
   writeFileSync(status, JSON.stringify(STATUS));
-  const brainEnv = { OFFLOAD_OBSERVER_BIN: FAKE_OBSERVER, FAKE_OBSERVER_LOG: log, FAKE_OBSERVER_STATUS: status, ...extra };
+  const brainEnv = { OFFLOAD_OBSERVER_BIN: fakeObserverWith({ FAKE_OBSERVER_LOG: log, FAKE_OBSERVER_STATUS: status, ...extra }, ww.home) };
   const { createBrain } = await import("../../src/api/server.ts");
   ww.brain = createBrain({ home: ww.home, token: "t".repeat(40), now: () => ww.clock.now, workflows: { model: ww.model, env: {} }, observerEnv: brainEnv });
   return { w: ww, log };

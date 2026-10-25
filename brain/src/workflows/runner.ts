@@ -6,9 +6,14 @@
 //   - every item has a state written BEFORE its send (pending -> sending -> sent | failed_before_send | unknown);
 //     sent and unknown count as contacted and are never re-sent unless the user releases them (releaseUnknown);
 //   - pause and delete cancel a running batch: the gate re-checks before every call and the executor is aborted;
-//   - a batch runs only from `approved` (or `pending` with auto-run on), and its approval is used up when it starts.
+//   - a batch runs only from `approved` (or `pending` with auto-run on), and its approval is used up when it starts;
+//   - s10b N1: auto-run sends on its own only what autorun.ts says is pinned and unchanged;
+//   - s10b N5: an auto run (auto path, or approved by the run loop) stops before its next item when auto-run goes off;
+//   - s10b privacy: every address the gate lets a send go to is written to contacted.ledger (sha256, no address)
+//     before the send, so "never write twice" holds after the sealed batch is purged at 7 days.
 import { randomBytes } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
+import { addressHash, autoSendable, pinFiles, rowHash } from "./autorun.ts";
 import { join } from "node:path";
 import type { Model } from "../models/model.ts";
 import { draftInTone } from "../tone/draft.ts";
@@ -20,7 +25,7 @@ import { pickNext, readRecipients } from "./scripts/recipients.ts";
 import type { Executor, ToolCallRecord } from "./executor.ts";
 import { parseFacts, renderSubject } from "./facts.ts";
 import { createGate, type GateAction, type ServerMap } from "./gate.ts";
-import { batchIntact, deleteApproval, gateLogPath, listBatches, readApprovals, readBatch, readText, readWorkflow, saveApproval, saveBatch, updateWorkflow, workflowDir, workflowExists, WorkflowGoneError, writePrivate } from "./store.ts";
+import { batchIntact, deleteApproval, gateLogPath, listBatches, readApprovals, readBatch, readText, readWorkflow, removeBatch, saveApproval, saveBatch, updateWorkflow, workflowDir, workflowExists, WorkflowGoneError, writePrivate } from "./store.ts";
 import type { WorkflowJson } from "./types.ts";
 
 export class RunError extends Error {
@@ -88,28 +93,56 @@ export function acquireLock(home: string, id: string): { release(): void } {
 
 // ---------- cancel ----------
 
-const running = new Map<string, AbortController>();
+const running = new Map<string, { ac: AbortController; auto: boolean }>();
 const runKey = (home: string, id: string) => `${home}\u0000${id}`;
 
-/** Pause and delete call this: the running prepare or batch stops before its next item and the executor is aborted. */
-export function requestCancel(home: string, id: string): boolean {
-  const ac = running.get(runKey(home, id));
-  if (ac === undefined) return false;
-  ac.abort(new Error("workflow paused or deleted"));
+/** Pause and delete call this: the running prepare or batch stops before its next item and the executor is aborted.
+ * `autoOnly` (auto-run turned off, REVIEW-2 N5): only a run that auto-run started is stopped. */
+export function requestCancel(home: string, id: string, opts: { autoOnly?: boolean } = {}): boolean {
+  const r = running.get(runKey(home, id));
+  if (r === undefined || (opts.autoOnly === true && !r.auto)) return false;
+  r.ac.abort(new Error(opts.autoOnly === true ? "auto-run was turned off" : "workflow paused or deleted"));
   return true;
 }
 
-function register(home: string, id: string): { ac: AbortController; done: () => void } {
+function register(home: string, id: string, auto = false): { ac: AbortController; done: () => void; setAuto: (a: boolean) => void } {
   const ac = new AbortController();
-  running.set(runKey(home, id), ac);
-  return { ac, done: () => void (running.get(runKey(home, id)) === ac && running.delete(runKey(home, id))) };
+  const rec = { ac, auto };
+  running.set(runKey(home, id), rec);
+  return { ac, done: () => void (running.get(runKey(home, id)) === rec && running.delete(runKey(home, id))), setAuto: (a) => void (rec.auto = a) };
 }
 
-function cancelReason(home: string, id: string, ac: AbortController): string | null {
-  if (ac.signal.aborted) return "the workflow was paused or deleted";
+function cancelReason(home: string, id: string, ac: AbortController, auto = false): string | null {
+  if (ac.signal.aborted) return auto && readWorkflow(home, id)?.autoRun === false ? "auto-run was turned off" : "the workflow was paused or deleted";
   if (!workflowExists(home, id)) return "the workflow was deleted";
-  if (readWorkflow(home, id)?.status === "paused") return "the workflow is paused";
+  const wf = readWorkflow(home, id);
+  if (wf?.status === "paused") return "the workflow is paused";
+  if (auto && wf?.autoRun !== true) return "auto-run was turned off";
   return null;
+}
+
+// ---------- contacted ledger ----------
+
+export const ledgerPath = (home: string, id: string) => join(workflowDir(home, id), "contacted.ledger");
+
+/** One line per event, `contacted <hash>` (written before a send is allowed) or `released <hash>` (the user said an
+ * unknown send did not go out). No address, only addressHash. */
+export function appendLedger(home: string, id: string, email: string, op: "contacted" | "released"): void {
+  appendFileSync(ledgerPath(home, id), `${op} ${addressHash(id, email)}\n`, { mode: 0o600 });
+}
+
+/** Address hashes whose last ledger line is `contacted`. */
+export function ledgerContacted(home: string, id: string): Set<string> {
+  const out = new Set<string>();
+  const p = ledgerPath(home, id);
+  if (!existsSync(p)) return out;
+  for (const line of readFileSync(p, "utf8").split("\n")) {
+    const m = /^(contacted|released) ([0-9a-f]{64})$/.exec(line.trim());
+    if (m === null) continue;
+    if (m[1] === "contacted") out.add(m[2]!);
+    else out.delete(m[2]!);
+  }
+  return out;
 }
 
 // ---------- contacted ----------
@@ -184,7 +217,12 @@ export async function prepareLiveBatch(o: PrepareOptions): Promise<Batch> {
     const factsText = readText(o.home, wf.id, "facts.md") ?? "";
     const facts = parseFacts(factsText);
     const contacted = contactedKeys(o.home, wf.id, wf.inputs.crmLog, now);
-    const next = pickNext(readRecipients(readText(o.home, wf.id, wf.inputs.list) ?? ""), contacted, wf.batchSize);
+    const rows = readRecipients(readText(o.home, wf.id, wf.inputs.list) ?? "");
+    // Sent or unknown in a batch that was already purged (7 days): still never written to again.
+    const ledger = ledgerContacted(o.home, wf.id);
+    for (const r of rows) if (ledger.has(addressHash(wf.id, r.email))) contacted.add(r.email);
+    const next = pickNext(rows, contacted, wf.batchSize);
+    const draftedWith = pinFiles(o.home, wf);
     if (next.length === 0) throw new RunError(`nobody left to write to in ${wf.inputs.list}`, "conflict");
     // Reserved on disk before the first model await.
     writePrivate(preparingPath(o.home, wf.id), JSON.stringify({ keys: next.map((r) => r.email), at: now, pid: process.pid }) + "\n");
@@ -197,11 +235,11 @@ export async function prepareLiveBatch(o: PrepareOptions): Promise<Batch> {
       const recipient = { email: r.email, firstName: r.firstName, lastName: r.lastName, org: r.org, notes: r.notes };
       const subject = renderSubject(facts.subject ?? wf.inputs.subjectTemplate, facts, recipient);
       const d = await draftInTone({ pack, bucket: wf.bucket, recipient, subject, facts: factsText, model: o.model, models: wf.models });
-      items.push({ key: r.email, to: r.email, subject, body: d.body, warnings: d.warnings });
+      items.push({ key: r.email, to: r.email, subject, body: d.body, warnings: d.warnings, sourceRowHash: rowHash(r) });
     }
     const why = cancelReason(o.home, wf.id, ac);
     if (why !== null) throw new RunError(`stopped while drafting: ${why}`, "conflict");
-    const batch = makeBatch(wf.id, "live", items, now);
+    const batch: Batch = { ...makeBatch(wf.id, "live", items, now), draftedWith };
     saveBatch(o.home, batch);
     return batch;
   } finally {
@@ -224,7 +262,7 @@ export interface ApproveResult {
  * Approves exactly `hash`. A dry-run batch marks the workflow reviewed (active) and is never sendable.
  * A live batch gets a fresh token stored for that hash only.
  */
-export function approveBatch(home: string, workflowId: string, hash: string, now: number): ApproveResult {
+export function approveBatch(home: string, workflowId: string, hash: string, now: number, opts: { auto?: boolean } = {}): ApproveResult {
   const wf = readWorkflow(home, workflowId);
   if (wf === null) throw new RunError(`no workflow ${workflowId}`, "not_found");
   const batch = readBatch(home, workflowId, hash, now);
@@ -243,8 +281,39 @@ export function approveBatch(home: string, workflowId: string, hash: string, now
     return { batch, workflow: updated, token: null };
   }
   const token = randomBytes(32).toString("base64url");
-  saveApproval(home, workflowId, hash, { token, approvedAt: now });
+  // auto: approved by auto-run (the run loop), not by you: it stops when auto-run goes off (REVIEW-2 N5).
+  saveApproval(home, workflowId, hash, { token, approvedAt: now, ...(opts.auto === true ? { auto: true } : {}) });
   return { batch, workflow: wf, token };
+}
+
+/**
+ * Splits a pending live batch into the items in `keep` and the rest: two new pending batches (content hashes change),
+ * the original file removed. `held` gets `review` (why auto-run did not send it). Returns null for an empty side.
+ */
+export function splitBatch(home: string, b: Batch, keep: ReadonlySet<string>, review: NonNullable<Batch["review"]>, now: number): { kept: Batch | null; held: Batch | null } {
+  if (b.kind !== "live" || b.state !== "pending") throw new RunError(`batch is ${b.state}, not pending`, "conflict");
+  const lock = acquireLock(home, b.workflowId);
+  try {
+    const extra = { ...(b.draftedWith === undefined ? {} : { draftedWith: b.draftedWith }) };
+    const keptItems = b.items.filter((i) => keep.has(i.key));
+    const heldItems = b.items.filter((i) => !keep.has(i.key));
+    const kept = keptItems.length === 0 ? null : { ...makeBatch(b.workflowId, "live", keptItems, b.createdAt), ...extra };
+    const held = heldItems.length === 0 ? null : { ...makeBatch(b.workflowId, "live", heldItems, b.createdAt), ...extra, review };
+    if (kept !== null) saveBatch(home, kept);
+    if (held !== null) saveBatch(home, held);
+    if (kept?.hash !== b.hash && held?.hash !== b.hash) removeBatch(home, b.workflowId, b.hash);
+    void now;
+    return { kept, held };
+  } finally {
+    lock.release();
+  }
+}
+
+/** Marks a pending batch as held by auto-run (why it did not send it). */
+export function holdBatch(home: string, b: Batch, review: NonNullable<Batch["review"]>): Batch {
+  const held = { ...b, review };
+  saveBatch(home, held);
+  return held;
 }
 
 // ---------- execute ----------
@@ -278,7 +347,7 @@ export async function executeBatch(o: ExecuteOptions): Promise<Batch> {
   const now = o.now ?? Date.now;
   if (readWorkflow(o.home, o.workflowId) === null) throw new RunError("no such workflow or batch", "not_found");
   const lock = acquireLock(o.home, o.workflowId);
-  const { ac, done } = register(o.home, o.workflowId);
+  const { ac, done, setAuto } = register(o.home, o.workflowId);
   try {
     const wf = readWorkflow(o.home, o.workflowId);
     if (wf === null || readBatch(o.home, o.workflowId, o.hash, now()) === null) throw new RunError("no such workflow or batch", "not_found");
@@ -292,6 +361,11 @@ export async function executeBatch(o: ExecuteOptions): Promise<Batch> {
     const rec = approvals[o.hash];
     const approved = batch.state === "approved" && rec !== undefined && o.token !== null && rec.token === o.token;
     const auto = batch.state === "pending" && wf.autoRun;
+    // REVIEW-2 N1: the auto path (no token) sends only a batch that is entirely pinned and unchanged; anything else
+    // stays pending for review, untouched.
+    if (!approved && auto && !autoSendable(o.home, wf, batch)) return batch;
+    const autoRun = auto || (approved && rec?.auto === true);
+    setAuto(autoRun);
     batch.itemStates ??= {};
     const states = batch.itemStates;
     if (!approved && !auto) {
@@ -330,10 +404,11 @@ export async function executeBatch(o: ExecuteOptions): Promise<Batch> {
       // Written to disk BEFORE the tool runs; if it cannot be written the gate denies the call.
       onAllow: (k, role, tool) => {
         if (role !== "send") return;
+        appendLedger(o.home, wf.id, k, "contacted");
         states[k] = { state: "sending", at: now(), tool };
         saveBatch(o.home, batch);
       },
-      cancelled: () => cancelReason(o.home, wf.id, ac),
+      cancelled: () => cancelReason(o.home, wf.id, ac, autoRun),
       logPath: gateLogPath(o.home, wf.id),
       now,
     });
@@ -391,6 +466,7 @@ export function releaseUnknown(home: string, workflowId: string, hash: string, k
       b.itemStates![k] = { ...b.itemStates![k]!, state: "failed_before_send", at: now, releasedAt: now };
     }
     saveBatch(home, b);
+    for (const raw of keys) appendLedger(home, workflowId, raw.toLowerCase(), "released");
     return b;
   } finally {
     lock.release();

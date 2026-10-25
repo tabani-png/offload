@@ -7,6 +7,7 @@ import {
   type BatchSummaryDTO,
   type ConnectorsResponse,
   type DashboardResponse,
+  type KeptFileDTO,
   type MeasuredSavingDTO,
   type WorkflowConnectorDTO,
   type WorkflowDetailDTO,
@@ -20,6 +21,12 @@ import { roleOfTool } from "./allowlist.ts";
 import type { Batch } from "./batch.ts";
 import { pendingLiveBatch } from "./runner.ts";
 import { nextCronRun } from "./schedule.ts";
+import { existsSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { readStyleCard } from "../tone/pack.ts";
+import { BUCKETS } from "../tone/types.ts";
+import { autoRunPinDTO, reviewSentence } from "./autorun.ts";
+import { displayName } from "./labels.ts";
 import { listBatches, listWorkflows, readText, workflowDir } from "./store.ts";
 import type { WorkflowJson } from "./types.ts";
 
@@ -50,7 +57,10 @@ function purposeOf(wf: WorkflowJson, connectorId: string): string {
 export function stateOf(wf: WorkflowJson, connectors: readonly WorkflowConnectorDTO[], pending: Batch | null): { state: WorkflowState; needsYou: string[] } {
   if (wf.status !== "active") return { state: wf.status, needsYou: [] };
   const needsYou: string[] = [];
-  if (pending !== null) needsYou.push(`A new batch of ${pending.items.length} is ready for review.`);
+  // s10b N1: a batch auto-run held back says why ("3 new recipients need your review.").
+  if (pending !== null) needsYou.push(reviewSentence(pending) ?? `A new batch of ${pending.items.length} is ready for review.`);
+  // s10b N2: a scheduled run that did not finish.
+  if (wf.lastRunError) needsYou.push(`The last scheduled run did not finish: ${wf.lastRunError.reason.replace(/[.\s]+$/, "")}. It tries again at the next scheduled time.`);
   for (const c of connectors) {
     if (!c.required || c.status === "connected") continue;
     needsYou.push(`Connect ${c.name} so this can ${purposeOf(wf, c.id)}.${c.status === "missing_env" ? " Its sign-in setting is not set yet." : ""}`);
@@ -76,7 +86,7 @@ export function summaryOf(home: string, wf: WorkflowJson, status: Record<string,
     insightId: wf.insightId,
     taskId: wf.taskId,
     kind: wf.kind,
-    name: wf.name,
+    name: displayName(home, wf, now),
     description: wf.description,
     state,
     needsYou,
@@ -89,6 +99,8 @@ export function summaryOf(home: string, wf: WorkflowJson, status: Record<string,
     pendingBatch: pending === null ? null : batchSummary(pending),
     lastDryRunAt: wf.lastDryRunAt,
     ...runTimes(home, wf, now),
+    autoRunPin: autoRunPinDTO(home, wf),
+    lastRunError: wf.lastRunError ?? null,
   };
 }
 
@@ -171,7 +183,7 @@ export function dashboard(a: Analysis, home: string, env: Env, now: number = Dat
     return {
       id: wf.id,
       insightId: wf.insightId,
-      name: wf.name,
+      name: s.name,
       status: legacyStatus(s.state, wf),
       connectors: insight === undefined ? wf.insight.connectors : insightConnectors(insight),
       estimatedHoursSavedPerWeek: wf.estimate.weeklyHoursSaved,
@@ -232,4 +244,35 @@ export function connectorsResponse(a: Analysis, home: string, env: Env): Connect
       return { insightId: i.id, name: i.label.name, ready: list.length > 0 && list.every((x) => x.status === "connected"), connectors: list };
     }),
   };
+}
+
+// ---------- kept user files (s10b, REVIEW-2 privacy table) ----------
+
+const KEPT_NOTES: Record<KeptFileDTO["kind"], string> = {
+  recipients: "Your recipient list. Kept until you delete it; auto-run only sends to rows pinned when you turned it on.",
+  facts: "The facts you wrote for drafts. Kept until you delete it.",
+  send_log: "Your record of who was emailed, so nobody gets the same email twice. Kept until you delete it.",
+  tone_card: "A tone card you edited. Kept until you delete it; cards you did not edit are deleted with the mail they came from after 7 days.",
+};
+
+/** Files with the user's own content that are not purged at 7 days: recipients.csv, facts.md, crm-log.csv per
+ * workflow, and tone cards the user edited. Everything else holding observed or mail text is sealed and purged. */
+export function keptFiles(home: string): KeptFileDTO[] {
+  const out: KeptFileDTO[] = [];
+  const add = (path: string, kind: KeptFileDTO["kind"], workflowId: string | null) => {
+    if (!existsSync(path)) return;
+    const st = statSync(path);
+    out.push({ path, kind, workflowId, bytes: st.size, updatedAt: Math.round(st.mtimeMs), note: KEPT_NOTES[kind] });
+  };
+  for (const wf of listWorkflows(home)) {
+    const dir = workflowDir(home, wf.id);
+    add(join(dir, wf.inputs.list), "recipients", wf.id);
+    add(join(dir, "facts.md"), "facts", wf.id);
+    add(join(dir, wf.inputs.crmLog), "send_log", wf.id);
+  }
+  for (const b of BUCKETS) {
+    const card = readStyleCard(home, b);
+    if (card.text !== null && card.edited) add(card.path, "tone_card", null);
+  }
+  return out;
 }

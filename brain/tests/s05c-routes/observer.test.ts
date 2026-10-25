@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ErrorResponse, ObserverResponse } from "../../src/api/types.ts";
-import { FAKE_OBSERVER } from "../s05c-keys/fake.ts";
+import { fakeObserverWith } from "../s05c-keys/fake.ts";
 import { tempHome } from "../helpers.ts";
 import { routeWorld, type RouteWorld } from "./setup.ts";
 
@@ -33,8 +33,10 @@ const STATUS = {
   schemaVersion: 1,
 };
 
+let lastBin = "";
 async function observerWith(env: Record<string, string>): Promise<RouteWorld> {
-  return await routeWorld({ observerEnv: { OFFLOAD_OBSERVER_BIN: FAKE_OBSERVER, ...env } });
+  lastBin = fakeObserverWith(env);
+  return await routeWorld({ observerEnv: { OFFLOAD_OBSERVER_BIN: lastBin } });
 }
 
 describe("s05c observer route", () => {
@@ -49,7 +51,7 @@ describe("s05c observer route", () => {
       expect(r.status).toBe(200);
       expect(r.body.available).toBe(true);
       expect(r.body.error).toBeNull();
-      expect(r.body.bin).toBe(FAKE_OBSERVER);
+      expect(r.body.bin).toBe(lastBin);
       expect(r.body.permissions).toEqual({ screenRecording: true, accessibility: true, inputMonitoring: false });
       expect(r.body.status).toMatchObject({ schemaVersion: 1, running: true, keysMode: "keychain", permissionsSource: "heartbeat", daysStored: STATUS.daysStored, nextPurgeAt: STATUS.nextPurgeAt });
       expect(r.body.status?.heartbeat).toMatchObject({ pid: 4242, ocrErrors: 3 });

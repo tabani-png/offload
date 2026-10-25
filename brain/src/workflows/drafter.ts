@@ -2,7 +2,9 @@
 // scripts/). The structure is deterministic (a template per task kind); the model only writes drafts later, per
 // recipient. The estimate is the insight's saving estimate, copied with its arithmetic (ADR 0005).
 // SKILL.md and the description are fixed template text: insight labels come from observed window titles and hosts
-// (attacker-controllable text), so they stay in workflow.json `name` / `insight` for display only (REVIEW-1 M5).
+// (attacker-controllable text), so they never reach a prompt (REVIEW-1 M5). They are observed text too, so they are
+// sealed in labels.json.enc under the capture day of the oldest instance and purged with it; workflow.json keeps
+// fixed template names and ids only (REVIEW-2 N8, workflows/labels.ts).
 import { copyFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Analysis, Insight } from "../analyze.ts";
@@ -10,6 +12,8 @@ import { insightConnectors } from "../api/dto.ts";
 import { connectorById } from "../connectors/catalog.ts";
 import { DEFAULT_MODELS, type ModelConfig } from "../models/model.ts";
 import type { Bucket } from "../tone/types.ts";
+import { localDay } from "../store/vault.ts";
+import { FIXED_NAMES, sealLabels } from "./labels.ts";
 import { RECIPIENTS_HEADER } from "./scripts/recipients.ts";
 import { CRM_HEADER } from "./scripts/crm-log.ts";
 import { ensureDir, readWorkflow, workflowDir, writePrivate, writeWorkflow } from "./store.ts";
@@ -97,7 +101,7 @@ const TEMPLATES: Record<TemplateId, Template> = {
   generic: {
     id: "generic",
     bucket: "other",
-    name: (i) => i.label.name,
+    name: () => FIXED_NAMES.generic,
     description: () => "Drafts this repeated task for your review, then does it through the connected tool.",
     steps: (primary) => [
       { id: "read", type: "read", title: "Read what needs doing", detail: "Read the items waiting in the connected tool.", connector: primary, sideEffect: false },
@@ -219,7 +223,7 @@ export function draftWorkflow(o: DraftWorkflowOptions): { workflow: WorkflowJson
     steps: t.steps(primary),
     estimate: { weeklyHoursSaved: s.weeklyHoursSaved, savingPct: s.savingPct, arithmetic: s.arithmetic, lowHoursSaved: s.range.low.hoursSaved, highHoursSaved: s.range.high.hoursSaved },
     models: o.models ?? { ...DEFAULT_MODELS },
-    insight: { name: insight.label.name, kind: insight.label.kind, connectors: insightConnectors(insight) },
+    insight: { name: "", kind: insight.label.kind, connectors: insightConnectors(insight) },
     lastDryRunAt: null,
     lastDryRunHash: null,
   };
@@ -232,6 +236,8 @@ export function draftWorkflow(o: DraftWorkflowOptions): { workflow: WorkflowJson
   if (!existsSync(join(dir, wf.inputs.list))) writePrivate(join(dir, wf.inputs.list), RECIPIENTS_HEADER + "\n");
   if (!existsSync(join(dir, wf.inputs.crmLog))) writePrivate(join(dir, wf.inputs.crmLog), CRM_HEADER + "\n");
   writePrivate(join(dir, "SKILL.md"), renderSkillMd(wf));
+  const days = (o.analysis.tasks.find((t) => t.id === insight.taskId)?.instances ?? []).map((i) => i.day).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+  sealLabels(o.home, id, { name: t.id === "generic" ? insight.label.name : wf.name, insightName: insight.label.name }, days[0] ?? localDay(now), now);
   wf.status = "ready_for_review";
   writeWorkflow(o.home, wf);
   return { workflow: wf, created: true };

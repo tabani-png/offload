@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { startBrainServer } from "../../src/api/server.ts";
 import { brainKeyPath, clearBrainKeyCache, migrateBrainKeys, openText, purgeExpired, sealText, wrappedBrainKeyPath } from "../../src/store/vault.ts";
 import { tempHome } from "../helpers.ts";
-import { FAKE_OBSERVER } from "./fake.ts";
+import { FAKE_OBSERVER, fakeObserverWith, fakeVarsFromEnv } from "./fake.ts";
 
 const NOW = new Date(2026, 9, 19, 12).getTime();
 const DAY = "2026-10-19";
@@ -19,9 +19,10 @@ let log = "";
 const saved: Record<string, string | undefined> = {};
 const ENV_KEYS = ["OFFLOAD_KEYS", "OFFLOAD_OBSERVER_BIN", "FAKE_OBSERVER_LOG", "FAKE_OBSERVER_FAIL_UNWRAP"] as const;
 
-function keychainMode(bin = FAKE_OBSERVER): void {
+// s10b N6: FAKE_OBSERVER_* reach the fake through a wrapper script, not the (minimal) child environment.
+function keychainMode(bin?: string): void {
   delete process.env.OFFLOAD_KEYS;
-  process.env.OFFLOAD_OBSERVER_BIN = bin;
+  process.env.OFFLOAD_OBSERVER_BIN = bin ?? fakeObserverWith(fakeVarsFromEnv(), home);
 }
 function fileMode(): void {
   process.env.OFFLOAD_KEYS = "file";
@@ -159,11 +160,13 @@ describe("s05c H4: Keychain-wrapped brain keys", () => {
     sealText(home, f, "{}", NOW);
     clearBrainKeyCache();
     process.env.FAKE_OBSERVER_FAIL_UNWRAP = "1";
+    keychainMode();
     expect(openText(home, f, NOW)).toBeNull();
     const res = purgeExpired(home, NOW, { log: () => {} });
     expect(res.files).toBe(0);
     expect(existsSync(f)).toBe(true);
     delete process.env.FAKE_OBSERVER_FAIL_UNWRAP;
+    keychainMode();
     expect(openText(home, f, NOW)).toBe("{}");
   });
 

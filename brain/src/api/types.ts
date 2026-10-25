@@ -317,6 +317,27 @@ export interface WorkflowSummaryDTO {
   lastRunAt: number | null;
   /** Same as AutomationDTO.nextRunAt. */
   nextRunAt: number | null;
+  // ---- added in s10b (additive) ----
+  /** REVIEW-2 N1: what auto-run is pinned to; null while auto-run is off. Show it when auto-run is turned on. */
+  autoRunPin?: AutoRunPinDTO | null;
+  /** REVIEW-2 N2: the last scheduled run that did not finish (also a needsYou sentence); null when the last one did. */
+  lastRunError?: { at: number; reason: string } | null;
+}
+
+/** s10b (REVIEW-2 N1): the auto-run pin. Auto-run sends on its own only to `pinnedRecipients`; anyone new or changed
+ * waits for review, and a changed file holds the whole batch. Turning auto-run on again re-pins. */
+export interface AutoRunPinDTO {
+  pinnedAt: number;
+  /** Rows in the list when it was pinned. */
+  recipients: number;
+  /** Addresses in the list now whose row is pinned and unchanged, sorted. */
+  pinnedRecipients: string[];
+  /** Rows in the list now that were not there at pin time / whose fields changed / pinned rows no longer there. */
+  newRecipients: number;
+  changedRecipients: number;
+  removedRecipients: number;
+  /** facts.md, tone/<bucket>.md, SKILL.md: sha256 at pin time and whether the file differs now. */
+  files: Array<{ file: string; sha256: string; changed: boolean }>;
 }
 
 export interface WorkflowDetailDTO extends WorkflowSummaryDTO {
@@ -396,6 +417,9 @@ export interface RunResponse {
   workflowId: string;
   batch: BatchSummaryDTO;
   items: BatchItemDTO[];
+  /** s10b N1, auto-run on: recipients auto-run did not send (new or changed since the pin), split into this pending
+   * batch for review. Absent or null when nothing was held. */
+  held?: BatchSummaryDTO | null;
 }
 
 export interface ConnectorsResponse {
@@ -507,6 +531,21 @@ export interface ObserverResponse {
   /** Same as status.permissions; null when unknown or unavailable. */
   permissions: ObserverPermissionsDTO | null;
   status: ObserverStatusDTO | null;
+  /** s10b: files with your content that are kept until you delete them (not purged at 7 days), for the app's
+   * "Observing" section. Everything else with observed or mail text is sealed and purged at 7 days. */
+  keptFiles?: KeptFileDTO[];
+}
+
+/** s10b (REVIEW-2 privacy table): a user file the brain keeps until you delete it. */
+export interface KeptFileDTO {
+  path: string;
+  kind: "recipients" | "facts" | "send_log" | "tone_card";
+  /** The workflow it belongs to; null for tone cards (shared by bucket). */
+  workflowId: string | null;
+  bytes: number;
+  updatedAt: number;
+  /** One plain sentence: what it is and why it is kept. */
+  note: string;
 }
 
 // ---------- s09b: model label, observer control ----------

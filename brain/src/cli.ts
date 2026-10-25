@@ -8,7 +8,12 @@
 //   bun run brain/src/cli.ts tone pairs --home DIR [--answers]       (prints the latest sealed blind-test pairs)
 //   bun run brain/src/cli.ts draft   --insight N|ins_… --home DIR [--facts FILE] [--json]
 //   bun run brain/src/cli.ts dry-run (--workflow ID | --insight N|ins_…) --home DIR [--limit N] [--model stub|claude] [--json]
+//   bun run brain/src/cli.ts purge   --home DIR [--json]   (s10b N4: the app runs it at launch; same purge as serve)
+//   serve --log-file FILE (s10b): the brain's log lines go to FILE, scrubbed of content, rotated at 5 MB keeping 2.
+//     Without it they go to stderr, scrubbed the same way.
 import { readFileSync } from "node:fs";
+import { installBrainLogging } from "./log.ts";
+import { purgeAll } from "./store/retention.ts";
 import { analyzeHome, type Analysis } from "./analyze.ts";
 import { formatReadyLine, startBrainServer, resolveToken } from "./api/server.ts";
 import { toInsights } from "./api/dto.ts";
@@ -30,11 +35,13 @@ const USAGE = `usage:
   bun run brain/src/cli.ts tone test --home DIR --hold-back N [--source fixture|mcp] [--model stub|claude]
   bun run brain/src/cli.ts tone pairs --home DIR [--answers]
   bun run brain/src/cli.ts draft --insight N|ins_ID --home DIR [--facts FILE] [--json]
-  bun run brain/src/cli.ts dry-run (--workflow ID | --insight N|ins_ID) --home DIR [--limit N] [--model stub|claude] [--json]`;
+  bun run brain/src/cli.ts dry-run (--workflow ID | --insight N|ins_ID) --home DIR [--limit N] [--model stub|claude] [--json]
+  bun run brain/src/cli.ts purge --home DIR [--json]
+  serve also takes --log-file FILE`;
 
 class UsageError extends Error {}
 
-type Command = "analyze" | "serve" | "tone build" | "tone test" | "tone pairs" | "draft" | "dry-run";
+type Command = "analyze" | "serve" | "tone build" | "tone test" | "tone pairs" | "draft" | "dry-run" | "purge";
 
 interface Args {
   command: Command;
@@ -52,6 +59,7 @@ interface Args {
   force: boolean;
   holdBack: number;
   answers: boolean;
+  logFile: string;
 }
 
 function parse(argv: readonly string[]): Args {
@@ -62,9 +70,9 @@ function parse(argv: readonly string[]): Args {
     if (sub !== "build" && sub !== "test" && sub !== "pairs") throw new UsageError(`unknown tone command ${sub ?? "(none)"}`);
     command = `tone ${sub}`;
     rest = rest.slice(1);
-  } else if (first === "analyze" || first === "serve" || first === "draft" || first === "dry-run") command = first;
+  } else if (first === "analyze" || first === "serve" || first === "draft" || first === "dry-run" || first === "purge") command = first;
   else throw new UsageError(`unknown command ${first ?? "(none)"}`);
-  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "real", source: "fixture", force: false, holdBack: 0, answers: false };
+  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "real", source: "fixture", force: false, holdBack: 0, answers: false, logFile: "" };
   const num = (flag: string, v: string | undefined, min: number, max: number): number => {
     const n = Number(v);
     if (v === undefined || !Number.isFinite(n) || n < min || n > max) throw new UsageError(`${flag} must be a number in [${min}, ${max}]`);
@@ -88,6 +96,7 @@ function parse(argv: readonly string[]): Args {
     else if (a === "--hold-back") args.holdBack = Math.floor(num(a, rest[++i], 1, 100));
     else if (a === "--force") args.force = true;
     else if (a === "--answers") args.answers = true;
+    else if (a === "--log-file") args.logFile = str(a, rest[++i]);
     else if (a === "--model") {
       const v = rest[++i];
       if (v !== "stub" && v !== "real" && v !== "claude") throw new UsageError("--model must be stub or real (claude is an alias for real)");
@@ -193,6 +202,11 @@ async function main(argv: readonly string[]): Promise<number> {
 }
 
 async function runCommand(args: Args): Promise<number> {
+  if (args.command === "purge") {
+    const r = purgeAll(args.home, Date.now(), { log: (l) => console.error(l) });
+    console.log(args.json ? JSON.stringify(r) : `purged ${r.files} artefact(s), ${r.keys} key(s), ${r.toneCards} tone card(s); sealed ${r.sealed} plaintext file(s)`);
+    return 0;
+  }
   if (args.command === "analyze") {
     const a = await analyzeHome(args.home, args.reviewSeconds === undefined ? {} : { reviewSeconds: args.reviewSeconds });
     if (args.json) {
@@ -250,6 +264,8 @@ async function runCommand(args: Args): Promise<number> {
     console.log(args.json ? JSON.stringify(r, null, 2) : formatDryRun(r));
     return 0;
   }
+  // Before anything is logged: scrubbed lines, to --log-file (rotated) or stderr.
+  installBrainLogging(args.logFile === "" ? {} : { file: args.logFile });
   const { token, generated } = resolveToken(process.env);
   if (generated) console.error("brain: no OFFLOAD_TOKEN set; generated one (it is in the ready line)");
   const model = modelOf(args);

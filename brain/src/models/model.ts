@@ -105,25 +105,31 @@ function parseFactLines(text: string): Record<string, string> {
  * One-turn text completion through the Agent SDK (uses the local Claude Code login or ANTHROPIC_API_KEY).
  * No tools at all: built-ins off, no MCP servers, no setting sources, every permission request denied.
  */
+/** The exact query() arguments of a model call (exported so tests pin them without a network call). The child gets
+ * executorEnv: no OFFLOAD_TOKEN, no OFFLOAD_* setting, no connector secret (REVIEW-1 L5, REVIEW-2 N6). */
+export function modelQueryOptions(req: ModelRequest, env: Readonly<Record<string, string | undefined>> = process.env) {
+  return {
+    prompt: req.prompt,
+    options: {
+      model: req.model,
+      systemPrompt: req.system,
+      tools: [] as string[],
+      allowedTools: [] as string[],
+      settingSources: [] as [],
+      strictMcpConfig: true,
+      mcpServers: {},
+      env: executorEnv(env),
+      maxTurns: 1,
+      permissionMode: "default" as const,
+      canUseTool: async () => ({ behavior: "deny" as const, message: "model calls have no tools" }),
+    },
+  };
+}
+
 export class AgentSdkModel implements Model {
   async complete(req: ModelRequest): Promise<string> {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
-    const q = query({
-      prompt: req.prompt,
-      options: {
-        model: req.model,
-        systemPrompt: req.system,
-        tools: [],
-        allowedTools: [],
-        settingSources: [],
-        strictMcpConfig: true,
-        mcpServers: {},
-        env: executorEnv(process.env),
-        maxTurns: 1,
-        permissionMode: "default",
-        canUseTool: async () => ({ behavior: "deny", message: "model calls have no tools" }),
-      },
-    });
+    const q = query(modelQueryOptions(req, process.env));
     for await (const m of q) {
       if (m.type !== "result") continue;
       if (m.subtype === "success" && !m.is_error) return m.result.trim();

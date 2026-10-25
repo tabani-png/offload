@@ -8,7 +8,9 @@ import type { Model } from "../models/model.ts";
 import { draftWorkflow, NotFoundError } from "../workflows/drafter.ts";
 import { dryRun, DryRunError, readLastDryRun } from "../workflows/dryrun.ts";
 import type { Executor } from "../workflows/executor.ts";
-import { approveBatch, executeBatch, prepareLiveBatch, releaseUnknown, requestCancel, RunError } from "../workflows/runner.ts";
+import { disableAutoRun, enableAutoRun, partitionForAuto } from "../workflows/autorun.ts";
+import type { Batch } from "../workflows/batch.ts";
+import { approveBatch, executeBatch, holdBatch, prepareLiveBatch, releaseUnknown, requestCancel, RunError, splitBatch } from "../workflows/runner.ts";
 import { batchSummary, connectorStatus, connectorsResponse, detailOf, summaryOf } from "../workflows/service.ts";
 import { deleteWorkflow, listWorkflows, readBatch, readWorkflow, updateWorkflow, WORKFLOW_ID_RE } from "../workflows/store.ts";
 import { applySkillUpdate, SkillEditError, skillDTO } from "../workflows/skill.ts";
@@ -151,9 +153,15 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
       return json(200, await dryRun({ home: ctx.home, analysis: await ctx.analysis(), workflowId: wf.id, model: ctx.model, modelLabel: ctx.modelLabel, now: ctx.now, ...(limit === undefined ? {} : { limit }) }));
     }
     case "run": {
-      const batch = await prepareLiveBatch({ home: ctx.home, workflowId: wf.id, model: ctx.model, now: ctx.now });
-      if (wf.autoRun) ctx.background(sendBatch(ctx, wf.id, batch.hash, null, wf.connectors));
-      const res: RunResponse = { version: API_VERSION, workflowId: wf.id, batch: batchSummary(batch), items: batch.items.map((i) => ({ key: i.key, to: i.to, subject: i.subject, body: i.body, warnings: [...i.warnings] })) };
+      let batch = await prepareLiveBatch({ home: ctx.home, workflowId: wf.id, model: ctx.model, now: ctx.now });
+      let held: Batch | null = null;
+      // Auto-run sends only what is pinned and unchanged (REVIEW-2 N1); the rest waits in a held batch.
+      if (readWorkflow(ctx.home, wf.id)?.autoRun === true) {
+        const d = dispatchAuto(ctx, wf.id, batch, ctx.now(), (l) => console.error(l));
+        batch = d.sending ?? d.held ?? batch;
+        held = d.sending === null ? null : d.held;
+      }
+      const res: RunResponse = { version: API_VERSION, workflowId: wf.id, batch: batchSummary(batch), items: batch.items.map((i) => ({ key: i.key, to: i.to, subject: i.subject, body: i.body, warnings: [...i.warnings] })), held: held === null ? null : batchSummary(held) };
       return json(201, res);
     }
     case "approve": {
@@ -195,8 +203,10 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
     }
     case "auto-run": {
       if (typeof b.enabled !== "boolean") throw new HttpError(400, "bad_request", "enabled (boolean) is required");
-      const enabled = b.enabled;
-      const updated = updateWorkflow(ctx.home, wf.id, (w) => void (w.autoRun = enabled), now);
+      // On: pin the recipient rows, facts.md, the tone card and SKILL.md (again, when already on). The summary's
+      // autoRunPin shows what was pinned. Off: drop the pin and stop an auto batch before its next item (N5).
+      const updated = b.enabled ? enableAutoRun(ctx.home, wf.id, now) : disableAutoRun(ctx.home, wf.id, now);
+      if (!b.enabled) requestCancel(ctx.home, wf.id, { autoOnly: true });
       return json(200, summaryOf(ctx.home, updated, status(), ctx.now()));
     }
     default:
@@ -219,6 +229,47 @@ function toneText(b: Record<string, unknown>): string {
 
 function toneDTO(wf: WorkflowJson, card: StyleCard): ToneCardDTO {
   return { version: API_VERSION, workflowId: wf.id, bucket: card.bucket, text: card.text, edited: card.edited, path: card.path, updatedAt: card.updatedAt, maxBytes: MAX_TONE_CARD_BYTES };
+}
+
+export interface AutoDispatch {
+  /** The batch auto-run approved and handed to the sender, or null. */
+  sending: Batch | null;
+  /** The pending batch that waits for review (new or changed recipients, a changed file, connectors), or null. */
+  held: Batch | null;
+}
+
+/**
+ * Auto-run on a freshly drafted (or existing) pending live batch, shared by the run loop and POST /run (REVIEW-2 N1):
+ * pinned and unchanged recipients are approved as their own batch (an auto approval, N5) and sent; new or changed
+ * ones are split into a pending batch with a review reason; a changed pinned file, a batch drafted before the pin or a
+ * missing connector holds the whole batch.
+ */
+export function dispatchAuto(ctx: WorkflowContext, id: string, batch: Batch, now: number, log: (line: string) => void): AutoDispatch {
+  const wf = readWorkflow(ctx.home, id);
+  if (wf === null || wf.status !== "active" || !wf.autoRun || batch.state !== "pending" || batch.kind !== "live") return { sending: null, held: batch };
+  const missing = summaryOf(ctx.home, wf, connectorStatus(ctx.home, ctx.env), now).connectors.filter((c) => c.required && c.status !== "connected");
+  if (missing.length > 0) {
+    log(`brain: ${id}: auto-run batch waits: connect ${missing.map((c) => c.name).join(", ")}`);
+    return { sending: null, held: batch };
+  }
+  const p = partitionForAuto(ctx.home, wf, batch);
+  // Auto-run on with nothing pinned (set by hand in workflow.json): every recipient is new to it.
+  if (wf.autoRunPin == null) return { sending: null, held: holdBatch(ctx.home, batch, { newRecipients: batch.items.length, changedRecipients: 0, changedFiles: [] }) };
+  if (p.stale) return { sending: null, held: batch };
+  const review = { newRecipients: p.newItems.length, changedRecipients: p.changedItems.length, changedFiles: p.changedFiles };
+  if (p.changedFiles.length > 0) return { sending: null, held: holdBatch(ctx.home, batch, review) };
+  let sendable: Batch | null = batch;
+  let held: Batch | null = null;
+  if (p.newItems.length + p.changedItems.length > 0) {
+    const split = splitBatch(ctx.home, batch, new Set(p.eligible.map((i) => i.key)), review, now);
+    sendable = split.kept;
+    held = split.held;
+    log(`brain: ${id}: auto-run held ${review.newRecipients} new and ${review.changedRecipients} changed recipient(s) for review`);
+  }
+  if (sendable === null) return { sending: null, held };
+  const { workflow, token } = approveBatch(ctx.home, id, sendable.hash, now, { auto: true });
+  ctx.background(sendBatch(ctx, id, sendable.hash, token, workflow.connectors));
+  return { sending: sendable, held };
 }
 
 /** Sends one live batch through the gate with the connectors.json MCP servers. Used by approve, run and the s09b run loop. */

@@ -12,6 +12,8 @@ export interface BatchItem {
   sourceInstanceId?: string;
   /** Code checks on the draft (numbers not in the facts, gaps, sign-off). */
   warnings: string[];
+  /** s10b N1, live batches: sha256 of the recipients.csv row this draft was written from (autorun.ts rowHash). */
+  sourceRowHash?: string;
 }
 
 export type BatchKind = "dry_run" | "live";
@@ -54,6 +56,13 @@ export interface Batch {
   results: BatchResult[];
   /** Live batches: state per item key. Missing = pending (batches written before s05b have none). */
   itemStates?: Record<string, ItemStateRecord>;
+  /** s10b N3: the day the batch is sealed under (dry runs: capture day of the oldest observed instance). Default: the
+   * local day of createdAt. */
+  sealDay?: string;
+  /** s10b N1: sha256 of facts.md, the tone card and SKILL.md as they were when this batch was drafted. */
+  draftedWith?: Record<string, string>;
+  /** s10b N1: why auto-run did not send this pending batch on its own. */
+  review?: { newRecipients: number; changedRecipients: number; changedFiles: string[] };
 }
 
 export function batchHash(workflowId: string, kind: BatchKind, items: readonly Pick<BatchItem, "to" | "subject" | "body">[]): string {

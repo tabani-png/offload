@@ -70,9 +70,11 @@ describe("s05b privacy: encrypted, purged artefacts", () => {
   });
 
   test("H4: the reader refuses an artefact older than 7 days even before the purge ran", async () => {
-    await dryRun({ home: w.home, analysis: w.analysis, workflowId: w.outreach.id, model: w.model, now: () => NOW });
-    expect(readLastDryRun(w.home, w.outreach.id, NOW + 7 * DAY_MS)).not.toBeNull();
-    expect(readLastDryRun(w.home, w.outreach.id, NOW + 8 * DAY_MS)).toBeNull();
+    const r = await dryRun({ home: w.home, analysis: w.analysis, workflowId: w.outreach.id, model: w.model, now: () => NOW });
+    // s10b N3: the clock starts on the capture day of the oldest instance in the dry run, not on the day it ran.
+    const [y, m, d] = [...r.instances.map((i) => i.day)].sort()[0]!.split("-").map(Number) as [number, number, number];
+    expect(readLastDryRun(w.home, w.outreach.id, new Date(y, m - 1, d + 7, 23).getTime())).not.toBeNull();
+    expect(readLastDryRun(w.home, w.outreach.id, new Date(y, m - 1, d + 8, 1).getTime())).toBeNull();
   });
 
   test("H4: the tone corpus is encrypted at rest and purged with the 7-day rule", () => {

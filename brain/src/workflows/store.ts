@@ -1,7 +1,8 @@
 // Workflow folders on disk: $OFFLOAD_HOME/workflows/<id>/{SKILL.md, workflow.json, facts.md, recipients.csv,
-// crm-log.csv, scripts/, batches/<hash>.json (live) or <hash>.json.enc (dry run, sealed), approvals.json,
-// gate-log.jsonl, dry-run.json.enc, dry-runs/<ts>.json.enc, preparing.json}. All 0600/0700. Sealed files hold OCR
-// text and are purged after 7 days (store/vault.ts).
+// crm-log.csv, scripts/, batches/<hash>.json.enc (live and dry run, sealed; plain <hash>.json only from before s10b),
+// approvals.json, gate-log.jsonl, dry-run.json.enc, dry-runs/<ts>.json.enc, labels.json.enc, contacted.ledger,
+// preparing.json}. All 0600/0700. Sealed files hold OCR or mail text and are purged 7 days after the capture day of
+// their oldest source data (store/vault.ts, store/retention.ts).
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openText, sealText } from "../store/vault.ts";
@@ -53,14 +54,31 @@ export function updateWorkflow(home: string, id: string, change: (wf: WorkflowJs
   return wf;
 }
 
-export function listWorkflows(home: string): WorkflowJson[] {
+/** Workflow folder ids, sorted. */
+export function listWorkflowIds(home: string): string[] {
   const dir = workflowsDir(home);
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((n) => WORKFLOW_ID_RE.test(n))
-    .sort()
-    .map((id) => readWorkflow(home, id))
-    .filter((w): w is WorkflowJson => w !== null);
+    .sort();
+}
+
+const unreadable = new Set<string>();
+/** Every readable workflow. A workflow.json that does not parse is skipped (logged once), never fatal for the rest
+ * (REVIEW-2 N2). */
+export function listWorkflows(home: string): WorkflowJson[] {
+  const out: WorkflowJson[] = [];
+  for (const id of listWorkflowIds(home)) {
+    try {
+      const wf = readWorkflow(home, id);
+      if (wf !== null) out.push(wf);
+    } catch (err) {
+      const k = `${home}\u0000${id}`;
+      if (!unreadable.has(k)) console.error(`brain: skipping workflow ${id}: workflow.json is not readable (${err instanceof Error ? err.name : "error"})`);
+      unreadable.add(k);
+    }
+  }
+  return out;
 }
 
 export function deleteWorkflow(home: string, id: string): boolean {
@@ -80,15 +98,24 @@ const batchesDir = (home: string, id: string) => join(workflowDir(home, id), "ba
 
 export class WorkflowGoneError extends Error {}
 
-/** Live batches are plain JSON (the send record); dry-run batches hold OCR-parsed data and are sealed. */
+/** Every batch is sealed (REVIEW-2 privacy table): dry runs hold OCR-parsed recipients, live batches hold drafts. The
+ * seal day is `sealDay` (the capture day of the oldest observed instance, dry runs) or the day it was drafted. */
 export function saveBatch(home: string, b: Batch): void {
   // Never recreate a folder the user deleted mid-run.
   if (!workflowExists(home, b.workflowId)) throw new WorkflowGoneError(`workflow ${b.workflowId} was deleted`);
   ensureDir(batchesDir(home, b.workflowId));
   const base = join(batchesDir(home, b.workflowId), `${b.hash}.json`);
-  const text = JSON.stringify(b, null, 2) + "\n";
-  if (b.kind === "dry_run") sealText(home, `${base}.enc`, text, b.createdAt);
-  else writePrivate(base, text);
+  sealText(home, `${base}.enc`, JSON.stringify(b, null, 2) + "\n", b.sealDay ?? b.createdAt);
+  // A plain file from before s10b is replaced by the sealed one.
+  if (existsSync(base)) rmSync(base, { force: true });
+}
+
+/** Deletes a batch file (plain or sealed). */
+export function removeBatch(home: string, id: string, hash: string): void {
+  if (!HASH_RE.test(hash)) return;
+  const base = join(batchesDir(home, id), `${hash}.json`);
+  rmSync(base, { force: true });
+  rmSync(`${base}.enc`, { force: true });
 }
 
 /** True when the items on disk still hash to the batch's hash (REVIEW-1 L2). */
@@ -106,20 +133,24 @@ function parseBatch(text: string | null): Batch | null {
 export function readBatch(home: string, id: string, hash: string, now: number = Date.now()): Batch | null {
   if (!HASH_RE.test(hash)) return null;
   const p = join(batchesDir(home, id), `${hash}.json`);
+  if (existsSync(`${p}.enc`)) return parseBatch(openText(home, `${p}.enc`, now));
   if (existsSync(p)) return parseBatch(readFileSync(p, "utf8"));
-  return parseBatch(openText(home, `${p}.enc`, now));
+  return null;
 }
 
 export function listBatches(home: string, id: string, now: number = Date.now()): Batch[] {
   const dir = batchesDir(home, id);
   if (!existsSync(dir)) return [];
-  const out: Batch[] = [];
-  for (const n of readdirSync(dir)) {
+  const byHash = new Map<string, Batch>();
+  for (const n of readdirSync(dir).sort()) {
     const m = /^([0-9a-f]{64})\.json(\.enc)?$/.exec(n);
     if (m === null) continue;
+    // A plain file left beside its sealed copy (crash between the two writes): the sealed one is newer and wins
+    // (it sorts after the plain one).
     const b = m[2] === undefined ? parseBatch(readFileSync(join(dir, n), "utf8")) : parseBatch(openText(home, join(dir, n), now));
-    if (b !== null) out.push(b);
+    if (b !== null) byHash.set(m[1]!, b);
   }
+  const out = [...byHash.values()];
   return out.sort((a, b) => b.createdAt - a.createdAt || (a.hash < b.hash ? -1 : 1));
 }
 

@@ -14,10 +14,12 @@
 //   that item already had this role (send once, log once and only after its send) -> deny
 //   the durable journal could not record the call           -> deny
 //   otherwise                                               -> allow, journal it, mark the item done
-// Every decision is logged (callback and, when given, workflows/<id>/gate-log.jsonl).
+// Every decision is logged (callback and, when given, workflows/<id>/gate-log.jsonl). On disk (REVIEW-2 privacy table)
+// the log holds no content: the item is a hashed ref (itemRef), the reason is scrubbed (no addresses, no quoted
+// argument snippets), and the file rotates at 5 MB keeping 2 old files (log.ts).
 import type { CanUseTool, HookCallback, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { appendLogLine, scrubLogText } from "../log.ts";
 import { canonicalArgs, DEFAULT_SERVERS, expectedHash, policyFor, splitMcpName, type CrmSheet, type Role } from "./allowlist.ts";
 import { batchHash, shortHash, type Batch, type ItemState } from "./batch.ts";
 
@@ -39,6 +41,18 @@ export function classifyTool(name: string, servers: ServerMap = DEFAULT_SERVERS)
 export interface ApprovalRecord {
   token: string;
   approvedAt: number;
+  /** s10b N5: approved by auto-run (the run loop), not by you. */
+  auto?: boolean;
+}
+
+/** A content-free reference to an item: sha256(workflow id, item key), 16 hex chars. */
+export const itemRef = (workflowId: string, key: string) => createHash("sha256").update(`${workflowId}\u0000${key.toLowerCase()}`).digest("hex").slice(0, 16);
+
+/** The on-disk form of a decision: itemKey becomes itemRef, the reason is scrubbed. Rotates at 5 MB. */
+export function appendGateLog(path: string, d: GateDecisionLog): void {
+  const { itemKey, ...rest } = d;
+  const disk = { ...rest, reason: scrubLogText(d.reason), ...(itemKey === undefined ? {} : { itemRef: itemRef(d.workflowId, itemKey) }) };
+  appendLogLine(path, JSON.stringify(disk));
 }
 
 export interface GateDecisionLog {
@@ -138,7 +152,7 @@ export function createGate(ctx: GateContext): Gate {
     ctx.log?.(entry);
     if (ctx.logPath !== undefined) {
       try {
-        appendFileSync(ctx.logPath, JSON.stringify(entry) + "\n", { mode: 0o600 });
+        appendGateLog(ctx.logPath, entry);
       } catch (err) {
         // The workflow folder can be deleted mid-run; the decision itself still stands.
         console.error("brain: gate log not written:", err instanceof Error ? err.message : err);

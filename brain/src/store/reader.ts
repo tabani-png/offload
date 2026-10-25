@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { DayLabel, OffloadEvent } from "../types.ts";
 import { decryptLine, KEY_BYTES, LineCryptoError } from "./crypto.ts";
 import { isExpired, KEEP_DAYS } from "./vault.ts";
-import { observerBin } from "./observer.ts";
+import { observerBin, observerChildEnv } from "./observer.ts";
 import { validateEvent } from "./schema.ts";
 
 export type BadLineReason = "invalid_base64" | "decrypt_failed" | "invalid_json" | "schema_invalid" | "duplicate_id";
@@ -55,10 +55,7 @@ const EXPORT_TIMEOUT_MS = 60_000;
 function exportDay(home: string, day: DayLabel, env: ReaderEnv): { lines: string[] } | { error: string } {
   const bin = observerBin(env);
   if (!existsSync(bin)) return { error: `wrapped day key needs the observer to export ${day}, but ${bin} does not exist (build the engine or set OFFLOAD_OBSERVER_BIN)` };
-  const childEnv: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) childEnv[k] = v;
-  for (const [k, v] of Object.entries(env)) if (v !== undefined) childEnv[k] = v;
-  childEnv.OFFLOAD_HOME = home;
+  const childEnv = observerChildEnv(home, env);
   const r = spawnSync(bin, ["export-day", day, "--home", home], { env: childEnv, encoding: "utf8", timeout: EXPORT_TIMEOUT_MS, maxBuffer: 512 * 1024 * 1024 });
   if (r.error !== undefined) return { error: `${bin} export-day ${day} failed: ${r.error.message}` };
   if (r.status !== 0) return { error: `${bin} export-day ${day} exited ${r.status ?? r.signal}: ${(r.stderr ?? "").trim().slice(0, 300)}` };
@@ -248,10 +245,7 @@ function readWrapped(home: string, day: DayLabel, enc: string, lines: readonly s
 export function requestObserverPurge(home: string, env: ReaderEnv): boolean {
   const bin = observerBin(env);
   if (!existsSync(bin)) return false;
-  const childEnv: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) childEnv[k] = v;
-  for (const [k, v] of Object.entries(env)) if (v !== undefined) childEnv[k] = v;
-  childEnv.OFFLOAD_HOME = home;
+  const childEnv = observerChildEnv(home, env);
   const r = spawnSync(bin, ["purge-now", "--home", home], { env: childEnv, encoding: "utf8", timeout: EXPORT_TIMEOUT_MS });
   if (r.error !== undefined || r.status !== 0) {
     console.error(`brain: ${bin} purge-now failed: ${r.error?.message ?? (r.stderr ?? "").trim().slice(0, 200)}`);

@@ -127,7 +127,7 @@ top of `active` when a batch waits or a connector is missing. Auto-run is off by
 | `POST /workflows/:id/approve` | `{ batchHash }` | `ApproveResponse`: dry-run hash → `activated`; live hash → `sending` |
 | `POST /workflows/:id/pause` / `resume` | | `WorkflowSummaryDTO`. Pause also stops a running batch before its next item |
 | `POST /workflows/:id/release` | `{ batchHash, keys[] }` | `{ batch }`: you confirm these `unknown` sends did not go out; they can be drafted again (s05b) |
-| `POST /workflows/:id/auto-run` | `{ enabled }` | `WorkflowSummaryDTO` |
+| `POST /workflows/:id/auto-run` | `{ enabled }` | `WorkflowSummaryDTO` with `autoRunPin` (s10b): on = pin (again) the recipient rows, facts.md, the tone card and SKILL.md; off = drop the pin and stop an auto batch before its next item |
 | `DELETE /workflows/:id` | | `{ deleted }`. Stops a running batch first |
 | `GET /workflows/:id/tone` | | `ToneCardDTO`: the style card of the workflow's tone bucket (`text` null when none) (s05c) |
 | `PUT /workflows/:id/tone` | `ToneCardUpdate { text }` | `ToneCardDTO`. Stored 0600 in `tone/<bucket>.md`; kept by later `tone build` unless `--force` |
@@ -159,6 +159,15 @@ when every required connector is connected; otherwise the batch stays pending. N
 approved batch hash. Each slot is handled once: missed slots are not replayed, slots passing while paused (or while a
 batch waits) are skipped, a pending batch is never replaced, and resuming does not catch up.
 
+Auto-run pin and failures (s10b, REVIEW-2 N1, N2, N5): with auto-run on, the loop and `POST /run` send on their own
+only recipients whose row was pinned when auto-run was turned on and is unchanged, drafted from the pinned facts.md,
+tone card and SKILL.md. New or changed rows are split into a pending batch (`RunResponse.held`; needs_you "3 new
+recipients need your review."); a changed pinned file holds the whole batch. Show `autoRunPin` (pinnedRecipients,
+counts, file hashes with `changed`) when the user turns auto-run on. Turning auto-run off or pausing stops an auto
+batch before its next item; a batch you approved yourself is not stopped by auto-run off. A scheduled run that fails
+marks its slot, sets `lastRunError` and needs_you "The last scheduled run did not finish: ...", and is not retried
+until the next slot; one failing workflow never stops the others.
+
 Dry run: the task's newest real instances from the store (recipient and subject from OCR), our draft next to the OCR
 excerpt of what you wrote, and per instance `estimate { observedMinutes, reviewSeconds, savedMinutes }`, computed in
 code. Every side-effect step is sent through the gate in dry-run mode, denied and logged (`sideEffects`, `gateLog`).
@@ -182,6 +191,15 @@ Runs `offload-observer status --json --home HOME` (5 s timeout) and returns its 
 macOS permissions (`screenRecording`, `accessibility`, `inputMonitoring`; `permissionsSource` heartbeat, probe or
 unknown) also at the top level. Always 200: a missing binary, non-zero exit, timeout, non-JSON output or another
 schemaVersion gives `available: false`, `status: null` and the reason in `error`.
+`keptFiles` (s10b, `KeptFileDTO[]`): files with your content that are kept until you delete them (recipients.csv,
+facts.md, crm-log.csv per workflow, tone cards you edited), for the "Observing" section. Everything else holding
+observed or mail text is sealed and purged 7 days after its capture day (slices/s10b-review2-brain/SPEC.md).
+
+## Purge and logs (s10b)
+`bun run brain/src/cli.ts purge --home DIR [--json]` runs the brain's purge (expired sealed artefacts and keys,
+generated tone cards with their corpus, observed names); the app runs it at launch. `serve` runs it before it listens
+and hourly. `serve --log-file FILE` writes the brain's log lines there (no content, rotated at 5 MB keeping 2);
+without it they go to stderr, scrubbed the same way.
 
 ## POST /observer/pause, POST /observer/resume → `ObserverControlResponse` (s09b)
 Runs `offload-observer pause|resume --home HOME` (5 s timeout); on exit 0 answers 200 with `{ action, ok: true,

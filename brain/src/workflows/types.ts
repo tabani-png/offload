@@ -27,6 +27,15 @@ export interface WorkflowStep {
 
 export type TemplateId = "investor_outreach" | "scheduling_reply" | "generic";
 
+/** s10b N1: what auto-run was allowed to act on when it was turned on (hashes only). */
+export interface AutoRunPin {
+  at: number;
+  /** addressHash(workflow, email) -> rowHash(row), for every row of the recipient list at pin time. */
+  rows: Record<string, string>;
+  /** "facts.md", "tone/<bucket>.md", "SKILL.md" -> sha256 of the text at pin time. */
+  files: Record<string, string>;
+}
+
 export interface WorkflowJson {
   version: 1;
   id: string;
@@ -34,6 +43,7 @@ export interface WorkflowJson {
   taskId: string;
   kind: string;
   template: TemplateId;
+  /** Fixed template text (s10b N8): a name taken from window titles lives in labels.json.enc (workflows/labels.ts). */
   name: string;
   description: string;
   /** Tone bucket the drafts use. */
@@ -55,10 +65,15 @@ export interface WorkflowJson {
   steps: WorkflowStep[];
   estimate: { weeklyHoursSaved: number; savingPct: number; arithmetic: string; lowHoursSaved: number; highHoursSaved: number };
   models: ModelConfig;
+  /** `name` is "" since s10b N8 (the observed label is sealed in labels.json.enc). */
   insight: { name: string; kind: string; connectors: ConnectorDTO[] };
   lastDryRunAt: number | null;
   lastDryRunHash: string | null;
   /** s09b: the last time the serve run loop handled a due cron slot (started it, or skipped it while paused or with a
    * batch waiting). Absent until the first slot. */
   lastScheduledAt?: number | null;
+  /** s10b N1: set while auto-run is on (enableAutoRun); null or absent = nothing pinned, nothing auto-sent. */
+  autoRunPin?: AutoRunPin | null;
+  /** s10b N2: the last scheduled run that did not finish, with a content-free reason; cleared by the next good run. */
+  lastRunError?: { at: number; reason: string } | null;
 }

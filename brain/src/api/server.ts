@@ -1,5 +1,6 @@
 // The brain's local API: Bun.serve on 127.0.0.1, bearer token, read-only GET routes (brain/API.md).
 import { localDay, migrateBrainKeys, startPurgeSchedule } from "../store/vault.ts";
+import { purgeAll } from "../store/retention.ts";
 import type { ObserverEnv } from "../store/observer.ts";
 import { observerControl, observerStatus } from "./observer-route.ts";
 import { SCHEDULER_INTERVAL_MS, schedulerTick, type SchedulerTick } from "./scheduler.ts";
@@ -9,7 +10,7 @@ import { DAY_RE, storeFingerprint } from "../store/reader.ts";
 import type { Env } from "../connectors/config.ts";
 import { AgentSdkModel, StubModel, type Model } from "../models/model.ts";
 import { AgentSdkExecutor, type Executor } from "../workflows/executor.ts";
-import { dashboard } from "../workflows/service.ts";
+import { dashboard, keptFiles } from "../workflows/service.ts";
 import { toEvidence, toInsights, toStatus, toTimeline } from "./dto.ts";
 import { BRAIN_READY_PREFIX, MODEL_HEADER, type BrainReadyDTO, type ModelLabel } from "./types.ts";
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
@@ -151,7 +152,8 @@ export function createBrain(opts: BrainOptions): Brain {
     if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed");
 
     if (path === "/status") return json(200, toStatus(await analysis(undefined), now()));
-    if (path === "/observer") return json(200, await observerStatus(opts.home, observerEnv, now()));
+    // s10b: plus the user files kept until the user deletes them, for the app's "Observing" section.
+    if (path === "/observer") return json(200, { ...(await observerStatus(opts.home, observerEnv, now())), keptFiles: keptFiles(opts.home) });
     if (path === "/dashboard") return json(200, dashboard(await analysis(undefined), opts.home, env, now()));
     if (path === "/insights") {
       const review = parseReviewSeconds(url.searchParams.get("reviewSeconds"));
@@ -217,8 +219,9 @@ export async function startBrainServer(opts: BrainOptions & { port?: number; sch
   } catch (err) {
     log(`brain: key migration failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  // Brain artefacts with OCR or mail text: purged at startup and every hour (store/vault.ts, REVIEW-1 H4).
-  const stopPurge = startPurgeSchedule(opts.home, now, { log });
+  // Brain artefacts with OCR or mail text: purged now, BEFORE the listener opens, and every hour (store/retention.ts,
+  // REVIEW-1 H4, REVIEW-2 N4). The app also runs `cli.ts purge` at launch, and the observer purges expired brain keys.
+  const stopPurge = startPurgeSchedule(opts.home, now, { log, purge: purgeAll });
   // s09b run loop: starts due workflows (only active ones; see api/scheduler.ts). First tick right away.
   const interval = opts.schedulerIntervalMs ?? SCHEDULER_INTERVAL_MS;
   const tick = () => void brain.schedulerTick().catch((err: unknown) => log(`brain: scheduler failed: ${err instanceof Error ? err.message : String(err)}`));

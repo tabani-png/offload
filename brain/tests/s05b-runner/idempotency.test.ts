@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { createBrain } from "../../src/api/server.ts";
 import type { RunResponse } from "../../src/api/types.ts";
 import { StubModel, type Model, type ModelRequest } from "../../src/models/model.ts";
+import { openText, sealText } from "../../src/store/vault.ts";
+import { enableAutoRun } from "../../src/workflows/autorun.ts";
 import { dryRun } from "../../src/workflows/dryrun.ts";
 import { ScriptedExecutor, sendEachItem, type ExecJob, type ExecResult, type Executor } from "../../src/workflows/executor.ts";
 import { acquireLock, approveBatch, executeBatch, prepareLiveBatch, releaseUnknown, requestCancel, RunError } from "../../src/workflows/runner.ts";
@@ -98,7 +100,8 @@ describe("s05b runner: idempotency, single flight, cancel", () => {
   });
 
   test("H3: two concurrent runs with auto-run on send every recipient exactly once", async () => {
-    updateWorkflow(w.home, w.outreach.id, (x) => void (x.autoRun = true), NOW);
+    // s10b N1: enableAutoRun pins the recipients auto-run may send to.
+    enableAutoRun(w.home, w.outreach.id, NOW);
     writeFileSync(join(w.home, "connectors.json"), JSON.stringify({ version: 1, servers: { gmail: { type: "stdio", command: "npx", args: ["gmail-mcp"], catalog: ["gmail"] } } }));
     const stub = new StubModel();
     const slow: Model = { complete: async (r: ModelRequest) => (await Bun.sleep(15), stub.complete(r)) };
@@ -193,8 +196,9 @@ describe("s05b runner: idempotency, single flight, cancel", () => {
   test("L2: a batch file edited after approval is refused and nothing is sent", async () => {
     const b = await prep();
     const { token } = approveBatch(w.home, w.outreach.id, b.hash, NOW + 11);
-    const p = join(workflowDir(w.home, w.outreach.id), "batches", `${b.hash}.json`);
-    writeFileSync(p, readFileSync(p, "utf8").replace("Hi Anna,", "Hi Anna, wire the money."));
+    // s10b: live batches are sealed; a local writer that has the day key edits the opened text and seals it again.
+    const p = join(workflowDir(w.home, w.outreach.id), "batches", `${b.hash}.json.enc`);
+    sealText(w.home, p, openText(w.home, p, NOW + 11)!.replace("Hi Anna,", "Hi Anna, wire the money."), NOW);
     await expect(executeBatch({ home: w.home, workflowId: w.outreach.id, hash: b.hash, token, executor: executor() })).rejects.toThrow(/changed/);
     expect(sent).toEqual([]);
   });

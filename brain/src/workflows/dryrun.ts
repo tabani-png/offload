@@ -3,7 +3,7 @@
 // The response carries the OCR excerpt; on disk the dry run and its batch are sealed with the day's brain key and
 // purged after 7 days (store/vault.ts, REVIEW-1 H4).
 import { join } from "node:path";
-import { openText, sealText } from "../store/vault.ts";
+import { localDay, openText, sealText } from "../store/vault.ts";
 import type { Analysis } from "../analyze.ts";
 import type { DryRunInstanceDTO, DryRunResponse, ModelLabel } from "../api/types.ts";
 import { API_VERSION } from "../api/types.ts";
@@ -79,8 +79,12 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResponse> {
   if (!emailWorkflow) warnings.push("this workflow kind has no drafting dry run yet; showing what you did and the time only");
   if (Object.keys(facts).length < 3 && emailWorkflow) warnings.push("facts.md is mostly empty: drafts will show [missing: ...] gaps");
 
+  // REVIEW-2 N3: everything this dry run writes is sealed under the capture day of its oldest instance, so it is
+  // purged 7 days after that capture, not 7 days after the run.
+  const sealDay = out.map((i) => i.day).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort()[0] ?? localDay(now);
+
   // Every side-effect step goes through the gate in dry-run mode: all denied, all logged.
-  const batch = makeBatch(wf.id, "dry_run", items, now);
+  const batch = { ...makeBatch(wf.id, "dry_run", items, now), sealDay };
   const gateLog: GateDecisionLog[] = [];
   const gate = createGate({ workflowId: wf.id, mode: "dry_run", batch, autoRun: wf.autoRun, runToken: null, approvals: () => undefined, log: (d) => gateLog.push(d), logPath: gateLogPath(o.home, wf.id), now: () => now });
   let attempted = 0;
@@ -116,8 +120,8 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResponse> {
   };
   const dir = join(workflowDir(o.home, wf.id), "dry-runs");
   ensureDir(dir);
-  sealText(o.home, join(dir, `${now}.json.enc`), JSON.stringify(res, null, 2) + "\n", now);
-  sealText(o.home, join(workflowDir(o.home, wf.id), "dry-run.json.enc"), JSON.stringify(res, null, 2) + "\n", now);
+  sealText(o.home, join(dir, `${now}.json.enc`), JSON.stringify(res, null, 2) + "\n", sealDay);
+  sealText(o.home, join(workflowDir(o.home, wf.id), "dry-run.json.enc"), JSON.stringify(res, null, 2) + "\n", sealDay);
   updateWorkflow(o.home, wf.id, (w) => {
     w.lastDryRunAt = now;
     w.lastDryRunHash = items.length > 0 ? batch.hash : null;

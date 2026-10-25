@@ -13,9 +13,12 @@
 // lazily when a day with only a raw key is used. Unwrapped keys are cached in memory for this process only.
 //
 // Sealed file: line 1 "OBV1 YYYY-MM-DD", line 2 the encrypted text (crypto.ts line format).
-// Purge (startup and hourly, see startPurgeSchedule): days older than 7 local days lose their key and artefacts, and a
-// line goes to $OFFLOAD_HOME/purge-log.jsonl {day, deletedAt, events: 0, files, by: "brain"}. Readers refuse an
-// expired artefact even before the purge ran.
+// Purge (brain start before serving, hourly, and `cli.ts purge` which the app runs at launch; see startPurgeSchedule
+// and store/retention.ts): days older than 7 local days lose their key and artefacts, and a line goes to
+// $OFFLOAD_HOME/purge-log.jsonl {day, deletedAt, events: 0, files, by: "brain"}. Readers refuse an expired artefact
+// even before the purge ran. The observer purges expired brain keys too (keys/brain-YYYY-MM-DD.key, engine 52b205b,
+// REVIEW-2 N4), so a closed brain still loses the key on time; wrap/unwrap of such a day exits 3 = "expired".
+// The seal day is the capture day of the oldest source data in the file (REVIEW-2 N3), never the write day.
 import { appendFileSync, chmodSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { decryptLine, encryptLine, generateKey, KEY_BYTES } from "./crypto.ts";
@@ -61,6 +64,9 @@ export const wrappedBrainKeyPath = (home: string, at: number | string) => join(h
 
 /** The observer could not wrap or unwrap a brain key. */
 export class BrainKeyError extends Error {}
+/** wrap-key / unwrap-key exited 3: the day is older than keepDays and the observer purged its key (engine 52b205b).
+ * Not a failure: the sealed files of that day are expired and get deleted. */
+export class BrainKeyExpiredError extends BrainKeyError {}
 
 const cache = new Map<string, Buffer>();
 const cacheKey = (home: string, day: string) => `${home}\u0000${day}`;
@@ -110,13 +116,17 @@ function parseKeyLine(stdout: string, what: string): Buffer {
 
 /** wrap-key --name DAY: stores `raw` (or a new random key when null) and returns the stored key. */
 function wrapKey(home: string, day: string, raw: Buffer | null, env: ObserverEnv): Buffer {
-  const r = runObserverSync(home, ["wrap-key", "--name", day], env, { input: raw === null ? "" : raw.toString("base64") + "\n", drop: ["OFFLOAD_KEYS"] });
+  // A key on stdin needs --import (engine 52b205b: exit 2 otherwise); only raw-key migration passes one.
+  const args = raw === null ? ["wrap-key", "--name", day] : ["wrap-key", "--name", day, "--import"];
+  const r = runObserverSync(home, args, env, { input: raw === null ? "" : raw.toString("base64") + "\n", drop: ["OFFLOAD_KEYS"] });
+  if (!r.ok && r.code === 3) throw new BrainKeyExpiredError(`brain key ${day}: expired`);
   if (!r.ok) throw new BrainKeyError(`brain key ${day}: ${r.error}`);
   return parseKeyLine(r.stdout, `wrap-key ${day}`);
 }
 
 function unwrapKey(home: string, day: string, env: ObserverEnv): Buffer {
   const r = runObserverSync(home, ["unwrap-key", "--name", day], env, { drop: ["OFFLOAD_KEYS"] });
+  if (!r.ok && r.code === 3) throw new BrainKeyExpiredError(`brain key ${day}: expired`);
   if (!r.ok) throw new BrainKeyError(`brain key ${day}: ${r.error}`);
   return parseKeyLine(r.stdout, `unwrap-key ${day}`);
 }
@@ -169,10 +179,13 @@ function keyExists(home: string, day: string): boolean {
   return existsSync(wrappedBrainKeyPath(home, day)) || existsSync(brainKeyPath(home, day));
 }
 
-/** Writes `text` sealed under the key of the local day of `at` (0600, atomic). Throws BrainKeyError when the
- * observer cannot provide a key. */
-export function sealText(home: string, path: string, text: string, at: number, env: ObserverEnv = process.env): void {
-  const day = localDay(at);
+/** Writes `text` sealed under the key of a local day (0600, atomic). `at` is a timestamp (its local day) or a day
+ * label YYYY-MM-DD: callers pass the CAPTURE day of the oldest source data in `text` (REVIEW-2 N3), so the file is
+ * purged 7 days after that capture, not after the write. Throws BrainKeyError when the observer cannot provide a
+ * key, and BrainKeyExpiredError for a day that is already expired (nothing is written). */
+export function sealText(home: string, path: string, text: string, at: number | string, env: ObserverEnv = process.env): void {
+  const day = typeof at === "number" ? localDay(at) : at;
+  if (dayAge(day, Date.now()) === null || !/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(day)) throw new Error(`bad seal day ${day}`);
   const key = keyFor(home, day, true, env)!;
   writeAtomic(path, `${MAGIC} ${day}\n${encryptLine(key, text)}\n`);
 }
@@ -205,6 +218,12 @@ export function openText(home: string, path: string, now: number, env: ObserverE
     const k = keyFor(home, day, false, env);
     if (k !== null) keys.push(k);
   } catch (err) {
+    if (err instanceof BrainKeyExpiredError) {
+      // The observer says the day is past keepDays and purged its key: the file is expired, delete it.
+      cache.delete(cacheKey(home, day));
+      rmSync(path, { force: true });
+      return null;
+    }
     if (!(err instanceof BrainKeyError)) throw err;
     console.error(`brain: cannot open a sealed file of ${day}: ${err.message}`);
   }
@@ -274,13 +293,17 @@ function artefacts(home: string): Array<{ path: string; plain: boolean; dryRunBa
     if (!/^wf_[a-z0-9]{4,40}$/.test(id)) continue;
     const dir = join(wfRoot, id);
     for (const n of ["dry-run.json", "dry-run.json.enc"]) if (existsSync(join(dir, n))) out.push({ path: join(dir, n), plain: !n.endsWith(SEALED_SUFFIX) });
+    // s10b N8: names from window titles, sealed under the capture day of the oldest instance they came from.
+    if (existsSync(join(dir, "labels.json.enc"))) out.push({ path: join(dir, "labels.json.enc"), plain: false });
     for (const n of ls(join(dir, "dry-runs"))) if (/^\d+\.json(\.enc)?$/.test(n)) out.push({ path: join(dir, "dry-runs", n), plain: !n.endsWith(SEALED_SUFFIX) });
     for (const n of ls(join(dir, "batches"))) {
       if (/^[0-9a-f]{64}\.json\.enc$/.test(n)) out.push({ path: join(dir, "batches", n), plain: false });
       else if (/^[0-9a-f]{64}\.json$/.test(n)) {
-        // Only dry-run batches carry OCR-parsed recipients and subjects; live batches are the send record.
+        // Plain batch files are from before s10b: dry-run batches (OCR-parsed recipients) and live batches (drafts)
+        // are both sealed in place now (REVIEW-2 privacy table). The contacted ledger is written first (retention.ts).
         try {
-          if ((JSON.parse(readFileSync(join(dir, "batches", n), "utf8")) as { kind?: string }).kind === "dry_run") out.push({ path: join(dir, "batches", n), plain: true, dryRunBatch: true });
+          const kind = (JSON.parse(readFileSync(join(dir, "batches", n), "utf8")) as { kind?: string }).kind;
+          if (kind === "dry_run" || kind === "live") out.push({ path: join(dir, "batches", n), plain: true, dryRunBatch: kind === "dry_run" });
         } catch {
           // Not JSON: not ours to judge.
         }
@@ -374,6 +397,8 @@ export interface ScheduleDeps {
   setInterval: (fn: () => void, ms: number) => unknown;
   clearInterval: (t: unknown) => void;
   log: (line: string) => void;
+  /** The purge to run (default purgeExpired; serve passes store/retention.ts purgeAll). */
+  purge: (home: string, now: number, opts: PurgeOptions) => unknown;
 }
 
 /** Purges now and every hour. Returns a stop function. Errors are logged, never thrown into the timer. */
@@ -381,7 +406,7 @@ export function startPurgeSchedule(home: string, now: () => number, deps: Partia
   const log = deps.log ?? ((l: string) => console.log(l));
   const run = () => {
     try {
-      purgeExpired(home, now(), { log });
+      (deps.purge ?? purgeExpired)(home, now(), { log });
     } catch (err) {
       log(`brain: purge failed: ${err instanceof Error ? err.message : String(err)}`);
     }
