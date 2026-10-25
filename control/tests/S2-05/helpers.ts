@@ -65,7 +65,9 @@ export async function setup(extraModules: Record<string, string> = {}): Promise<
 function modulesWith(extra: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), "offload-s205-"));
   const src = join(MODULES_DIR, "..");
-  for (const name of readdirSync(MODULES_DIR)) {
+  // Only this slice's modules and the core org module: later modules (compliance, broker, registry) register their own
+  // handlers and ports, which would clash with the fakes here.
+  for (const name of readdirSync(MODULES_DIR).filter((m) => ["org", "sync", "metrics"].includes(m))) {
     cpSync(join(MODULES_DIR, name), join(dir, name), { recursive: true });
     for (const f of readdirSync(join(dir, name)).filter((f) => f.endsWith(".ts"))) {
       const p = join(dir, name, f);

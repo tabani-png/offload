@@ -66,8 +66,8 @@ describe("LOADER", () => {
     const r = await (await asPrincipal(custom, "member")).get("/v1/compliance/features");
     expect(r.status).toBe(200);
     expect(r.json).toEqual({ loadedBy: "fake-compliance" });
-    // Not mounted in the app built from the real folder.
-    expect((await (await asPrincipal(h, "member")).get("/v1/compliance/features")).status).toBe(404);
+    // Not mounted in the app built from the real folder (S2-08 now owns the real path, so check the fake is absent).
+    expect((await (await asPrincipal(h, "member")).get("/v1/compliance/features")).json).not.toEqual({ loadedBy: "fake-compliance" });
   });
 
   test("LOADER: a dropped-in module's routes still pass the RBAC gate", async () => {

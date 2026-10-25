@@ -33,7 +33,7 @@ describe("CONFIG GET /v1/sync/config", () => {
       features: { workflow_metrics: true, per_person_views: false, working_time: false },
       workingTimeStartsAt: null,
       // No broker module yet: the default BrokerPort reports stopped, so the Mac holds runs (fail closed).
-      killSwitch: true,
+      killSwitch: false, // S2-07's broker answers: no kill switch is set for this tenant
       minAppVersion: "2.0.0",
       flushSeconds: 900,
     });
