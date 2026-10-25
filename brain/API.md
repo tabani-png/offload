@@ -405,3 +405,52 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   route and model, prices, the last 100 routing decisions (route, tiers tried, escalation reasons, tokens, cost).
 - CLI: `draft` and `dry-run` take `--understanding v1|v2` (and the embedder flags); `draft` of a general insight uses
   the stub design model unless `--model real` is given.
+
+## Company sync (S2-02, ADR 0103)
+The brain's sync client (`src/sync/`) connects this Mac to the company control plane (`OFFLOAD_CONTROL_URL`, https;
+http only on 127.0.0.1). It can emit only the seven sync objects of `schemas/stage2` (`notice_ack`, `run_outcome`,
+`review_event`, `baseline_sample`, `daily_aggregate`, `working_time_aggregate`, `workflow_proposal`), each validated
+against its schema before it is queued. Raw activity has no code path to the network: the collector
+(`sync/collect.ts`) turns brain state into numbers, ids, hashes and evidence refs, and the projectors
+(`sync/project/*`) never see events, spans, OCR, frame notes, recipients, subjects or bodies. Without
+`OFFLOAD_CONTROL_URL`, or before "Connect", nothing is sent and no request is made.
+- Keys: `device-signing` (P-256 private scalar, ES256) and `device-evidence` (HMAC key) are brain keys wrapped by the
+  observer (`offload-observer wrap-key --name device-signing|device-evidence`; raw files under `OFFLOAD_KEYS=file`).
+  `DeviceSigner` is the seam for a Secure Enclave key. `instanceRef = hex(HMAC-SHA256(deviceEvidenceKey,
+  localInstanceId))[0:32]`; the ref -> instance map is sealed per capture day and resolves only on this Mac, 7 days.
+- Consent (checked here before anything but the notice ack is sent; the server re-checks): unknown config = only
+  `notice_ack`; G1 nothing else until the required notice version is acknowledged on this Mac; G2 working time only
+  when `working_time` is on, an acknowledged notice lists it and `now >= workingTimeStartsAt` (and never for days
+  before that), turned off = queued working-time objects are dropped; G3 daily aggregates always once acknowledged;
+  G4 a proposal only after `?confirm=1` on its preview; G5 pause holds everything. A kill switch holds everything but
+  acks. Kinds outside `allowedKinds` are held.
+- Outbox: `$OFFLOAD_HOME/sync/outbox/DAY.json.enc`, sealed with the brain day key of the day queued (no plaintext);
+  purged after 7 days with a purge-log line `{day, deletedAt, events: 0, files, by: "sync-outbox"}`. State (ids, seq,
+  flags, acks, bindings; no secrets) in `sync/state.json`; measured review seconds in `sync/reviews.json`.
+- Envelopes: RFC 8785 JCS body `{v: 1, deviceId, seq, sentAt, objects}` (<= 500 objects, <= 1 MiB), signed ES256 in
+  `Offload-Signature: keyid=<deviceId>, sig=<b64url>`; `seq` is written before the request and strictly increases
+  across restarts. Notice acks go first. Flush every `flushSeconds` (default 15 min) and after each run; network, 429
+  and 5xx back off 15 min, 30 min, ... up to 6 h (at least `Retry-After`). Receipt: accepted and `duplicate` leave the
+  outbox, `rate_limited` / `server_error` are retried after a backoff, everything else is dropped and logged.
+- Device tokens: challenge -> ES256 over the nonce -> 15-minute token in memory, refreshed in its last minute. A
+  401/403 from the token endpoints marks the device revoked: sync stops until it is connected again (new device id).
+- Only workflows bound to a company workflow (`SyncClient.bind`, a role workflow or a promoted proposal) produce run
+  outcomes, review events, baselines and per-workflow daily rows.
+
+Routes (bearer token as everywhere):
+- `GET /sync/status` -> `SyncStatusDTO {state: not_configured|not_connected|connecting|connected|paused|revoked,
+  controlUrl, configError, deviceId, personId, tenantId, enrolledAt, paused, seq, notice {required, acknowledged} |
+  null, features | null, outbox {total, byKind}, boundWorkflows, lastFlushAt, nextFlushAt, failures, lastError}`.
+- `POST /sync/connect` -> 202 `{state: "waiting", authorizeUrl}`: PKCE (S256) + a loopback listener on 127.0.0.1;
+  opens `GET {control}/auth/login?client=offload-mac&redirect_uri=http://127.0.0.1:PORT/callback&state=&code_challenge=
+  &code_challenge_method=S256` in the browser; the redirect brings the enrollment code, then `POST /v1/devices/enroll`
+  with the public JWK (code_verifier in the `Offload-Code-Verifier` header). 409 when already connected or not
+  configured.
+- `POST /sync/pause`, `POST /sync/resume` -> `SyncStatusDTO`.
+- `GET /sync/preview` -> `{envelope | null, body | null, held, queued}`: the exact next envelope (and its JCS text)
+  the next flush sends at the same moment; it sends nothing. 409 before connect.
+- `POST /sync/notice/ack {noticeVersionId}` -> 201 `{ack}` (a `notice_ack`, channel `mac_app`); 409 unless it names
+  the notice the config requires.
+- `POST /workflows/:id/share` -> `{confirmed: false, proposal}` (the exact `workflow_proposal` JSON, facts values and
+  recipient-list cells redacted, contacts masked); `?confirm=1[&hash=<definitionHash>]` -> 201 `{confirmed: true,
+  proposal}` and queues it (409 when the hash no longer matches). 404 unknown workflow.
