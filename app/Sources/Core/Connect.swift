@@ -10,6 +10,32 @@ enum ConnectVia: String, Codable, Equatable, Sendable {
   case gmailMCP = "gmail-mcp"
 }
 
+/// s10e (operator scope): how a connector is reached, for any tool in any domain. mcp and composio work today; api and
+/// computer are declared so the brain can offer them later (s13 adds the auto-fallback chain and computer use).
+enum ConnectMethod: String, Codable, Equatable, Sendable, CaseIterable {
+  case mcp, composio, api, computer
+
+  /// Plain words (no internal names): how the sheet says it connects.
+  var route: String {
+    switch self {
+    case .mcp: return "Through a connector on this Mac"
+    case .composio: return "Through Composio"
+    case .api: return "Through the app's own sign-in"
+    case .computer: return "By using the app on screen, the way you do"
+    }
+  }
+
+  /// The button that tries this method after another one failed.
+  var tryTitle: String {
+    switch self {
+    case .mcp: return "Use a connector on this Mac instead"
+    case .composio: return "Use Composio instead"
+    case .api: return "Use the app's own sign-in instead"
+    case .computer: return "Use the app on screen instead"
+    }
+  }
+}
+
 enum ConnectLinkState: String, Codable, Equatable, Sendable {
   case idle, waiting, connected, failed
 }
@@ -28,6 +54,12 @@ struct ConnectLink: Equatable, Sendable {
   var message: String
   var startedAt: Date?
   var connectedAt: Date?
+  /// s10e: the method this link uses, every method the connector can use (in order), and the one to offer next when
+  /// this one failed. `detail` is the brain's plain sentence about the method's state.
+  var method: ConnectMethod? = nil
+  var methods: [ConnectMethod] = []
+  var next: ConnectMethod? = nil
+  var detail: String = ""
 }
 
 /// Wire mirror of the brain's ConnectLinkDTO (brain/src/api/types.ts).
@@ -41,13 +73,20 @@ struct ConnectLinkDTO: Codable, Equatable {
   var message: String
   var startedAt: Double?
   var connectedAt: Double?
+  var method: String? = nil
+  var methods: [String]? = nil
+  var next: String? = nil
+  var detail: String? = nil
 
   func toLink() -> ConnectLink {
     ConnectLink(connectorId: connectorId, name: name, via: ConnectVia(rawValue: via) ?? .composio,
                 state: ConnectLinkState(rawValue: state) ?? .failed,
                 url: url.flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil },
                 simulated: simulated, message: message,
-                startedAt: startedAt.map(BrainWire.date(ms:)), connectedAt: connectedAt.map(BrainWire.date(ms:)))
+                startedAt: startedAt.map(BrainWire.date(ms:)), connectedAt: connectedAt.map(BrainWire.date(ms:)),
+                method: method.flatMap(ConnectMethod.init(rawValue:)) ?? (via == "gmail-mcp" ? .mcp : .composio),
+                methods: (methods ?? []).compactMap(ConnectMethod.init(rawValue:)),
+                next: next.flatMap(ConnectMethod.init(rawValue:)), detail: detail ?? "")
   }
 }
 
@@ -74,6 +113,8 @@ struct ConnectFlow: Equatable, Sendable {
   private(set) var link: ConnectLink?
   private(set) var failure: String?
   private(set) var waitingSince: Date?
+  /// s10e: the method the next start asks for (nil = the brain's first choice).
+  private(set) var requestedMethod: ConnectMethod?
   private var opened = false
 
   init(connector: Connector) {
@@ -121,6 +162,16 @@ struct ConnectFlow: Equatable, Sendable {
       return out
     }
   }
+
+  /// s10e: after a failure, try the method the brain offered next ("Use Composio instead").
+  mutating func tryNext(at now: Date) -> [Effect] {
+    guard phase == .failed, let n = link?.next else { return connect(at: now) }
+    requestedMethod = n
+    return connect(at: now)
+  }
+
+  /// The method in use (or about to be), for the sheet's route line.
+  var method: ConnectMethod? { requestedMethod ?? link?.method }
 
   /// The brain could not be reached or refused.
   mutating func fail(_ message: String) {
@@ -170,7 +221,12 @@ struct ConnectCopy: Equatable, Sendable {
     title = verb
     symbol = Self.symbol(c.id)
     purpose = Self.purpose(c)
-    route = Self.via(for: c, link: flow.link) == .composio ? "Connects through Composio" : "Signs in with Google on this Mac"
+    // s10e: the method in use, in plain words; before the brain has said, from how the connector is reached.
+    if let m = flow.method {
+      route = m.route
+    } else {
+      route = Self.via(for: c, link: flow.link) == .composio ? "Connects through Composio" : "Signs in with Google on this Mac"
+    }
     note = nil
     switch flow.phase {
     case .intro:
@@ -188,8 +244,11 @@ struct ConnectCopy: Equatable, Sendable {
       primary = returnsToConfirm ? "Back to Turn on" : "Done"
       status = "\(c.name) connected"
     case .failed:
-      primary = "Try again"
-      status = flow.failure ?? Self.didNotStart
+      // s10e: when the brain offers another way, that is the one white button ("Use Composio instead").
+      primary = flow.link?.next?.tryTitle ?? "Try again"
+      let detail = flow.link?.detail ?? ""
+      status = detail.isEmpty ? (flow.failure ?? Self.didNotStart) : detail
+      if flow.link?.next != nil { note = "Nothing was changed. The other way asks you to sign in once." }
     }
   }
 

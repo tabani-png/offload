@@ -87,7 +87,7 @@ SURFACES="card card-evidence card-undo card-empty rail scene components review r
   review-dryrun review-dryrun-sample review-confirm review-confirm-ready review-armed review-skill review-skill-source
   review-real-schedule dashboard dashboard-before dashboard-automations dashboard-observing dashboard-autosend
   dashboard-autosend-on dashboard-permissions timeline pointer pointer-row onboarding-watches onboarding-permissions
-  onboarding-comeback review-connect review-connect-waiting review-connected review-voice-edit timeline-before
+  onboarding-comeback review-connect review-connect-waiting review-connected review-connect-failed review-voice-edit timeline-before
   dashboard-automations-empty"
 n=0
 for s in $SURFACES; do

@@ -510,3 +510,55 @@ struct S10EPolishTests {
     #expect(AutomationsEmptyCopy.action == "Open the inbox")
   }
 }
+
+// MARK: generic connect (operator scope: any tool, any domain)
+
+@Suite("S10E connect methods")
+struct S10EConnectMethodTests {
+  let t0 = S10EFixture.t0
+  let tool = Connector(id: "notion", name: "Notion", kind: .composio, connected: false)
+
+  private func link(_ state: ConnectLinkState, method: ConnectMethod, next: ConnectMethod?, detail: String = "") -> ConnectLink {
+    ConnectLink(connectorId: "notion", name: "Notion", via: method == .mcp ? .gmailMCP : .composio, state: state, url: nil,
+                simulated: true, message: "", startedAt: t0, connectedAt: nil, method: method, methods: [.mcp, .composio],
+                next: next, detail: detail)
+  }
+
+  @Test("a failed method offers the next one, and the primary tries it")
+  func fallback() {
+    var f = ConnectFlow(connector: tool)
+    _ = f.connect(at: t0)
+    _ = f.receive(link(.failed, method: .mcp, next: .composio, detail: "The connector on this Mac did not answer."), at: t0)
+    let c = ConnectCopy(flow: f, returnsToConfirm: false)
+    #expect(c.primary == "Use Composio instead")
+    #expect(c.status == "The connector on this Mac did not answer.")
+    #expect(f.tryNext(at: t0) == [.startLink])
+    #expect(f.method == .composio)
+    #expect(ConnectCopy(flow: f, returnsToConfirm: false).route == "Through Composio")
+  }
+
+  @Test("every method has a plain route line and a try title, with no internal words")
+  func plain() {
+    for m in ConnectMethod.allCases {
+      #expect(S10EFixture.plain(m.route) && S10EFixture.plain(m.tryTitle), "\(m)")
+    }
+    #expect(ConnectMethod.allCases.map(\.rawValue) == ["mcp", "composio", "api", "computer"])
+  }
+
+  @Test("the wire carries method, methods, next and detail; an older brain without them still decodes")
+  func wire() throws {
+    let j = #"{"connectorId":"notion","name":"Notion","via":"composio","state":"failed","url":null,"simulated":true,"message":"","startedAt":null,"connectedAt":null,"method":"mcp","methods":["mcp","composio","api","computer"],"next":"composio","detail":"The connector on this Mac did not answer."}"#
+    let l = try BrainJSON.decoder.decode(ConnectLinkDTO.self, from: Data(j.utf8)).toLink()
+    #expect(l.method == .mcp && l.next == .composio && l.methods.count == 4)
+    let old = #"{"connectorId":"gmail","name":"Gmail","via":"gmail-mcp","state":"waiting","url":null,"simulated":true,"message":"x","startedAt":null,"connectedAt":null}"#
+    let o = try BrainJSON.decoder.decode(ConnectLinkDTO.self, from: Data(old.utf8)).toLink()
+    #expect(o.method == .mcp && o.next == nil)
+  }
+
+  @Test("a connector for any tool gets a purpose line that is not about email")
+  func anyTool() {
+    let c = ConnectCopy(flow: ConnectFlow(connector: tool), returnsToConfirm: false)
+    #expect(c.title == "Connect Notion")
+    #expect(!c.purpose.lowercased().contains("mail"))
+  }
+}

@@ -32,7 +32,8 @@ protocol BrainClient: Sendable {
   func keptFiles() async throws -> [KeptFile]
 
   // s10e: connect a tool from inside Offload (POST/GET /connectors/:id/link). Never approves or sends.
-  func startLink(connectorId: String) async throws -> ConnectLink
+  /// `method` nil = the brain's first choice for this connector.
+  func startLink(connectorId: String, method: ConnectMethod?) async throws -> ConnectLink
   func linkStatus(connectorId: String) async throws -> ConnectLink
 }
 
@@ -102,12 +103,13 @@ struct MockBrainClient: BrainClient {
   }
 
   /// s10e: a deterministic demo sign-in: waiting, then connected after `MockLinks.delay` seconds. No browser.
-  func startLink(connectorId: String) async throws -> ConnectLink {
+  func startLink(connectorId: String, method: ConnectMethod?) async throws -> ConnectLink {
     MockLinks.start(connectorId)
     let name = [Self.gmail, Self.sheets, Self.calendar, Self.hubspot].first { $0.id == connectorId }?.name ?? connectorId
     return ConnectLink(connectorId: connectorId, name: name, via: connectorId == "gmail" ? .gmailMCP : .composio,
                        state: .waiting, url: nil, simulated: true,
-                       message: "Demo sign-in: no browser opens and nothing is sent.", startedAt: Date(), connectedAt: nil)
+                       message: "Demo sign-in: no browser opens and nothing is sent.", startedAt: Date(), connectedAt: nil,
+                       method: method ?? Self.methods(connectorId).first, methods: Self.methods(connectorId))
   }
 
   func linkStatus(connectorId: String) async throws -> ConnectLink {
@@ -116,8 +118,12 @@ struct MockBrainClient: BrainClient {
     return ConnectLink(connectorId: connectorId, name: name, via: connectorId == "gmail" ? .gmailMCP : .composio,
                        state: done ? .connected : .waiting, url: nil, simulated: true,
                        message: done ? "\(name) is connected." : "Demo sign-in: no browser opens and nothing is sent.",
-                       startedAt: nil, connectedAt: done ? Date() : nil)
+                       startedAt: nil, connectedAt: done ? Date() : nil,
+                       method: Self.methods(connectorId).first, methods: Self.methods(connectorId))
   }
+
+  /// How the sample's connectors are reached, in order.
+  static func methods(_ id: String) -> [ConnectMethod] { id == "gmail" ? [.mcp, .composio] : [.composio] }
 
   func workflow(id: String) async throws -> Workflow {
     guard let w = Self.sampleWorkflows.first(where: { $0.id == id }) else { throw BrainError.notFound(id) }

@@ -34,7 +34,8 @@ final class ConnectSession: ObservableObject {
   /// ⌘↩ / the white button: Connect, Try again, or (once connected) go back.
   func primary() {
     if flow.phase == .connected { close(); return }
-    run(flow.connect(at: clock()))
+    // s10e: after a failure the primary is the next method the brain offered.
+    run(flow.phase == .failed ? flow.tryNext(at: clock()) : flow.connect(at: clock()))
   }
 
   /// Esc: stop waiting and go back. Nothing the brain started is undone (it never sends).
@@ -60,11 +61,12 @@ final class ConnectSession: ObservableObject {
       switch e {
       case .startLink:
         let id = flow.connector.id
+        let method = flow.method
         pollTask?.cancel()
         pollTask = Task { [weak self] in
           guard let self else { return }
           do {
-            let l = try await self.client.startLink(connectorId: id)
+            let l = try await self.client.startLink(connectorId: id, method: method)
             self.run(self.flow.receive(l, at: self.clock()))
           } catch {
             self.flow.fail(ConnectCopy.didNotStart + " " + BrainError.message(for: error))

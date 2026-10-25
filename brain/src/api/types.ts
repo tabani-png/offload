@@ -485,10 +485,21 @@ export interface ToneMeasuredDTO {
 }
 
 /** s10e: POST /connectors/:id/link starts a sign-in, GET polls it. `message` is shown to a person as it is. */
+export type ConnectMethod = "mcp" | "composio" | "api" | "computer";
+
 export interface ConnectLinkDTO {
   connectorId: string;
   name: string;
+  /** Kept for compatibility: "gmail-mcp" when `method` is mcp, "composio" otherwise. */
   via: "composio" | "gmail-mcp";
+  /** The way this sign-in connects: mcp = a connector on this Mac, composio, or the api / computer seams. */
+  method: ConnectMethod;
+  /** Every method this connector can use, in the order Offload offers them (the first is the default). */
+  methods: ConnectMethod[];
+  /** The method to offer next when this one failed; null otherwise or when there is none. */
+  next: ConnectMethod | null;
+  /** Plain words about the method or why it failed, shown to a person as it is. */
+  detail: string;
   state: "idle" | "waiting" | "connected" | "failed";
   /** The sign-in page to open (Composio); null when a browser window opens by itself or in the demo. */
   url: string | null;

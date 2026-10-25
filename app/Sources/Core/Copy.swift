@@ -218,15 +218,16 @@ struct ReviewCopy: Equatable, Sendable {
     dryRunTitle = "Dry run"
     sampleChip = sample ? "Sample drafts" : nil
     oursTitle = sample ? "Sample draft" : "Our draft"
-    diffNote = "Highlighted: words in the draft that your email did not use."
+    diffNote = "Highlighted: words in the draft that your own version did not use."
     if let d = dryRun {
       let n = d.items.count
-      let what = n == 1 ? "1 of last week's emails" : "\(n) of last week's emails"
+      // s10e: any task, not only email: the dry run re-does real examples of what you did.
+      let what = n == 1 ? "1 real example from last week" : "\(n) real examples from last week"
       dryRunTrailing = "\(what) · ran \(Format.clock(d.ranAt)) · nothing was sent"
     } else {
-      dryRunTrailing = running ? "Drafting against last week's emails…" : ""
+      dryRunTrailing = running ? "Re-doing last week's real examples…" : ""
     }
-    emptyDryRun = running ? "Drafting against last week's real emails…" : "No dry run yet. Press R to run one."
+    emptyDryRun = running ? "Re-doing last week's real examples…" : "No dry run yet. Press R to run one."
     items = (dryRun?.items ?? []).map {
       Item(id: $0.id, who: $0.recipient.display, subject: Self.subject($0.subject, org: $0.recipient.org),
            time: Figures.itemTime(observedMinutes: $0.observedMinutes, reviewSeconds: $0.reviewSeconds),

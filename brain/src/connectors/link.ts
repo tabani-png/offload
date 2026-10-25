@@ -133,19 +133,46 @@ export function composioToolkit(c: Connector): string {
   return c.how.startsWith("composio:") ? c.how.slice("composio:".length) : c.id;
 }
 
-/** "composio" when an http server lists the id, "gmail-mcp" when a stdio server does, else from the catalog `how`. */
-export function linkVia(c: Connector, cfg: ConnectorsConfig | null): ConnectLinkDTO["via"] {
+// ---------- resolution methods (s10e follow-up: Connect is generic, not Gmail-specific) ----------
+
+/** How a connector can be reached. mcp = a connector server on this Mac; composio = Composio holds the sign-in;
+ * api and computer are declared seams (a later slice registers them; today they answer "not available yet"). */
+export const METHODS = ["mcp", "composio", "api", "computer"] as const;
+export type Method = (typeof METHODS)[number];
+export const isMethod = (x: unknown): x is Method => typeof x === "string" && (METHODS as readonly string[]).includes(x);
+
+/**
+ * The ordered methods a connector can use. The single source of truth for `methods` and the default method (the
+ * first one). gmail: ["mcp", "composio"] (composio first when only a Composio http server lists it);
+ * Composio-catalog ids: ["composio", "mcp"] when a stdio server lists them, else ["composio"]. "api" and "computer"
+ * are appended as declared but not yet available seams. Unknown id: [].
+ */
+export function resolutionMethods(connectorId: string, cfg: ConnectorsConfig | null): Method[] {
+  const c = connectorById(connectorId);
+  if (c === undefined) return [];
   const servers = Object.values(cfg?.servers ?? {}).filter((s) => s.catalog.includes(c.id));
-  if (servers.some((s) => s.type === "http")) return "composio";
-  if (servers.some((s) => s.type === "stdio")) return "gmail-mcp";
-  return c.how === "gmail-mcp" ? "gmail-mcp" : "composio";
+  const stdio = servers.some((s) => s.type === "stdio");
+  const http = servers.some((s) => s.type === "http");
+  const head: Method[] = c.how === "gmail-mcp" ? (http && !stdio ? ["composio", "mcp"] : ["mcp", "composio"]) : stdio ? ["composio", "mcp"] : ["composio"];
+  return [...head, "api", "computer"];
 }
 
-/** The Gmail MCP server's auth command: the configured stdio server's command and args plus "auth", or the default. */
-export function gmailAuthArgv(c: Connector, cfg: ConnectorsConfig | null): string[] {
-  const s = Object.values(cfg?.servers ?? {}).find((x) => x.type === "stdio" && x.catalog.includes(c.id));
-  return s !== undefined && s.type === "stdio" ? [s.command, ...s.args, "auth"] : [...DEFAULT_GMAIL_AUTH];
+/** The legacy `via` of a method (kept for compatibility): gmail-mcp for mcp, composio otherwise. */
+export const viaOf = (m: Method): ConnectLinkDTO["via"] => (m === "mcp" ? "gmail-mcp" : "composio");
+
+/** "composio" when an http server lists the id, "gmail-mcp" when a stdio server does, else from the catalog `how`. */
+export function linkVia(c: Connector, cfg: ConnectorsConfig | null): ConnectLinkDTO["via"] {
+  return viaOf(resolutionMethods(c.id, cfg)[0] ?? "composio");
 }
+
+/** The local connector's one-time auth command: the configured stdio server's command and args plus "auth"; for
+ * Gmail without one, the default Gmail server's. null when there is nothing to run. */
+export function mcpAuthArgv(c: Connector, cfg: ConnectorsConfig | null): string[] | null {
+  const s = Object.values(cfg?.servers ?? {}).find((x) => x.type === "stdio" && x.catalog.includes(c.id));
+  if (s !== undefined && s.type === "stdio") return [s.command, ...s.args, "auth"];
+  return c.id === "gmail" ? [...DEFAULT_GMAIL_AUTH] : null;
+}
+export const gmailAuthArgv = (c: Connector, cfg: ConnectorsConfig | null): string[] => mcpAuthArgv(c, cfg) ?? [...DEFAULT_GMAIL_AUTH];
 
 // ---------- the link state machine ----------
 
@@ -159,28 +186,51 @@ export function stubLinkMs(env: Env): number {
   return n <= 60_000 ? n : DEFAULT_STUB_LINK_MS;
 }
 
-export interface LinkerOptions {
-  home: string;
-  env: Env;
-  modelLabel: ModelLabel;
-  now: () => number;
-  /** Stub: how long the demo sign-in takes (default OFFLOAD_STUB_LINK_MS or 2000 ms). */
-  linkMs?: number;
-  runner?: LinkRunner;
-  log?: (line: string) => void;
+/** OFFLOAD_STUB_LINK_FAIL: comma list of methods whose demo sign-in fails (stub only), e.g. "mcp". */
+export function stubFailures(env: Env): Set<Method> {
+  return new Set((env.OFFLOAD_STUB_LINK_FAIL ?? "").split(",").map((x) => x.trim()).filter(isMethod));
 }
 
-interface LinkRecord {
-  via: ConnectLinkDTO["via"];
+/** One sign-in in progress (or finished) for one connector. Methods mutate it in poll. */
+export interface LinkProgress {
+  method: Method;
   state: ConnectLinkDTO["state"];
   url: string | null;
   message: string;
+  detail: string;
   startedAt: number;
   connectedAt: number | null;
   /** Real mode: the account is signed in (Composio list active, or the auth command finished). */
   signedIn: boolean;
   lastPollAt: number;
-  generation: number;
+}
+
+export interface LinkMethodContext {
+  connector: Connector;
+  cfg: ConnectorsConfig | null;
+  status: Record<string, ConnectorStatus>;
+  env: Env;
+  home: string;
+  now: number;
+  runner: LinkRunner;
+  log?: (line: string) => void;
+  /** Background work the method started (tests wait on it through Linker.idle). */
+  track(p: Promise<unknown>): void;
+  /** True while `rec` is still this connector's live sign-in (a restart replaces it). */
+  isCurrent(rec: LinkProgress): boolean;
+}
+
+/**
+ * One way of connecting. Real mode only: the stub simulates every available method itself. A later slice (s13) adds
+ * the auto-fallback chain and computer use by registering methods here, not by editing the route.
+ */
+export interface LinkMethod {
+  readonly method: Method;
+  /** false = a declared seam: start answers failed with "not available yet" and the next method is offered. */
+  readonly available: boolean;
+  start(ctx: LinkMethodContext): Promise<LinkProgress>;
+  /** Called on GET while the progress is waiting; updates it in place. */
+  poll(ctx: LinkMethodContext, rec: LinkProgress): Promise<void>;
 }
 
 export class LinkNotFound extends Error {}
@@ -195,6 +245,17 @@ const plain = {
   failed: (reason: string) => `The sign-in did not start: ${reason}.`,
   unfinished: (reason: string) => `The sign-in did not finish: ${reason}.`,
   signedInNotAdded: (name: string, where: string) => `${name} is signed in. Add it to the ${where} Offload uses, then Offload connects it.`,
+  notYet: "That way of connecting is not available yet.",
+  notFor: (name: string) => `That way of connecting does not work for ${name} yet.`,
+  stubFail: { mcp: "The connector on this Mac did not answer.", composio: "Composio did not answer.", api: "That way of connecting is not available yet.", computer: "That way of connecting is not available yet." } as Record<Method, string>,
+};
+
+/** What each method means, in plain words (the `detail` while it is not failed). */
+export const METHOD_DETAIL: Record<Method, string> = {
+  mcp: "Uses a connector on this Mac, so the sign-in stays on this Mac.",
+  composio: "Uses Composio, which keeps the sign-in for Offload.",
+  api: "Connects straight to the service.",
+  computer: "Offload uses the app on your screen, the way you do.",
 };
 
 /** Why a spawn failed, in plain words for a person. */
@@ -204,23 +265,145 @@ function reasonOf(r: LinkRunResult, what: string): string {
   return `${what} stopped with an error`;
 }
 
+const sentence = (s: string) => `${s.charAt(0).toUpperCase()}${s.slice(1)}.`;
+const progress = (method: Method, now: number, p: Partial<LinkProgress> & Pick<LinkProgress, "state" | "message">): LinkProgress => ({ method, url: null, detail: METHOD_DETAIL[method], startedAt: now, connectedAt: null, signedIn: false, lastPollAt: 0, ...p });
+
+function markConnected(rec: LinkProgress, name: string, now: number): void {
+  rec.state = "connected";
+  rec.connectedAt = now;
+  rec.message = plain.connected(name);
+  rec.detail = METHOD_DETAIL[rec.method];
+  rec.url = null;
+}
+
+/** Composio: `composio link <toolkit> --no-browser --no-wait` hands back a sign-in URL; `--list` polls it. */
+export const COMPOSIO_METHOD: LinkMethod = {
+  method: "composio",
+  available: true,
+  async start(ctx) {
+    const c = ctx.connector;
+    const r = await ctx.runner.run(["composio", "link", composioToolkit(c), "--no-browser", "--no-wait"], { timeoutMs: COMPOSIO_START_TIMEOUT_MS, env: linkEnv(ctx.env) });
+    const url = firstHttpsUrl(`${r.stdout}\n${r.stderr}`);
+    if (r.code !== 0 || url === null) {
+      const reason = r.code === 0 ? "Composio did not give a sign-in link" : reasonOf(r, "Composio");
+      ctx.log?.(`brain: link ${c.id}: composio link did not start (exit ${String(r.code)}${r.timedOut ? ", timed out" : ""})`);
+      return progress("composio", ctx.now, { state: "failed", message: plain.failed(reason), detail: sentence(reason) });
+    }
+    return progress("composio", ctx.now, { state: "waiting", url, message: plain.waitingReal.replace("Gmail", c.name) });
+  },
+  async poll(ctx, rec) {
+    const c = ctx.connector;
+    if (ctx.now - rec.lastPollAt >= POLL_MIN_INTERVAL_MS) {
+      rec.lastPollAt = ctx.now;
+      const r = await ctx.runner.run(["composio", "link", composioToolkit(c), "--list"], { timeoutMs: COMPOSIO_LIST_TIMEOUT_MS, env: linkEnv(ctx.env) });
+      if (r.code === 0 && listShowsActive(r.stdout)) rec.signedIn = true;
+    }
+    if (!rec.signedIn) return;
+    // Re-read: the server may have been added meanwhile.
+    if (catalogStatus(loadConnectorsConfig(ctx.home).config, ctx.env)[c.id] === "connected") markConnected(rec, c.name, ctx.now);
+    else rec.message = plain.signedInNotAdded(c.name, "Composio server");
+  },
+};
+
+/** A connector on this Mac: its one-time auth command opens a browser window and waits for the sign-in. It runs in
+ * the background, bounded by GMAIL_AUTH_TIMEOUT_MS; connected follows the catalog status. */
+export const MCP_METHOD: LinkMethod = {
+  method: "mcp",
+  available: true,
+  async start(ctx) {
+    const c = ctx.connector;
+    const argv = mcpAuthArgv(c, ctx.cfg);
+    if (argv === null) return progress("mcp", ctx.now, { state: "failed", message: plain.failed(`there is no connector for ${c.name} on this Mac yet`), detail: plain.notFor(c.name) });
+    const rec = progress("mcp", ctx.now, { state: "waiting", message: plain.waitingWindow(c.name) });
+    ctx.track(
+      ctx.runner
+        .run(argv, { timeoutMs: GMAIL_AUTH_TIMEOUT_MS, env: linkEnv(ctx.env) })
+        .then((r) => {
+          if (!ctx.isCurrent(rec) || rec.state !== "waiting") return;
+          if (r.code === 0) {
+            rec.signedIn = true;
+            return;
+          }
+          rec.state = "failed";
+          if (r.spawnError !== undefined) rec.message = plain.failed("the sign-in command is not installed on this Mac");
+          else rec.message = plain.unfinished(r.timedOut ? "it took too long, so Offload stopped waiting" : "the sign-in window closed with an error");
+          rec.detail = "The connector on this Mac did not finish the sign-in.";
+          ctx.log?.(`brain: link ${c.id}: the auth command ended (exit ${String(r.code)}${r.timedOut ? ", timed out" : ""})`);
+        })
+        .catch(() => {}),
+    );
+    return rec;
+  },
+  async poll(ctx, rec) {
+    const c = ctx.connector;
+    if (ctx.status[c.id] === "connected") markConnected(rec, c.name, ctx.now);
+    else if (rec.signedIn) rec.message = plain.signedInNotAdded(c.name, `${c.name} server`);
+  },
+};
+
+/** A declared seam that is not built yet: it fails at once and the next method is offered. */
+export function unavailableMethod(method: Method): LinkMethod {
+  return {
+    method,
+    available: false,
+    async start(ctx) {
+      return progress(method, ctx.now, { state: "failed", message: plain.notYet, detail: plain.notYet });
+    },
+    async poll() {},
+  };
+}
+
+export type LinkRegistry = Map<Method, LinkMethod>;
+/** The default registry: mcp and composio work; api and computer are seams. */
+export const LINK_METHODS: LinkRegistry = new Map<Method, LinkMethod>([
+  ["mcp", MCP_METHOD],
+  ["composio", COMPOSIO_METHOD],
+  ["api", unavailableMethod("api")],
+  ["computer", unavailableMethod("computer")],
+]);
+/** Registers (or replaces) a method, e.g. computer use in s13. */
+export function registerLinkMethod(m: LinkMethod, registry: LinkRegistry = LINK_METHODS): void {
+  registry.set(m.method, m);
+}
+
+/** The method to offer after `current` failed: the next available one in `methods`, wrapping around; null if none. */
+export function nextMethod(methods: readonly Method[], current: Method, registry: LinkRegistry = LINK_METHODS): Method | null {
+  const i = methods.indexOf(current);
+  const order = i < 0 ? methods : [...methods.slice(i + 1), ...methods.slice(0, i)];
+  return order.find((m) => m !== current && registry.get(m)?.available === true) ?? null;
+}
+
+export interface LinkerOptions {
+  home: string;
+  env: Env;
+  modelLabel: ModelLabel;
+  now: () => number;
+  /** Stub: how long the demo sign-in takes (default OFFLOAD_STUB_LINK_MS or 2000 ms). */
+  linkMs?: number;
+  runner?: LinkRunner;
+  log?: (line: string) => void;
+  /** Methods by name (default LINK_METHODS). */
+  registry?: LinkRegistry;
+}
+
 export class Linker {
-  private readonly links = new Map<string, LinkRecord>();
+  private readonly links = new Map<string, LinkProgress>();
   private readonly runner: LinkRunner;
   private readonly linkMs: number;
-  private generation = 0;
+  private readonly registry: LinkRegistry;
   private readonly inflight = new Set<Promise<unknown>>();
 
   constructor(private readonly o: LinkerOptions) {
     this.runner = o.runner ?? new SpawnLinkRunner();
     this.linkMs = o.linkMs ?? stubLinkMs(o.env);
+    this.registry = o.registry ?? LINK_METHODS;
   }
 
   private get simulated(): boolean {
     return this.o.modelLabel === "stub";
   }
 
-  /** Background spawns (the Gmail auth command); tests wait on them. */
+  /** Background spawns (a local connector's auth command); tests wait on them. */
   async idle(): Promise<void> {
     while (this.inflight.size > 0) await Promise.all([...this.inflight]);
   }
@@ -231,123 +414,104 @@ export class Linker {
     return c;
   }
 
-  private realStatus(): { cfg: ConnectorsConfig | null; status: Record<string, ConnectorStatus> } {
+  private context(c: Connector): LinkMethodContext {
     const cfg = loadConnectorsConfig(this.o.home).config;
-    return { cfg, status: catalogStatus(cfg, this.o.env) };
+    return {
+      connector: c,
+      cfg,
+      status: catalogStatus(cfg, this.o.env),
+      env: this.o.env,
+      home: this.o.home,
+      now: this.o.now(),
+      runner: this.runner,
+      ...(this.o.log === undefined ? {} : { log: this.o.log }),
+      track: (p) => {
+        const t: Promise<unknown> = p.finally(() => this.inflight.delete(t));
+        this.inflight.add(t);
+      },
+      isCurrent: (rec) => this.links.get(c.id) === rec,
+    };
   }
 
-  private dto(c: Connector, via: ConnectLinkDTO["via"], r: { state: LinkRecord["state"]; message: string; url?: string | null; startedAt?: number | null; connectedAt?: number | null }): ConnectLinkDTO {
-    return { connectorId: c.id, name: c.name, via, state: r.state, url: r.url ?? null, simulated: this.simulated, message: r.message, startedAt: r.startedAt ?? null, connectedAt: r.connectedAt ?? null };
+  private dto(ctx: LinkMethodContext, methods: readonly Method[], r: { method: Method; state: LinkProgress["state"]; message: string; detail?: string; url?: string | null; startedAt?: number | null; connectedAt?: number | null }): ConnectLinkDTO {
+    const c = ctx.connector;
+    return {
+      connectorId: c.id,
+      name: c.name,
+      via: viaOf(r.method),
+      method: r.method,
+      methods: [...methods],
+      next: r.state === "failed" ? nextMethod(methods, r.method, this.registry) : null,
+      state: r.state,
+      url: r.url ?? null,
+      simulated: this.simulated,
+      message: r.message,
+      detail: r.detail ?? METHOD_DETAIL[r.method],
+      startedAt: r.startedAt ?? null,
+      connectedAt: r.connectedAt ?? null,
+    };
   }
 
-  /** POST: starts a sign-in (or returns the one running / the connection there is). */
-  async start(id: string, opts: { restart?: boolean } = {}): Promise<ConnectLinkDTO> {
+  /** POST: starts a sign-in with `method` (default: the running one, else the first of resolutionMethods). */
+  async start(id: string, opts: { restart?: boolean; method?: Method } = {}): Promise<ConnectLinkDTO> {
     const c = this.connector(id);
-    const { cfg, status } = this.realStatus();
-    const via = linkVia(c, cfg);
-    const now = this.o.now();
-    if (this.simulated) {
-      const sim = readSim(this.o.home);
-      if (sim[c.id] !== undefined || status[c.id] === "connected") return this.dto(c, via, { state: "connected", message: plain.connectedDemo(c.name), connectedAt: sim[c.id] ?? null, startedAt: this.links.get(c.id)?.startedAt ?? null });
-      const cur = this.links.get(c.id);
-      if (cur !== undefined && cur.state === "waiting" && opts.restart !== true) return this.poll(id);
-      const rec: LinkRecord = { via, state: "waiting", url: null, message: plain.waitingDemo, startedAt: now, connectedAt: null, signedIn: false, lastPollAt: 0, generation: ++this.generation };
-      this.links.set(c.id, rec);
-      return this.dto(c, via, rec);
-    }
-    if (status[c.id] === "connected") {
-      const cur = this.links.get(c.id);
-      return this.dto(c, via, { state: "connected", message: plain.connected(c.name), startedAt: cur?.startedAt ?? null, connectedAt: cur?.connectedAt ?? null });
-    }
+    const ctx = this.context(c);
+    const methods = resolutionMethods(c.id, ctx.cfg);
     const cur = this.links.get(c.id);
-    if (cur !== undefined && cur.state === "waiting" && opts.restart !== true) return this.poll(id);
-    const gen = ++this.generation;
-    if (via === "composio") {
-      const r = await this.runner.run(["composio", "link", composioToolkit(c), "--no-browser", "--no-wait"], { timeoutMs: COMPOSIO_START_TIMEOUT_MS, env: linkEnv(this.o.env) });
-      const url = firstHttpsUrl(`${r.stdout}\n${r.stderr}`);
-      if (r.code !== 0 || url === null) {
-        const reason = r.code === 0 ? "Composio did not give a sign-in link" : reasonOf(r, "Composio");
-        const failed: LinkRecord = { via, state: "failed", url: null, message: plain.failed(reason), startedAt: now, connectedAt: null, signedIn: false, lastPollAt: 0, generation: gen };
-        this.links.set(c.id, failed);
-        this.o.log?.(`brain: link ${c.id}: composio link did not start (exit ${String(r.code)}${r.timedOut ? ", timed out" : ""})`);
-        return this.dto(c, via, failed);
-      }
-      const rec: LinkRecord = { via, state: "waiting", url, message: c.id === "gmail" ? plain.waitingReal : plain.waitingReal.replace("Gmail", c.name), startedAt: now, connectedAt: null, signedIn: false, lastPollAt: 0, generation: gen };
-      this.links.set(c.id, rec);
-      return this.dto(c, via, rec);
+    const method = opts.method ?? (cur?.state === "waiting" ? cur.method : methods[0]!);
+    const sim = this.simulated ? readSim(this.o.home) : {};
+    if (sim[c.id] !== undefined || ctx.status[c.id] === "connected") {
+      return this.dto(ctx, methods, { method: cur?.method ?? method, state: "connected", message: this.simulated ? plain.connectedDemo(c.name) : plain.connected(c.name), startedAt: cur?.startedAt ?? null, connectedAt: sim[c.id] ?? cur?.connectedAt ?? null });
     }
-    // Gmail MCP: its one-time auth command opens a browser window and waits for the sign-in; it runs in the
-    // background, bounded by GMAIL_AUTH_TIMEOUT_MS.
-    const rec: LinkRecord = { via, state: "waiting", url: null, message: plain.waitingWindow(c.name), startedAt: now, connectedAt: null, signedIn: false, lastPollAt: 0, generation: gen };
+    if (cur !== undefined && cur.state === "waiting" && cur.method === method && opts.restart !== true) return this.poll(id);
+    let rec: LinkProgress;
+    const impl = this.registry.get(method);
+    if (!methods.includes(method)) rec = progress(method, ctx.now, { state: "failed", message: plain.failed(`that way of connecting does not work for ${c.name} yet`), detail: plain.notFor(c.name) });
+    else if (impl === undefined || !impl.available) rec = await (impl ?? unavailableMethod(method)).start(ctx);
+    else if (this.simulated) {
+      // Deterministic demo sign-in per method; OFFLOAD_STUB_LINK_FAIL makes the listed methods fail.
+      rec = stubFailures(this.o.env).has(method)
+        ? progress(method, ctx.now, { state: "failed", message: plain.failed(plain.stubFail[method].replace(/\.$/, "").replace(/^./, (x) => x.toLowerCase())), detail: plain.stubFail[method] })
+        : progress(method, ctx.now, { state: "waiting", message: plain.waitingDemo });
+    } else {
+      // Placeholder first, so a background completion of this start sees itself as current.
+      this.links.set(c.id, progress(method, ctx.now, { state: "waiting", message: "" }));
+      const placeholder = this.links.get(c.id)!;
+      rec = await impl.start({ ...ctx, isCurrent: (r) => this.links.get(c.id) === r || (this.links.get(c.id) === placeholder && r !== placeholder) });
+    }
     this.links.set(c.id, rec);
-    const p = this.runner
-      .run(gmailAuthArgv(c, cfg), { timeoutMs: GMAIL_AUTH_TIMEOUT_MS, env: linkEnv(this.o.env) })
-      .then((r) => {
-        const live = this.links.get(c.id);
-        if (live === undefined || live.generation !== gen || live.state !== "waiting") return;
-        if (r.code === 0) {
-          live.signedIn = true;
-          return;
-        }
-        live.state = "failed";
-        live.message = r.spawnError !== undefined ? plain.failed("the sign-in command is not installed on this Mac") : plain.unfinished(r.timedOut ? "it took too long, so Offload stopped waiting" : "the sign-in window closed with an error");
-        this.o.log?.(`brain: link ${c.id}: the auth command ended (exit ${String(r.code)}${r.timedOut ? ", timed out" : ""})`);
-      })
-      .catch(() => {})
-      .finally(() => this.inflight.delete(p));
-    this.inflight.add(p);
-    return this.dto(c, via, rec);
+    return this.dto(ctx, methods, rec);
   }
 
-  /** GET: the state of the sign-in. */
+  /** GET /link and GET /status: the state of the sign-in. */
   async poll(id: string): Promise<ConnectLinkDTO> {
     const c = this.connector(id);
-    const { cfg, status } = this.realStatus();
-    const via = this.links.get(c.id)?.via ?? linkVia(c, cfg);
-    const now = this.o.now();
+    const ctx = this.context(c);
+    const methods = resolutionMethods(c.id, ctx.cfg);
     const rec = this.links.get(c.id);
     if (this.simulated) {
       const sim = readSim(this.o.home);
-      if (sim[c.id] !== undefined || status[c.id] === "connected") return this.dto(c, via, { state: "connected", message: plain.connectedDemo(c.name), connectedAt: sim[c.id] ?? rec?.connectedAt ?? null, startedAt: rec?.startedAt ?? null });
-      if (rec === undefined) return this.dto(c, via, { state: "idle", message: plain.idle(c.name) });
-      if (rec.state === "waiting" && now - rec.startedAt >= this.linkMs) {
-        writeSim(this.o.home, c.id, now);
+      if (sim[c.id] !== undefined || ctx.status[c.id] === "connected") return this.dto(ctx, methods, { method: rec?.method ?? methods[0]!, state: "connected", message: plain.connectedDemo(c.name), connectedAt: sim[c.id] ?? rec?.connectedAt ?? null, startedAt: rec?.startedAt ?? null });
+      if (rec === undefined) return this.dto(ctx, methods, { method: methods[0]!, state: "idle", message: plain.idle(c.name) });
+      if (rec.state === "waiting" && ctx.now - rec.startedAt >= this.linkMs) {
+        writeSim(this.o.home, c.id, ctx.now);
         rec.state = "connected";
-        rec.connectedAt = now;
+        rec.connectedAt = ctx.now;
         rec.message = plain.connectedDemo(c.name);
       }
-      return this.dto(c, via, rec);
+      return this.dto(ctx, methods, rec);
     }
-    if (status[c.id] === "connected" && (rec === undefined || rec.via !== "composio" || rec.signedIn || rec.state !== "waiting")) {
-      if (rec !== undefined && rec.state !== "connected") {
-        rec.state = "connected";
-        rec.connectedAt = now;
-        rec.message = plain.connected(c.name);
-        rec.url = null;
-      }
-      return this.dto(c, via, { state: "connected", message: plain.connected(c.name), startedAt: rec?.startedAt ?? null, connectedAt: rec?.connectedAt ?? null });
+    if (rec === undefined) {
+      const connected = ctx.status[c.id] === "connected";
+      return this.dto(ctx, methods, { method: methods[0]!, state: connected ? "connected" : "idle", message: connected ? plain.connected(c.name) : plain.idle(c.name) });
     }
-    if (rec === undefined) return this.dto(c, via, { state: "idle", message: plain.idle(c.name) });
-    if (rec.state !== "waiting") return this.dto(c, via, rec);
-    if (rec.via === "composio" && now - rec.lastPollAt >= POLL_MIN_INTERVAL_MS) {
-      rec.lastPollAt = now;
-      const r = await this.runner.run(["composio", "link", composioToolkit(c), "--list"], { timeoutMs: COMPOSIO_LIST_TIMEOUT_MS, env: linkEnv(this.o.env) });
-      if (r.code === 0 && listShowsActive(r.stdout)) rec.signedIn = true;
-    }
-    if (rec.signedIn) {
-      // Re-read: the server may have been added meanwhile.
-      if (catalogStatus(loadConnectorsConfig(this.o.home).config, this.o.env)[c.id] === "connected") {
-        rec.state = "connected";
-        rec.connectedAt = now;
-        rec.message = plain.connected(c.name);
-        rec.url = null;
-      } else rec.message = plain.signedInNotAdded(c.name, rec.via === "composio" ? "Composio server" : "Gmail server");
-    }
-    return this.dto(c, via, rec);
+    if (rec.state === "waiting") await (this.registry.get(rec.method) ?? unavailableMethod(rec.method)).poll(ctx, rec);
+    else if (rec.state !== "connected" && ctx.status[c.id] === "connected") markConnected(rec, c.name, ctx.now);
+    return this.dto(ctx, methods, rec);
   }
 }
 
-/** Every message the link routes can show, for the plain-words lint in the tests. */
+/** Every message and detail the link routes can show, for the plain-words lint in the tests. */
 export const LINK_MESSAGES_FOR_LINT: readonly string[] = [
   plain.waitingReal,
   plain.waitingDemo,
@@ -360,9 +524,17 @@ export const LINK_MESSAGES_FOR_LINT: readonly string[] = [
   plain.failed("Composio stopped with an error"),
   plain.failed("Composio did not give a sign-in link"),
   plain.failed("the sign-in command is not installed on this Mac"),
+  plain.failed("there is no connector for Slack on this Mac yet"),
+  plain.failed("that way of connecting does not work for Slack yet"),
+  plain.failed("the connector on this Mac did not answer"),
   plain.unfinished("it took too long, so Offload stopped waiting"),
   plain.unfinished("the sign-in window closed with an error"),
   plain.signedInNotAdded("Gmail", "Composio server"),
   plain.signedInNotAdded("Gmail", "Gmail server"),
+  plain.notYet,
+  plain.notFor("Slack"),
+  "The connector on this Mac did not finish the sign-in.",
+  ...Object.values(plain.stubFail),
+  ...Object.values(METHOD_DETAIL),
   DEMO_SEND_REFUSED,
 ];

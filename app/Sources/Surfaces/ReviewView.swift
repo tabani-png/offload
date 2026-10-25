@@ -44,7 +44,7 @@ struct ReviewView: View {
   private var content: some View {
     let copy = model.copy
     return VStack(alignment: .leading, spacing: Tokens.Space.s32) {
-      if parts.contains(.header) { ReviewHeader(model: model, copy: copy) }
+      if parts.contains(.header) { ReviewHeader(model: model, copy: copy).id("section.top") }
       if parts.contains(.steps) { StepsSection(copy: copy) }
       if parts.contains(.tone) { ToneSection(model: model) }
       if parts.contains(.dryRun) { DryRunSection(model: model, copy: copy).id(ReviewModel.dryRunSectionId) }

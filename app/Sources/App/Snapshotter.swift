@@ -107,6 +107,12 @@ enum Snapshotter {
     }
     let intro = connectModel(nil)
     let waiting = connectModel(link(.waiting))
+    var failedLink = link(.failed)
+    failedLink.method = .mcp
+    failedLink.methods = [.mcp, .composio]
+    failedLink.next = .composio
+    failedLink.detail = "The connector on this Mac did not answer."
+    let failed = connectModel(failedLink)
     let done = connectModel(link(.connected))
     done.previewConnected(sheets)
     func connectScene(_ m: ReviewModel) -> AnyView {
@@ -121,6 +127,7 @@ enum Snapshotter {
       ("review-connect", connectScene(intro)),
       ("review-connect-waiting", connectScene(waiting)),
       ("review-connected", connectScene(done)),
+      ("review-connect-failed", connectScene(failed)),
       ("review-voice-edit", reviewChrome(voice) { ReviewView(model: voice, parts: [.tone]) }),
       ("dashboard-automations-empty", dashboardScene(dashboardModel(section: .automations, data: empty))),
     ]

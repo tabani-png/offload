@@ -402,6 +402,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2 + Double(n)) { [weak self] in
           if k == "dashboard" { self?.openDashboard(); return }
           if k == "scroll-dryrun" { m.scrollRequest = ReviewModel.dryRunSectionId; return }
+          if k == "scroll-top" { m.scrollRequest = "section.top"; return }
+          // s10e: the footer's Approve pressed with the mouse (it is secondary while a step is blocked).
+          if k == "approvenow" {
+            m.approveNow()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+              if m.sheet == .confirm { self?.qaRecord("review-confirm", window) }
+            }
+            return
+          }
           let key: ReviewKey? = ["approve": .approve, "confirm": .confirm, "escape": .escape, "skill": .skill,
                                  "rerun": .rerun, "edit": .edit, "discard": .discard][k]
           if let key { m.send(key) }
@@ -421,6 +430,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if phase == .waiting { self?.qaRecord("review-connect-waiting", window) }
         if phase == .connected { self?.qaRecord("review-connected", window) }
       }.store(in: &self!.qaBag)
+    }.store(in: &qaBag)
+    m.$sheet.removeDuplicates().sink { [weak self] sheet in
+      if case .skill = sheet { DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self?.qaRecord("review-skill", window) } }
     }.store(in: &qaBag)
     m.$sheet.removeDuplicates().dropFirst().sink { [weak self] sheet in
       if sheet == .confirm, m.connect == nil, m.flow.plan.canTurnOn { self?.qaRecord("review-confirm-ready", window) }

@@ -15,7 +15,7 @@ import { toEvidence, toInsights, toStatus, toTimeline } from "./dto.ts";
 import { BRAIN_READY_PREFIX, MODEL_HEADER, type BrainReadyDTO, type ModelLabel } from "./types.ts";
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
 import { workflowRoute } from "./workflow-routes.ts";
-import { Linker, LinkNotFound, simPath, type LinkRunner } from "../connectors/link.ts";
+import { isMethod, Linker, LinkNotFound, METHODS, simPath, type LinkRunner, type Method } from "../connectors/link.ts";
 import { existsSync } from "node:fs";
 
 export interface BrainOptions {
@@ -46,7 +46,7 @@ export interface Brain {
   linkIdle(): Promise<void>;
 }
 
-async function linkBody(req: Request): Promise<{ restart: boolean } | string> {
+async function linkBody(req: Request): Promise<{ restart: boolean; method?: Method } | string> {
   const text = await req.text();
   if (text.length > 64 * 1024) return "body over 65536 bytes";
   if (text.trim() === "") return { restart: false };
@@ -58,10 +58,11 @@ async function linkBody(req: Request): Promise<{ restart: boolean } | string> {
     return "body is not JSON";
   }
   if (typeof v !== "object" || v === null || Array.isArray(v)) return "body must be a JSON object";
-  for (const k of Object.keys(v)) if (k !== "restart") return `${k} is not a link field (send {} or { "restart": true })`;
-  const r = (v as { restart?: unknown }).restart;
+  for (const k of Object.keys(v)) if (k !== "restart" && k !== "method") return `${k} is not a link field (send {}, { "restart": true } or { "method": ... })`;
+  const { restart: r, method: m } = v as { restart?: unknown; method?: unknown };
   if (r !== undefined && typeof r !== "boolean") return "restart must be true or false";
-  return { restart: r === true };
+  if (m !== undefined && !isMethod(m)) return `method must be one of ${METHODS.join(", ")}`;
+  return { restart: r === true, ...(m === undefined ? {} : { method: m }) };
 }
 
 /** Adds the model label: the header on every response, `model` on 2xx JSON object bodies that do not have one. */
@@ -177,10 +178,12 @@ export function createBrain(opts: BrainOptions): Brain {
       return r.ok ? json(200, r.body) : error(409, "conflict", r.error);
     }
     // s10e: start (POST) or poll (GET) a sign-in for one catalog id. Connecting never sends anything.
-    const link = /^\/connectors\/([^/]+)\/link$/.exec(path);
+    // GET /connectors/:id/status is the generic name of the same poll (GET and HEAD only).
+    const link = /^\/connectors\/([^/]+)\/(link|status)$/.exec(path);
     if (link !== null) {
       const id = link[1]!;
-      if (req.method !== "POST" && req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed", "use GET or POST");
+      const allowed = link[2] === "link" ? ["POST", "GET", "HEAD"] : ["GET", "HEAD"];
+      if (!allowed.includes(req.method)) return error(405, "method_not_allowed", link[2] === "link" ? "use GET or POST" : "use GET");
       try {
         if (req.method === "POST") {
           const b = await linkBody(req);

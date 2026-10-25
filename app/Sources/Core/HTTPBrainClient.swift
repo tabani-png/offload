@@ -173,14 +173,20 @@ struct HTTPBrainClient: BrainClient {
     try await get(ConnectorsResponse.self, "connectors").states()
   }
 
-  /// s10e: POST /connectors/:id/link. The brain starts Composio's sign-in (or its demo simulation); nothing is sent.
-  func startLink(connectorId: String) async throws -> ConnectLink {
-    try await call(ConnectLinkDTO.self, "POST", "connectors/\(Self.segment(connectorId))/link", body: [:]).toLink()
+  /// s10e: POST /connectors/:id/link {method?}. The brain starts the sign-in for that method (or its demo simulation);
+  /// nothing is sent.
+  func startLink(connectorId: String, method: ConnectMethod?) async throws -> ConnectLink {
+    try await call(ConnectLinkDTO.self, "POST", "connectors/\(Self.segment(connectorId))/link",
+                   body: method.map { ["method": $0.rawValue] } ?? [:]).toLink()
   }
 
-  /// s10e: GET /connectors/:id/link, polled by the connect sheet.
+  /// s10e: GET /connectors/:id/status, polled by the connect sheet (an older brain only has GET …/link).
   func linkStatus(connectorId: String) async throws -> ConnectLink {
-    try await get(ConnectLinkDTO.self, "connectors/\(Self.segment(connectorId))/link").toLink()
+    do {
+      return try await get(ConnectLinkDTO.self, "connectors/\(Self.segment(connectorId))/status").toLink()
+    } catch BrainError.notFound {
+      return try await get(ConnectLinkDTO.self, "connectors/\(Self.segment(connectorId))/link").toLink()
+    }
   }
 
   func workflow(id: String) async throws -> Workflow {

@@ -177,6 +177,8 @@ extension BrainClient {
   func latestDryRun(workflowId: String) async throws -> DryRun? { nil }
 
   /// An older brain has no link route: the connect sheet says the sign-in did not start.
-  func startLink(connectorId: String) async throws -> ConnectLink { throw BrainError.notFound("connectors/\(connectorId)/link") }
+  func startLink(connectorId: String, method: ConnectMethod?) async throws -> ConnectLink { throw BrainError.notFound("connectors/\(connectorId)/link") }
+  /// The brain's first choice of method.
+  func startLink(connectorId: String) async throws -> ConnectLink { try await startLink(connectorId: connectorId, method: nil) }
   func linkStatus(connectorId: String) async throws -> ConnectLink { throw BrainError.notFound("connectors/\(connectorId)/link") }
 }

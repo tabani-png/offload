@@ -229,30 +229,45 @@ it (the app polls every few seconds). `:id` must be a catalog id (`src/connector
 other methods 405; another body key or a non-boolean `restart` is a 400. Same auth, Host and Origin checks as every
 route. Connecting never sends anything.
 
-`ConnectLinkDTO`: `connectorId`, `name`, `via` (`composio` when a Composio/http server in connectors.json lists the id,
-`gmail-mcp` when a stdio server does, else from the catalog `how`), `state` (`idle | waiting | connected | failed`),
+`ConnectLinkDTO`: `connectorId`, `name`, `method`, `methods`, `next`, `detail` (below), `via` (kept for compatibility:
+`gmail-mcp` when `method` is mcp, `composio` otherwise), `state` (`idle | waiting | connected | failed`),
 `url` (the sign-in page to open, or null), `simulated`, `message`, `startedAt`, `connectedAt` (plus `model`).
 `message` is plain words for a person, shown as it is ("Finish signing in to Gmail in your browser. Offload checks
 every few seconds.", "Gmail is connected.", "The sign-in did not start: Composio did not answer in time.").
 
+- Methods (connecting is generic, not Gmail-specific): `method` is one of `mcp` (a connector on this Mac),
+  `composio`, `api`, `computer`. `methods` is the ordered list the connector can use, from `resolutionMethods()` in
+  `src/connectors/link.ts`: gmail `["mcp", "composio"]` (`composio` first when only a Composio http server lists it),
+  Composio-catalog ids `["composio"]` or `["composio", "mcp"]` when a stdio server lists them, then always `"api",
+  "computer"`. The first is the default. POST takes `{}`, `{ "restart": true }` or `{ "method": M, "restart"? }`;
+  another method while one waits starts the new one. `api` and `computer` are declared seams: they answer `failed`
+  with `detail` "That way of connecting is not available yet."; a method the connector cannot use fails with "That
+  way of connecting does not work for Slack yet." `next` is the method to offer after a failure (the next available
+  one in `methods`, wrapping; never a seam), else null. `detail` is plain words like `message` (what the method is, or
+  why it failed). Methods live in a registry (`LinkMethod` with start/poll, `registerLinkMethod`); a later slice adds
+  the fallback chain and computer use by registering, not by editing the route.
+- `GET /connectors/:id/status` returns the same DTO as `GET /connectors/:id/link` (the generic name; GET and HEAD
+  only, other methods 405).
 - GET before any POST: `idle`, or `connected` when the id already is. POST on a connected id answers `connected` and
   starts nothing. POST while a sign-in is waiting returns it; `restart: true` starts a new one.
 - Stub model (`serve --model stub`): a demo sign-in, `simulated: true`. POST → `waiting`, `url` null; GET →
   `connected` once `linkMs` has passed since `startedAt` (default 2000 ms, `OFFLOAD_STUB_LINK_MS` 0..60000). The id is
   then kept in `$OFFLOAD_HOME/connect-sim.json` (0600, `{ "version": 1, "connected": { "<id>": <connectedAt> } }`) and
-  counts as connected everywhere: GET /connectors (catalog and insights), workflow connectors, /dashboard needsYou and
+  counts as connected everywhere (every available method simulates the same way; `OFFLOAD_STUB_LINK_FAIL`, a comma
+  list such as `mcp`, makes those methods end `failed`, e.g. mcp: detail "The connector on this Mac did not answer.",
+  next `composio`): GET /connectors (catalog and insights), workflow connectors, /dashboard needsYou and
   the approve check. Nothing can be sent through it: approving a live batch on a demo sign-in is a 409 `conflict`
   "Demo connection: Offload does not send from a demo sign-in.", auto-run and the run loop leave the batch pending,
   and any send path that still reaches `sendBatch` never starts the executor (its items end `failed_before_send`).
   Activation (approving the dry-run batch) works, because it sends nothing. With the real model the file is ignored
   (one line on stderr at start).
-- Real model, `via: composio`: POST runs `composio link <toolkit> --no-browser --no-wait` (toolkit from the catalog
+- Real model, method `composio`: POST runs `composio link <toolkit> --no-browser --no-wait` (toolkit from the catalog
   `how`, `gmail` for Gmail; 30 s timeout) and answers `waiting` with the first https URL it prints (or `failed`). GET
   runs `composio link <toolkit> --list` (15 s timeout, at most every 2 s) and answers `connected` only when the account
   is active AND the catalog status is connected; active but no server lists the id stays `waiting` with "Gmail is
   signed in. Add it to the Composio server Offload uses, then Offload connects it."
-- Real model, `via: gmail-mcp`: POST runs the configured stdio server's command and args plus `auth` (default
-  `npx -y @gongrzhe/server-gmail-autoauth-mcp auth`) in the background (10 min timeout) and answers `waiting`, `url`
+- Real model, method `mcp`: POST runs the configured stdio server's command and args plus `auth` (for Gmail without
+  one, `npx -y @gongrzhe/server-gmail-autoauth-mcp auth`) in the background (10 min timeout) and answers `waiting`, `url`
   null; GET answers from the catalog status; an auth command that fails ends `failed`.
 - Every command gets only PATH, HOME, USER, LOGNAME, SHELL, TMPDIR and the locale: never `OFFLOAD_TOKEN`, a connector
   secret or a model login. Tests inject a fake runner (`BrainOptions.link.runner`) and never spawn.
