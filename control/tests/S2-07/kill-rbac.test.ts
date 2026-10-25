@@ -257,6 +257,9 @@ describe("S2-07 audit", () => {
     }
     const v = await withTenant(w.h.db.app, { tenantId: w.t.id }, (t) => verifyChain(t));
     expect(v).toEqual({ ok: true });
+    // The events read back through the audit log validate against audit-event.schema.json (responses are validated).
+    const log = await (await client(w, "auditor")).get("/v1/audit-log?limit=200");
+    expect(log.status).toBe(200);
   });
 
   test("AUDIT: the reject event names the actor and the reason, the approve event the approver kind", async () => {
