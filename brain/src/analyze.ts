@@ -7,7 +7,14 @@ import { estimateSaving, type SavingEstimate } from "./insights/saving.ts";
 import { DEFAULT_SESSION_OPTIONS, sessionizeDays, totalActiveMs, type SessionOptions } from "./sessionize.ts";
 import { computeTaskStats } from "./stats.ts";
 import { readStore, type ReaderEnv, type StoreRead } from "./store/reader.ts";
-import type { DayLabel, OffloadEvent, Span, Task, TaskLabel, TaskProfile, TaskStats } from "./types.ts";
+import type { DayLabel, OffloadEvent, Span, Task, TaskLabel, TaskProfile, TaskStats, UserContext } from "./types.ts";
+import type { SpanDescription } from "./understanding/describe.ts";
+import { StubEmbedder, type Embedder } from "./understanding/embed.ts";
+import { framesFromEvents, mergeFrames, readFrameSidecars, type FrameNote } from "./understanding/frames.ts";
+import { understandingJudge } from "./understanding/labeler.ts";
+import { understandSpans } from "./understanding/pipeline.ts";
+import { connectorsForReach } from "./understanding/reach.ts";
+import { sanitizeUserContext } from "./understanding/context.ts";
 
 export interface AnalyzeOptions {
   windowDays?: number;
@@ -25,6 +32,23 @@ export interface AnalyzeOptions {
   now?: () => number;
   /** Reader environment (OFFLOAD_OBSERVER_BIN, OFFLOAD_KEYS). Default process.env. */
   env?: ReaderEnv;
+  /** s12: "v1" (default until s15) = app/host rule grouping; "v2" = span descriptions + local embeddings + induction. */
+  understanding?: "v1" | "v2";
+  /** v2: local embedder. Default StubEmbedder (deterministic, offline); the CLI offers Ollama. */
+  embedder?: Embedder;
+  /** v2: frame notes. Default: notes among the store's events plus the fixture sidecar (analyzeHome). */
+  frames?: readonly FrameNote[];
+  /** Optional onboarding context {role, industry}: passed to the labeler and judge as context only. */
+  userContext?: UserContext;
+}
+
+export interface UnderstandingInfo {
+  version: "v2";
+  embedder: string;
+  framesRead: number;
+  framesUsed: number;
+  invalidFrames: number;
+  descriptions: SpanDescription[];
 }
 
 export interface Insight {
@@ -52,12 +76,13 @@ export interface Analysis {
   stats: Map<string, TaskStats>;
   insights: Insight[];
   totalActiveMs: number;
+  /** v2 only. */
+  understanding?: UnderstandingInfo;
 }
 
 export const insightIdFor = (taskId: string) => `ins_${taskId.replace(/^t_/, "")}`;
 
 export async function analyzeStore(store: StoreRead, opts: AnalyzeOptions = {}): Promise<Analysis> {
-  const judge = opts.judge ?? heuristicJudge;
   const minInstances = opts.minInstances ?? 3;
   const minSaved = opts.minWeeklyHoursSaved ?? 0.25;
   const maxJudgement = opts.maxJudgement ?? 0.8;
@@ -66,7 +91,20 @@ export async function analyzeStore(store: StoreRead, opts: AnalyzeOptions = {}):
   const spans = sessionizeDays(store.days, opts.session ?? DEFAULT_SESSION_OPTIONS);
   const spansById = indexSpans(spans);
   const total = totalActiveMs(spans);
-  const tasks = await groupTasks(spans, opts.labeler === undefined ? {} : { labeler: opts.labeler });
+  const user = sanitizeUserContext(opts.userContext);
+  let tasks: Task[];
+  let understanding: UnderstandingInfo | undefined;
+  if (opts.understanding === "v2") {
+    const fromEvents = framesFromEvents(store.days.flatMap((d) => d.events));
+    const frames = mergeFrames(opts.frames ?? [], fromEvents.frames);
+    const embedder = opts.embedder ?? new StubEmbedder();
+    const u = await understandSpans(spans, { frames, embedder, ...(opts.labeler === undefined ? {} : { labeler: opts.labeler }), ...(user === undefined ? {} : { user }) });
+    tasks = u.tasks;
+    understanding = { version: "v2", embedder: u.embedder, framesRead: frames.length, framesUsed: u.framesUsed, invalidFrames: fromEvents.invalid, descriptions: u.descriptions };
+  } else {
+    tasks = await groupTasks(spans, { ...(opts.labeler === undefined ? {} : { labeler: opts.labeler }), ...(user === undefined ? {} : { user }) });
+  }
+  const judge = opts.judge ?? (opts.understanding === "v2" ? understandingJudge : heuristicJudge);
 
   const taskOfSpan = new Map<string, string>();
   const stats = new Map<string, TaskStats>();
@@ -79,9 +117,9 @@ export async function analyzeStore(store: StoreRead, opts: AnalyzeOptions = {}):
   for (const t of tasks) {
     const st = stats.get(t.id);
     if (st === undefined || st.instances.value < minInstances) continue;
-    const verdict = await judge.judge({ profile: t.profile, sameness: st.sameness.value });
+    const verdict = await judge.judge({ profile: t.profile, sameness: st.sameness.value, ...(user === undefined ? {} : { user }) });
     if (verdict.judgement >= maxJudgement) continue;
-    const connectors = connectorsFor(t.profile);
+    const connectors = t.profile.understanding === undefined ? connectorsFor(t.profile) : connectorsForReach(t.profile.understanding.reach);
     const factors: ScoreFactors = {
       volume: st.share.value,
       sameness: st.sameness.value,
@@ -112,9 +150,16 @@ export async function analyzeStore(store: StoreRead, opts: AnalyzeOptions = {}):
     stats,
     insights: candidates.map((c, i) => ({ ...c, rank: i + 1 })),
     totalActiveMs: total,
+    ...(understanding === undefined ? {} : { understanding }),
   };
 }
 
 export async function analyzeHome(home: string, opts: AnalyzeOptions = {}): Promise<Analysis> {
-  return analyzeStore(readStore(home, { windowDays: opts.windowDays ?? 7, now: (opts.now ?? Date.now)(), ...(opts.env === undefined ? {} : { env: opts.env }) }), opts);
+  const now = (opts.now ?? Date.now)();
+  const store = readStore(home, { windowDays: opts.windowDays ?? 7, now, ...(opts.env === undefined ? {} : { env: opts.env }) });
+  if (opts.understanding !== "v2" || opts.frames !== undefined) return analyzeStore(store, opts);
+  // v2: until s11 stores frame notes as events, a fixture sidecar (frames/<day>.jsonl[.enc]) carries them.
+  const side = readFrameSidecars(home, store.days.map((d) => d.day), { now });
+  for (const e of side.errors) console.error(`brain: ${e}`);
+  return analyzeStore(store, { ...opts, frames: side.frames });
 }

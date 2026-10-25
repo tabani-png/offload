@@ -130,6 +130,18 @@ export interface InsightDTO {
   identifiers: { counterpartyCount: number; domainCount: number; topDomains: string[] };
   keywords: string[];
   examples: ExampleDTO[];
+  /** s12, `--understanding v2` only (additive): the induced task model behind this insight. */
+  understanding?: InsightUnderstandingDTO;
+}
+
+export interface InsightUnderstandingDTO {
+  goal: string;
+  steps: Array<{ id: string; name: string; verb: string; object: string; surface: string; app: string; host: string; perInstance: number; repeatsPerInstance: number; core: boolean }>;
+  /** Step ids in instance order. */
+  loop: string[];
+  surfaces: Array<{ app: string; appName: string; host: string; minutes: number }>;
+  reach: { value: number; perSurface: Array<{ app: string; host: string; via: "catalog" | "local_file" | "computer_use"; connectorId: string | null; reach: number }> };
+  identifiers: { items: number; containers: string[] };
 }
 
 export interface InsightsResponse {

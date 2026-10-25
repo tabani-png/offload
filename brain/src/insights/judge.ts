@@ -1,12 +1,14 @@
 // Judgement and risk for a task. The research pipeline (S5) has Claude score these on the top tasks; until that is
 // wired, a deterministic heuristic Judge stands in. Judges see the task profile only, never raw events.
 import { isMailListView, WRITING_KEYS_PER_MINUTE } from "../grouping/group.ts";
-import type { TaskProfile } from "../types.ts";
+import type { TaskProfile, UserContext } from "../types.ts";
 
 export interface JudgeInput {
   profile: TaskProfile;
   /** Sameness score 0..1 from stats. */
   sameness: number;
+  /** s12: optional onboarding context (role, industry). Context only; the heuristic judge ignores it. */
+  user?: UserContext;
 }
 
 export interface JudgeResult {

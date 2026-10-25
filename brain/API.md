@@ -79,6 +79,35 @@ Example (fixture week, trimmed):
 }
 ```
 
+### Understanding v2 (s12, behind a flag; ADR 0007)
+`serve` and `analyze` take `--understanding v1|v2` (default `v1` until s15 flips it). v1 is unchanged byte for byte.
+v2 finds repeated work in any field instead of keying tasks on app/host rules:
+1. Every span gets an internal description (`brain/src/understanding/describe.ts`): activity, verb, object,
+   counterpart, surface, step, identifiers. Frame notes (`schemas/frame-note.schema.json`, events of kind `frame`
+   from s11; until then a fixture sidecar `frames/<day>.jsonl[.enc]` encrypted with the day key) win by
+   confidence-weighted vote; without frames it is composed from focus, title, URL, input counts and OCR.
+2. The masked description text (no identifiers, no counterpart) is embedded locally: `--embedder stub` (default,
+   deterministic, offline) or `--embedder ollama` (127.0.0.1:11434 only, `--embed-model qwen3-embedding:0.6b|bge-m3`).
+   A failing Ollama call is an error, never a silent fallback.
+3. Task induction (`induce.ts`, Task Model Induction style): step clusters by embedding + surface + verb/object with a
+   daily global merge; steps link into one task by shared item identifiers (an invoice number, a ticket id, a file)
+   or a reliable step-to-step transition; instances split on a new day, a gap over 10 min, a different item on a
+   screen already in the instance, or the start step coming round again (loop model).
+4. Tasks keep the v1 `Task`/`TaskProfile` shape, so figures, saving arithmetic, ranking and evidence are the same code
+   (ADR 0005). `category` and `app`/`template` describe the step with the most time and are features only.
+   `kind` is `task.<verb>-<object>` (mail-only tasks keep v1's `email.*` kinds), `reachability` is the domain-neutral
+   reach: per surface a catalog connector, a local document (0.8) or computer use as last resort (0.35),
+   active-time-weighted.
+5. `--role R --industry I` (or `AnalyzeOptions.userContext`, from onboarding in s14) reach the Labeler (second
+   argument) and Judge (`input.user`) and the prompt builders (`understanding/context.ts`) as context only.
+
+Additive field on `InsightDTO` (v2 only): `understanding` = `{ goal, steps[{id, name, verb, object, surface, app, host,
+perInstance, repeatsPerInstance, core}], loop[stepId], surfaces[{app, appName, host, minutes}],
+reach{value, perSurface[{app, host, via: catalog|local_file|computer_use, connectorId, reach}]},
+identifiers{items, containers[]} }`. v1 responses never carry it.
+Known-answer fixtures: `bun run brain/fixtures/gen-domains.ts --out DIR [--persona recruiter|bookkeeper|support|salesops|mixed|all]`;
+agreement report: `bun run brain/fixtures/domains-report.ts [--embedder ollama]`.
+
 ## GET /insights/:id/evidence → `EvidenceResponse`
 The proof behind every number: `figures.<name>.eventIds` (all figures plus `saving`), the task's `instances`
 (with span ids and counterparties) and its `spans` (with their event ids). Use it for "show me the rows".
