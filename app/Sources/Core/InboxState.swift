@@ -46,9 +46,24 @@ struct UndoWindow: Equatable, Sendable {
   var deadline: Date { startedAt.addingTimeInterval(duration) }
 
   /// Rounds up: shows "1s" right until it lands, never "0s" while still undoable.
-  func secondsLeftLabel(at now: Date) -> String {
-    let left = max(0, duration - elapsed(at: now))
-    return "\(Int(left.rounded(.up)))s"
+  func secondsLeftLabel(at now: Date) -> String { "\(secondsShown(at: now))s" }
+
+  /// The whole seconds the label shows.
+  func secondsShown(at now: Date) -> Int { CountdownMath.secondsShown(elapsed: elapsed(at: now), duration: duration) }
+
+  /// s10a: the hairline is the label's seconds over the window, so "4s" of 5 is exactly 80%.
+  func hairline(at now: Date) -> Double { CountdownMath.hairline(elapsed: elapsed(at: now), duration: duration) }
+}
+
+/// Shared by the card's undo and the review's arm/discard countdowns.
+enum CountdownMath {
+  static func secondsShown(elapsed: Double, duration: Double) -> Int {
+    Int(max(0, duration - elapsed).rounded(.up))
+  }
+
+  static func hairline(elapsed: Double, duration: Double) -> Double {
+    guard duration > 0 else { return 0 }
+    return min(1, Double(secondsShown(elapsed: elapsed, duration: duration)) / duration)
   }
 }
 

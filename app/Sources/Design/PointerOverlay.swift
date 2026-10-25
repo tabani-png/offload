@@ -89,13 +89,17 @@ struct PointerGlyph: View {
         .scaleEffect(frame.scale, anchor: .topLeading)
         .position(x: frame.position.x + Self.size / 2, y: frame.position.y + Self.size / 2)
 
+      // Opaque, like a tooltip (s10a): the label often sits over text, and glass let that text bleed through.
       Text(label)
-        .font(.system(size: 12, weight: .medium))
+        .textStyle(Tokens.TypeScale.calloutEmphasis)
         .foregroundStyle(p.ink1)
         .lineLimit(1)
-        .padding(.horizontal, 11)
-        .frame(height: 26)
-        .glass(cornerRadius: 13, material: .popover)
+        .padding(.horizontal, Tokens.Space.s12)
+        .frame(height: Tokens.Size.chip + Tokens.Space.s4)
+        .background(Capsule().fill(p.isDark ? Color(hex: 0x2C2C30) : .white))
+        .overlay(Capsule().strokeBorder(p.ringStrong, lineWidth: 1))
+        .compositingGroup()
+        .shadow(color: .black.opacity(p.isDark ? 0.45 : 0.16), radius: 6, x: 0, y: 3)
         .fixedSize()
         .alignmentGuide(.leading) { d in labelLeft ? d.width : 0 }
         .offset(x: frame.position.x + (labelLeft ? -6 : Self.size + 4), y: frame.position.y + Self.size - 4)

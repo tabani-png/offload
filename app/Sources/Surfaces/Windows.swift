@@ -107,20 +107,20 @@ final class ReviewWindowController: TitledWindowController {
 
   init(model: ReviewModel) {
     self.model = model
-    super.init(title: "Review workflow", subtitle: "Drafted from your week · \(model.workflow.state.label)",
-               size: NSSize(width: 820, height: 880), minSize: NSSize(width: 700, height: 520), autosave: "OffloadReview")
+    // The status is said once, in the body; the subtitle says where the workflow came from (s10a).
+    super.init(title: "Review workflow", subtitle: "Drafted from your week",
+               size: NSSize(width: 900, height: 880), minSize: NSSize(width: ReviewView.minWindowWidth, height: 520),
+               autosave: "OffloadReview")
     let host = NSHostingView(rootView: ReviewView(model: model))
     host.sceneBridgingOptions = []  // our title and subtitle, not SwiftUI's (it would reset the subtitle)
     window.contentView = host
     model.$sheet.removeDuplicates().sink { [weak self] in self?.present($0) }.store(in: &bag)
-    model.$flow.map(\.workflow.state).removeDuplicates()
-      .sink { [weak self] s in self?.window.subtitle = "Drafted from your week · \(s.label)" }.store(in: &bag)
     model.loadDryRunIfNeeded()
     model.loadEditables()
   }
 
   override var toolbarButtons: [ToolbarButton] {
-    [ToolbarButton(id: "skill", symbol: "doc.text", label: "SKILL.md") { [weak self] in self?.model.send(.skill) }]
+    [ToolbarButton(id: "skill", symbol: "list.bullet.rectangle", label: "Steps (S)") { [weak self] in self?.model.send(.skill) }]
   }
 
   override func handleKey(_ e: NSEvent) -> Bool {

@@ -48,11 +48,11 @@ extension MockBrainClient {
     WorkflowStep(id: "s1", type: .read, title: "Read the investor list",
                  detail: "Investor pipeline sheet, rows marked Not contacted", connectorId: "gsheets"),
     WorkflowStep(id: "s2", type: .read, title: "Pick the next 8",
-                 detail: "Skips anyone emailed in the last 30 days. Runs as a script, no model."),
+                 detail: "Skips anyone you emailed in the last 30 days. Runs on this Mac."),
     WorkflowStep(id: "s3", type: .read, title: "Read your last thread with each",
                  detail: "Newest 3 messages per person", connectorId: "gmail"),
     WorkflowStep(id: "s4", type: .draft, title: "Draft each email in your voice",
-                 detail: "Tone card, your 3 closest past emails and facts.md. Every number must be in facts.md."),
+                 detail: "Your voice, your 3 closest past emails and your facts. A number that is not in your facts is flagged."),
     WorkflowStep(id: "s5", type: .approvalGate, title: "You approve the batch",
                  detail: "All 8 drafts wait here. Approve, edit or drop each one. Nothing below runs until you do."),
     WorkflowStep(id: "s6", type: .send, title: "Send from Gmail",
@@ -90,7 +90,6 @@ extension MockBrainClient {
   """
 
   static let outreachTone = """
-  Investor outreach · your voice
   Measured from 40 sent emails: 45 to 80 words, 3 or 4 short paragraphs. Opens "Hi <first name>," every time. Ends with "Muhammad" on its own line. One ask, at the end, with a day in it.
 
   Direct and warm. Lead with something specific to them. State numbers plainly and never round up. No "hope this finds you well", no exclamation marks.
@@ -103,7 +102,8 @@ extension MockBrainClient {
     schedule: WorkflowSchedule(summary: "Weekdays at 09:00 · 8 a batch", batchSize: 8, nextRunAt: local(26, 9, 0)),
     steps: outreachSteps, skillMarkdown: outreachSkill, toneCard: outreachTone, nextBatch: nextBatch,
     logTarget: "Investor pipeline", sendFrom: "muhammad@offload.so", estimatedHoursPerWeek: 21.9,
-    batchHash: "b_7f3a91c2")
+    batchHash: "b_7f3a91c2",
+    arithmetic: "98.4/day × 5 days × 3.0 min = 24.6 h/wk → review 492 × 20 s = 2.7 h/wk → saves 21.9 h/wk (89%)")
 
   static let outreachDryRun = DryRun(
     workflowId: "wf_outreach", ranAt: local(23, 10, 52),
@@ -201,7 +201,8 @@ extension MockBrainClient {
     skillMarkdown: "---\nname: scheduling-replies\nconnectors: [gmail, gcal]\ngates: [reply-approval]\n---\n\n# Scheduling replies\n\n1. Read the thread.\n2. Find three free 30-minute slots.\n3. Draft a reply.\n4. Approval gate.\n5. Send as a reply.\n",
     toneCard: "Scheduling · your voice\nOne or two lines. Offers three times, says the time zone once. Ends with \"Muhammad\".",
     nextBatch: [daniel], logTarget: "nowhere (no log step)", sendFrom: "muhammad@offload.so",
-    estimatedHoursPerWeek: 4.6, batchHash: "b_19c0e4aa")
+    estimatedHoursPerWeek: 4.6, batchHash: "b_19c0e4aa",
+    arithmetic: "9.2/day × 5 days × 7.0 min = 5.4 h/wk → review 46 × 60 s = 0.8 h/wk → saves 4.6 h/wk (86%)")
 
   static let schedulingDryRun = DryRun(
     workflowId: "wf_scheduling", ranAt: local(23, 8, 40),
@@ -224,16 +225,19 @@ extension MockBrainClient {
       id: "auto_outreach", workflowId: "wf_outreach", insightId: "ins_outreach", name: "Investor outreach emails",
       state: .active, connectors: [gmail, sheets.applying(["gsheets": .connected])],
       lastRunAt: local(23, 9, 0), nextRunAt: local(26, 9, 0),
-      estimatedHoursPerWeek: 21.9, measuredHoursPerWeek: 16.8, needsYouReason: nil, taskId: "t_outreach"),
+      estimatedHoursPerWeek: 21.9, measuredHoursPerWeek: 16.8, needsYouReason: nil, taskId: "t_outreach",
+      arithmetic: "98.4/day × 5 days × 3.0 min = 24.6 h/wk → review 492 × 20 s = 2.7 h/wk → saves 21.9 h/wk (89%)"),
     DashboardAutomation(
       id: "auto_scheduling", workflowId: "wf_scheduling", insightId: "ins_scheduling", name: "Scheduling replies",
       state: .readyForReview, connectors: [gmail, calendar], lastRunAt: nil, nextRunAt: nil,
-      estimatedHoursPerWeek: 4.6, measuredHoursPerWeek: nil, needsYouReason: nil, taskId: "t_sched"),
+      estimatedHoursPerWeek: 4.6, measuredHoursPerWeek: nil, needsYouReason: nil, taskId: "t_sched",
+      arithmetic: "9.2/day × 5 days × 7.0 min = 5.4 h/wk → review 46 × 60 s = 0.8 h/wk → saves 4.6 h/wk (86%)"),
     DashboardAutomation(
       id: "auto_crm", workflowId: "wf_crm", insightId: "ins_crm", name: "CRM notes from replies",
       state: .needsYou, connectors: [gmail, hubspot], lastRunAt: local(22, 17, 30), nextRunAt: nil,
       estimatedHoursPerWeek: 2.9, measuredHoursPerWeek: nil,
-      needsYouReason: "Stopped at the log step: HubSpot needs its key again. 2 notes are waiting.", taskId: "t_crm"),
+      needsYouReason: "HubSpot signed out, so 2 notes are waiting to be logged.", taskId: "t_crm",
+      arithmetic: "24/day × 5 days × 1.7 min = 3.4 h/wk → review 120 × 15 s = 0.5 h/wk → saves 2.9 h/wk (85%)"),
   ]
 
   /// Only automations that ran this week count toward the hero; scheduling has not run, CRM stopped.

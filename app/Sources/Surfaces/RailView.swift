@@ -17,20 +17,20 @@ struct RailView: View {
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    HStack(alignment: .statusCenter, spacing: 8) {
+    HStack(alignment: .statusCenter, spacing: Tokens.Space.s8) {
       if hoveringStatus {
-        Text(rail.observerLabel)
+        Text(rail.hoverLabel)
           .textStyle(Tokens.TypeScale.label)
           .monospacedDigit()
           .foregroundStyle(p.ink1)
-          .padding(.horizontal, 12)
-          .frame(height: 28)
-          .glass(cornerRadius: 14, material: .popover)
+          .padding(.horizontal, Tokens.Space.s12)
+          .frame(height: Tokens.Size.chip + Tokens.Space.s8)
+          .glass(cornerRadius: (Tokens.Size.chip + Tokens.Space.s8) / 2, material: .popover)
           .fixedSize()
           .transition(.rise(reduceMotion: reduceMotion))
           .alignmentGuide(.statusCenter) { $0[VerticalAlignment.center] }
       }
-      VStack(spacing: 8) {
+      VStack(spacing: Tokens.Space.s8) {
         inbox(p)
         status(p)
           .onHover { onHoverStatus($0) }
@@ -44,7 +44,7 @@ struct RailView: View {
   private func inbox(_ p: Palette) -> some View {
     Button(action: onInbox) {
       Image(systemName: "tray")
-        .font(.system(size: 14, weight: .medium))
+        .symbolStyle(Tokens.TypeScale.Symbol.large)
         .foregroundStyle(p.ink1)
         .frame(width: Self.width, height: Self.width)
         .glass(cornerRadius: Self.width / 2, material: .popover)
@@ -54,9 +54,9 @@ struct RailView: View {
               .textStyle(Tokens.TypeScale.badge)
               .monospacedDigit()
               .foregroundStyle(p.onStatus(.needsYou))
-              .frame(minWidth: 16, minHeight: 16)
+              .frame(minWidth: Tokens.Space.s16, minHeight: Tokens.Space.s16)
               .background(Circle().fill(p.status(.needsYou)))
-              .offset(x: 3, y: -3)
+              .offset(x: Tokens.Space.nudge, y: -Tokens.Space.nudge)
               .transition(.scale.combined(with: .opacity))
           }
         }
@@ -70,22 +70,22 @@ struct RailView: View {
   private func status(_ p: Palette) -> some View {
     VStack(spacing: 0) {
       ForEach(rail.dots) { dot in
-        StatusDot(role: dot.role, pulses: dot.pulses, size: 8)
-          .frame(width: Self.width, height: 18)
+        StatusDot(role: dot.role, pulses: dot.pulses, size: Tokens.Size.dot)
+          .frame(width: Self.width, height: Tokens.Size.tag)
       }
       if rail.overflowCount > 0 {
         Text("+\(rail.overflowCount)")
           .textStyle(Tokens.TypeScale.caption)
           .foregroundStyle(p.ink3)
-          .frame(height: 16)
+          .frame(height: Tokens.Space.s16)
       }
     }
-    .padding(.vertical, 7)
+    .padding(.vertical, Tokens.Space.s8)
     .frame(width: Self.width)
     .glass(cornerRadius: Self.width / 2, material: .popover)
     .contentShape(Capsule())
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel(rail.observerLabel)
+    .accessibilityLabel(rail.hoverLabel)
   }
 
   private func tools(_ p: Palette) -> some View {
@@ -97,7 +97,7 @@ struct RailView: View {
                  label: rail.micRole == .recording ? "Stop listening" : "Talk", action: onMic)
       toolButton("ellipsis", ink: p.ink2, label: "More", action: onMore)
     }
-    .padding(.vertical, 4)
+    .padding(.vertical, Tokens.Space.s4)
     .frame(width: Self.width)
     .glass(cornerRadius: Self.width / 2, material: .popover)
   }
@@ -105,9 +105,9 @@ struct RailView: View {
   private func toolButton(_ symbol: String, ink: Color, label: String, action: @escaping () -> Void) -> some View {
     Button(action: action) {
       Image(systemName: symbol)
-        .font(.system(size: 12, weight: .medium))
+        .symbolStyle(Tokens.TypeScale.Symbol.regular)
         .foregroundStyle(ink)
-        .frame(width: Self.width, height: 30)
+        .frame(width: Self.width, height: Tokens.Size.control)
         .contentShape(Rectangle())
     }
     .buttonStyle(PressStyle())

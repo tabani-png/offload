@@ -79,9 +79,9 @@ struct OnboardingFlow: Equatable, Sendable {
     if permissions.contains(where: { $0.grant == .unknown }) {
       return "The observer is not answering yet, so these show as unknown. You can grant them now anyway."
     }
-    if requiredMissing.isEmpty { return "All set. Offload ticks these off as soon as macOS turns them on." }
+    if requiredMissing.isEmpty { return "All set." }
     let names = requiredMissing.map(\.name).joined(separator: " and ")
-    return "Without \(names), Offload sees less. You can turn it on later from the dashboard."
+    return "You can continue now. Without \(names), Offload sees less until you turn it on, here or in the dashboard."
   }
 }
 

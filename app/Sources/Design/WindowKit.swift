@@ -13,15 +13,59 @@ extension Palette {
   /// is not a state.
   var mark: Color { isDark ? .white.opacity(0.15) : .black.opacity(0.075) }
 
-  /// Task tints for the timeline. Desaturated pastels from the feature-title family, picked away from the four
-  /// status hues so a bar never reads as "working" or "needs you". The last one is neutral ink.
-  func task(_ tint: Int) -> Color {
-    switch tint % 4 {
-    case 0: return isDark ? Color(hex: 0xA99CF0) : Color(hex: 0x7A68D8)  // lavender
-    case 1: return isDark ? Color(hex: 0x7FC9BE) : Color(hex: 0x3B9C8D)  // sea glass
-    case 2: return isDark ? Color(hex: 0xE79AB4) : Color(hex: 0xCC6688)  // rose
-    default: return isDark ? .white.opacity(0.26) : .black.opacity(0.18)
+  /// Timeline ink for a task rank (s10a): neutral steps of one ink, darkest = most time, never a hue (colour means
+  /// state). Values and their >= 3:1 contrast live in Core (TimelineInk) so they are tested.
+  func task(_ rank: Int) -> Color {
+    (isDark ? Color.white : Color.black).opacity(TimelineInk.opacity(rank: rank, dark: isDark))
+  }
+}
+
+// MARK: FlowLayout
+
+/// Lays children left to right and wraps to a new line when the next one would not fit (chips, connector rows).
+/// Never wider than the width it is offered, so a long label can never push a window's content off the side.
+struct FlowLayout: Layout {
+  var spacing: CGFloat = Tokens.Space.s8
+  var lineSpacing: CGFloat = Tokens.Space.s8
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    let width = proposal.width ?? .infinity
+    var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0, widest: CGFloat = 0
+    for v in subviews {
+      let s = v.sizeThatFits(ProposedViewSize(width: width, height: nil))
+      let w = min(s.width, width)
+      if x > 0 && x + w > width { y += lineHeight + lineSpacing; x = 0; lineHeight = 0 }
+      x += w + spacing
+      widest = max(widest, x - spacing)
+      lineHeight = max(lineHeight, s.height)
     }
+    return CGSize(width: width.isFinite ? width : widest, height: y + lineHeight)
+  }
+
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    var x = bounds.minX, y = bounds.minY, lineHeight: CGFloat = 0
+    // Items on one line share a centre line.
+    var line: [(LayoutSubview, CGSize, CGFloat)] = []
+    func flush() {
+      for (v, s, px) in line {
+        v.place(at: CGPoint(x: px, y: y + (lineHeight - s.height) / 2), proposal: ProposedViewSize(width: s.width, height: s.height))
+      }
+      line.removeAll()
+    }
+    for v in subviews {
+      var s = v.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+      s.width = min(s.width, bounds.width)
+      if x > bounds.minX && x + s.width > bounds.maxX {
+        flush()
+        y += lineHeight + lineSpacing
+        x = bounds.minX
+        lineHeight = 0
+      }
+      line.append((v, s, x))
+      x += s.width + spacing
+      lineHeight = max(lineHeight, s.height)
+    }
+    flush()
   }
 }
 
@@ -40,22 +84,23 @@ struct ConnectorChip: View {
   var body: some View {
     let p = Palette(scheme: scheme)
     let m = ConnectorChipModel(connector)
+    let type = compact ? Tokens.TypeScale.caption : Tokens.TypeScale.calloutEmphasis
     HStack(spacing: 0) {
-      HStack(spacing: 5) {
-        Circle().fill(p.status(m.role)).frame(width: 6, height: 6)
-        Text(m.name).font(.system(size: compact ? 11 : 12, weight: .medium)).tracking(0.1)
+      HStack(spacing: Tokens.Space.s4) {
+        Circle().fill(p.status(m.role)).frame(width: Tokens.Size.dotSmall, height: Tokens.Size.dotSmall)
+        Text(m.name).textStyle(type)
           .foregroundStyle(m.action == nil ? p.ink1 : p.ink2)
       }
-      .padding(.leading, compact ? 7 : 9)
-      .padding(.trailing, m.action == nil ? (compact ? 8 : 9) : 6)
+      .padding(.leading, Tokens.Space.s8)
+      .padding(.trailing, m.action == nil ? Tokens.Space.s8 : Tokens.Space.s8)
       if let action = m.action {
-        Rectangle().fill(p.ring).frame(width: 1, height: compact ? 12 : 14)
+        Rectangle().fill(p.ring).frame(width: 1, height: compact ? Tokens.Space.s12 : Tokens.Space.s16)
         Button { onAction(connector) } label: {
           Text(action)
-            .font(.system(size: compact ? 11 : 12, weight: .medium)).tracking(0.1)
+            .textStyle(type)
             .foregroundStyle(m.role == .needsYou ? p.statusInk(.needsYou) : p.ink1)
-            .padding(.leading, 6)
-            .padding(.trailing, compact ? 8 : 9)
+            .padding(.leading, Tokens.Space.s8)
+            .padding(.trailing, Tokens.Space.s8)
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
         }
@@ -64,7 +109,7 @@ struct ConnectorChip: View {
         .modifier(OptionalPointerTarget(id: actionTarget))
       }
     }
-    .frame(height: compact ? 20 : 22)
+    .frame(height: compact ? Tokens.Size.chipSmall : Tokens.Size.chip)
     .background(Capsule().fill(p.fill))
     .overlay(Capsule().strokeBorder(p.ring, lineWidth: 1))
     .fixedSize()
@@ -82,10 +127,12 @@ struct OptionalPointerTarget: ViewModifier {
 
 // MARK: DiffText
 
-/// Text with the diff-lite marks: unchanged words in secondary ink, changed words in primary ink on a soft mark.
+/// Text with the diff-lite marks (s10a): only the draft side is marked. Changed words are primary ink with an
+/// underline (no box: a box needs padding Text cannot give it, and clipped glyphs read as a bug); everything else,
+/// and the whole "what you sent" side, is plain secondary ink. A caption under the run says what the mark means.
 struct DiffText: View {
   var segments: [DiffLite.Segment]
-  var size: CGFloat = 12.5
+  var marked = true
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
@@ -93,13 +140,14 @@ struct DiffText: View {
     var s = AttributedString()
     for seg in segments {
       var run = AttributedString(seg.text)
-      run.foregroundColor = seg.changed ? p.ink1 : p.ink2
-      if seg.changed { run.backgroundColor = p.mark }
+      run.foregroundColor = seg.changed && marked ? p.ink1 : p.ink2
+      if seg.changed && marked && !seg.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        run.underlineStyle = Text.LineStyle(pattern: .solid, color: p.ink3)
+      }
       s += run
     }
     return Text(s)
-      .font(.system(size: size))
-      .lineSpacing(3)
+      .paragraphStyle(Tokens.TypeScale.body)
       .fixedSize(horizontal: false, vertical: true)
       .frame(maxWidth: .infinity, alignment: .topLeading)
       .textSelection(.enabled)
@@ -151,13 +199,15 @@ struct WindowSection<Content: View>: View {
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    VStack(alignment: .leading, spacing: 10) {
-      HStack(alignment: .firstTextBaseline) {
+    VStack(alignment: .leading, spacing: Tokens.Space.s12) {
+      HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
         Text(title).textStyle(Tokens.TypeScale.title).foregroundStyle(p.ink1)
           .accessibilityAddTraits(.isHeader)
-        Spacer(minLength: 12)
+          .layoutPriority(1)
+        Spacer(minLength: Tokens.Space.s12)
         if let trailing {
-          Text(trailing).font(.system(size: 12)).monospacedDigit().foregroundStyle(p.ink3).lineLimit(1)
+          Text(trailing).textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
+            .lineLimit(1).truncationMode(.tail)
         }
       }
       content
@@ -167,7 +217,7 @@ struct WindowSection<Content: View>: View {
 
 /// A hairline between rows inside a RingBox, inset from the leading edge like a native grouped list.
 struct RowDivider: View {
-  var inset: CGFloat = 16
+  var inset: CGFloat = Tokens.Space.s16
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     Rectangle().fill(Palette(scheme: scheme).ring).frame(height: 1).padding(.leading, inset)
@@ -188,32 +238,32 @@ struct WindowChrome<Content: View>: View {
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+    let shape = RoundedRectangle(cornerRadius: Tokens.Radius.window, style: .continuous)
     VStack(spacing: 0) {
-      HStack(spacing: 8) {
+      HStack(spacing: Tokens.Space.s8) {
         ForEach([0xFF5F57, 0xFEBC2E, 0x28C840], id: \.self) { hex in
-          Circle().fill(Color(hex: UInt32(hex))).frame(width: 12, height: 12)
+          Circle().fill(Color(hex: UInt32(hex))).frame(width: Tokens.Space.s12, height: Tokens.Space.s12)
             .overlay(Circle().strokeBorder(.black.opacity(0.12), lineWidth: 0.5))
         }
-        VStack(alignment: .leading, spacing: 1) {
-          Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(p.ink1)
-          if let subtitle { Text(subtitle).font(.system(size: 11)).foregroundStyle(p.ink3) }
+        VStack(alignment: .leading, spacing: 0) {
+          Text(title).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
+          if let subtitle { Text(subtitle).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3) }
         }
-        .padding(.leading, 14)
+        .padding(.leading, Tokens.Space.s12)
         Spacer()
         ForEach(toolbarItems) { item in
-          HStack(spacing: 5) {
-            Image(systemName: item.symbol).font(.system(size: 12, weight: .medium))
-            if let t = item.title { Text(t).font(.system(size: 12)) }
+          HStack(spacing: Tokens.Space.s4) {
+            Image(systemName: item.symbol).symbolStyle(Tokens.TypeScale.Symbol.regular)
+            if let t = item.title { Text(t).textStyle(Tokens.TypeScale.callout) }
           }
           .foregroundStyle(p.ink2)
-          .padding(.horizontal, 9)
-          .frame(height: 26)
-          .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(p.fill))
+          .padding(.horizontal, Tokens.Space.s8)
+          .frame(height: Tokens.Size.chip + Tokens.Space.s4)
+          .background(RoundedRectangle(cornerRadius: Tokens.Radius.control, style: .continuous).fill(p.fill))
         }
       }
-      .padding(.horizontal, 18)
-      .frame(height: 52)
+      .padding(.horizontal, Tokens.Space.s20)
+      .frame(height: Tokens.Size.toolbar)
       .background(p.isDark ? Color(hex: 0x232326) : Color(hex: 0xEDEDF0))
       .overlay(alignment: .bottom) { Rectangle().fill(p.isDark ? .black.opacity(0.5) : .black.opacity(0.1)).frame(height: 1) }
       content
@@ -239,6 +289,23 @@ struct ToolbarItemLook: Identifiable {
 struct KeyHint: View {
   var keys: [String]
   var body: some View {
-    HStack(spacing: 3) { ForEach(keys, id: \.self) { Keycap(label: $0) } }
+    HStack(spacing: Tokens.Space.s4) { ForEach(keys, id: \.self) { Keycap(label: $0) } }
+  }
+}
+
+/// "J K select": keys then what they do, in callout ink. One component for every hint row (s10a).
+struct KeyLegend: View {
+  var items: [(keys: [String], text: String)]
+  @Environment(\.colorScheme) private var scheme
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    FlowLayout(spacing: Tokens.Space.s16, lineSpacing: Tokens.Space.s8) {
+      ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+        HStack(spacing: Tokens.Space.s8) {
+          KeyHint(keys: item.keys)
+          Text(item.text).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+        }
+      }
+    }
   }
 }

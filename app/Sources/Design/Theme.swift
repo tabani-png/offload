@@ -8,17 +8,18 @@ struct Palette {
   var isDark: Bool { scheme == .dark }
 
   // Ink ladder (opacity steps, not weight).
-  var ink1: Color { isDark ? .white.opacity(0.96) : .black.opacity(0.86) }
+  var ink1: Color { isDark ? .white.opacity(Tokens.Ink.primary) : .black.opacity(0.86) }
   var ink2: Color { isDark ? .white.opacity(Tokens.Ink.secondary) : .black.opacity(0.72) }
   // Light tertiary was 46% black: 3.5:1 even over pure white, below AA. Thin 11-pt dark text also renders lighter
   // than its nominal ink, so 63% is what measured 4.5:1 live (s08 DESIGN-REVIEW, "Glass").
   var ink3: Color { isDark ? .white.opacity(Tokens.Ink.tertiary) : .black.opacity(0.63) }
 
   // Rings and fills.
-  var ring: Color { isDark ? .white.opacity(0.10) : .black.opacity(0.08) }
-  var ringStrong: Color { isDark ? .white.opacity(0.20) : .black.opacity(0.13) }
-  var fill: Color { isDark ? .white.opacity(0.06) : .white.opacity(0.55) }
-  var fillStrong: Color { isDark ? .white.opacity(0.12) : .white.opacity(0.92) }
+  var ring: Color { isDark ? .white.opacity(0.10) : .black.opacity(0.10) }
+  var ringStrong: Color { isDark ? .white.opacity(0.22) : .black.opacity(0.18) }
+  // Light: a faint grey well instead of white-on-white, so rows and wells separate from light glass (s10a).
+  var fill: Color { isDark ? .white.opacity(0.06) : .black.opacity(0.04) }
+  var fillStrong: Color { isDark ? .white.opacity(0.12) : .white.opacity(0.96) }
   var track: Color { isDark ? .white.opacity(0.10) : .black.opacity(0.07) }
 
   /// Top specular highlight on glass.
@@ -85,16 +86,29 @@ extension Tokens.TypeStyle {
   }
 
   var font: Font {
-    name == "mono"
+    name == "mono" || name == "code"
       ? .system(size: size, weight: swiftUIWeight, design: .monospaced)
       : .system(size: size, weight: swiftUIWeight)
   }
+
+  /// Extra leading for multi-line text, from the style's line height.
+  var lineSpacing: CGFloat { max(0, (lineHeight - 1.2) * size) }
 }
 
 extension View {
   /// Applies a type token: system SF Pro (Display/Text picked by size), weight and tracking.
   func textStyle(_ style: Tokens.TypeStyle) -> some View {
     font(style.font).tracking(style.tracking)
+  }
+
+  /// A type token for paragraphs: the style plus its line height.
+  func paragraphStyle(_ style: Tokens.TypeStyle) -> some View {
+    font(style.font).tracking(style.tracking).lineSpacing(style.lineSpacing)
+  }
+
+  /// An SF Symbol sized to the text beside it.
+  func symbolStyle(_ size: Double, weight: Font.Weight = .medium) -> some View {
+    font(.system(size: size, weight: weight))
   }
 }
 

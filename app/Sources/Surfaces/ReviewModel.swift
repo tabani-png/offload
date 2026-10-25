@@ -143,15 +143,44 @@ final class ReviewModel: ObservableObject {
     }
   }
 
-  func send(_ key: ReviewKey) { apply(flow.handle(key, at: clock())) }
+  /// Every string the window shows (s10a).
+  var copy: ReviewCopy { ReviewCopy(workflow: workflow, dryRun: dryRun, running: runningDryRun) }
+
+  func send(_ key: ReviewKey) {
+    // s10a: Turn on is disabled while a connector a later step needs is missing; ↩ and ⌘↩ say why instead.
+    if !ArmGuard.allows(key, flow: flow) {
+      message = flow.plan.turnOnBlockedReason
+      return
+    }
+    apply(flow.handle(key, at: clock()))
+  }
+
+  /// The confirm sheet's primary while Turn on is blocked.
+  func connectFirstMissing() {
+    if let c = flow.plan.missing.first { onConnect?(c) }
+  }
 
   func dismissSheet() {
     if sheet == .confirm { send(.escape) } else { sheet = nil }
   }
 
+  /// The newest stored dry run first (GET /workflows/:id/dry-runs/latest, s09b); only when there is none does
+  /// opening the window draft a new one. R always runs again.
   func loadDryRunIfNeeded() {
     guard dryRun == nil, !runningDryRun else { return }
-    rerun()
+    runningDryRun = true
+    let id = workflow.id
+    Task {
+      let latest = try? await client.latestDryRun(workflowId: id)
+      if let d = latest, d.workflowId == id || d.workflowId.isEmpty {
+        dryRun = d
+        adoptBatchHash(from: d)
+        runningDryRun = false
+      } else {
+        runningDryRun = false
+        rerun()
+      }
+    }
   }
 
   private func apply(_ effects: [ApprovalFlow.Effect]) {

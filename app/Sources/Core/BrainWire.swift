@@ -193,9 +193,10 @@ struct InsightDTO: Codable, Equatable {
                              reviewMinutesPerInstance: saving.reviewSecondsPerItem / 60,
                              hoursPerWeekLow: saving.range.low.hoursSaved,
                              hoursPerWeekHigh: saving.range.high.hoursSaved,
-                             arithmetic: saving.arithmetic),
+                             arithmetic: saving.arithmetic, hoursPerWeek: saving.weeklyHoursSaved),
       connectors: connectors.map { $0.toConnector() },
-      evidenceIds: examples.map(\.instanceId))
+      evidenceIds: examples.map(\.instanceId),
+      shareDisplay: figures.share.display, medianDisplay: figures.medianMinutes.display)
   }
 
   /// "Outreach emails" → "outreach emails"; keeps acronyms like "CRM updates".
@@ -294,6 +295,8 @@ struct AutomationDTO: Codable, Equatable {
   // s05c additions (optional): newest live batch and the next cron time, epoch ms.
   var lastRunAt: Double? = nil
   var nextRunAt: Double? = nil
+  // s09b addition (optional): the observed task this workflow automates.
+  var taskId: String? = nil
 
   /// Rail colours. Reads the s05 `state` when present, else the legacy status.
   func toAutomation() -> Automation {

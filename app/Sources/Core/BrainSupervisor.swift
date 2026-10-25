@@ -106,8 +106,9 @@ enum BrainLaunch {
     return parts.filter { seen.insert($0).inserted }.joined(separator: ":")
   }
 
+  /// `model`: "stub" or "real" for `serve --model` (s09b); nil leaves the brain's default (real).
   static func spec(bun: URL, repo: URL, home: URL, token: String, baseEnvironment: [String: String],
-                   observer: URL? = nil, userHome: String = NSHomeDirectory()) -> BrainLaunchSpec {
+                   observer: URL? = nil, userHome: String = NSHomeDirectory(), model: String? = nil) -> BrainLaunchSpec {
     var env = baseEnvironment
     env["OFFLOAD_TOKEN"] = token
     env["OFFLOAD_HOME"] = home.path
@@ -115,8 +116,24 @@ enum BrainLaunch {
     if let observer { env["OFFLOAD_OBSERVER_BIN"] = observer.path }
     return BrainLaunchSpec(
       executable: bun,
-      arguments: ["run", repo.appendingPathComponent("brain/src/cli.ts").path, "serve", "--home", home.path, "--port", "0"],
+      arguments: ["run", repo.appendingPathComponent("brain/src/cli.ts").path, "serve", "--home", home.path, "--port", "0"]
+        + (model.map { ["--model", $0] } ?? []),
       environment: env, workingDirectory: repo, home: home)
+  }
+
+  /// `bun run brain/src/cli.ts purge --home DIR` (REVIEW-2): deletes expired days before serve starts. nil when this
+  /// brain has no purge command yet.
+  static func purgeArguments(repo: URL, home: URL, fileManager fm: FileManager = .default) -> [String]? {
+    let cli = repo.appendingPathComponent("brain/src/cli.ts")
+    guard let src = try? String(contentsOf: cli, encoding: .utf8), src.contains("\"purge\"") else { return nil }
+    return ["run", cli.path, "purge", "--home", home.path]
+  }
+
+  /// Which model the brain drafts with: OFFLOAD_BRAIN_MODEL when set, else the stub for the demo week (its drafts are
+  /// labelled "Sample drafts"), else the brain's default.
+  static func model(environment: [String: String], demo: Bool) -> String? {
+    if let m = environment["OFFLOAD_BRAIN_MODEL"], ["stub", "real"].contains(m) { return m }
+    return demo ? "stub" : nil
   }
 
   /// The orphan guard: `sh -c GUARD sh PARENT_PID cmd args…` runs the command, stops it on TERM, and stops it when

@@ -23,6 +23,9 @@ protocol BrainClient: Sendable {
   func skill(workflowId: String) async throws -> SkillDoc
   func saveSkill(workflowId: String, edit: SkillEdit) async throws -> SkillDoc
   func observer() async throws -> ObserverReport?
+
+  // s09b: the newest stored dry run (GET /workflows/:id/dry-runs/latest), so opening a review never re-drafts.
+  func latestDryRun(workflowId: String) async throws -> DryRun?
 }
 
 enum BrainError: Error, Equatable {
@@ -72,13 +75,10 @@ enum BrainError: Error, Equatable {
 
 /// Realistic sample data: one founder's week, 38.5 active hours tracked.
 struct MockBrainClient: BrainClient {
-  func status() async throws -> ObserverStatus {
-    ObserverStatus(state: .watching, daysStored: 4, windowDays: 7,
-                   nextPurge: Self.weekStart.addingTimeInterval(8 * 86_400),
-                   insightsWaiting: Self.sampleInsights.count)
-  }
+  /// s10a: the consistent sample week (SampleWeek), so --mock shows the same figures on every screen.
+  func status() async throws -> ObserverStatus { SampleWeek.status }
 
-  func insights() async throws -> [Insight] { Self.sampleInsights }
+  func insights() async throws -> [Insight] { SampleWeek.insights }
 
   func evidence(insightId: String) async throws -> [EvidenceSpan] {
     guard let spans = Self.sampleEvidence[insightId] else { throw BrainError.notFound(insightId) }
@@ -116,6 +116,8 @@ struct MockBrainClient: BrainClient {
   }
 
   func discard(workflowId: String) async throws { _ = try await workflow(id: workflowId) }
+
+  func latestDryRun(workflowId: String) async throws -> DryRun? { Self.sampleDryRuns[workflowId] }
 
   func dashboard() async throws -> DashboardData { Self.sampleDashboard }
 

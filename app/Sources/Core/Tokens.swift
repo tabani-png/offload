@@ -12,7 +12,11 @@ enum Tokens {
     static let s20: Double = 20
     static let s24: Double = 24
     static let s32: Double = 32
-    static let all: [Double] = [s4, s8, s12, s16, s20, s24, s32]
+    static let s40: Double = 40
+    static let s48: Double = 48
+    static let all: [Double] = [s4, s8, s12, s16, s20, s24, s32, s40, s48]
+    /// Optical nudges below one grid step (text baselines, a badge riding a capsule edge). Never layout spacing.
+    static let nudge: Double = 2
   }
 
   /// Concentric radii: 24 outside, 16 for an 8-pt inset, 12 for rows, pill for anything you press.
@@ -21,6 +25,14 @@ enum Tokens {
     static let well: Double = 16
     static let row: Double = 12
     static let key: Double = 5
+    /// A row inset 4 inside a 12-pt box (concentric).
+    static let inset: Double = 8
+    /// Toolbar buttons and small tiles.
+    static let control: Double = 6
+    /// Timeline bars.
+    static let bar: Double = 3
+    /// Snapshot window frame.
+    static let window: Double = 12
     static func concentric(outer: Double, inset: Double) -> Double { max(0, outer - inset) }
   }
 
@@ -38,14 +50,51 @@ enum Tokens {
   enum TypeScale {
     /// The dashboard's one big number (s08). Display family, 500, tight tracking.
     static let hero = TypeStyle(name: "hero", size: 34, weight: 500, tracking: -0.9, lineHeight: 1.0)
+    /// Window titles (the review window's workflow name). macOS large title.
+    static let largeTitle = TypeStyle(name: "largeTitle", size: 26, weight: 500, tracking: -0.6, lineHeight: 1.15)
     static let display = TypeStyle(name: "display", size: 20, weight: 500, tracking: -0.35, lineHeight: 1.2)
+    /// Sheet titles (confirm, steps).
+    static let sheetTitle = TypeStyle(name: "sheetTitle", size: 17, weight: 500, tracking: -0.3, lineHeight: 1.25)
     static let title = TypeStyle(name: "title", size: 15, weight: 500, tracking: -0.15, lineHeight: 1.3)
     static let body = TypeStyle(name: "body", size: 13, weight: 400, tracking: -0.05, lineHeight: 1.45)
     static let label = TypeStyle(name: "label", size: 13, weight: 500, tracking: -0.05, lineHeight: 1.3)
+    /// Secondary lines: details, footnotes, table cells. macOS callout.
+    static let callout = TypeStyle(name: "callout", size: 12, weight: 400, tracking: 0, lineHeight: 1.4)
+    static let calloutEmphasis = TypeStyle(name: "calloutEmphasis", size: 12, weight: 500, tracking: 0, lineHeight: 1.3)
     static let caption = TypeStyle(name: "caption", size: 11, weight: 500, tracking: 0.1, lineHeight: 1.2)
+    /// Small regular text: axis notes, column sublabels.
+    static let footnote = TypeStyle(name: "footnote", size: 11, weight: 400, tracking: 0.05, lineHeight: 1.3)
+    /// Chart axis ticks and the "now" tag.
+    static let micro = TypeStyle(name: "micro", size: 10, weight: 400, tracking: 0.1, lineHeight: 1)
+    /// Key labels on a Keycap: single characters and words ("esc", "Space").
+    static let key = TypeStyle(name: "key", size: 11, weight: 500, tracking: 0, lineHeight: 1)
+    static let keyWord = TypeStyle(name: "keyWord", size: 10, weight: 500, tracking: 0, lineHeight: 1)
     static let badge = TypeStyle(name: "badge", size: 10, weight: 600, tracking: 0, lineHeight: 1)
     static let mono = TypeStyle(name: "mono", size: 11, weight: 500, tracking: 0, lineHeight: 1)
-    static let all: [TypeStyle] = [hero, display, title, body, label, caption, badge, mono]
+    /// Raw source (View source disclosure).
+    static let code = TypeStyle(name: "code", size: 12, weight: 400, tracking: 0, lineHeight: 1.35)
+    static let all: [TypeStyle] = [hero, largeTitle, display, sheetTitle, title, body, label, callout, calloutEmphasis,
+                                   caption, footnote, micro, key, keyWord, badge, mono, code]
+    /// SF Symbol sizes, matched to the text they sit beside.
+    enum Symbol {
+      static let small: Double = 10
+      static let regular: Double = 12
+      static let large: Double = 14
+    }
+  }
+
+  /// Fixed control sizes (points). Heights, not spacing: pills and rows are this tall, dots this wide.
+  enum Size {
+    static let key: Double = 18
+    static let control: Double = 30
+    static let chip: Double = 22
+    static let chipSmall: Double = 20
+    static let tag: Double = 18
+    static let row: Double = 36
+    static let dot: Double = 8
+    static let dotSmall: Double = 6
+    static let toolbar: Double = 52
+    static let actionBar: Double = 56
   }
 
   /// Seconds.
@@ -65,11 +114,12 @@ enum Tokens {
     static let springDamping: Double = 0.9
   }
 
-  /// Opacity ladder for foregrounds (100 / 90 / 60 / 40).
+  /// Opacity ladder for dark-mode foregrounds (96 / 78 / 52). s10a: secondary rose from 62% so body copy in
+  /// cards reads as copy, not as a caption (DESIGN-REVIEW-1 token check); tertiary keeps 4.5:1 on graphite.
   enum Ink {
-    static let primary: Double = 1.0
-    static let secondary: Double = 0.62
-    static let tertiary: Double = 0.50
+    static let primary: Double = 0.96
+    static let secondary: Double = 0.78
+    static let tertiary: Double = 0.52
   }
 
   static let undoSeconds: Double = 5

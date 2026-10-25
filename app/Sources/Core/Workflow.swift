@@ -99,6 +99,8 @@ struct Workflow: Codable, Equatable, Identifiable, Sendable {
   var batchHash: String
   /// Why an active workflow waits for you, in the brain's plain words (s09a). Empty otherwise.
   var needsYou: [String] = []
+  /// s10a: the brain's arithmetic behind `estimatedHoursPerWeek`, so the review prints the card's digits.
+  var arithmetic: String = ""
 
   var gate: WorkflowStep? { steps.first(where: \.isGate) }
 
@@ -136,6 +138,11 @@ struct DryRun: Codable, Equatable, Sendable {
   var deniedSideEffects: Int
   /// Approving this exact hash marks the workflow reviewed (active). A dry-run batch can never be sent (s05).
   var batchHash: String = ""
+  /// s09b: which model wrote the drafts ("stub" = the offline sample model, "real" = Claude). nil from older brains.
+  var model: String? = nil
+
+  /// Drafts from the stub model are samples, and the window says so.
+  var isSample: Bool { model == "stub" }
 }
 
 // MARK: connectors

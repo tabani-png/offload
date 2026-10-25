@@ -177,7 +177,7 @@ struct WorkflowDTO: Codable, Equatable {
       schedule: WorkflowSchedule(summary: scheduleSummary, batchSize: batchSize ?? 0, nextRunAt: nextRunAt.map(BrainWire.date(ms:))),
       steps: steps, skillMarkdown: skillMd ?? "", toneCard: "", nextBatch: (pendingItems ?? []).map { $0.toRecipient() },
       logTarget: logTarget, sendFrom: "your account", estimatedHoursPerWeek: estimatedHoursSavedPerWeek,
-      batchHash: dryRunHash ?? "", needsYou: needsYou)
+      batchHash: dryRunHash ?? "", needsYou: needsYou, arithmetic: arithmetic)
   }
 }
 
@@ -235,10 +235,12 @@ struct DryRunResponse: Codable, Equatable {
   var totals: Totals
   var gateLog: [GateDecisionDTO]
   var warnings: [String]
+  /// s09b: "stub" | "real"; absent on dry runs sealed before s09b.
+  var model: String? = nil
 
   func toDryRun() -> DryRun {
     DryRun(workflowId: workflowId, ranAt: BrainWire.date(ms: ranAt), items: instances.map { $0.toItem() },
-           deniedSideEffects: sideEffects.denied, batchHash: batchHash)
+           deniedSideEffects: sideEffects.denied, batchHash: batchHash, model: model)
   }
 }
 
@@ -277,6 +279,7 @@ extension AutomationDTO {
 
   /// Run times from the s05c fields; before them, last run is the pending batch's approval (or creation).
   func toDashboardAutomation(taskId: String? = nil) -> DashboardAutomation {
+    let taskId = taskId ?? self.taskId
     let st = workflowState
     // s05c brains send lastRunAt/nextRunAt; older ones fall back to the pending batch.
     let last = lastRunAt.map(BrainWire.date(ms:)) ?? pendingBatch.map { BrainWire.date(ms: $0.approvedAt ?? $0.createdAt) }
@@ -284,7 +287,8 @@ extension AutomationDTO {
       id: id, workflowId: workflowId ?? id, insightId: insightId, name: name, state: st,
       connectors: connectors.map { $0.toConnector() }, lastRunAt: last, nextRunAt: nextRunAt.map(BrainWire.date(ms:)),
       estimatedHoursPerWeek: estimatedHoursSavedPerWeek, measuredHoursPerWeek: measuredHoursSavedPerWeek,
-      needsYouReason: (needsYou ?? []).isEmpty ? nil : needsYou!.joined(separator: " "), taskId: taskId)
+      needsYouReason: (needsYou ?? []).isEmpty ? nil : needsYou!.joined(separator: " "), taskId: taskId,
+      arithmetic: arithmetic)
   }
 }
 
@@ -307,6 +311,6 @@ extension TimelineResponse {
       return TimelineBar(id: s.id, taskId: s.taskId ?? "other", start: start, end: BrainWire.date(ms: s.end),
                          automated: automated, title: s.title, counterparty: nil)
     }
-    return TimelineDay(day: day, date: calendar.startOfDay(for: date), bars: bars)
+    return TimelineDay(day: day, date: calendar.startOfDay(for: date), bars: bars, trackedMinutes: activeMinutes)
   }
 }

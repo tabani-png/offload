@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The workflow review window: a normal titled window, no sidebar, content centred at most 720 pt wide.
-/// Header, steps (the approval gate set apart in amber with a lock), the tone card (editable inline), the dry run
-/// ("Our draft" against "What you sent", diff-lite), and one action bar with a single white Approve.
+/// The workflow review window: a normal titled window, no sidebar, one column centred and at most 720 pt wide at
+/// any window width (s10a). Header (status, name, what it does, connectors and the saving in a wrapping row, the
+/// schedule on its own line), steps, your voice (editable inline), the dry run ("Our draft" against "What you
+/// sent"), and one action bar with a single white Approve. Every string comes from ReviewCopy / ConfirmCopy.
 struct ReviewView: View {
   enum Part: CaseIterable { case header, steps, tone, dryRun }
 
@@ -13,7 +14,10 @@ struct ReviewView: View {
   @Environment(\.colorScheme) private var scheme
   @Environment(\.isSnapshot) private var isSnapshot
 
+  /// The column, not the window: content never grows past this, and never past the window either.
   static let contentWidth: CGFloat = 720
+  /// Smallest window the column is laid out for (the window's minSize).
+  static let minWindowWidth: CGFloat = 640
 
   var body: some View {
     let p = Palette(scheme: scheme)
@@ -22,7 +26,7 @@ struct ReviewView: View {
         content
       } else {
         ScrollViewReader { proxy in
-          ScrollView { content }
+          ScrollView(.vertical) { content }
             .onChange(of: model.scrollRequest) { _, id in
               guard let id else { return }
               withAnimation(Motion.outExpo(Tokens.Duration.slow)) { proxy.scrollTo(id, anchor: .top) }
@@ -35,16 +39,17 @@ struct ReviewView: View {
   }
 
   private var content: some View {
-    VStack(alignment: .leading, spacing: 28) {
-      if parts.contains(.header) { ReviewHeader(model: model) }
-      if parts.contains(.steps) { StepsSection(workflow: model.workflow) }
+    let copy = model.copy
+    return VStack(alignment: .leading, spacing: Tokens.Space.s32) {
+      if parts.contains(.header) { ReviewHeader(model: model, copy: copy) }
+      if parts.contains(.steps) { StepsSection(copy: copy) }
       if parts.contains(.tone) { ToneSection(model: model) }
-      if parts.contains(.dryRun) { DryRunSection(model: model).id(ReviewModel.dryRunSectionId) }
+      if parts.contains(.dryRun) { DryRunSection(model: model, copy: copy).id(ReviewModel.dryRunSectionId) }
     }
-    .padding(.horizontal, 24)
-    .padding(.top, 28)
-    .padding(.bottom, 32)
-    .frame(maxWidth: Self.contentWidth + 48)
+    .frame(maxWidth: Self.contentWidth, alignment: .leading)
+    .padding(.horizontal, Tokens.Space.s32)
+    .padding(.top, Tokens.Space.s24)
+    .padding(.bottom, Tokens.Space.s32)
     .frame(maxWidth: .infinity)
   }
 }
@@ -53,121 +58,103 @@ struct ReviewView: View {
 
 private struct ReviewHeader: View {
   @ObservedObject var model: ReviewModel
+  var copy: ReviewCopy
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
     let p = Palette(scheme: scheme)
     let w = model.workflow
     VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: 6) {
-        StatusDot(role: StatusRole.forWorkflow(w.state), size: 7).frame(width: 10, height: 10)
-        Text(w.state.label).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink2)
+      HStack(spacing: Tokens.Space.s8) {
+        StatusDot(role: StatusRole.forWorkflow(w.state), size: Tokens.Size.dotSmall)
+          .frame(width: Tokens.Space.s12, height: Tokens.Space.s12)
+        Text(copy.status).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink2)
       }
-      Text(w.name)
-        .font(.system(size: 26, weight: .medium)).tracking(-0.6)
+      Text(copy.title)
+        .paragraphStyle(Tokens.TypeScale.largeTitle)
         .foregroundStyle(p.ink1)
-        .padding(.top, 8)
-      Text(w.summary)
-        .textStyle(Tokens.TypeScale.body)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.top, Tokens.Space.s8)
+      Text(copy.summary)
+        .paragraphStyle(Tokens.TypeScale.body)
         .foregroundStyle(p.ink2)
         .fixedSize(horizontal: false, vertical: true)
-        .padding(.top, 6)
-      HStack(spacing: 8) {
+        .padding(.top, Tokens.Space.s8)
+      // Chips wrap: a long connector list or a narrow window adds a line, never pushes the column off screen.
+      FlowLayout(spacing: Tokens.Space.s8) {
         ForEach(w.connectors) { c in ConnectorChip(connector: c) { model.onConnect?($0) } }
-        Spacer(minLength: 8)
-        Chip(text: "Saves ~" + Format.perWeek(w.estimatedHoursPerWeek), style: .positive, symbol: "arrow.down.right")
+        if let saving = copy.savingChip { Chip(text: saving, style: .positive) }
       }
-      .padding(.top, 16)
-      // s09a: the brain's schedule note is a sentence, not a chip label; it wraps instead of widening the window.
-      HStack(alignment: .firstTextBaseline, spacing: 6) {
-        Image(systemName: "clock").font(.system(size: 10, weight: .medium))
-        Text(w.schedule.summary).font(.system(size: 12)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+      .padding(.top, Tokens.Space.s16)
+      // The schedule is a sentence, so it gets its own line and wraps.
+      HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+        Image(systemName: "clock").symbolStyle(Tokens.TypeScale.Symbol.small)
+        Text(copy.schedule).paragraphStyle(Tokens.TypeScale.callout).fixedSize(horizontal: false, vertical: true)
       }
       .foregroundStyle(p.ink2)
-      .padding(.top, 10)
+      .padding(.top, Tokens.Space.s12)
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
 // MARK: steps
 
 private struct StepsSection: View {
-  var workflow: Workflow
-  @Environment(\.colorScheme) private var scheme
+  var copy: ReviewCopy
 
   var body: some View {
-    let gates = workflow.steps.filter(\.isGate).count
-    WindowSection(title: "Steps", trailing: "\(workflow.steps.count) steps · \(gates == 1 ? "1 approval gate" : "\(gates) approval gates")") {
+    WindowSection(title: copy.stepsTitle, trailing: copy.stepsTrailing) {
       RingBox {
-        ForEach(Array(workflow.steps.enumerated()), id: \.element.id) { i, step in
-          if i > 0 && !step.isGate && !workflow.steps[i - 1].isGate { RowDivider(inset: 56) }
-          StepRow(index: i + 1, step: step, connector: step.connectorId.flatMap { id in workflow.connectors.first { $0.id == id } })
+        ForEach(Array(copy.steps.enumerated()), id: \.element.id) { i, step in
+          if i > 0 { RowDivider(inset: Tokens.Space.s40) }
+          StepRow(step: step)
         }
       }
     }
   }
 }
 
+/// One step: its number, title and detail, and where it runs on the right. Your approval step carries a lock and
+/// a neutral "You approve" tag; colour is not used for it, because it is a design-time step, not a state.
 private struct StepRow: View {
-  var index: Int
-  var step: WorkflowStep
-  var connector: Connector?
+  var step: ReviewCopy.Step
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    let amber = p.status(.needsYou)
-    HStack(alignment: .top, spacing: 12) {
-      Text("\(index)")
-        .font(.system(size: 11, weight: .medium)).monospacedDigit()
-        .foregroundStyle(step.isGate ? p.statusInk(.needsYou) : p.ink3)
-        .frame(width: 14, alignment: .trailing)
-        .padding(.top, 6)
-      ZStack {
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
-          .fill(step.isGate ? amber.opacity(p.isDark ? 0.18 : 0.16) : p.fill)
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
-          .strokeBorder(step.isGate ? amber.opacity(0.45) : p.ring, lineWidth: 1)
-        Image(systemName: step.type.symbol)
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(step.isGate ? p.statusInk(.needsYou) : p.ink2)
-      }
-      .frame(width: 26, height: 26)
-      VStack(alignment: .leading, spacing: 3) {
-        HStack(spacing: 8) {
+    HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s12) {
+      Text(step.number)
+        .textStyle(Tokens.TypeScale.caption).monospacedDigit()
+        .foregroundStyle(p.ink3)
+        .frame(width: Tokens.Space.s16, alignment: .trailing)
+      VStack(alignment: .leading, spacing: Tokens.Space.s4) {
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+          if step.isGate {
+            Image(systemName: "lock.fill").symbolStyle(Tokens.TypeScale.Symbol.small).foregroundStyle(p.ink2)
+          }
           Text(step.title).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
-          if step.isGate { Chip(text: "Approval gate", style: .recommended) }
+            .fixedSize(horizontal: false, vertical: true)
         }
         Text(step.detail)
-          .font(.system(size: 12))
-          .foregroundStyle(step.isGate ? p.ink1.opacity(0.78) : p.ink2)
+          .paragraphStyle(Tokens.TypeScale.callout)
+          .foregroundStyle(p.ink2)
           .fixedSize(horizontal: false, vertical: true)
       }
-      Spacer(minLength: 8)
-      if let connector {
-        HStack(spacing: 5) {
-          Circle().fill(p.status(ConnectorChipModel(connector).role)).frame(width: 6, height: 6)
-          Text(connector.name).font(.system(size: 12)).foregroundStyle(p.ink3)
-        }
-        .padding(.top, 5)
-      } else if step.type != .approvalGate {
-        Text("On this Mac").font(.system(size: 12)).foregroundStyle(p.ink3).padding(.top, 5)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      if !step.isGate {
+        Text(step.place)
+          .textStyle(Tokens.TypeScale.callout)
+          .foregroundStyle(step.placeNeedsYou ? p.statusInk(.needsYou) : p.ink3)
+          .multilineTextAlignment(.trailing)
+          .frame(maxWidth: 200, alignment: .trailing)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
-    .padding(.horizontal, 14)
-    .padding(.vertical, step.isGate ? 14 : 11)
-    .background {
-      if step.isGate {
-        // The gate is set apart: an amber band with its own ring, inset inside the box (concentric 12 → 8).
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(amber.opacity(p.isDark ? 0.09 : 0.08))
-          .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(amber.opacity(0.35), lineWidth: 1))
-          .padding(4)
-      }
-    }
+    .padding(.horizontal, Tokens.Space.s16)
+    .padding(.vertical, Tokens.Space.s12)
     .accessibilityElement(children: .combine)
-    .accessibilityLabel(step.isGate ? "Step \(index), approval gate. \(step.title). \(step.detail)"
-                                    : "Step \(index). \(step.title). \(step.detail)")
+    .accessibilityLabel("Step \(step.number)\(step.isGate ? ", you approve" : ""). \(step.title). \(step.detail). \(step.isGate ? "" : step.place)")
   }
 }
 
@@ -182,45 +169,44 @@ private struct ToneSection: View {
     let p = Palette(scheme: scheme)
     WindowSection(title: "Your voice", trailing: toneTrailing) {
       if model.workflow.toneCard.isEmpty && !(model.toneLoaded && model.tone != nil) {
-        RingBox(padding: 16) {
-          Text(model.toneLoaded ? "The brain did not send a tone card for this workflow." : "Loading the tone card…")
-            .font(.system(size: 13)).foregroundStyle(p.ink2)
+        RingBox(padding: Tokens.Space.s16) {
+          Text(model.toneLoaded ? "No notes on your voice yet." : "Loading your voice…")
+            .textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
         }
       } else {
-      RingBox(padding: 0) {
-        Group {
-          if isSnapshot {
-            // TextEditor is an AppKit text view, which offscreen rendering cannot draw; same text, same metrics.
-            Text(model.toneDraft)
-              .font(.system(size: 13)).lineSpacing(3)
-              .foregroundStyle(p.ink1)
-              .fixedSize(horizontal: false, vertical: true)
-              .frame(maxWidth: .infinity, alignment: .topLeading)
-              .padding(.horizontal, 5)
-          } else {
-            TextEditor(text: $model.toneDraft)
-              .font(.system(size: 13))
-              .lineSpacing(3)
-              .foregroundStyle(p.ink1)
-              .scrollContentBackground(.hidden)
-              .frame(height: 150)  // the whole card without an inner scroll at the 720-pt column
-              .accessibilityLabel("Tone card, editable")
+        RingBox(padding: 0) {
+          Group {
+            if isSnapshot {
+              // TextEditor is an AppKit text view, which offscreen rendering cannot draw; same text, same metrics.
+              Text(model.toneDraft)
+                .paragraphStyle(Tokens.TypeScale.body)
+                .foregroundStyle(p.ink1)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.horizontal, Tokens.Space.s4)
+            } else {
+              TextEditor(text: $model.toneDraft)
+                .paragraphStyle(Tokens.TypeScale.body)
+                .foregroundStyle(p.ink1)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 120, maxHeight: 180)
+                .accessibilityLabel("How you write, editable")
+            }
+          }
+          .padding(.horizontal, Tokens.Space.s12)
+          .padding(.vertical, Tokens.Space.s12)
+        }
+        if model.tone?.text == nil && model.toneLoaded && !isSnapshot {
+          Text("Write a few lines on how you sound. Drafts follow them.")
+            .textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+        }
+        if model.toneUnsaved {
+          HStack {
+            Spacer()
+            SecondaryButton(title: model.saving ? "Saving…" : "Save your voice") { model.saveTone() }
+              .disabled(model.saving)
           }
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 12)
-      }
-      if model.tone?.text == nil && model.toneLoaded && !isSnapshot {
-        Text("No tone card yet: write a few lines on how you sound, or build one from your sent mail (tone build).")
-          .font(.system(size: 12)).foregroundStyle(p.ink3)
-      }
-      if model.toneUnsaved {
-        HStack {
-          Spacer()
-          SecondaryButton(title: model.saving ? "Saving…" : "Save tone card") { model.saveTone() }
-            .disabled(model.saving)
-        }
-      }
       }
     }
   }
@@ -228,10 +214,10 @@ private struct ToneSection: View {
   private var toneTrailing: String? {
     if let t = model.tone {
       if model.toneUnsaved { return "Not saved yet" }
-      return t.text == nil ? "\(t.bucketLabel) · empty" : (t.edited ? "\(t.bucketLabel) · edited by you" : "\(t.bucketLabel) · built from your sent mail")
+      return t.text == nil ? nil : (t.edited ? "Edited by you · type to change it" : "Built from your sent mail · type to change it")
     }
     if model.workflow.toneCard.isEmpty { return nil }
-    return model.toneEdited ? "Edited · used on the next dry run" : "From 40 sent emails · click to edit"
+    return model.toneEdited ? "Edited · used on the next dry run" : "Built from your sent mail · type to change it"
   }
 }
 
@@ -239,29 +225,32 @@ private struct ToneSection: View {
 
 private struct DryRunSection: View {
   @ObservedObject var model: ReviewModel
+  var copy: ReviewCopy
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    let trailing: String = {
-      guard let d = model.dryRun else { return model.runningDryRun ? "Running on last week's emails…" : "" }
-      return "\(d.items.count) of last week's emails · ran \(Format.clock(d.ranAt)) · \(d.deniedSideEffects) sends and logs held by the gate"
-    }()
-    WindowSection(title: "Dry run", trailing: trailing) {
-      if let d = model.dryRun {
-        VStack(spacing: 12) {
-          ForEach(d.items) { DryRunCard(item: $0) }
-          HStack(spacing: 6) {
-            Image(systemName: "lock.fill").font(.system(size: 10)).foregroundStyle(p.status(.needsYou))
-            Text("Nothing was sent. Every send and log in the dry run stopped at the gate and was written to its log.")
-              .font(.system(size: 12)).foregroundStyle(p.ink3)
+    WindowSection(title: copy.dryRunTitle, trailing: copy.dryRunTrailing) {
+      if model.dryRun != nil {
+        VStack(alignment: .leading, spacing: Tokens.Space.s12) {
+          if let sample = copy.sampleChip {
+            HStack(spacing: Tokens.Space.s8) {
+              Chip(text: sample)
+              Text("Written by the offline sample model to show the steps, not drafted from your voice.")
+                .textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+                .fixedSize(horizontal: false, vertical: true)
+            }
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
+          ForEach(Array(copy.items.enumerated()), id: \.element.id) { i, item in
+            if let d = model.dryRun, d.items.indices.contains(i) {
+              DryRunCard(item: d.items[i], copy: item, oursTitle: copy.oursTitle)
+            }
+          }
+          Text(copy.diffNote).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
         }
       } else {
-        RingBox(padding: 20) {
-          Text(model.runningDryRun ? "Drafting against last week's real emails…" : "No dry run yet. Press R to run one.")
-            .font(.system(size: 13)).foregroundStyle(p.ink2)
+        RingBox(padding: Tokens.Space.s20) {
+          Text(copy.emptyDryRun).textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
         }
       }
     }
@@ -270,52 +259,55 @@ private struct DryRunSection: View {
 
 private struct DryRunCard: View {
   var item: DryRunItem
+  var copy: ReviewCopy.Item
+  var oursTitle: String
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
     let p = Palette(scheme: scheme)
     let diff = DiffLite.diff(ours: item.ourDraft, theirs: item.whatYouSent)
     RingBox {
-      // Counterparty first, then the subject cut at the tail (never a middle cut), then the time per item.
-      HStack(spacing: 8) {
-        Text(item.recipient.display)
+      // Who first, then the subject cut at the tail, then the time per item and what it saves.
+      HStack(spacing: Tokens.Space.s8) {
+        Text(copy.who)
           .textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
           .lineLimit(1).layoutPriority(2)
-        Text(item.subject)
-          .font(.system(size: 13)).foregroundStyle(p.ink2)
-          .help(item.subject)
+        Text(copy.subject)
+          .textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
+          .help(copy.subject)
           .lineLimit(1).truncationMode(.tail).layoutPriority(1)
-        Spacer(minLength: 12)
-        Text(Format.reviewTime(observedMinutes: item.observedMinutes, reviewSeconds: item.reviewSeconds))
-          .font(.system(size: 12)).monospacedDigit().foregroundStyle(p.ink3)
-          .lineLimit(1).fixedSize()
-        Chip(text: "−\(Format.decimal(item.minutesSaved)) min", style: .positive)
+        Spacer(minLength: Tokens.Space.s12)
+        Text(copy.time)
+          .textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
+          .lineLimit(1)
+          .fixedSize()
+        Chip(text: copy.saved, style: .positive)
       }
-      .padding(.horizontal, 14)
-      .frame(height: 42)
+      .padding(.horizontal, Tokens.Space.s16)
+      .frame(minHeight: Tokens.Size.toolbar - Tokens.Space.s8)
       RowDivider(inset: 0)
       HStack(alignment: .top, spacing: 0) {
-        column("Our draft", segments: diff.ours, p: p)
+        column(oursTitle, segments: diff.ours, marked: true, p: p)
         Rectangle().fill(p.ring).frame(width: 1)
-        column("What you sent · \(Format.weekdayClock(item.sentAt))", segments: diff.theirs, p: p)
+        column(copy.theirsTitle, segments: diff.theirs, marked: false, p: p)
       }
       .fixedSize(horizontal: false, vertical: true)
     }
     .accessibilityElement(children: .contain)
-    .accessibilityLabel("\(item.recipient.display), \(item.subject)")
+    .accessibilityLabel("\(copy.who), \(copy.subject)")
   }
 
-  private func column(_ title: String, segments: [DiffLite.Segment], p: Palette) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
+  private func column(_ title: String, segments: [DiffLite.Segment], marked: Bool, p: Palette) -> some View {
+    VStack(alignment: .leading, spacing: Tokens.Space.s8) {
       Text(title).textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink3)
       if segments.isEmpty {
         Text("No draft. This kind of task has no drafting dry run yet.")
-          .font(.system(size: 12.5)).foregroundStyle(p.ink3)
+          .textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
       } else {
-        DiffText(segments: segments)
+        DiffText(segments: segments, marked: marked)
       }
     }
-    .padding(14)
+    .padding(Tokens.Space.s16)
     .frame(maxWidth: .infinity, alignment: .topLeading)
   }
 }
@@ -330,7 +322,7 @@ struct ReviewActionBar: View {
     let p = Palette(scheme: scheme)
     VStack(spacing: 0) {
       Rectangle().fill(p.isDark ? .black.opacity(0.55) : .black.opacity(0.10)).frame(height: 1)
-      HStack(spacing: 8) {
+      HStack(spacing: Tokens.Space.s8) {
         if case .discarding(let c) = model.flow.phase {
           TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
             CountdownStrip(text: "Discarding", countdown: c, now: ctx.date)
@@ -338,29 +330,29 @@ struct ReviewActionBar: View {
         } else {
           SecondaryButton(title: "Discard", key: "⌘⌫") { model.send(.discard) }
           if let m = model.message {
-            Text(m).font(.system(size: 12)).foregroundStyle(p.ink2).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-              .padding(.leading, 6)
+            Text(m).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
+              .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+              .padding(.leading, Tokens.Space.s8)
           }
-          Spacer(minLength: 12)
-          SecondaryButton(title: model.runningDryRun ? "Running…" : "Run dry run again", key: "R") { model.send(.rerun) }
+          Spacer(minLength: Tokens.Space.s12)
+          SecondaryButton(title: model.runningDryRun ? "Running…" : "Run again", key: "R") { model.send(.rerun) }
             .disabled(model.runningDryRun)
           SecondaryButton(title: "Edit", key: "E") { model.send(.edit) }
-          if model.flow.canApprove {
-            // One white action per view: while the confirmation is up, it holds the primary and this one rests.
-            PrimaryButton(title: "Approve", key: "⌘↩") { model.send(.approve) }
-              .opacity(model.flow.isConfirmOpen ? 0.3 : 1)
-              .disabled(model.flow.isConfirmOpen)
-          }
+          // Always in place, so the bar never reflows: disabled while a dry run is drafting or there is nothing to
+          // approve. One white action per view: while the confirmation is up it holds the primary.
+          PrimaryButton(title: "Approve", key: "⌘↩") { model.send(.approve) }
+            .disabled(!model.flow.canApprove || model.runningDryRun || model.sheet != nil)
+            .opacity(model.sheet != nil ? 0.3 : 1)
         }
       }
-      .padding(.horizontal, 20)
-      .frame(height: 56)
+      .padding(.horizontal, Tokens.Space.s20)
+      .frame(height: Tokens.Size.actionBar)
     }
     .background(p.isDark ? Color(hex: 0x1C1C1F) : Color(hex: 0xF8F8FA))
   }
 }
 
-/// "Turning on in 4s · esc to cancel" with the blue hairline counting down.
+/// "Turning on in 4s · esc to cancel" with the blue hairline at exactly the seconds shown.
 struct CountdownStrip: View {
   var text: String
   var countdown: Countdown
@@ -369,16 +361,18 @@ struct CountdownStrip: View {
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    VStack(spacing: 8) {
-      HStack(spacing: 8) {
-        StatusDot(role: .working, size: 7).frame(width: 10, height: 10)
+    let seconds = countdown.secondsShown(at: now)
+    VStack(spacing: Tokens.Space.s8) {
+      HStack(spacing: Tokens.Space.s8) {
+        StatusDot(role: .working, size: Tokens.Size.dotSmall).frame(width: Tokens.Space.s12, height: Tokens.Space.s12)
         Text("\(text) in \(countdown.secondsLeftLabel(at: now))").textStyle(Tokens.TypeScale.label)
           .monospacedDigit().foregroundStyle(p.ink1)
         Spacer()
-        Text("Cancel").font(.system(size: 12)).foregroundStyle(p.ink2)
+        Text("Cancel").textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
         Keycap(label: "esc")
       }
-      ProgressHairline(fraction: countdown.fractionRemaining(at: now), role: .working)
+      ProgressHairline(fraction: countdown.hairline(at: now), role: .working)
+        .animation(Motion.outExpo(Tokens.Duration.base), value: seconds)
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(text) in \(countdown.secondsLeftLabel(at: now)). Press Escape to cancel.")
@@ -387,76 +381,75 @@ struct CountdownStrip: View {
 
 // MARK: sheets
 
-/// The confirmation: exactly what the first run does, who gets an email, and what is not ready yet.
+/// The confirmation: exactly what the first run does, who gets an email, and what is not ready yet. While a
+/// connector a later step needs is missing, Turn on is disabled with the reason beside it, and the primary
+/// connects that connector instead (s10a).
 struct ConfirmSheet: View {
   @ObservedObject var model: ReviewModel
   var frozenNow: Date? = nil
   @Environment(\.colorScheme) private var scheme
 
+  static let width: CGFloat = 560
+
   var body: some View {
     let p = Palette(scheme: scheme)
     let plan = model.flow.plan
+    let copy = ConfirmCopy(plan: plan, now: frozenNow ?? Date())
     VStack(alignment: .leading, spacing: 0) {
-      HStack(alignment: .top, spacing: 12) {
-        ZStack {
-          Circle().fill(p.status(.needsYou).opacity(0.16))
-          Image(systemName: "lock.open").font(.system(size: 14, weight: .medium)).foregroundStyle(p.status(.needsYou))
-        }
-        .frame(width: 34, height: 34)
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Turn on \(plan.workflowName)?").font(.system(size: 17, weight: .medium)).tracking(-0.3).foregroundStyle(p.ink1)
-          Text(plan.firstRunAt == nil ? BrainError.sentence(plan.schedule)
-               : "First run \(Format.runTime(plan.firstRunAt, now: frozenNow ?? Date(), past: false)). Then \(plan.schedule.lowercased()).")
-            .font(.system(size: 13)).foregroundStyle(p.ink2)
-        }
-      }
-      RingBox {
-        HStack {
-          Text(plan.headline).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
-          Spacer()
-          Text("from \(plan.sendFrom)").font(.system(size: 12)).foregroundStyle(p.ink3)
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 38)
-        RowDivider(inset: 0)
-        if let note = plan.pendingNote {
-          Text(note).font(.system(size: 12.5)).foregroundStyle(p.ink2)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(14)
-        }
-        VStack(spacing: 0) {
-          ForEach(Array(plan.recipients.enumerated()), id: \.element.id) { i, r in
-            HStack(spacing: 8) {
-              Text("\(i + 1)").font(.system(size: 11)).monospacedDigit().foregroundStyle(p.ink3).frame(width: 14, alignment: .trailing)
-              Text(r.name).font(.system(size: 13)).foregroundStyle(p.ink1).lineLimit(1)
-              Text(r.org).font(.system(size: 13)).foregroundStyle(p.ink2).lineLimit(1)
-              Spacer(minLength: 8)
-              Text(r.email).font(.system(size: 12)).foregroundStyle(p.ink3).lineLimit(1).truncationMode(.head)
-            }
-            .frame(height: 24)
-          }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, plan.recipients.isEmpty ? 0 : 8)
-      }
-      .padding(.top, 18)
+      Text(copy.title).paragraphStyle(Tokens.TypeScale.sheetTitle).foregroundStyle(p.ink1)
+        .fixedSize(horizontal: false, vertical: true)
+      Text(copy.subtitle).paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.top, Tokens.Space.s4)
 
-      VStack(alignment: .leading, spacing: 6) {
-        ForEach(Array(plan.steps.enumerated()), id: \.offset) { i, s in
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("\(i + 1).").font(.system(size: 12)).monospacedDigit().foregroundStyle(p.ink3).frame(width: 16, alignment: .trailing)
-            Text(s).font(.system(size: 12.5)).foregroundStyle(p.ink2).fixedSize(horizontal: false, vertical: true)
-          }
+      RingBox {
+        Text(copy.headline).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
+          .padding(.horizontal, Tokens.Space.s16)
+          .frame(height: Tokens.Size.row + Tokens.Space.s4)
+        RowDivider(inset: 0)
+        if let note = copy.pendingNote {
+          Text(note).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(Tokens.Space.s16)
         }
-        ForEach(plan.blockers, id: \.self) { b in
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Circle().fill(p.status(.needsYou)).frame(width: 6, height: 6).frame(width: 16)
-            Text(b).font(.system(size: 12.5)).foregroundStyle(p.ink1).fixedSize(horizontal: false, vertical: true)
+        if !copy.people.isEmpty {
+          // Plain rows: numbers are keys elsewhere, so a list that is not pressable is not numbered.
+          VStack(spacing: 0) {
+            ForEach(copy.people) { r in
+              HStack(spacing: Tokens.Space.s8) {
+                Text(r.name).textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink1).lineLimit(1)
+                Text(r.org).textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2).lineLimit(1)
+                Spacer(minLength: Tokens.Space.s8)
+                Text(r.email).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3).lineLimit(1).truncationMode(.head)
+              }
+              .frame(height: Tokens.Space.s24)
+            }
           }
-          .padding(.top, 4)
+          .padding(.horizontal, Tokens.Space.s16)
+          .padding(.vertical, Tokens.Space.s8)
         }
       }
-      .padding(.top, 16)
+      .padding(.top, Tokens.Space.s20)
+
+      VStack(alignment: .leading, spacing: Tokens.Space.s8) {
+        ForEach(Array(copy.lines.enumerated()), id: \.offset) { _, line in
+          HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+            Image(systemName: line.symbol).symbolStyle(Tokens.TypeScale.Symbol.small).foregroundStyle(p.ink3)
+              .frame(width: Tokens.Space.s16)
+            Text(line.text).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        ForEach(copy.blockers, id: \.self) { b in
+          HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+            Circle().fill(p.status(.needsYou)).frame(width: Tokens.Size.dotSmall, height: Tokens.Size.dotSmall)
+              .frame(width: Tokens.Space.s16)
+            Text(b).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink1)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+      }
+      .padding(.top, Tokens.Space.s16)
 
       Group {
         if let c = model.flow.countdown, case .armed = model.flow.phase {
@@ -467,38 +460,60 @@ struct ConfirmSheet: View {
               CountdownStrip(text: "Turning on", countdown: c, now: ctx.date)
             }
           }
-        } else {
-          HStack(spacing: 8) {
-            Text("Pause it any time from the dashboard.").font(.system(size: 12)).foregroundStyle(p.ink3)
+        } else if copy.canTurnOn {
+          HStack(spacing: Tokens.Space.s8) {
+            Text(copy.footnote).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
             Spacer()
             SecondaryButton(title: "Cancel", key: "esc") { model.send(.escape) }
-            PrimaryButton(title: "Turn on", key: "↩") { model.send(.confirm) }
+            // ⌘↩ here too: Approve and Turn on are the same weight of action, so they share a chord.
+            PrimaryButton(title: copy.turnOnTitle, key: "⌘↩") { model.send(.confirm) }
+          }
+        } else {
+          VStack(alignment: .trailing, spacing: Tokens.Space.s12) {
+            if let reason = copy.blockedReason {
+              Text(reason).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: Tokens.Space.s8) {
+              Spacer()
+              SecondaryButton(title: "Cancel", key: "esc") { model.send(.escape) }
+              SecondaryButton(title: copy.turnOnTitle) {}
+                .disabled(true)
+                .help(copy.blockedReason ?? "")
+              PrimaryButton(title: copy.connectTitle ?? "Connect", key: nil) { model.connectFirstMissing() }
+            }
           }
         }
       }
-      .padding(.top, 20)
+      .padding(.top, Tokens.Space.s20)
     }
-    .padding(24)
-    .frame(width: 520)
+    .padding(Tokens.Space.s24)
+    .frame(width: Self.width)
     .background(p.isDark ? Color(hex: 0x202023) : Color(hex: 0xFBFBFC))
   }
 }
 
-/// SKILL.md, read-only (S) or editable (E). Edits stay on this Mac until the brain has a write route.
+/// The steps, as a person reads them (S, or the toolbar's Steps button). SKILL.md itself is behind a View source
+/// disclosure. E opens the same sheet with the words editable (s05c); tools, connectors and your approval step
+/// stay as they are.
 struct SkillSheet: View {
   @ObservedObject var model: ReviewModel
   var editing: Bool
+  /// Snapshots: render with the source open.
+  var sourceOpen = false
+  @State private var showSource = false
   @Environment(\.colorScheme) private var scheme
   @Environment(\.isSnapshot) private var isSnapshot
 
+  static let width: CGFloat = 640
+
   var body: some View {
     let p = Palette(scheme: scheme)
-    VStack(alignment: .leading, spacing: 12) {
-      HStack {
-        Image(systemName: "doc.text").foregroundStyle(p.ink2)
-        Text("SKILL.md").font(.system(size: 15, weight: .medium)).foregroundStyle(p.ink1)
-        Text(editing ? "Editing the words; steps, tools and the gate stay as they are" : "Read only")
-          .font(.system(size: 12)).foregroundStyle(p.ink3)
+    let copy = model.copy
+    VStack(alignment: .leading, spacing: Tokens.Space.s12) {
+      HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+        Text(editing ? "Edit the steps" : "Steps").textStyle(Tokens.TypeScale.sheetTitle).foregroundStyle(p.ink1)
         Spacer()
         if editing && model.skillEdit != nil {
           SecondaryButton(title: "Cancel", key: "esc") { model.dismissSheet() }
@@ -508,39 +523,80 @@ struct SkillSheet: View {
           SecondaryButton(title: "Done", key: "esc") { model.dismissSheet() }
         }
       }
+      Text(editing ? "Change the words. The tools, the order and your approval stay as they are."
+                   : PlainWords.clean(model.workflow.summary))
+        .paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
+        .fixedSize(horizontal: false, vertical: true)
       RingBox(padding: 0) {
         Group {
           if editing && !isSnapshot {
             SkillEditForm(model: model)
-          } else if isSnapshot {
-            // Offscreen rendering cannot draw a scroll view; same text, clipped to the same box.
-            Text(model.skillDraft)
-              .font(.system(size: 12, design: .monospaced)).lineSpacing(2)
-              .foregroundStyle(p.ink1)
-              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-              .clipped()
+              .padding(Tokens.Space.s12)
           } else {
-            ScrollView {
-              Text(model.skillDraft)
-                .font(.system(size: 12, design: .monospaced)).lineSpacing(2)
-                .foregroundStyle(p.ink1)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+            VStack(alignment: .leading, spacing: 0) {
+              ForEach(Array(copy.steps.enumerated()), id: \.element.id) { i, step in
+                if i > 0 { RowDivider(inset: Tokens.Space.s40) }
+                HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s12) {
+                  Text(step.number).textStyle(Tokens.TypeScale.caption).monospacedDigit().foregroundStyle(p.ink3)
+                    .frame(width: Tokens.Space.s16, alignment: .trailing)
+                  VStack(alignment: .leading, spacing: Tokens.Space.s4) {
+                    HStack(spacing: Tokens.Space.s8) {
+                      if step.isGate { Image(systemName: "lock.fill").symbolStyle(Tokens.TypeScale.Symbol.small).foregroundStyle(p.ink2) }
+                      Text(step.title).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
+                    }
+                    Text(step.detail).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
+                      .fixedSize(horizontal: false, vertical: true)
+                  }
+                  Spacer(minLength: 0)
+                }
+                .padding(.horizontal, Tokens.Space.s16)
+                .padding(.vertical, Tokens.Space.s8)
+              }
+            }
+            .padding(.vertical, Tokens.Space.s4)
+          }
+        }
+      }
+      if !editing {
+        Button {
+          withAnimation(Motion.outExpo()) { showSource.toggle() }
+        } label: {
+          HStack(spacing: Tokens.Space.s4) {
+            Image(systemName: "chevron.right").symbolStyle(Tokens.TypeScale.Symbol.small)
+              .rotationEffect(.degrees(showSource || sourceOpen ? 90 : 0))
+            Text("View source").textStyle(Tokens.TypeScale.calloutEmphasis)
+          }
+          .foregroundStyle(p.ink2)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(PressStyle())
+        .accessibilityHint("Shows the workflow file Offload runs from")
+        if showSource || sourceOpen {
+          RingBox(padding: Tokens.Space.s12) {
+            if isSnapshot {
+              Text(model.skillDraft).paragraphStyle(Tokens.TypeScale.code).foregroundStyle(p.ink2)
+                .frame(maxWidth: .infinity, maxHeight: 220, alignment: .topLeading)
+                .clipped()
+            } else {
+              ScrollView {
+                Text(model.skillDraft).paragraphStyle(Tokens.TypeScale.code).foregroundStyle(p.ink2)
+                  .textSelection(.enabled)
+                  .frame(maxWidth: .infinity, alignment: .topLeading)
+              }
+              .frame(height: 220)
             }
           }
         }
-        .padding(12)
       }
-      .frame(height: 420)
     }
-    .padding(20)
-    .frame(width: 640)
+    .padding(Tokens.Space.s20)
+    .frame(width: Self.width)
     .background(p.isDark ? Color(hex: 0x202023) : Color(hex: 0xFBFBFC))
   }
 }
 
-/// Edit mode of the SKILL.md sheet (s05c): the description and each step's title and detail, nothing else. Gate
-/// steps are shown locked.
+/// Edit mode of the steps sheet (s05c): the description and each step's title and detail, nothing else. Your
+/// approval step is shown locked.
 private struct SkillEditForm: View {
   @ObservedObject var model: ReviewModel
   @Environment(\.colorScheme) private var scheme
@@ -548,27 +604,28 @@ private struct SkillEditForm: View {
   var body: some View {
     let p = Palette(scheme: scheme)
     if model.skillEdit == nil {
-      Text(model.skillDoc == nil ? "Loading SKILL.md…" : "")
-        .font(.system(size: 13)).foregroundStyle(p.ink2)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      Text(model.skillDoc == nil ? "Loading the steps…" : "")
+        .textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
+        .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
     } else {
       ScrollView {
-        VStack(alignment: .leading, spacing: 14) {
-          Text("Description").font(.system(size: 12, weight: .medium)).foregroundStyle(p.ink2)
+        VStack(alignment: .leading, spacing: Tokens.Space.s16) {
+          Text("What it does").textStyle(Tokens.TypeScale.calloutEmphasis).foregroundStyle(p.ink2)
           TextField("What this workflow does", text: binding(\.description), axis: .vertical)
             .textFieldStyle(.roundedBorder).lineLimit(2...4)
           ForEach(Array((model.skillEdit?.steps ?? []).enumerated()), id: \.element.id) { i, step in
-            VStack(alignment: .leading, spacing: 6) {
-              HStack(spacing: 6) {
-                Text("Step \(i + 1)").font(.system(size: 12, weight: .medium)).foregroundStyle(p.ink2)
+            VStack(alignment: .leading, spacing: Tokens.Space.s8) {
+              HStack(spacing: Tokens.Space.s8) {
+                Text("Step \(i + 1)").textStyle(Tokens.TypeScale.calloutEmphasis).foregroundStyle(p.ink2)
                 if step.isGate {
-                  Image(systemName: "lock.fill").font(.system(size: 10)).foregroundStyle(p.status(.needsYou))
-                  Text("Approval gate, not editable").font(.system(size: 11)).foregroundStyle(p.ink3)
+                  Image(systemName: "lock.fill").symbolStyle(Tokens.TypeScale.Symbol.small).foregroundStyle(p.ink2)
+                  Text("You approve each batch here. This step cannot be edited.")
+                    .textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
                 }
               }
               if step.isGate {
-                Text(step.title).font(.system(size: 13)).foregroundStyle(p.ink1)
-                Text(step.detail).font(.system(size: 12)).foregroundStyle(p.ink3)
+                Text(PlainWords.clean(step.title)).textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink1)
+                Text(PlainWords.clean(step.detail)).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
               } else {
                 TextField("Title", text: stepBinding(i, \.title)).textFieldStyle(.roundedBorder)
                 TextField("Detail", text: stepBinding(i, \.detail), axis: .vertical)
@@ -579,6 +636,7 @@ private struct SkillEditForm: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
       }
+      .frame(height: 420)
     }
   }
 

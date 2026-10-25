@@ -82,7 +82,7 @@ final class DashboardModel: ObservableObject {
   static func pointerTarget(for a: DashboardAutomation) -> (id: String, label: String) {
     if let c = a.connectors.first(where: { $0.state != .connected }) {
       let verb = c.state == .missingEnv ? "Add the \(c.name) key here" : "Connect \(c.name) here"
-      return ("conn.\(a.id).\(c.id)", a.state == .needsYou ? "\(verb) and the waiting run finishes" : "\(verb) before it can run")
+      return ("conn.\(a.id).\(c.id)", a.state == .needsYou ? verb : "\(verb) before it can run")
     }
     if a.state == .readyForReview { return ("row.\(a.id)", "Press ↩ to review it") }
     return ("row.\(a.id)", a.needsYouReason ?? a.name)
@@ -95,11 +95,12 @@ final class DashboardModel: ObservableObject {
 
   /// "Show the evidence" on the timeline: fly to the span the top insight is built on.
   func showEvidence() {
-    guard let d = data, let bar = d.days.flatMap(\.bars).first(where: { $0.id == MockBrainClient.evidenceBarId }) ?? d.days.flatMap(\.bars).first
-    else { return }
+    guard let d = data, let bar = Self.evidenceBar(d) else { return }
     startPointer(PointerRequest(targetId: "bar.\(bar.id)", originId: "timeline.evidence",
                                 label: Self.evidenceLabel(bar, tasks: d.tasks), startedAt: clock()))
   }
+
+  static func evidenceBar(_ d: DashboardData) -> TimelineBar? { d.evidenceBar }
 
   static func evidenceLabel(_ bar: TimelineBar, tasks: [TimelineTask]) -> String {
     let minutes = Int((bar.end.timeIntervalSince(bar.start) / 60).rounded())

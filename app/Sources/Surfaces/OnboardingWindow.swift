@@ -91,15 +91,16 @@ struct OnboardingView: View {
   var body: some View {
     let p = Palette(scheme: scheme)
     VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: 10) {
+      HStack(spacing: Tokens.Space.s8) {
         OffloadMark(size: 22)
-        Text(model.flow.step.counter).font(.system(size: 12)).monospacedDigit().foregroundStyle(p.ink3)
+        Text(model.flow.step.counter).textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
         Spacer()
       }
-      .padding(.bottom, 18)
-      Text(model.flow.step.title).textStyle(Tokens.TypeScale.display).foregroundStyle(p.ink1)
+      .padding(.bottom, Tokens.Space.s16)
+      Text(model.flow.step.title).paragraphStyle(Tokens.TypeScale.display).foregroundStyle(p.ink1)
+        .fixedSize(horizontal: false, vertical: true)
         .accessibilityAddTraits(.isHeader)
-        .padding(.bottom, 16)
+        .padding(.bottom, Tokens.Space.s16)
       Group {
         switch model.flow.step {
         case .watches: WatchesStep()
@@ -108,11 +109,10 @@ struct OnboardingView: View {
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      Spacer(minLength: 20)
       if let note = model.note {
-        Text(note).font(.system(size: 12)).foregroundStyle(p.ink2).padding(.bottom, 10)
+        Text(note).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2).padding(.top, Tokens.Space.s16)
       }
-      HStack(spacing: 10) {
+      HStack(spacing: Tokens.Space.s8) {
         if !model.flow.isFirst {
           SecondaryButton(title: "Back") { model.back() }
         }
@@ -123,9 +123,13 @@ struct OnboardingView: View {
         }
         PrimaryButton(title: model.flow.primaryTitle, key: "↩") { model.next() }
       }
+      .padding(.top, Tokens.Space.s32)
     }
-    .padding(28)
-    .frame(width: Self.width, height: 470, alignment: .topLeading)
+    // Sized to its content, like a System Settings pane: no dead band above the buttons (s10a). The window
+    // controller resizes to fit when the step changes.
+    .padding(Tokens.Space.s32)
+    .frame(width: Self.width, alignment: .topLeading)
+    .fixedSize(horizontal: false, vertical: true)
     .background(p.canvas)
   }
 }
@@ -138,12 +142,13 @@ private struct BulletList: View {
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: Tokens.Space.s8) {
       Text(title).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink2)
       ForEach(items, id: \.self) { item in
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-          Image(systemName: symbol).font(.system(size: 11, weight: .medium)).foregroundStyle(p.ink3).frame(width: 14)
-          Text(item).textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink1).fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+          Image(systemName: symbol).symbolStyle(Tokens.TypeScale.Symbol.regular).foregroundStyle(p.ink3)
+            .frame(width: Tokens.Space.s16)
+          Text(item).paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink1).fixedSize(horizontal: false, vertical: true)
         }
       }
     }
@@ -154,10 +159,12 @@ private struct WatchesStep: View {
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     let p = Palette(scheme: scheme)
-    VStack(alignment: .leading, spacing: 20) {
+    VStack(alignment: .leading, spacing: Tokens.Space.s20) {
       BulletList(title: "What it notices", symbol: "eye", items: OnboardingFlow.watches)
-      BulletList(title: "What it never keeps", symbol: "xmark", items: OnboardingFlow.neverStores)
-      Text(OnboardingFlow.localNote).font(.system(size: 12)).foregroundStyle(p.ink3).fixedSize(horizontal: false, vertical: true)
+      // A minus, not an ×: on a Mac an × is a close or remove button.
+      BulletList(title: "What it never keeps", symbol: "minus.circle", items: OnboardingFlow.neverStores)
+      Text(OnboardingFlow.localNote).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
 }
@@ -168,42 +175,43 @@ private struct PermissionsStep: View {
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    VStack(alignment: .leading, spacing: 14) {
+    VStack(alignment: .leading, spacing: Tokens.Space.s16) {
       Text("macOS asks once for each. Open Settings, turn Offload on, and come back: the ticks appear on their own.")
-        .textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2).fixedSize(horizontal: false, vertical: true)
+        .paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2).fixedSize(horizontal: false, vertical: true)
       RingBox {
         ForEach(Array(flow.permissions.enumerated()), id: \.element.id) { i, perm in
-          if i > 0 { RowDivider(inset: 44) }
-          HStack(spacing: 12) {
+          if i > 0 { RowDivider(inset: Tokens.Space.s48) }
+          HStack(spacing: Tokens.Space.s12) {
             ZStack {
-              Circle().fill(perm.grant == .granted ? p.status(.done) : p.track).frame(width: 20, height: 20)
+              Circle().fill(perm.grant == .granted ? p.status(.done) : p.track).frame(width: Tokens.Space.s20, height: Tokens.Space.s20)
               if perm.grant == .granted {
-                Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                Image(systemName: "checkmark").symbolStyle(Tokens.TypeScale.Symbol.small, weight: .bold).foregroundStyle(.white)
               }
             }
             .scaleEffect(perm.kind.map { flow.justGranted.contains($0) } == true ? 1.0 : 0.96)
             .animation(Motion.outExpo(Tokens.Duration.slow), value: perm.grant)
-            .frame(width: 20)
-            VStack(alignment: .leading, spacing: 2) {
-              HStack(spacing: 6) {
+            .frame(width: Tokens.Space.s20)
+            VStack(alignment: .leading, spacing: Tokens.Space.nudge) {
+              HStack(spacing: Tokens.Space.s8) {
                 Text(perm.name).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
-                Text(perm.required ? "Required" : "Optional").font(.system(size: 11)).foregroundStyle(p.ink3)
+                Text(perm.kind?.importance ?? (perm.required ? "Recommended" : "Optional"))
+                  .textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
               }
-              Text(perm.purpose).font(.system(size: 12)).foregroundStyle(p.ink3).lineLimit(1)
+              Text(perm.purpose).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3).lineLimit(1)
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: Tokens.Space.s8)
             if perm.grant == .granted {
-              Text("Allowed").font(.system(size: 12)).foregroundStyle(p.ink2)
+              Text("Allowed").textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
             } else if let url = perm.settingsURL {
               SecondaryButton(title: "Open Settings") { NSWorkspace.shared.open(url) }
             }
           }
-          .padding(.horizontal, 12).frame(minHeight: 54)
+          .padding(.horizontal, Tokens.Space.s12).frame(minHeight: Tokens.Size.toolbar + Tokens.Space.s4)
           .accessibilityElement(children: .combine)
           .accessibilityLabel("\(perm.name), \(perm.label). \(perm.purpose)")
         }
       }
-      Text(flow.permissionsNote).font(.system(size: 12)).foregroundStyle(p.ink3).fixedSize(horizontal: false, vertical: true)
+      Text(flow.permissionsNote).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3).fixedSize(horizontal: false, vertical: true)
     }
   }
 }
@@ -214,22 +222,25 @@ private struct ComeBackStep: View {
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    VStack(alignment: .leading, spacing: 16) {
-      Text(OnboardingFlow.comeBackBody).textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink1)
+    VStack(alignment: .leading, spacing: Tokens.Space.s16) {
+      Text(OnboardingFlow.comeBackBody).paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink1)
         .fixedSize(horizontal: false, vertical: true)
-      RingBox(padding: 14) {
-        HStack(alignment: .top, spacing: 12) {
-          Image(systemName: "sparkles").font(.system(size: 13)).foregroundStyle(p.ink2).frame(width: 16)
-          VStack(alignment: .leading, spacing: 4) {
+      RingBox(padding: Tokens.Space.s16) {
+        HStack(alignment: .top, spacing: Tokens.Space.s12) {
+          Image(systemName: "sparkles").symbolStyle(Tokens.TypeScale.Symbol.regular).foregroundStyle(p.ink2)
+            .frame(width: Tokens.Space.s16)
+          VStack(alignment: .leading, spacing: Tokens.Space.s4) {
             Text("Want to see it work now?").textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
-            Text("Use demo week loads a sample founder's week (100 outreach emails a day) into a separate demo folder, so the first insight is waiting. Your own week is not touched.")
-              .font(.system(size: 12)).foregroundStyle(p.ink3).fixedSize(horizontal: false, vertical: true)
+            Text("Loads a sample founder's week (100 outreach emails a day) into a separate folder, so the first insight is waiting. Your own week is not touched.")
+              .paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3).fixedSize(horizontal: false, vertical: true)
           }
         }
       }
-      HStack(spacing: 8) {
-        Keycap(label: "⌥Space")
-        Text("opens the insight card any time.").font(.system(size: 12)).foregroundStyle(p.ink3)
+      HStack(spacing: Tokens.Space.s4) {
+        // The same Keycap as every other shortcut: one cap per key.
+        Keycap(label: "⌥"); Keycap(label: "Space")
+        Text("opens the insight card any time.").textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+          .padding(.leading, Tokens.Space.s4)
       }
     }
   }
@@ -256,6 +267,21 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     window.contentView = host
     window.delegate = self
     window.center()
+    // Each step is sized to its content; keep the top edge where it is when it changes.
+    stepWatch = model.$flow.map(\.step).removeDuplicates().dropFirst().sink { [weak self] _ in
+      DispatchQueue.main.async { self?.fitToContent() }
+    }
+  }
+
+  private var stepWatch: AnyCancellable?
+
+  private func fitToContent() {
+    guard let host = window.contentView else { return }
+    let size = host.fittingSize
+    var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
+    frame.origin.x = window.frame.minX
+    frame.origin.y = window.frame.maxY - frame.height
+    window.setFrame(frame, display: true, animate: true)
   }
 
   func show() {

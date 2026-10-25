@@ -11,7 +11,10 @@ struct Countdown: Equatable, Sendable {
   func fractionRemaining(at now: Date) -> Double { max(0, min(1, 1 - elapsed(at: now) / duration)) }
   var deadline: Date { startedAt.addingTimeInterval(duration) }
   /// Rounds up, so it never reads "0s" while you can still cancel.
-  func secondsLeftLabel(at now: Date) -> String { "\(Int(max(0, duration - elapsed(at: now)).rounded(.up)))s" }
+  func secondsLeftLabel(at now: Date) -> String { "\(secondsShown(at: now))s" }
+  func secondsShown(at now: Date) -> Int { CountdownMath.secondsShown(elapsed: elapsed(at: now), duration: duration) }
+  /// The label's seconds over the window (s10a): "Turning on in 4s" draws 80%.
+  func hairline(at now: Date) -> Double { CountdownMath.hairline(elapsed: elapsed(at: now), duration: duration) }
 }
 
 /// Keys in the workflow review window. ⌘ chords that are not ours pass through (⌘W, ⌘Q, ⌘C…).
@@ -79,14 +82,36 @@ struct FirstRunPlan: Equatable, Sendable {
     batchSize = w.schedule.batchSize
     let gateIndex = w.steps.firstIndex(where: \.isGate) ?? -1
     var seen = Set<String>()
+    var missing: [Connector] = []
     blockers = w.steps.enumerated().compactMap { i, step -> String? in
       guard i > gateIndex, let id = step.connectorId, !seen.contains(id),
             let c = w.connectors.first(where: { $0.id == id }), c.state != .connected else { return nil }
       seen.insert(id)
+      missing.append(c)
       return c.state == .missingEnv
         ? "\(c.name) needs its key. \(step.title) waits until it has one."
         : "\(c.name) is not connected. \(step.title) waits until you connect it."
     }
+    self.missing = missing
+  }
+
+  /// s10a: connectors a step after your approval needs that are not connected. While any is missing, Turn on is
+  /// disabled (it would arm something that cannot run) and the sheet's primary connects the first one.
+  var missing: [Connector]
+  var canTurnOn: Bool { missing.isEmpty }
+
+  /// The reason Turn on is disabled, said next to it.
+  var turnOnBlockedReason: String? {
+    guard let first = missing.first else { return nil }
+    let verb = first.state == .missingEnv ? "Add the \(first.name) key" : "Connect \(first.name)"
+    let more = missing.count > 1 ? " and \(missing.dropFirst().map(\.name).joined(separator: " and "))" : ""
+    return "\(verb)\(more) first. Turn on needs every step able to run."
+  }
+
+  /// The sheet's primary while blocked: "Connect Google Sheets" / "Add the HubSpot key".
+  var connectTitle: String? {
+    guard let first = missing.first else { return nil }
+    return first.state == .missingEnv ? "Add the \(first.name) key" : "Connect \(first.name)"
   }
 
   static func emails(_ n: Int) -> String { n == 1 ? "1 email" : "\(n) emails" }
@@ -230,5 +255,14 @@ struct ApprovalFlow: Equatable, Sendable {
   mutating func replaceWorkflow(_ w: Workflow) {
     workflow = w
     if case .confirming = phase { phase = .reviewing }
+  }
+}
+
+/// s10a: whether a key may go to the approval flow. While the confirmation is open and a connector a step after your
+/// approval needs is missing, ↩ and ⌘↩ do not arm Turn on (the button is disabled, with the reason beside it).
+enum ArmGuard {
+  static func allows(_ key: ReviewKey, flow: ApprovalFlow) -> Bool {
+    guard case .confirming = flow.phase, key == .confirm || key == .approve else { return true }
+    return flow.plan.canTurnOn
   }
 }

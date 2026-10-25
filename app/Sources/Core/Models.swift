@@ -40,6 +40,9 @@ struct Insight: Codable, Equatable, Identifiable, Sendable {
   var saving: SavingEstimate
   var connectors: [Connector]
   var evidenceIds: [String]
+  /// s10a: the brain's own display strings ("64.5%", "3.0 min"), shown as sent so no screen re-rounds them.
+  var shareDisplay: String? = nil
+  var medianDisplay: String? = nil
 }
 
 /// Weekly hours now − review time = hours saved, shown as a range (plan/CONTEXT.md, brain SavingDTO).
@@ -51,6 +54,8 @@ struct SavingEstimate: Codable, Equatable, Sendable {
   var hoursPerWeekHigh: Double
   /// The brain's own arithmetic line, shown verbatim when present (never recomputed by the app).
   var arithmetic: String? = nil
+  /// The brain's point estimate (`weeklyHoursSaved`). s10a: the one saving every screen shows.
+  var hoursPerWeek: Double? = nil
 }
 
 struct Connector: Codable, Equatable, Identifiable, Sendable {

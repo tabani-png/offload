@@ -190,6 +190,17 @@ struct HTTPBrainClient: BrainClient {
                           body: ["limit": n], timeout: Self.dryRunTimeout).toDryRun()
   }
 
+  /// GET /workflows/:id/dry-runs/latest (s09b). nil when none is stored (404) or the brain predates the route.
+  func latestDryRun(workflowId: String) async throws -> DryRun? {
+    do {
+      return try await get(DryRunResponse.self, "workflows/\(Self.segment(workflowId))/dry-runs/latest").toDryRun()
+    } catch BrainError.notFound {
+      return nil
+    } catch BrainError.badRequest {
+      return nil
+    }
+  }
+
   /// POST approve, then GET the detail (the approve response carries the summary only, without steps).
   func approve(workflowId: String, batchHash: String) async throws -> Workflow {
     let r = try await call(ApproveResponse.self, "POST", "workflows/\(Self.segment(workflowId))/approve",

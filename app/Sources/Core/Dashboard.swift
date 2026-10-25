@@ -18,6 +18,8 @@ struct DashboardAutomation: Codable, Equatable, Identifiable, Sendable {
   var needsYouReason: String?
   /// The brain task this automation took over (links timeline bars to it).
   var taskId: String?
+  /// s10a: the brain's arithmetic behind the estimate, so the dashboard prints the same digits as the card.
+  var arithmetic: String? = nil
 }
 
 extension StatusRole {
@@ -99,6 +101,16 @@ enum PermissionKind: String, Codable, CaseIterable, Sendable {
 
   /// Screen text is the core signal and titles name the work; counts only sharpen the estimate.
   var required: Bool { self != .inputMonitoring }
+
+  /// s10a: what onboarding calls it. Offload still runs without any of them (Continue is never blocked), so none is
+  /// labelled "Required": Screen Recording is what insights need, Accessibility sharpens them, counts are optional.
+  var importance: String {
+    switch self {
+    case .screenRecording: return "Needed for insights"
+    case .accessibility: return "Recommended"
+    case .inputMonitoring: return "Optional"
+    }
+  }
 
   /// System Settings > Privacy & Security, the right pane.
   var settingsURL: URL {
@@ -229,6 +241,8 @@ struct TimelineDay: Codable, Equatable, Identifiable, Sendable {
   var day: String
   var date: Date
   var bars: [TimelineBar]
+  /// The brain's active minutes for the day (GET /timeline activeMinutes), when it sent them.
+  var trackedMinutes: Double? = nil
   var id: String { day }
   var activeMinutes: Double { bars.reduce(0) { $0 + $1.end.timeIntervalSince($1.start) / 60 } }
 }

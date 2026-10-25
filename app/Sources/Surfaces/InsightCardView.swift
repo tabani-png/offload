@@ -1,7 +1,10 @@
 import SwiftUI
 
 /// The insight card plus its detached hint. Pure render of (state, evidence, now): the live wrapper feeds a
-/// ticking clock while an undo window runs; snapshots pass a fixed time.
+/// ticking clock while an undo window runs; snapshots pass a fixed time. Every string comes from CardCopy (s10a).
+///
+/// Keys, the same on every surface (s10a SPEC "Keycaps"): J next and K previous, shown in that order; 1/2/3 choose;
+/// E dismisses the insight; Esc undoes a pending choice, otherwise it closes the card.
 struct InsightCardView: View {
   var state: InboxState
   var evidence: [EvidenceSpan]?
@@ -13,7 +16,7 @@ struct InsightCardView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    VStack(spacing: 10) {
+    VStack(spacing: Tokens.Space.s12) {
       Card {
         if let insight = state.current {
           content(insight)
@@ -39,58 +42,51 @@ struct InsightCardView: View {
   @ViewBuilder
   private func content(_ insight: Insight) -> some View {
     let p = Palette(scheme: scheme)
+    let copy = CardCopy(insight)
     header(p)
-      .padding(.horizontal, 20)
-      .padding(.top, 16)
+      .padding(.horizontal, Tokens.Space.s20)
+      .padding(.top, Tokens.Space.s16)
 
     VStack(alignment: .leading, spacing: 0) {
-      Text(Format.headline(insight))
-        .textStyle(Tokens.TypeScale.display)
+      Text(copy.title)
+        .paragraphStyle(Tokens.TypeScale.display)
         .foregroundStyle(p.ink1)
-        .lineSpacing(1)
         .fixedSize(horizontal: false, vertical: true)
-      Text(Format.arithmetic(insight))
+      Text(copy.facts)
         .textStyle(Tokens.TypeScale.body)
         .monospacedDigit()
         .foregroundStyle(p.ink2)
-        .padding(.top, 8)
+        .padding(.top, Tokens.Space.s8)
       ProgressHairline(fraction: insight.timeShare)
-        .padding(.top, 12)
+        .padding(.top, Tokens.Space.s12)
         .accessibilityLabel("Share of tracked time")
     }
-    .padding(.horizontal, 20)
-    .padding(.top, 12)
+    .padding(.horizontal, Tokens.Space.s20)
+    .padding(.top, Tokens.Space.s12)
 
     Well {
-      HStack(spacing: 8) {
-        Chip(text: "Saves " + Format.savingRange(insight.saving).replacingOccurrences(of: " back", with: ""),
-             style: .positive, symbol: "arrow.down.right")
-        Spacer(minLength: 0)
+      if let chip = copy.savingChip {
+        Chip(text: chip, style: .positive)
       }
-      // Verbatim from the brain, broken at its own "→" steps so it reads as a short calculation.
-      Text(Format.savingArithmetic(insight).replacingOccurrences(of: " → ", with: "\n→ "))
-        .font(.system(size: 11))
-        .monospacedDigit()
-        .lineSpacing(2)
-        .foregroundStyle(p.ink3)
-        .fixedSize(horizontal: false, vertical: true)
-      HStack(spacing: 6) {
-        Text("Uses").textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink3)
-          .padding(.trailing, 2)
-        ForEach(insight.connectors) { c in
-          ConnectorChip(connector: c) { onConnect($0) }
+      arithmetic(copy.arithmetic, p)
+      HStack(alignment: .center, spacing: Tokens.Space.s8) {
+        Text(copy.usesLabel).textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink3)
+        FlowLayout(spacing: Tokens.Space.s8) {
+          ForEach(insight.connectors) { c in ConnectorChip(connector: c) { onConnect($0) } }
         }
       }
       if state.evidenceOpen {
-        evidenceList(insight, p)
+        evidenceList(insight, copy, p)
           .transition(.rise(reduceMotion: reduceMotion))
       }
     }
-    .padding(.horizontal, 8)
-    .padding(.top, 16)
+    .padding(.horizontal, Tokens.Space.s8)
+    .padding(.top, Tokens.Space.s16)
 
     options(insight)
-      .padding(12)
+      .padding(.horizontal, Tokens.Space.s8)
+      .padding(.top, Tokens.Space.s8)
+      .padding(.bottom, state.pending == nil ? Tokens.Space.s8 : Tokens.Space.s16)
 
     if let pending = state.pending {
       pendingStrip(pending, p)
@@ -99,20 +95,52 @@ struct InsightCardView: View {
   }
 
   private func header(_ p: Palette) -> some View {
-    HStack(spacing: 6) {
-      StatusDot(role: .needsYou, size: 7)
-        .frame(width: 10, height: 10)
+    HStack(spacing: Tokens.Space.s8) {
+      StatusDot(role: .needsYou, size: Tokens.Size.dotSmall)
+        .frame(width: Tokens.Space.s12, height: Tokens.Space.s12)
       Text("Insight").textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink2)
       Text(state.positionLabel).textStyle(Tokens.TypeScale.label).monospacedDigit().foregroundStyle(p.ink3)
       Spacer()
       if state.insights.count > 1 {
-        Keycap(label: "K").opacity(state.index == 0 ? 0.45 : 1)
-        Keycap(label: "J").opacity(state.index == state.insights.count - 1 ? 0.45 : 1)
-          .padding(.trailing, 4)
+        // J next, K previous: the order the hint and the dashboard use. The key that has nowhere to go is
+        // dimmed, the way a disabled control is.
+        Keycap(label: "J").opacity(state.index == state.insights.count - 1 ? 0.4 : 1)
+          .help("J: next insight")
+        Keycap(label: "K").opacity(state.index == 0 ? 0.4 : 1)
+          .help("K: previous insight")
       }
-      Keycap(label: "esc")
     }
   }
+
+  /// The brain's arithmetic as a receipt: what each line is, how it is worked out, and the hours a week on the
+  /// right. Digits are the brain's own; only the unit moves to the column note.
+  private func arithmetic(_ steps: [ArithmeticStep], _ p: Palette) -> some View {
+    VStack(alignment: .leading, spacing: Tokens.Space.s4) {
+      HStack {
+        Spacer()
+        Text("a week").textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
+      }
+      ForEach(Array(steps.enumerated()), id: \.offset) { i, s in
+        let last = i == steps.count - 1
+        if last { Rectangle().fill(p.ring).frame(height: 1) }
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+          Text(s.label).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
+            .frame(width: Self.receiptLabel, alignment: .leading)
+          Text(s.formula).textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink2)
+            .lineLimit(1).truncationMode(.middle)
+          Spacer(minLength: Tokens.Space.s8)
+          Text(s.result)
+            .textStyle(last ? Tokens.TypeScale.calloutEmphasis : Tokens.TypeScale.callout)
+            .monospacedDigit().foregroundStyle(last ? p.ink1 : p.ink2)
+            .fixedSize()
+        }
+      }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(steps.map { "\($0.label): \($0.text)" }.joined(separator: ". "))
+  }
+
+  static let receiptLabel: CGFloat = 80
 
   private func options(_ insight: Insight) -> some View {
     let chosen: Int? = {
@@ -127,7 +155,7 @@ struct InsightCardView: View {
       (2, state.evidenceOpen ? "Hide the evidence" : "Show the evidence", false),
       (3, "Not now", false),
     ]
-    return VStack(spacing: 6) {
+    return VStack(spacing: Tokens.Space.s8) {
       ForEach(rows, id: \.0) { n, title, rec in
         OptionRow(number: n, title: title, recommended: rec,
                   state: rowState(n, chosen: chosen),
@@ -141,102 +169,67 @@ struct InsightCardView: View {
     return n == chosen ? .chosen : .muted
   }
 
-  private func evidenceList(_ insight: Insight, _ p: Palette) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Rectangle().fill(p.ring).frame(height: 1).padding(.vertical, 2)
-      SectionHeader(title: evidence.flatMap { Self.usualApp($0) }.map { "Evidence · \($0)" } ?? "Evidence",
-                    trailing: evidence.map { "\($0.count) of \(Format.count(insight.instanceCount)) \(insight.unitPlural)" })
+  private func evidenceList(_ insight: Insight, _ copy: CardCopy, _ p: Palette) -> some View {
+    VStack(alignment: .leading, spacing: Tokens.Space.s8) {
+      Rectangle().fill(p.ring).frame(height: 1).padding(.vertical, Tokens.Space.nudge)
+      Text(copy.range).textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
+        .fixedSize(horizontal: false, vertical: true)
       if let spans = evidence {
-        // The usual app is said once in the header; a row names its app only when it is a different one.
-        let usual = Self.usualApp(spans)
-        ForEach(spans) { span in
-          HStack(spacing: 10) {
-            Text(Format.spanTime(span))
-              .font(.system(size: 12))
-              .monospacedDigit()
-              .foregroundStyle(p.ink3)
-              .fixedSize()
-              .frame(minWidth: 62, alignment: .leading)
-            evidenceTitle(EvidenceTitle.make(title: span.title, counterparty: span.counterparty), p)
-              .frame(maxWidth: .infinity, alignment: .leading)
-            if span.app != usual {
-              Text(span.app)
-                .font(.system(size: 12))
-                .foregroundStyle(p.ink3)
-                .lineLimit(1)
-                .fixedSize()
+        let e = EvidenceCopy(spans: spans, insight: insight)
+        SectionHeader(title: e.header, trailing: e.trailing)
+        // Fixed columns, so every subject starts at the same x whatever the sender's name.
+        VStack(alignment: .leading, spacing: Tokens.Space.s4) {
+          // Two lines, like a mail list: who and when, then the subject with the whole width.
+          ForEach(e.rows) { row in
+            VStack(alignment: .leading, spacing: 0) {
+              HStack(spacing: Tokens.Space.s8) {
+                Text(row.who ?? row.subject)
+                  .textStyle(Tokens.TypeScale.calloutEmphasis).foregroundStyle(p.ink1)
+                  .lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: Tokens.Space.s8)
+                Text(row.time)
+                  .textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
+              }
+              HStack(spacing: Tokens.Space.s8) {
+                Text(row.who == nil ? "" : row.subject)
+                  .textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
+                  .lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: Tokens.Space.s8)
+                Text(row.duration)
+                  .textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
+              }
             }
-            Text(Format.spanDuration(span))
-              .font(.system(size: 12))
-              .monospacedDigit()
-              .foregroundStyle(p.ink3)
-              .frame(width: 38, alignment: .trailing)
+            .padding(.vertical, Tokens.Space.nudge)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(row.time), \(row.who.map { "\($0), " } ?? "")\(row.subject), \(row.duration)")
           }
-          .frame(height: 18)
-          .accessibilityElement(children: .ignore)
-          .accessibilityLabel("\(Format.spanTime(span)), \(EvidenceTitle.make(title: span.title, counterparty: span.counterparty).plain), \(span.app), \(Format.spanDuration(span))")
+        }
+        if let more = e.elsewhere {
+          Text(more).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
         }
       } else {
-        Text("Loading spans…").font(.system(size: 12)).foregroundStyle(p.ink3)
-      }
-    }
-  }
-
-  /// The app most spans happened in (ties: the first seen).
-  static func usualApp(_ spans: [EvidenceSpan]) -> String? {
-    var counts: [String: Int] = [:]
-    for sp in spans { counts[sp.app, default: 0] += 1 }
-    return spans.map(\.app).first { counts[$0] == counts.values.max() }
-  }
-
-  /// Who it was for first, then the subject, cut at the tail: "Pellow Partners  Deck and data ro…".
-  /// The counterparty keeps its full width unless it alone would take more than the row.
-  private func evidenceTitle(_ t: EvidenceTitle, _ p: Palette) -> some View {
-    HStack(spacing: 6) {
-      if let lead = t.lead {
-        Text(lead)
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(p.ink1)
-          .lineLimit(1)
-          .truncationMode(.tail)
-          .layoutPriority(1)
-      }
-      if !t.subject.isEmpty {
-        Text(t.subject)
-          .font(.system(size: 12))
-          .foregroundStyle(t.lead == nil ? p.ink1 : p.ink2)
-          .lineLimit(1)
-          .truncationMode(.tail)
+        Text("Loading the evidence…").textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
       }
     }
   }
 
   private func pendingStrip(_ pending: UndoWindow, _ p: Palette) -> some View {
-    let message: String = {
-      switch pending.action {
-      case .build: return "Drafting the workflow"
-      case .notNow: return "Snoozed until tomorrow"
-      case .dismiss: return "Dismissed"
-      }
-    }()
-    return VStack(spacing: 0) {
-      HStack(spacing: 8) {
-        StatusDot(role: .working, size: 7).frame(width: 10, height: 10)
-        Text(message).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
+    let seconds = pending.secondsShown(at: now)
+    let message = UndoCopy.message(pending.action, seconds: seconds)
+    return VStack(spacing: Tokens.Space.s12) {
+      HStack(spacing: Tokens.Space.s8) {
+        StatusDot(role: .working, size: Tokens.Size.dotSmall).frame(width: Tokens.Space.s12, height: Tokens.Space.s12)
+        Text(message).textStyle(Tokens.TypeScale.label).monospacedDigit().foregroundStyle(p.ink1)
         Spacer()
-        Text("Undo").font(.system(size: 12)).foregroundStyle(p.ink2)
+        Text("Undo").textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
         Keycap(label: "esc")
-        Text(pending.secondsLeftLabel(at: now))
-          .textStyle(Tokens.TypeScale.mono)
-          .foregroundStyle(p.ink3)
-          .frame(width: 18, alignment: .trailing)
       }
-      .padding(.horizontal, 20)
-      .padding(.bottom, 14)
-      ProgressHairline(fraction: pending.fractionRemaining(at: now), role: .working)
-        .padding(.horizontal, 20)
-        .padding(.bottom, 12)
+      // The bar shows the seconds the label says: "4s" of 5 is 80%, stepping once a second.
+      ProgressHairline(fraction: pending.hairline(at: now), role: .working)
+        .animation(Motion.outExpo(Tokens.Duration.base), value: seconds)
     }
+    .padding(.horizontal, Tokens.Space.s20)
+    .padding(.bottom, Tokens.Space.s16)
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(message). Press Escape to undo.")
   }
@@ -246,18 +239,19 @@ struct InsightCardView: View {
   private var empty: some View {
     let p = Palette(scheme: scheme)
     return VStack(spacing: 0) {
-      HStack(spacing: 6) {
+      HStack(spacing: Tokens.Space.s8) {
         Text("Inbox").textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink2)
         Spacer()
+        Text("Close").textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
         Keycap(label: "esc")
       }
-      .padding(.horizontal, 20)
-      .padding(.top, 16)
+      .padding(.horizontal, Tokens.Space.s20)
+      .padding(.top, Tokens.Space.s16)
       EmptyState(title: "Nothing to decide.",
                  message: "Still watching. Offload speaks up\nwhen a task starts to repeat.",
                  statusLabel: observerLabel)
-        .padding(.top, 28)
-        .padding(.bottom, 32)
+        .padding(.top, Tokens.Space.s24)
+        .padding(.bottom, Tokens.Space.s32)
     }
   }
 
@@ -265,11 +259,12 @@ struct InsightCardView: View {
 
   private var hint: some View {
     HintPill {
-      Text("Press")
       Keycap(label: "1"); Keycap(label: "2"); Keycap(label: "3")
-      Text("to choose ·")
+      Text("choose").padding(.trailing, Tokens.Space.s8)
       Keycap(label: "E")
-      Text("dismiss")
+      Text("dismiss").padding(.trailing, Tokens.Space.s8)
+      Keycap(label: "esc")
+      Text("close")
     }
   }
 }

@@ -38,15 +38,15 @@ enum Snapshotter {
   // MARK: fixtures
 
   static let now = MockBrainClient.weekStart.addingTimeInterval(4 * 86_400 + 11 * 3600)
-  static let status = ObserverStatus(state: .watching, daysStored: 4, windowDays: 7,
-                                     nextPurge: now.addingTimeInterval(3 * 86_400), insightsWaiting: 3)
+  /// s10a: one sample week everywhere (SampleWeek): the rail, the card, the review and the dashboard agree.
+  static let status = SampleWeek.status
 
-  static var rail: RailModel {
-    RailModel(status: status, automations: MockBrainClient.sampleAutomations, micRecording: false)
-  }
+  static var rail: RailModel { SampleWeek.rail }
+
+  static var insights: [Insight] { SampleWeek.insights.map { $0.applying(connectorStates: MockBrainClient.connectorStates) } }
 
   static func state(_ build: (inout InboxState) -> Void = { _ in }) -> InboxState {
-    var s = InboxState(insights: MockBrainClient.sampleInsights)
+    var s = InboxState(insights: insights)
     build(&s)
     return s
   }
@@ -55,6 +55,7 @@ enum Snapshotter {
     let evidence = MockBrainClient.sampleEvidence[MockBrainClient.outreach.id]
     let base = state()
     let withEvidence = state { _ = $0.handle(.option(2), at: now) }
+    // 1.6 s into the 5 s window: the label reads 4s and the hairline sits at exactly 80%.
     let undo = state { _ = $0.handle(.option(1), at: now.addingTimeInterval(-1.6)) }
     let empty = InboxState(insights: [])
     let observer = rail.observerLabel
@@ -71,9 +72,10 @@ enum Snapshotter {
         HStack(alignment: .top, spacing: 36) {
           RailView(rail: rail, hoveringStatus: false)
           RailView(rail: rail, hoveringStatus: true)
+          // Paused, mic idle: no red anywhere (red only while the mic is live).
           RailView(rail: RailModel(
-            status: ObserverStatus(state: .paused, daysStored: 4, windowDays: 7, nextPurge: now, insightsWaiting: 0),
-            automations: [], micRecording: true), hoveringStatus: false)
+            status: ObserverStatus(state: .paused, daysStored: 7, windowDays: 7, nextPurge: now, insightsWaiting: 0),
+            automations: [], micRecording: false), hoveringStatus: true)
         }
       })),
       ("card", card(base)),
@@ -108,11 +110,11 @@ enum Snapshotter {
       ("onboarding-permissions", onboardingChrome(onboardingModel(.permissions, permissions: off, granted: partly))),
       ("onboarding-comeback", onboardingChrome(onboardingModel(.comeBack))),
       ("review-real-schedule", {
-        // The real brain's schedule note is a full sentence (live e2e); it must wrap, not widen the window.
+        // The real brain's schedule note is a full sentence (live e2e); it gets its own line and wraps.
         var w = MockBrainClient.outreachWorkflow
-        w.schedule.summary = "Weekdays at 09:00 a new batch is drafted and waits for your review. · 20 a batch"
+        w.schedule.summary = "Weekdays at 09:00 a new batch is drafted and waits for your review. · 8 a batch"
         let m = ReviewModel(workflow: w, dryRun: MockBrainClient.outreachDryRun, client: MockBrainClient(), clock: { reviewNow })
-        return reviewChrome(m) { ReviewView(model: m, parts: [.header]) }
+        return reviewChrome(m, width: ReviewView.minWindowWidth) { ReviewView(model: m, parts: [.header]) }
       }()),
       ("dashboard-permissions", dashboardChrome {
         DashboardView(model: dashboardModel(), parts: [.observing], frozenNow: reviewNow)
@@ -137,25 +139,41 @@ enum Snapshotter {
     return m
   }
 
-  static let windowWidth: CGFloat = 820
+  nonisolated static let windowWidth: CGFloat = 900
 
-  static func reviewChrome<C: View>(_ m: ReviewModel, @ViewBuilder _ content: () -> C) -> AnyView {
+  static func reviewChrome<C: View>(_ m: ReviewModel, width: CGFloat = windowWidth, @ViewBuilder _ content: () -> C) -> AnyView {
     AnyView(Backdrop(padding: 32) {
-      WindowChrome(title: "Review workflow", subtitle: "Drafted from your week · \(m.workflow.state.label)",
-                   toolbarItems: [ToolbarItemLook(symbol: "doc.text", title: nil)], width: windowWidth) { content() }
+      WindowChrome(title: "Review workflow", subtitle: "Drafted from your week",
+                   toolbarItems: [ToolbarItemLook(symbol: "list.bullet.rectangle", title: nil)], width: width) { content() }
     })
   }
 
-  static func dashboardChrome<C: View>(@ViewBuilder _ content: () -> C) -> AnyView {
+  static func dashboardChrome<C: View>(width: CGFloat = windowWidth, @ViewBuilder _ content: () -> C) -> AnyView {
     AnyView(Backdrop(padding: 32) {
-      WindowChrome(title: "Offload", subtitle: "Dashboard", width: windowWidth) { content() }
+      WindowChrome(title: "Offload", subtitle: "Dashboard", width: width) { content() }
     })
+  }
+
+  /// A macOS 11+ sheet: a rounded panel just under the toolbar, over the window's own content (as beginSheet
+  /// draws it live), not a drawer hanging from the title bar.
+  static func sheetScene<B: View, S: View>(_ m: ReviewModel, @ViewBuilder base: () -> B, @ViewBuilder sheet: () -> S) -> AnyView {
+    reviewChrome(m) {
+      ZStack(alignment: .top) {
+        base()
+        sheet()
+          .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.window, style: .continuous))
+          .overlay(RoundedRectangle(cornerRadius: Tokens.Radius.window, style: .continuous)
+            .strokeBorder(.white.opacity(0.10), lineWidth: 1))
+          .compositingGroup()
+          .shadow(color: .black.opacity(0.4), radius: 18, x: 0, y: 10)
+          .padding(.top, Tokens.Space.s8)
+      }
+    }
   }
 
   static func s08Surfaces() -> [(String, AnyView)] {
     let review = reviewModel()
     let confirm = reviewModel([(.approve, -2)])
-    let armed = reviewModel([(.approve, -3), (.confirm, -1.6)])
     let evidencePointer = PointerRequest(targetId: "bar.\(MockBrainClient.evidenceBarId)", originId: "timeline.evidence",
                                          label: DashboardModel.evidenceLabel(
                                            MockBrainClient.timelineDays.flatMap(\.bars).first { $0.id == MockBrainClient.evidenceBarId }!,
@@ -167,36 +185,53 @@ enum Snapshotter {
     let holdAt = reviewNow.addingTimeInterval(1.4 + 1.5)
 
     func confirmScene(_ m: ReviewModel) -> AnyView {
-      reviewChrome(m) {
-        ZStack(alignment: .top) {
-          ReviewView(model: m, parts: [.header, .steps])
-            .overlay(Color.black.opacity(0.28))
-          // Sheets drop from the bottom of the toolbar.
-          ConfirmSheet(model: m, frozenNow: reviewNow)
-            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: 12, bottomTrailingRadius: 12, style: .continuous))
-            .overlay(UnevenRoundedRectangle(bottomLeadingRadius: 12, bottomTrailingRadius: 12, style: .continuous)
-              .strokeBorder(.white.opacity(0.10), lineWidth: 1))
-            .compositingGroup()
-            .shadow(color: .black.opacity(0.45), radius: 22, x: 0, y: 12)
-        }
-      }
+      sheetScene(m, base: { ReviewView(model: m, parts: [.header, .steps]) },
+                 sheet: { ConfirmSheet(model: m, frozenNow: reviewNow) })
+    }
+
+    // Every connector connected: Turn on is enabled and can be armed.
+    var ready = MockBrainClient.outreachWorkflow
+    ready.connectors = ready.connectors.map { $0.applying(["gsheets": .connected]) }
+    func readyModel(_ keys: [(ReviewKey, Double)]) -> ReviewModel {
+      let m = ReviewModel(workflow: ready, dryRun: MockBrainClient.outreachDryRun, client: MockBrainClient(), clock: { reviewNow })
+      m.preview(keys: keys.map { ($0.0, reviewNow.addingTimeInterval($0.1)) })
+      return m
+    }
+    let confirmReady = readyModel([(.approve, -2)])
+    let armedReady = readyModel([(.approve, -3), (.confirm, -1.6)])
+    var sampleRun = MockBrainClient.outreachDryRun
+    sampleRun.model = "stub"
+    let sample = ReviewModel(workflow: MockBrainClient.outreachWorkflow, dryRun: sampleRun, client: MockBrainClient(), clock: { reviewNow })
+
+    // The dashboard before anything is on: no hours saved, the estimate as secondary text.
+    var before = MockBrainClient.sampleDashboard
+    before.automations = before.automations.map { var a = $0; if a.state != .readyForReview { a.state = .readyForReview; a.needsYouReason = nil; a.measuredHoursPerWeek = nil; a.lastRunAt = nil; a.nextRunAt = nil }; return a }
+    before.hours = HoursSaved(estimated: 0, measured: nil)
+    before.days = before.days.map { var d = $0; d.bars = d.bars.map { var b = $0; b.automated = false; return b }; return d }
+    let beforeModel = DashboardModel(client: MockBrainClient(), clock: { reviewNow })
+    beforeModel.preview(before)
+
+    func widths(_ w: CGFloat) -> AnyView {
+      let m = reviewModel()
+      return reviewChrome(m, width: w) { ReviewView(model: m, parts: [.header, .steps]) }
     }
 
     return [
       ("review", reviewChrome(review) { ReviewView(model: review, parts: [.header, .steps, .tone]) }),
+      ("review-640", widths(640)),
+      ("review-900", widths(900)),
+      ("review-1280", widths(1280)),
       ("review-dryrun", reviewChrome(review) { ReviewView(model: review, parts: [.dryRun]) }),
+      ("review-dryrun-sample", reviewChrome(sample) { ReviewView(model: sample, parts: [.dryRun]) }),
       ("review-confirm", confirmScene(confirm)),
-      ("review-armed", confirmScene(armed)),
-      ("review-skill", reviewChrome(review) {
-        ZStack(alignment: .top) {
-          ReviewView(model: review, parts: [.header, .steps]).overlay(Color.black.opacity(0.28))
-          SkillSheet(model: review, editing: false)
-            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: 12, bottomTrailingRadius: 12, style: .continuous))
-            .compositingGroup()
-            .shadow(color: .black.opacity(0.45), radius: 22, x: 0, y: 12)
-        }
-      }),
+      ("review-confirm-ready", confirmScene(confirmReady)),
+      ("review-armed", confirmScene(armedReady)),
+      ("review-skill", sheetScene(review, base: { ReviewView(model: review, parts: [.header, .steps]) },
+                                  sheet: { SkillSheet(model: review, editing: false) })),
+      ("review-skill-source", sheetScene(review, base: { ReviewView(model: review, parts: [.header, .steps, .tone]) },
+                                         sheet: { SkillSheet(model: review, editing: false, sourceOpen: true) })),
       ("dashboard", dashboardChrome { DashboardView(model: dashboardModel(), frozenNow: reviewNow) }),
+      ("dashboard-before", dashboardChrome { DashboardView(model: beforeModel, parts: [.hero, .automations], frozenNow: reviewNow) }),
       ("timeline", AnyView(TimelineSheet(model: dashboardModel()))),
       ("pointer", dashboardChrome {
         DashboardView(model: dashboardModel(pointer: evidencePointer), parts: [.hero, .automations, .timeline],
@@ -341,7 +376,7 @@ struct ComponentSheet: View {
         row("Keycap") {
           HStack(spacing: 6) {
             Keycap(label: "1"); Keycap(label: "2"); Keycap(label: "J"); Keycap(label: "K"); Keycap(label: "E")
-            Keycap(label: "esc"); Keycap(label: "⌥"); Keycap(label: "space"); Keycap(label: "1", pressed: true)
+            Keycap(label: "esc"); Keycap(label: "⌥"); Keycap(label: "Space"); Keycap(label: "1", pressed: true)
           }
         }
         row("Status") {
@@ -356,7 +391,7 @@ struct ComponentSheet: View {
         row("Chip") {
           HStack(spacing: 6) {
             Chip(text: "Gmail", dot: .neutral)
-            Chip(text: "Saves 20–24 h a week", style: .positive, symbol: "arrow.down.right")
+            Chip(text: "Saves 21.9 h a week", style: .positive)
             Chip(text: "Recommended", style: .recommended)
           }
         }
@@ -383,7 +418,7 @@ struct ComponentSheet: View {
           SectionHeader(title: "Evidence", trailing: "6 of 500 emails")
         }
         row("Empty") {
-          EmptyState(title: "Nothing to decide.", message: "Still watching.", statusLabel: "Watching · Day 4 of 7")
+          EmptyState(title: "Nothing to decide.", message: "Still watching.", statusLabel: "Watching · Day 7 of 7")
         }
       }
       .padding(24)
@@ -404,7 +439,7 @@ struct ComponentSheet: View {
   private func dot(_ role: StatusRole, _ label: String, pulses: Bool = false) -> some View {
     HStack(spacing: 0) {
       StatusDot(role: role, pulses: pulses)
-      Text(label).font(.system(size: 12)).foregroundStyle(Palette(scheme: scheme).ink2)
+      Text(label).textStyle(Tokens.TypeScale.callout).foregroundStyle(Palette(scheme: scheme).ink2)
     }
   }
 }
@@ -415,7 +450,8 @@ struct TimelineSheet: View {
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
-    TimelineSection(model: model, data: model.data!, now: Snapshotter.reviewNow)
+    TimelineSection(model: model, data: model.data!, now: Snapshotter.reviewNow,
+                    tracked: DashboardCopy(model.data!, now: Snapshotter.reviewNow).tracked)
       .padding(24)
       .frame(width: Snapshotter.windowWidth)
       .background(Palette(scheme: scheme).canvas)

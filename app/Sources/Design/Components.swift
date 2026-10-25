@@ -9,19 +9,21 @@ struct Keycap: View {
   var label: String
   var pressed = false
   var prominent = false
+  /// Inside the white primary button: the same key, in the primary's own ink.
+  var onPrimary = false
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
     let p = Palette(scheme: scheme)
     let shape = RoundedRectangle(cornerRadius: Tokens.Radius.key, style: .continuous)
     Text(label)
-      .font(.system(size: label.count > 1 ? 10 : 11, weight: .medium))
+      .textStyle(label.count > 2 ? Tokens.TypeScale.keyWord : Tokens.TypeScale.key)
       .monospacedDigit()
-      .foregroundStyle(prominent ? p.ink1 : p.ink2)
-      .padding(.horizontal, label.count > 1 ? 5 : 0)
-      .frame(minWidth: 18, minHeight: 18)
-      .background(shape.fill(pressed ? p.ringStrong : p.fillStrong))
-      .overlay(shape.strokeBorder(p.ring, lineWidth: 1))
+      .foregroundStyle(onPrimary ? p.primaryInk.opacity(0.62) : (prominent ? p.ink1 : p.ink2))
+      .padding(.horizontal, label.count > 1 ? Tokens.Space.s4 : 0)
+      .frame(minWidth: Tokens.Size.key, minHeight: Tokens.Size.key)
+      .background(shape.fill(onPrimary ? p.primaryInk.opacity(0.08) : (pressed ? p.ringStrong : p.fillStrong)))
+      .overlay(shape.strokeBorder(onPrimary ? p.primaryInk.opacity(0.10) : p.ring, lineWidth: 1))
       // A faint lower lip gives the key its depth without a drop shadow.
       .overlay(
         shape.strokeBorder(
@@ -39,7 +41,7 @@ struct Keycap: View {
 struct StatusDot: View {
   var role: StatusRole
   var pulses = false
-  var size: CGFloat = 8
+  var size: CGFloat = Tokens.Size.dot
   @Environment(\.colorScheme) private var scheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.isSnapshot) private var isSnapshot
@@ -93,14 +95,14 @@ struct Chip: View {
       case .recommended: let a = p.status(.needsYou); return (p.statusInk(.needsYou), a.opacity(0.15), a.opacity(0.0))
       }
     }()
-    HStack(spacing: 5) {
-      if let dot { Circle().fill(p.status(dot)).frame(width: 6, height: 6) }
-      if let symbol { Image(systemName: symbol).font(.system(size: 10, weight: .medium)) }
-      Text(text).font(.system(size: style == .recommended ? 11 : 12, weight: .medium)).tracking(0.1)
+    HStack(spacing: Tokens.Space.s4) {
+      if let dot { Circle().fill(p.status(dot)).frame(width: Tokens.Size.dotSmall, height: Tokens.Size.dotSmall) }
+      if let symbol { Image(systemName: symbol).symbolStyle(Tokens.TypeScale.Symbol.small) }
+      Text(text).textStyle(style == .recommended ? Tokens.TypeScale.caption : Tokens.TypeScale.calloutEmphasis)
     }
     .foregroundStyle(ink)
-    .padding(.horizontal, style == .recommended ? 7 : 9)
-    .frame(height: style == .recommended ? 18 : 22)
+    .padding(.horizontal, Tokens.Space.s8)
+    .frame(height: style == .recommended ? Tokens.Size.tag : Tokens.Size.chip)
     .background(Capsule().fill(fill))
     .overlay(Capsule().strokeBorder(ring, lineWidth: 1))
     .fixedSize()
@@ -123,24 +125,24 @@ struct OptionRow: View {
   var body: some View {
     let p = Palette(scheme: scheme)
     let shape = RoundedRectangle(cornerRadius: Tokens.Radius.row, style: .continuous)
-    HStack(spacing: 10) {
+    HStack(spacing: Tokens.Space.s12) {
       Keycap(label: "\(number)", pressed: pressed, prominent: state == .highlighted)
       Text(title)
         .textStyle(Tokens.TypeScale.body)
         .foregroundStyle(state == .muted ? p.ink3 : p.ink1)
-      Spacer(minLength: 8)
+      Spacer(minLength: Tokens.Space.s8)
       if state == .chosen {
         Image(systemName: "checkmark")
-          .font(.system(size: 11, weight: .semibold))
+          .symbolStyle(Tokens.TypeScale.Symbol.regular, weight: .semibold)
           .foregroundStyle(p.status(.working))
           .transition(.opacity)
       } else if recommended {
         Chip(text: "Recommended", style: .recommended)
       }
     }
-    .padding(.leading, 9)
-    .padding(.trailing, 10)
-    .frame(height: 36)
+    .padding(.leading, Tokens.Space.s8)
+    .padding(.trailing, Tokens.Space.s12)
+    .frame(height: Tokens.Size.row)
     .background(shape.fill(fill(p)))
     .overlay(shape.strokeBorder(ring(p), lineWidth: 1))
     .scaleEffect(pressed ? MotionPlan.press(reduceMotion: reduceMotion).scale : 1)
@@ -182,26 +184,27 @@ struct PrimaryButton: View {
   var body: some View {
     let p = Palette(scheme: scheme)
     Button(action: action) {
-      HStack(spacing: 8) {
-        Text(title).font(.system(size: 13, weight: .medium)).tracking(-0.05)
+      HStack(spacing: Tokens.Space.s8) {
+        Text(title).textStyle(Tokens.TypeScale.label)
         if let key {
-          Text(key)
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(p.primaryInk.opacity(0.55))
-            .frame(minWidth: 16, minHeight: 16)
-            .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(p.primaryInk.opacity(0.08)))
+          // The same Keycap as everywhere else (s10a), toned for the primary fill.
+          Keycap(label: key, onPrimary: true)
         } else {
-          Image(systemName: "arrow.right").font(.system(size: 11, weight: .medium))
+          Image(systemName: "arrow.right").symbolStyle(Tokens.TypeScale.Symbol.regular)
         }
       }
       .foregroundStyle(p.primaryInk)
-      .padding(.horizontal, 14)
-      .frame(height: 30)
+      .padding(.leading, Tokens.Space.s16)
+      .padding(.trailing, key == nil ? Tokens.Space.s16 : Tokens.Space.s8)
+      .frame(height: Tokens.Size.control)
       .background(Capsule().fill(p.primaryFill))
       .contentShape(Capsule())
     }
     .buttonStyle(PressStyle())
+    .opacity(isEnabled ? 1 : 0.4)
   }
+
+  @Environment(\.isEnabled) private var isEnabled
 }
 
 /// Translucent companion to the primary.
@@ -214,20 +217,22 @@ struct SecondaryButton: View {
   var body: some View {
     let p = Palette(scheme: scheme)
     Button(action: action) {
-      HStack(spacing: 8) {
-        Text(title).font(.system(size: 13, weight: .medium)).tracking(-0.05)
+      HStack(spacing: Tokens.Space.s8) {
+        Text(title).textStyle(Tokens.TypeScale.label)
         if let key { Keycap(label: key) }
       }
-      .foregroundStyle(p.ink1)
-      .padding(.leading, 14)
-      .padding(.trailing, key == nil ? 14 : 7)
-      .frame(height: 30)
+      .foregroundStyle(isEnabled ? p.ink1 : p.ink3)
+      .padding(.leading, Tokens.Space.s16)
+      .padding(.trailing, key == nil ? Tokens.Space.s16 : Tokens.Space.s8)
+      .frame(height: Tokens.Size.control)
       .background(Capsule().fill(p.fillStrong))
       .overlay(Capsule().strokeBorder(p.ring, lineWidth: 1))
       .contentShape(Capsule())
     }
     .buttonStyle(PressStyle())
   }
+
+  @Environment(\.isEnabled) private var isEnabled
 }
 
 // MARK: ProgressHairline
@@ -281,12 +286,12 @@ struct HintPill<Content: View>: View {
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    HStack(spacing: 6) { content }
-      .font(.system(size: 12))
+    HStack(spacing: Tokens.Space.s4) { content }
+      .textStyle(Tokens.TypeScale.callout)
       .foregroundStyle(p.ink2)
-      .padding(.horizontal, 12)
-      .frame(height: 30)
-      .glass(cornerRadius: 15, material: .popover)
+      .padding(.horizontal, Tokens.Space.s12)
+      .frame(height: Tokens.Size.control)
+      .glass(cornerRadius: Tokens.Size.control / 2, material: .popover)
   }
 }
 
@@ -312,8 +317,8 @@ struct Well<Content: View>: View {
   var body: some View {
     let p = Palette(scheme: scheme)
     let shape = RoundedRectangle(cornerRadius: Tokens.Radius.well, style: .continuous)
-    VStack(alignment: .leading, spacing: 10) { content }
-      .padding(12)
+    VStack(alignment: .leading, spacing: Tokens.Space.s12) { content }
+      .padding(Tokens.Space.s12)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(shape.fill(p.fill))
       .overlay(shape.strokeBorder(p.ring, lineWidth: 1))
@@ -384,20 +389,20 @@ struct EmptyState: View {
           }
         }
       }
-      .padding(.bottom, 16)
+      .padding(.bottom, Tokens.Space.s16)
       Text(title).textStyle(Tokens.TypeScale.title).foregroundStyle(p.ink1)
       Text(message)
-        .textStyle(Tokens.TypeScale.body)
+        .paragraphStyle(Tokens.TypeScale.body)
         .foregroundStyle(p.ink2)
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
-        .padding(.top, 4)
+        .padding(.top, Tokens.Space.s4)
       if let statusLabel {
-        HStack(spacing: 2) {
-          StatusDot(role: statusRole, pulses: statusRole == .working, size: 6)
+        HStack(spacing: Tokens.Space.nudge) {
+          StatusDot(role: statusRole, pulses: statusRole == .working, size: Tokens.Size.dotSmall)
           Text(statusLabel).textStyle(Tokens.TypeScale.caption).monospacedDigit().foregroundStyle(p.ink3)
         }
-        .padding(.top, 16)
+        .padding(.top, Tokens.Space.s16)
       }
     }
     .frame(maxWidth: .infinity)

@@ -127,8 +127,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func brainSpec(home: URL, demo: Bool = false) -> BrainLaunchSpec? {
     guard let repo, let bun = BrainLaunch.findBun(environment: ProcessInfo.processInfo.environment) else { return nil }
+    let env = Self.environment(demo: demo || options.demo)
     return BrainLaunch.spec(bun: bun, repo: repo, home: home, token: token,
-                            baseEnvironment: Self.environment(demo: demo || options.demo), observer: observer.binary)
+                            baseEnvironment: env, observer: observer.binary,
+                            model: BrainLaunch.model(environment: env, demo: demo || options.demo))
   }
 
   /// Demo homes use raw key files (OFFLOAD_KEYS=file): nothing touches the real Keychain.
@@ -138,12 +140,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     return env
   }
 
-  private static var brainLog: URL {
+  nonisolated private static var brainLog: URL {
     URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Logs/Offload/brain.err.log")
   }
 
+  private var logTimer: Timer?
+
+  /// REVIEW-2: rotate the brain log now and every minute.
+  private func startLogRotation() {
+    LogRotation.rotateIfNeeded(Self.brainLog)
+    let t = Timer(timeInterval: LogRotation.interval, repeats: true) { _ in LogRotation.rotateIfNeeded(Self.brainLog) }
+    RunLoop.main.add(t, forMode: .common)
+    logTimer = t
+  }
+
+  /// REVIEW-2: one `cli.ts purge` before serve, so expired days go even if serve never starts. Skipped when the
+  /// brain has no purge command.
+  private func purgeOnce(home: URL) {
+    guard let repo, let bun = BrainLaunch.findBun(environment: ProcessInfo.processInfo.environment),
+          let args = BrainLaunch.purgeArguments(repo: repo, home: home) else { return }
+    let p = Process()
+    p.executableURL = bun
+    p.arguments = args
+    p.environment = Self.environment(demo: options.demo)
+    p.currentDirectoryURL = repo
+    p.standardInput = FileHandle.nullDevice
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    do {
+      try p.run()
+      // Bounded: a stuck purge must not hold the app's launch. serve purges again on start and hourly.
+      let deadline = Date().addingTimeInterval(10)
+      while p.isRunning && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+      if p.isRunning { p.terminate(); NSLog("Offload: brain purge took over 10 s; stopped it"); return }
+      if p.terminationStatus != 0 { NSLog("Offload: brain purge exited %d", p.terminationStatus) }
+    } catch {
+      NSLog("Offload: brain purge did not run: %@", String(describing: error))
+    }
+  }
+
   private func startBrain() {
+    startLogRotation()
     guard options.brain == .spawn else { return }
+    purgeOnce(home: home)
     guard let spec = brainSpec(home: home) else {
       endpoint.starting = false
       NSLog("Offload: cannot start the brain (repo %@, bun not found or brain/src/cli.ts missing)", repo?.path ?? "none")

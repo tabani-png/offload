@@ -167,4 +167,7 @@ extension BrainClient {
 
   /// nil: ask the observer CLI instead.
   func observer() async throws -> ObserverReport? { nil }
+
+  /// nil: no stored dry run (or an older brain); the review runs one.
+  func latestDryRun(workflowId: String) async throws -> DryRun? { nil }
 }

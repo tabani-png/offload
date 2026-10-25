@@ -89,8 +89,9 @@ struct GlassBackground: View {
         lineWidth: 1)
     }
     .compositingGroup()
-    .shadow(color: shadow ? p.contactShadow : .clear, radius: 14, x: 0, y: 10)
-    .shadow(color: shadow ? p.contactShadow.opacity(0.5) : .clear, radius: 1.5, x: 0, y: 0.5)
+    // Tight contact shadow (rule 3): short and close, plus a hairline at the edge. Not a wide CSS blur.
+    .shadow(color: shadow ? p.contactShadow.opacity(0.75) : .clear, radius: 8, x: 0, y: 4)
+    .shadow(color: shadow ? p.contactShadow.opacity(0.6) : .clear, radius: 1, x: 0, y: 0.5)
   }
 }
 
