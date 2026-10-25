@@ -56,6 +56,9 @@ const SECRET_RES = [/\bsk-[A-Za-z0-9_-]{12,}/, /\bBearer\s+\S+/i, /[A-Za-z0-9_]{
 type Obj = Record<string, unknown>;
 const isObj = (x: unknown): x is Obj => typeof x === "object" && x !== null && !Array.isArray(x);
 
+/** s17: true when a value looks like a secret (the same patterns connectors.json refuses). */
+export const looksLikeSecret = (value: string): boolean => SECRET_RES.some((re) => re.test(value));
+
 function scanSecrets(where: string, value: string, errors: string[]): void {
   if (SECRET_RES.some((re) => re.test(value))) errors.push(`${where} looks like a secret: name an env var instead (envFromEnv / headersFromEnv)`);
 }

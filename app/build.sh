@@ -47,7 +47,7 @@ build_tests() {
     -F "$FW" -I "$DEVLIB" -L "$DEVLIB" -framework Testing \
     -plugin-path "$CLT/usr/lib/swift/host/plugins/testing" \
     -Xlinker -rpath -Xlinker "$FW" -Xlinker -rpath -Xlinker "$DEVLIB" \
-    $(swift_files "$HERE/Sources/Core" "$ROOT/slices/s06-design-system/tests" "$ROOT/slices/s07-rail-and-card/tests" "$ROOT/slices/s08-review-and-dashboard/tests" "$ROOT/slices/s09a-wiring/tests" "$ROOT/slices/s10a-ui-polish/tests" "$ROOT/slices/s10d-ui-round3/tests" "$ROOT/slices/s10e-ui-round4/tests" "$ROOT/slices/s14-any-task-workflows/tests") \
+    $(swift_files "$HERE/Sources/Core" "$ROOT/slices/s06-design-system/tests" "$ROOT/slices/s07-rail-and-card/tests" "$ROOT/slices/s08-review-and-dashboard/tests" "$ROOT/slices/s09a-wiring/tests" "$ROOT/slices/s10a-ui-polish/tests" "$ROOT/slices/s10d-ui-round3/tests" "$ROOT/slices/s10e-ui-round4/tests" "$ROOT/slices/s14-any-task-workflows/tests" "$ROOT/slices/s17-connect-anything/tests") \
     "$main" -o "$OUT/offload-tests"
 }
 

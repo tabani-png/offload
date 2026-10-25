@@ -13,7 +13,7 @@ import { join } from "node:path";
 import type { ConnectLinkDTO, ModelLabel } from "../api/types.ts";
 import { executorEnv } from "../workflows/executor.ts";
 import { CONNECTORS, connectorById, type Connector } from "./catalog.ts";
-import { isAppTargetId } from "./targets.ts";
+import { isAppTargetId, isUniverseId } from "./targets.ts";
 import { catalogStatus, loadConnectorsConfig, type ConnectorStatus, type ConnectorsConfig, type Env } from "./config.ts";
 
 // ---------- simulated connections (stub model only) ----------
@@ -29,7 +29,7 @@ export function readSim(home: string): Record<string, number> {
     const raw = JSON.parse(readFileSync(p, "utf8")) as { version?: unknown; connected?: unknown };
     if (raw.version !== 1 || typeof raw.connected !== "object" || raw.connected === null) return {};
     const out: Record<string, number> = {};
-    for (const [id, at] of Object.entries(raw.connected as Record<string, unknown>)) if ((connectorById(id) !== undefined || isAppTargetId(id)) && typeof at === "number" && Number.isFinite(at)) out[id] = at;
+    for (const [id, at] of Object.entries(raw.connected as Record<string, unknown>)) if ((connectorById(id) !== undefined || isAppTargetId(id) || isUniverseId(id)) && typeof at === "number" && Number.isFinite(at)) out[id] = at;
     return out;
   } catch {
     return {};
@@ -76,13 +76,15 @@ export interface LinkRunResult {
 
 /** Runs one command for a sign-in. Tests inject a fake and assert the exact argv; the default spawns it. */
 export interface LinkRunner {
-  run(argv: readonly string[], opts: { timeoutMs: number; env: Record<string, string> }): Promise<LinkRunResult>;
+  /** s17: `maxBytes` raises the output cap for listings (default 64 KB). */
+  run(argv: readonly string[], opts: { timeoutMs: number; env: Record<string, string>; maxBytes?: number }): Promise<LinkRunResult>;
 }
 
 const OUTPUT_CAP = 64 * 1024;
 
 export class SpawnLinkRunner implements LinkRunner {
-  async run(argv: readonly string[], opts: { timeoutMs: number; env: Record<string, string> }): Promise<LinkRunResult> {
+  async run(argv: readonly string[], opts: { timeoutMs: number; env: Record<string, string>; maxBytes?: number }): Promise<LinkRunResult> {
+    const cap = Math.min(opts.maxBytes ?? OUTPUT_CAP, 32 * 1024 * 1024);
     let proc: ReturnType<typeof Bun.spawn>;
     try {
       proc = Bun.spawn([...argv], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: opts.env });
@@ -94,7 +96,7 @@ export class SpawnLinkRunner implements LinkRunner {
       timedOut = true;
       proc.kill();
     }, opts.timeoutMs);
-    const read = async (s: ReadableStream<Uint8Array> | number | undefined | null) => (s instanceof ReadableStream ? (await new Response(s).text()).slice(0, OUTPUT_CAP) : "");
+    const read = async (s: ReadableStream<Uint8Array> | number | undefined | null) => (s instanceof ReadableStream ? (await new Response(s).text()).slice(0, cap) : "");
     try {
       const [stdout, stderr, code] = await Promise.all([read(proc.stdout), read(proc.stderr), proc.exited]);
       return { code: timedOut ? null : code, stdout, stderr, timedOut };
@@ -151,7 +153,7 @@ export const isMethod = (x: unknown): x is Method => typeof x === "string" && (M
 export function resolutionMethods(connectorId: string, cfg: ConnectorsConfig | null): Method[] {
   const c = connectorById(connectorId);
   // s13: an app the catalog does not know (app-…, web-…): no connector server lists it.
-  if (c === undefined) return isAppTargetId(connectorId) ? ["composio", "api", "computer"] : [];
+  if (c === undefined) return isAppTargetId(connectorId) || isUniverseId(connectorId) ? ["composio", "api", "computer"] : [];
   const servers = Object.values(cfg?.servers ?? {}).filter((s) => s.catalog.includes(c.id));
   const stdio = servers.some((s) => s.type === "stdio");
   const http = servers.some((s) => s.type === "http");

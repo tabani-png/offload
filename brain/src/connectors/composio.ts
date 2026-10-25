@@ -9,14 +9,16 @@
 // (`mcp__composio_cli__<SLUG>`, the composio policies of allowlist.ts), and only on allow runs
 // `composio execute <SLUG> -d <json> --account <id>`. A failed call stops the method (the item is unknown, never
 // retried); the chain hands the never-attempted items to the next method.
-import { expectedArgs, TOOL_POLICIES, type ToolPolicy } from "../workflows/allowlist.ts";
+import { expectedArgs, hasStaticPolicy, TOOL_POLICIES, type ToolPolicy } from "../workflows/allowlist.ts";
+import { parseGenericCommit } from "../workflows/generic.ts";
 import type { BatchItem } from "../workflows/batch.ts";
 import type { GateAction } from "../workflows/gate.ts";
 import type { ExecJob, ExecResult, Executor, ToolCallRecord } from "../workflows/executor.ts";
 import { CHAIN_WORDS, result, type ChainDeps, type MethodProbe, type ProbeResult } from "./chain.ts";
 import type { Env } from "./config.ts";
 import { linkEnv, type LinkRunner, type LinkRunResult } from "./link.ts";
-import { capabilityOf, slugify, type ChainTarget } from "./targets.ts";
+import { capabilityOf, GENERIC_COMMIT, GENERIC_READ, slugify, type ChainTarget } from "./targets.ts";
+import { readUniverse, toolsOf } from "./universe.ts";
 
 export const COMPOSIO_CLI_SERVER = "composio_cli";
 export const COMPOSIO_EXECUTE_TIMEOUT_MS = 60_000;
@@ -28,6 +30,16 @@ export function isReadOnlyComposioArgv(argv: readonly string[]): boolean {
   if (argv[0] !== "composio") return false;
   const [, a, b] = argv;
   if (a === "--version" || a === "whoami" || a === "search") return true;
+  // s17: the universe sync. `dev toolkits list` with only --limit / --query, `dev toolkits info <slug>` alone.
+  if (a === "dev" && b === "toolkits") {
+    const [, , , c, ...rest] = argv;
+    if (c === "info") return rest.length === 1 && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(rest[0] ?? "");
+    if (c !== "list") return false;
+    for (let i = 0; i < rest.length; i += 2) {
+      if ((rest[i] !== "--limit" && rest[i] !== "--query") || rest[i + 1] === undefined || rest[i + 1]!.startsWith("-")) return false;
+    }
+    return true;
+  }
   if (a === "tools" && (b === "list" || b === "info")) return true;
   if (a === "connections" && b === "list") return true;
   if (a === "link" && argv.includes("--list") && !argv.includes("--no-wait")) return true;
@@ -129,6 +141,8 @@ export class ComposioProbe implements MethodProbe {
     const env = linkEnv(d.env);
     const opts = { timeoutMs: d.timeoutMs, env };
     const t0 = d.now();
+    // s17: a universe target (any Composio toolkit): its tools come from the local index, no listing call.
+    if (t.sends.includes(GENERIC_COMMIT)) return this.probeUniverse(t, d, run, opts, t0);
     // 1. toolkit
     let toolkit = t.toolkit;
     let r = await run.run(["composio", "tools", "list", toolkit, "--limit", "1000"], opts);
@@ -172,6 +186,25 @@ export class ComposioProbe implements MethodProbe {
     }
     return result("ok", account.askEveryCall && writeTools.size > 0 ? "reads_only" : "ok", account.askEveryCall && writeTools.size > 0 ? CHAIN_WORDS.composioAsks : null, { reads: [...new Set(reads)], writes: [...new Set(writes)], tools: map }, d.now() - t0, info);
   }
+
+  /** s17: a universe target: its tools come from the local index; only the account is asked for. */
+  private async probeUniverse(t: ChainTarget, d: ChainDeps, run: LinkRunner, opts: { timeoutMs: number; env: Record<string, string> }, t0: number): Promise<ProbeResult> {
+    const idx = readUniverse(d.home);
+    const tools = idx === null ? [] : toolsOf(idx, t.toolkit);
+    const reads = tools.some((x) => x.class === "read");
+    const commits = tools.some((x) => x.class === "commit" && !hasStaticPolicy(x.slug));
+    if (!reads && !commits) return result("skipped", "no_toolkit", CHAIN_WORDS.composioNoApp(t.name), {}, d.now() - t0);
+    const c = await run.run(["composio", "connections", "list", "--toolkit", t.toolkit], opts);
+    if (c.spawnError !== undefined) return result("skipped", "composio_missing", CHAIN_WORDS.composioMissing);
+    if (failedRun(c)) return result("failed", c.timedOut ? "timeout" : "error", c.timedOut ? CHAIN_WORDS.composioNoAnswer : CHAIN_WORDS.broken, {}, d.now() - t0, { toolkit: t.toolkit });
+    const account = pickAccount(parseConnections(c.stdout, t.toolkit));
+    if (account === null) return result("skipped", "not_signed_in", CHAIN_WORDS.composioNotSigned(t.name), {}, d.now() - t0, { toolkit: t.toolkit });
+    const info = { toolkit: t.toolkit, account: account.wordId };
+    const any = `mcp__${COMPOSIO_CLI_SERVER}__*`;
+    const caps = { reads: reads ? [GENERIC_READ] : [], writes: commits && !account.askEveryCall ? [GENERIC_COMMIT] : [], tools: { ...(reads ? { [GENERIC_READ]: any } : {}), ...(commits && !account.askEveryCall ? { [GENERIC_COMMIT]: any } : {}) } };
+    if (account.askEveryCall && commits) return reads ? result("ok", "reads_only", CHAIN_WORDS.composioAsks, caps, d.now() - t0, info) : result("failed", "asks_every_call", CHAIN_WORDS.composioAsks, {}, d.now() - t0, info);
+    return result("ok", "ok", null, caps, d.now() - t0, info);
+  }
 }
 
 // ---------- executor ----------
@@ -193,6 +226,8 @@ export interface ComposioExecOptions {
   /** Catalog id -> Composio account word id (from the probe). A connector without one is not run here. */
   accounts: Readonly<Record<string, string>>;
   timeoutMs?: number;
+  /** s17: generic exact-approval policies (workflows/generic.ts) built from schemas fetched at run start. */
+  generic?: readonly ToolPolicy[];
 }
 
 /** Deterministic sends (and CRM logs) through `composio execute`, every call through the gate first. */
@@ -207,17 +242,22 @@ export class ComposioCliExecutor implements Executor {
     const toolCalls: ToolCallRecord[] = [];
     const actions = job.actions ?? [{ role: "send" as const, connector: "gmail" }];
     // The commit must be possible here before any item is used (otherwise the chain moves on with nothing consumed).
+    const generic = this.o.generic ?? [];
     for (const a of actions.filter((x) => x.role === "send" || x.role === "draft"))
-      if (composioPolicy(a.connector, a.role) === null || this.o.accounts[a.connector] === undefined) throw new MethodFailed(`Composio has no usable ${a.role} for ${a.connector}`);
+      if ((composioPolicy(a.connector, a.role) === null && !(a.role === "send" && generic.some((g) => g.connector === a.connector))) || this.o.accounts[a.connector] === undefined) throw new MethodFailed(`Composio has no usable ${a.role} for ${a.connector}`);
     for (const item of job.batch.items) {
       if (job.only !== undefined && !job.only.has(item.key)) continue;
       if (job.signal?.aborted === true) break;
       for (const a of [...actions].sort((x, y) => (x.role === y.role ? 0 : x.role === "send" ? -1 : 1))) {
         const ctx = { batchHash: job.batch.hash, ...(job.crmSheet === undefined ? {} : { crmSheet: job.crmSheet }) };
-        const p = composioPolicy(a.connector, a.role, item, ctx);
+        // s17: an item approved field by field names its tool; the gate (not this executor) decides whether the call
+        // still fits (schema hash, full-argument hash, once). The arguments are exactly the approved canonical ones.
+        const g = a.role === "send" ? parseGenericCommit(item) : null;
+        const gp = g === null ? undefined : generic.find((x) => x.tool === g.slug && x.connector === a.connector);
+        const p = gp ?? (g === null ? composioPolicy(a.connector, a.role, item, ctx) : null);
         const account = this.o.accounts[a.connector];
-        if (p === null || account === undefined) continue;
-        const args = expectedArgs(p, item, ctx);
+        if (p === null || p === undefined || account === undefined) continue;
+        const args = g !== null ? g.args : expectedArgs(p, item, ctx);
         if (args === null) continue;
         const tool = `mcp__${COMPOSIO_CLI_SERVER}__${p.tool}`;
         const { result: perm, decision } = job.gate.check(tool, args);

@@ -114,7 +114,14 @@ export interface GeneralDryRunInstanceDTO {
   evidence: { eventIds: string[]; spanIds: string[]; frameIds: string[] };
   estimate: { observedMinutes: number; reviewSeconds: number; savedMinutes: number };
   /** The commit the s13 chain would make for this item after your approval (BatchItem.commit). */
-  commit: { verb: string; fields: Array<[string, string]>; tool?: string; missing?: string[] } | null;
+  commit: {
+    verb: string;
+    fields: Array<[string, string]>;
+    tool?: string;
+    missing?: string[];
+    /** s17: a tool from the Composio list (composio:<SLUG>): one row per field, recipients / amounts / ids marked. */
+    review?: { rows: Array<{ path: string; label: string; value: string; highlight: "recipient" | "amount" | "id" | null; required: boolean; description: string | null }>; warning: string | null };
+  } | null;
   warnings: string[];
 }
 
