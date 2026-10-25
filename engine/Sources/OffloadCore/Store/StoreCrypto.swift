@@ -21,6 +21,12 @@ public enum StoreError: Error, Equatable {
     case masterKeyMissing
     /// A Keychain call failed. Payload: the OSStatus.
     case keychain(Int32)
+    /// No brain key file for the name. Payload: the file name.
+    case brainKeyMissing(String)
+    /// The brain key file holds another key; it is never replaced. Payload: the file name.
+    case brainKeyConflict(String)
+    /// The brain key file is not a wrapped key, or the master key / name does not open it. Payload: the file name.
+    case brainKeyBad(String)
 }
 
 public enum StoreCrypto {

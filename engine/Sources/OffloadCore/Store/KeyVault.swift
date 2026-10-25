@@ -207,23 +207,36 @@ public final class DayKeyVault {
     }
 
     func wrap(_ raw: Data, day: String) throws -> Data {
-        let master = try masterKey(create: true)
-        do {
-            let box = try AES.GCM.seal(raw, using: master, authenticating: Self.associatedData(day))
-            guard let combined = box.combined else { throw StoreError.io("wrap \(day)") }
-            return Self.wrappedMagic + combined
-        } catch let e as StoreError { throw e } catch { throw StoreError.io("wrap \(day): \(error)") }
+        try seal(raw, associatedData: Self.associatedData(day), label: day)
     }
 
     func unwrap(_ file: Data, day: String) throws -> Data {
+        try open(file, associatedData: Self.associatedData(day), failure: StoreError.badKey(day))
+    }
+
+    /// OKW1 | AES-GCM(master, raw, associatedData). Creates the master key when missing.
+    func seal(_ raw: Data, associatedData: Data, label: String) throws -> Data {
+        let master = try masterKey(create: true)
+        do {
+            let box = try AES.GCM.seal(raw, using: master, authenticating: associatedData)
+            guard let combined = box.combined else { throw StoreError.io("wrap \(label)") }
+            return Self.wrappedMagic + combined
+        } catch let e as StoreError { throw e } catch { throw StoreError.io("wrap \(label): \(error)") }
+    }
+
+    /// Opens an OKW1 file; any failure after the master key is found becomes `failure`. Never creates a master key.
+    func open(_ file: Data, associatedData: Data, failure: StoreError) throws -> Data {
+        guard Self.isWrapped(file) else { throw failure }
         let master = try masterKey(create: false)
         do {
             let box = try AES.GCM.SealedBox(combined: file.dropFirst(Self.wrappedMagic.count))
-            let raw = try AES.GCM.open(box, using: master, authenticating: Self.associatedData(day))
-            guard raw.count == StoreCrypto.keySize else { throw StoreError.badKey(day) }
+            let raw = try AES.GCM.open(box, using: master, authenticating: associatedData)
+            guard raw.count == StoreCrypto.keySize else { throw failure }
             return raw
-        } catch let e as StoreError { throw e } catch { throw StoreError.badKey(day) }
+        } catch let e as StoreError { throw e } catch { throw failure }
     }
+
+    static func randomKeyData() throws -> Data { try randomKey() }
 
     /// Raw and wrapped key files on disk (for `status`).
     public static func keyFileCounts(layout: StoreLayout) -> (raw: Int, wrapped: Int) {

@@ -8,11 +8,12 @@ SwiftPM does not work on this machine (Command Line Tools PackageDescription mis
 
 ```bash
 engine/build.sh                    # .build/libOffloadCore.dylib, .build/offload-observer
-engine/build.sh test               # + Swift Testing suite (S01*, S02*, S02B*)
+engine/build.sh test               # + Swift Testing suite (S01*, S02*, S02B*, S02C*)
 engine/build.sh test --filter S02  # one slice
 OFFLOAD_BUILD_DIR=/tmp/x engine/build.sh   # separate build dir for parallel agents
 bash slices/s02-observer/verify.sh # slice done-signal
 bash slices/s02b-observer-hardening/verify.sh   # full suite, min 70 tests, no-network grep
+bash slices/s02c-engine-review-fixes/verify.sh  # full suite, min 100 tests, no-network + no-spawn greps
 OFFLOAD_LIVE_KEYCHAIN=1 .build/offload-tests --filter liveKeychainRoundTrip  # opt-in real Keychain test
 ```
 
@@ -31,7 +32,23 @@ engine/.build/offload-observer uninstall-agent
 engine/.build/offload-observer pause | resume         # running observer notices within 1 s
 engine/.build/offload-observer purge-now
 engine/.build/offload-observer export-day 2026-10-24  # decrypted JSON lines on stdout (for the brain and tests)
+engine/.build/offload-observer wrap-key --name NAME   # brain key: base64 on stdin, or no stdin = new random key
+engine/.build/offload-observer unwrap-key --name NAME # prints the stored brain key
 ```
+Exit codes: 0 ok, 1 failure (message on stderr), 2 usage error, 3 `export-day` of a day older than 7 local days.
+An expired `export-day` is refused even when the observer is not running, and it runs the retention purge first, so
+the day file and key are gone afterwards (and logged in `purge-log.jsonl`).
+
+Brain keys (`wrap-key` / `unwrap-key`, keychain mode only; `OFFLOAD_KEYS=file` refuses): a 32-byte key for the
+brain's own sealed files, kept in `keys/brain-NAME.key` in the day-key OKW1 format (64 bytes) under the same
+Keychain master key, with `ai.offload.observer/brain-key/v1/NAME` as associated data, so a file copied to another
+name does not open. NAME is 1-32 of `a-z 0-9 -`, not starting with `-`. `wrap-key` reads one base64 line of exactly
+32 bytes from stdin (a terminal or empty stdin = generate one), stores it 0600 without ever overwriting (two racing
+callers end with one key), and prints the stored key as one base64 line. If a key is already stored it prints that
+key, or exits 1 when stdin held a different one. `unwrap-key` prints the key; it never creates a master key. stdout
+carries only the base64 key; stderr carries file names and status codes, never key bytes. Retention, migration and
+`status` ignore brain keys (they are not day keys); they live until the brain deletes them.
+
 Home: `--home`, else `$OFFLOAD_HOME`, else `~/Library/Application Support/Offload`. `OFFLOAD_PLAIN=1` writes plain
 `days/DAY.jsonl` instead of encrypted `days/DAY.jsonl.enc` + `keys/DAY.key`.
 
@@ -71,6 +88,11 @@ it there. A signed app bundle will get its own entry later.
   plus your `exclusions.json` (apps, hosts and their subdomains, title substrings, case-insensitive).
 - OCR skipped while Secure Event Input is on and while idle. Key values are never read, only counted.
 - Logs (stderr) carry context and error codes, never titles, URLs, text or keys.
+
+Midnight: at the first tick of a new local day, a focused, unpaused, non-idle observer writes the current focus
+again (app, title, URL, after exclusions and masking; the last snapshot if nothing is frontmost), so every day file
+starts with the active focus. While idle it waits for `idle_end`. The day is the DayStore's local calendar, so DST
+days of 23 or 25 hours still get one rollover each.
 
 ## Known limits
 - OCR runs on its own serial queue (`QueuedOCRExecutor`, 2 waiting jobs max, oldest dropped). The first Vision load

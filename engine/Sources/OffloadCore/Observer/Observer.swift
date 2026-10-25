@@ -51,6 +51,8 @@ public final class Observer {
     public private(set) var policy: ExclusionPolicy
     private let masker: Masker
     private let ids: ULIDGenerator
+    /// Local days, the same calendar the DayStore files events by.
+    private let days: DayCalendar
 
     public private(set) var counters = ObserverCounters()
     public private(set) var isPaused = false
@@ -64,6 +66,9 @@ public final class Observer {
     }
 
     private var lastFocus: FocusKey?
+    /// Local day of the last focus event written. When it is not today and the observer is focused, not paused and
+    /// not idle, the current focus is written again so each day file starts with it (REVIEW-1 L4).
+    private var lastFocusDay: String?
     private var lastSnapshot: FocusSnapshot?
     private var lastFocusPoll: Date?
     private var lastOCRAttempt: Date?
@@ -76,7 +81,8 @@ public final class Observer {
     public init(config: ObserverConfig = ObserverConfig(), clock: Clock, workspace: WorkspaceSource, idle: IdleSource,
                 input: InputCountSource, screenText: ScreenTextSource?, pauseState: PauseState, sink: EventSink,
                 retention: Retention?, policy: ExclusionPolicy = .standard, masker: Masker = Masker(),
-                ids: ULIDGenerator = ULIDGenerator(), exclusions: ExclusionReloader? = nil, ocr: OCRExecutor? = nil) {
+                ids: ULIDGenerator = ULIDGenerator(), exclusions: ExclusionReloader? = nil, ocr: OCRExecutor? = nil,
+                days: DayCalendar = DayCalendar()) {
         self.config = config
         self.clock = clock
         self.workspace = workspace
@@ -90,6 +96,7 @@ public final class Observer {
         self.policy = exclusions?.policy(now: clock.now) ?? policy
         self.masker = masker
         self.ids = ids
+        self.days = days
     }
 
     /// Runs retention once and opens the first input window.
@@ -121,9 +128,12 @@ public final class Observer {
 
         checkIdle()
         var focusChanged = false
-        if lastFocusPoll.map({ now.timeIntervalSince($0) >= config.focusPoll }) ?? true {
+        // New local day while focused: poll now and write the focus even if it did not change. While idle this waits
+        // for idle_end, so the new day's first focus is not counted as activity during the idle stretch.
+        let newDay = lastFocus != nil && !isIdle && lastFocusDay.map { $0 != days.day(of: now) } ?? false
+        if newDay || lastFocusPoll.map({ now.timeIntervalSince($0) >= config.focusPoll }) ?? true {
             lastFocusPoll = now
-            focusChanged = pollFocus()
+            focusChanged = pollFocus(force: newDay)
         }
         maybeOCR(now: now, focusChanged: focusChanged)
         maybeInput(now: now)
@@ -181,14 +191,16 @@ public final class Observer {
         return (title, masker.mask(scrubbed).text, URLScrubber.host(of: scrubbed), false)
     }
 
-    /// Returns true when a focus event was written.
-    private func pollFocus() -> Bool {
-        guard let snap = workspace.frontmost() else { return false }
+    /// Returns true when a focus event was written. `force` (day rollover) writes it even when unchanged, from the
+    /// last snapshot when nothing is frontmost right now.
+    private func pollFocus(force: Bool = false) -> Bool {
+        guard let snap = workspace.frontmost() ?? (force ? lastSnapshot : nil) else { return false }
         let fields = observedFields(snap)
         let key = FocusKey(app: snap.bundleID, title: fields.title, url: fields.url ?? fields.host)
         lastSnapshot = snap
-        guard key != lastFocus else { return false }
+        guard force || key != lastFocus else { return false }
         lastFocus = key
+        lastFocusDay = days.day(of: clock.now)
         write(Event(id: "", ts: 0, kind: .focus, app: snap.bundleID, appName: snap.appName, title: fields.title,
                     url: fields.url, host: fields.host))
         return true

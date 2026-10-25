@@ -20,6 +20,11 @@ guard parsed.command == .run else {
     let code = ObserverCLI.runOffline(parsed, environment: env, now: Date(), secrets: secrets,
                                       permissions: parsed.command == .status ? Permissions.state : nil,
                                       executable: executablePath,
+                                      input: {
+                                          // wrap-key only: a key may be piped in; a terminal means "make a new one".
+                                          guard case .wrapKey = parsed.command, isatty(STDIN_FILENO) == 0 else { return Data() }
+                                          return FileHandle.standardInput.readDataToEndOfFile()
+                                      },
                                       out: { print($0) },
                                       err: { FileHandle.standardError.write(Data(("offload-observer: " + $0 + "\n").utf8)) })
     exit(code)
@@ -51,7 +56,7 @@ let ocr = QueuedOCRExecutor(source: LiveScreenText(policy: .standard))
 let observer = Observer(clock: clock, workspace: LiveWorkspace(), idle: LiveIdle(), input: input,
                         screenText: nil, pauseState: FilePauseControl(layout: layout),
                         sink: DayStore(layout: layout, plain: plain, keys: vault), retention: Retention(layout: layout),
-                        exclusions: exclusions, ocr: ocr)
+                        exclusions: exclusions, ocr: ocr, days: DayCalendar())
 let startedAt = Date()
 let pid = ProcessInfo.processInfo.processIdentifier
 

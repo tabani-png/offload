@@ -11,6 +11,10 @@ public enum ObserverCommand: Equatable, Sendable {
     case exclude(ExcludeAction)
     case installAgent
     case uninstallAgent
+    /// `wrap-key --name NAME`: store (or return) a Keychain-wrapped brain key.
+    case wrapKey(String)
+    /// `unwrap-key --name NAME`: print a stored brain key.
+    case unwrapKey(String)
     case help
 }
 
@@ -29,12 +33,14 @@ public enum ArgumentError: Error, Equatable, CustomStringConvertible {
     case unknownCommand(String)
     case missingValue(String)
     case unexpected(String)
+    case invalidValue(String)
 
     public var description: String {
         switch self {
         case .unknownCommand(let c): return "unknown command '\(c)'"
         case .missingValue(let f): return "\(f) needs a value"
         case .unexpected(let a): return "unexpected argument '\(a)'"
+        case .invalidValue(let f): return "\(f) has an invalid value"
         }
     }
 }
@@ -46,7 +52,10 @@ public enum ObserverCLI {
       status [--json]      print observer state as JSON (schemaVersion 1)
       pause | resume       stop / restart recording (the running observer notices within 1 s)
       purge-now            delete days older than 7 local days now
-      export-day YYYY-MM-DD  print that day's decrypted events as JSON lines
+      export-day YYYY-MM-DD  print that day's decrypted events as JSON lines (exit 3 + purge if older than 7 days)
+      wrap-key --name NAME   store a 32-byte brain key (base64 on stdin, or none = new random key) wrapped with
+                           the Keychain master key in keys/brain-NAME.key; prints the key as base64
+      unwrap-key --name NAME print the stored brain key as base64
       exclude list         print exclusions.json (your entries; built-ins always apply too)
       exclude add|remove --app BUNDLE_ID | --host HOST | --title TEXT
       install-agent        write ~/Library/LaunchAgents/ai.offload.observer.plist (does not load it)
@@ -97,8 +106,29 @@ public enum ObserverCLI {
             guard let day = extra.first else { throw ArgumentError.missingValue("export-day") }
             if extra.count > 1 { throw ArgumentError.unexpected(extra[extra.startIndex + 1]) }
             return ParsedArguments(command: .exportDay(day), home: home)
+        case "wrap-key": return ParsedArguments(command: .wrapKey(try parseName(Array(extra))), home: home)
+        case "unwrap-key": return ParsedArguments(command: .unwrapKey(try parseName(Array(extra))), home: home)
         default: throw ArgumentError.unknownCommand(first)
         }
+    }
+
+    /// `--name NAME` or `--name=NAME`; NAME must pass `BrainKeys.isValidName`.
+    static func parseName(_ args: [String]) throws -> String {
+        guard let flag = args.first else { throw ArgumentError.missingValue("--name") }
+        let name: String
+        var used = 1
+        if flag == "--name" {
+            guard args.count > 1 else { throw ArgumentError.missingValue("--name") }
+            name = args[1]
+            used = 2
+        } else if flag.hasPrefix("--name=") {
+            name = String(flag.dropFirst("--name=".count))
+        } else {
+            throw ArgumentError.unexpected(flag)
+        }
+        if args.count > used { throw ArgumentError.unexpected(args[used]) }
+        guard BrainKeys.isValidName(name) else { throw ArgumentError.invalidValue("--name") }
+        return name
     }
 
     static func parseExclude(_ args: [String]) throws -> ExcludeAction {
@@ -139,6 +169,7 @@ public enum ObserverCLI {
                                   days: DayCalendar = DayCalendar(), secrets: SecretStore? = nil,
                                   permissions: PermissionState? = nil,
                                   executable: String = CommandLine.arguments.first ?? "",
+                                  input: () -> Data = { Data() },
                                   out: (String) -> Void, err: (String) -> Void) -> Int32 {
         let layout = StoreLayout(home: StoreLayout.resolveHome(flag: parsed.home, environment: environment))
         let keysMode = KeyMode.fromEnvironment(environment)
@@ -184,6 +215,13 @@ public enum ObserverCLI {
             out("purged \(records.count) day(s)" + (records.isEmpty ? "" : ": " + records.map(\.day).joined(separator: ", ")))
             return 0
         case .exportDay(let day):
+            // REVIEW-1 M4: never serve a day past retention, even when the observer is not running to purge it.
+            if let age = days.age(ofDay: day, now: now), age > Retention.defaultKeepDays {
+                let purged = Retention(layout: layout, days: days).purge(now: now)
+                err("export-day \(day): day is older than \(Retention.defaultKeepDays) days and is not served"
+                    + " (retention purged \(purged.count) expired day(s))")
+                return 3
+            }
             do {
                 let vault = DayKeyVault(layout: layout, mode: keysMode, secrets: secrets)
                 let store = DayStore(layout: layout, plain: false, days: days, keys: vault)
@@ -213,6 +251,42 @@ public enum ObserverCLI {
                 return 0
             } catch {
                 err("exclude: \(error)")
+                return 1
+            }
+        case .wrapKey(let name):
+            guard keysMode == .keychain else {
+                err("wrap-key: brain keys need the Keychain; unset OFFLOAD_KEYS=file")
+                return 1
+            }
+            let provided: Data?
+            let text = String(decoding: input(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.isEmpty {
+                provided = nil
+            } else {
+                guard let raw = Data(base64Encoded: text), raw.count == StoreCrypto.keySize else {
+                    err("wrap-key: stdin must be one base64 line holding exactly \(StoreCrypto.keySize) bytes")
+                    return 1
+                }
+                provided = raw
+            }
+            do {
+                let raw = try BrainKeys(layout: layout, secrets: secrets).wrap(name: name, key: provided)
+                out(raw.base64EncodedString())
+                return 0
+            } catch {
+                err("wrap-key \(name): \(BrainKeys.describe(error))")
+                return 1
+            }
+        case .unwrapKey(let name):
+            guard keysMode == .keychain else {
+                err("unwrap-key: brain keys need the Keychain; unset OFFLOAD_KEYS=file")
+                return 1
+            }
+            do {
+                out(try BrainKeys(layout: layout, secrets: secrets).unwrap(name: name).base64EncodedString())
+                return 0
+            } catch {
+                err("unwrap-key \(name): \(BrainKeys.describe(error))")
                 return 1
             }
         case .installAgent:

@@ -33,7 +33,8 @@ import Testing
 
     @Test func exportOfAMissingDayFailsWithAMessage() throws {
         var err: [String] = []
-        let code = ObserverCLI.runOffline(try ObserverCLI.parse(["export-day", "2026-01-01", "--home", tempHome().path]),
+        let today = DayCalendar().day(of: Date())  // within retention, so the missing file is what fails (s02c: old days exit 3)
+        let code = ObserverCLI.runOffline(try ObserverCLI.parse(["export-day", today, "--home", tempHome().path]),
                                           environment: [:], now: Date(), out: { _ in }, err: { err.append($0) })
         #expect(code == 1)
         #expect(err.first?.contains("notFound") == true)
