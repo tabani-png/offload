@@ -25,6 +25,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { appendLogLine, scrubLogText } from "../log.ts";
 import { canonicalArgs, DEFAULT_SERVERS, expectedHash, policyFor, splitMcpName, type CrmSheet, type Role, type ToolPolicy } from "./allowlist.ts";
 import { batchHash, shortHash, type Batch, type ItemState } from "./batch.ts";
+import { DRIFT_WORDS } from "./generic.ts";
 
 export { splitMcpName };
 
@@ -169,7 +170,9 @@ export function createGate(ctx: GateContext): Gate {
   /** The approved item whose expected arguments hash exactly like `input` under `p`. */
   function matchItem(p: ToolPolicy, input: Record<string, unknown>): { item: Batch["items"][number] } | { reason: string } {
     const got = canonicalArgs(p, input);
-    if ("reason" in got) return got;
+    // s17: the call is denied either way; when a generic tool's schema changed since approval, that is the reason to
+    // show (the new schema is why the approved call no longer fits).
+    if ("reason" in got) return p.generic === true && ctx.batch.items.some((i) => p.whyNot?.(i) === DRIFT_WORDS) ? { reason: DRIFT_WORDS } : got;
     let firstReason: string | null = null;
     for (const i of ctx.batch.items) {
       const ck = `${p.tool}\u0000${i.key}`;

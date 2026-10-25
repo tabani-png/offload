@@ -13,6 +13,10 @@ import { capabilityById, candidateDTO } from "../connectors/capabilities.ts";
 import { chainPath } from "../connectors/chain.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { modelFor, type Model, type ModelConfig } from "../models/model.ts";
+import { universeTargetId } from "../connectors/targets.ts";
+import { toolkitForApp, toolScore, type UniverseIndex, type UniverseTool } from "../connectors/universe.ts";
+import { hasStaticPolicy } from "../workflows/allowlist.ts";
+import { genericVerb } from "../workflows/generic.ts";
 
 export type Via = "mcp" | "composio" | "api" | "computer" | "local";
 
@@ -32,6 +36,10 @@ export interface ToolOptionDTO {
   commitsAllowed?: boolean | null;
   /** A plain sentence when this option cannot do the whole step yet; null otherwise. */
   needsYou?: string | null;
+  /** s17: false for a tool from the Composio universe (approved field by field, not hand-verified). */
+  verified?: boolean;
+  /** s17: the Composio tool slug of a universe option. */
+  slug?: string;
 }
 
 export interface StepToolsDTO {
@@ -123,6 +131,7 @@ export function legacyFamily(step: { type: string; connector: string | null }, k
 }
 
 function viaWords(o: ToolOptionDTO): string {
+  if (o.verified === false) return o.connected ? "Already connected. You check every field before it runs." : "Set it up once in Connections.";
   if (o.needsYou != null) return o.connected ? "Connected, reads only for now." : "Reads only for now.";
   if (o.connected) return "Already connected.";
   if (o.via === "composio") return "Connect via Composio.";
@@ -193,8 +202,85 @@ function catalogOptions(capId: string, current: string | null, connected: Readon
   return top;
 }
 
+// ---------- s17: tools from the Composio universe ----------
+
+/** Words a family's tools are found by (name words count most, then description words). */
+export const FAMILY_WORDS: Readonly<Record<string, readonly string[]>> = {
+  "email.send_bulk": ["send", "email", "campaign", "lead", "outreach", "sequence"],
+  "email.send": ["send", "email"],
+  "email.draft": ["draft", "email"],
+  "enrich.person": ["enrich", "person", "people", "contact", "lookup", "profile"],
+  "crm.log": ["note", "activity", "log", "contact", "crm"],
+  "sheet.update": ["row", "rows", "record", "append", "sheet", "table"],
+  "ticket.reply": ["ticket", "tickets", "reply", "support", "conversation"],
+  "order.lookup": ["order", "orders", "tracking", "shipment"],
+  "accounting.bill": ["bill", "bills", "invoice", "expense", "payable"],
+  "ats.stage": ["candidate", "application", "stage", "applicant"],
+  "chat.message": ["message", "post", "channel", "chat"],
+};
+/** Families whose step reads (the rest commit). */
+const READ_FAMILIES = new Set(["enrich.person", "order.lookup"]);
+
+const writeRank = (t: UniverseTool) => (t.hints.includes("createHint") ? 0 : t.hints.includes("updateHint") ? 1 : 2) + (t.destructive ? 3 : 0);
+
+/** Universe tools of one class for some words, at most one per toolkit, best first; tools with a hand-written policy,
+ * toolkits already among the options and Composio's own helpers are left out. */
+export function universeTools(idx: UniverseIndex, want: readonly string[], cls: "read" | "commit", o: { toolkit?: string; exclude?: ReadonlySet<string>; limit?: number; perToolkit?: number } = {}): UniverseTool[] {
+  const scored = Object.values(idx.tools)
+    .filter((t) => t.class === cls && t.toolkit !== "composio" && !hasStaticPolicy(t.slug) && !(o.exclude?.has(t.toolkit) ?? false) && (o.toolkit === undefined || t.toolkit === o.toolkit))
+    .map((t) => ({ t, s: toolScore(t, want) }))
+    .filter((x) => o.toolkit !== undefined || x.s > 0)
+    .sort((a, b) => b.s - a.s || writeRank(a.t) - writeRank(b.t) || Number(b.t.important) - Number(a.t.important) || a.t.slug.length - b.t.slug.length || a.t.slug.localeCompare(b.t.slug));
+  const out: UniverseTool[] = [];
+  const per = new Map<string, number>();
+  for (const { t } of scored) {
+    const n = per.get(t.toolkit) ?? 0;
+    if (n >= (o.perToolkit ?? 1)) continue;
+    per.set(t.toolkit, n + 1);
+    out.push(t);
+    if (out.length >= (o.limit ?? 3)) break;
+  }
+  return out;
+}
+
+/** One universe tool as a step option: approved field by field, never above a hand-verified tool. */
+export function universeOption(idx: UniverseIndex, t: UniverseTool, connected: ReadonlySet<string>): ToolOptionDTO {
+  const tk = idx.toolkits[t.toolkit];
+  const name = tk?.name ?? t.toolkit;
+  const connectorId = universeTargetId(t.toolkit);
+  const isConnected = connected.has(connectorId);
+  return {
+    id: genericVerb(t.slug),
+    name,
+    via: "composio",
+    why: `${t.name.replace(/\.$/, "")} in ${name}, through Composio. You see every field before it runs.`,
+    setup: "minutes",
+    cost: "your existing plan",
+    connected: isConnected,
+    connectorId,
+    mcpConfirmed: false,
+    commitsAllowed: t.class === "commit" ? true : null,
+    needsYou: isConnected ? null : `Set up ${name} once in Connections.`,
+    verified: false,
+    slug: t.slug,
+  };
+}
+
+const toolkitsOf = (options: readonly ToolOptionDTO[]): Set<string> => {
+  const out = new Set<string>();
+  for (const o of options) {
+    out.add(o.id.replace(/-/g, ""));
+    if (o.connectorId !== null) {
+      const c = connectorById(o.connectorId);
+      if (c !== undefined && c.how.startsWith("composio:")) out.add(c.how.slice("composio:".length));
+      out.add(o.connectorId.replace(/-/g, ""));
+    }
+  }
+  return out;
+};
+
 /** Options for one family (+ the on-screen last resort), default chosen: connected and good enough, else the first. */
-export function optionsFor(family: string, appName: string, connected: ReadonlySet<string>, perDay: number, o: { current?: string | null; readsOnly?: ReadonlyMap<string, string> } = {}): { options: ToolOptionDTO[]; chosen: string } {
+export function optionsFor(family: string, appName: string, connected: ReadonlySet<string>, perDay: number, o: { current?: string | null; readsOnly?: ReadonlyMap<string, string>; universe?: UniverseIndex | null } = {}): { options: ToolOptionDTO[]; chosen: string } {
   const capId = CATALOG_CAPABILITY[family];
   const fromCatalog = capId === undefined ? null : catalogOptions(capId, o.current ?? null, connected, o.readsOnly ?? new Map());
   let options: ToolOptionDTO[];
@@ -206,12 +292,20 @@ export function optionsFor(family: string, appName: string, connected: ReadonlyS
     };
     options = (OPTIONS[family] ?? []).map(mk).slice(0, 3);
   }
+  // s17: the remaining slots go to Composio universe tools for this family, after every catalog candidate.
+  const words = FAMILY_WORDS[family];
+  if (o.universe != null && words !== undefined && options.length < 3) {
+    const cls = READ_FAMILIES.has(family) ? "read" : "commit";
+    for (const t of universeTools(o.universe, words, cls, { exclude: toolkitsOf(options), limit: 3 - options.length })) options.push(universeOption(o.universe, t, connected));
+  }
   if (options.length < 3 && family !== "doc.read") {
     const s = ONSCREEN(appName);
     options.push({ ...s, connected: false });
   }
   const mailbox = (x: ToolOptionDTO) => x.id === "gmail" || x.id === "outlook";
-  const enough = (x: ToolOptionDTO) => x.needsYou == null && x.via !== "computer" && !(family === "email.send_bulk" && mailbox(x) && perDay > MAILBOX_PER_DAY);
+  // s17: a universe tool is never the default pick while a hand-verified one is offered.
+  const verifiedOffered = options.some((x) => x.verified !== false && x.via !== "computer");
+  const enough = (x: ToolOptionDTO) => x.needsYou == null && x.via !== "computer" && !(verifiedOffered && x.verified === false) && !(family === "email.send_bulk" && mailbox(x) && perDay > MAILBOX_PER_DAY);
   // 1. connected and good enough; 2. the tool the person uses today, when it is good enough; 3. the first option.
   const good = options.find((x) => x.connected && enough(x)) ?? options.find((x) => o.current != null && (x.connectorId === o.current || x.id === o.current) && enough(x));
   return { options, chosen: good?.id ?? options[0]!.id };
@@ -226,13 +320,15 @@ export interface ToolInputs {
   connected: ReadonlySet<string>;
   /** Catalog ids whose Composio account may only read (s13 chain), with the plain reason. */
   readsOnly?: ReadonlyMap<string, string>;
+  /** s17: the Composio universe index; absent = the s14 options only. */
+  universe?: UniverseIndex | null;
 }
 
 /** Rules recommendations for every step that needs a tool. */
 export function recommendTools(i: ToolInputs): StepToolsDTO[] {
   const out: StepToolsDTO[] = [];
   const add = (stepId: string, family: string, need: string, appName: string, runsWith?: string, current?: string | null) => {
-    const { options, chosen } = optionsFor(family, appName, i.connected, i.perDay, { current: current ?? null, ...(i.readsOnly === undefined ? {} : { readsOnly: i.readsOnly }) });
+    const { options, chosen } = optionsFor(family, appName, i.connected, i.perDay, { current: current ?? null, ...(i.readsOnly === undefined ? {} : { readsOnly: i.readsOnly }), ...(i.universe == null ? {} : { universe: i.universe }) });
     const pick = options.find((o) => o.id === chosen)!;
     out.push({ stepId, capability: family, catalogCapability: CATALOG_CAPABILITY[family] ?? null, need, options, chosen, chosenBy: "default", runsWith: runsWith ?? chosen, suggestion: suggestionFor(VERBS[family] ?? "this step", pick) });
   };
@@ -240,6 +336,11 @@ export function recommendTools(i: ToolInputs): StepToolsDTO[] {
     for (const s of i.plan.variant.steps) {
       const f = capabilityFamily(s, i.plan.outputType, i.perDay);
       if (f !== null && s.capability !== null) add(s.id, f, s.capability.need, s.capability.targetName, undefined, s.capability.via === "catalog" ? s.capability.target : null);
+      // s17: a commit in an app the catalog does not know: that app's own tools from the Composio universe.
+      else if (f === null && s.type === "commit" && s.capability !== null && i.universe != null) {
+        const step = universeStep(i.universe, s.id, s.capability, `${s.title} ${s.detail}`, i.connected);
+        if (step !== null) out.push(step);
+      }
     }
   }
   if (i.legacy !== undefined) {
@@ -249,6 +350,18 @@ export function recommendTools(i: ToolInputs): StepToolsDTO[] {
     }
   }
   return out;
+}
+
+/** s17: the step for a commit in an app only the universe knows: up to two of its commit tools, then the screen. */
+export function universeStep(idx: UniverseIndex, stepId: string, cap: { need: string; target: string; targetName: string }, words: string, connected: ReadonlySet<string>): StepToolsDTO | null {
+  const tk = toolkitForApp(idx, cap.targetName) ?? toolkitForApp(idx, cap.target.replace(/^(app|web)-/, "").replace(/-/g, "."));
+  if (tk === null) return null;
+  const want = `${words} ${cap.need}`.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+  const tools = universeTools(idx, want, "commit", { toolkit: tk.slug, limit: 2, perToolkit: 2 });
+  if (tools.length === 0) return null;
+  const options = [...tools.map((t) => universeOption(idx, t, connected)), { ...ONSCREEN(cap.targetName), connected: false }];
+  const pick = options[0]!;
+  return { stepId, capability: "universe.commit", catalogCapability: null, need: cap.need, options, chosen: pick.id, chosenBy: "default", runsWith: pick.id, suggestion: suggestionFor("this step", pick) };
 }
 
 const BAD = /[\d<>\u0000-\u001f]/;

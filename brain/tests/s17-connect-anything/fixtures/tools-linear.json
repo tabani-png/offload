@@ -1,0 +1,68 @@
+[
+ {
+  "slug": "LINEAR_CREATE_LINEAR_COMMENT",
+  "name": "Create a comment",
+  "description": "Creates a new comment on a specified Linear issue. This action modifies shared workspace data and is not reversible \u2014 confirm the target issue and comment conte",
+  "tags": [
+   "openWorldHint",
+   "createHint"
+  ]
+ },
+ {
+  "slug": "LINEAR_CREATE_LINEAR_ISSUE",
+  "name": "Create linear issue",
+  "description": "Creates a new issue in a specified Linear project and team, requiring team_id and title, and allowing optional properties like description, assignee, state, pri",
+  "tags": [
+   "openWorldHint",
+   "createHint"
+  ]
+ },
+ {
+  "slug": "LINEAR_DELETE_LINEAR_ISSUE",
+  "name": "Delete issue",
+  "description": "Archives an existing Linear issue by its ID, which is Linear's standard way of deleting issues; the operation is idempotent. Archiving is permanent with no buil",
+  "tags": [
+   "destructiveHint",
+   "openWorldHint"
+  ]
+ },
+ {
+  "slug": "LINEAR_LIST_ISSUE_DRAFTS",
+  "name": "List issue drafts",
+  "description": "Tool to list issue drafts. Use when you need to fetch draft issues for review or further editing. Check `pageInfo.hasNextPage` in the response to determine if a",
+  "tags": [
+   "readOnlyHint",
+   "openWorldHint"
+  ]
+ },
+ {
+  "slug": "LINEAR_LIST_LINEAR_TEAMS",
+  "name": "Get teams",
+  "description": "Retrieves all teams with their members and projects. Use stable team IDs or keys (not display names) for subsequent operations \u2014 names are non-unique. Results r",
+  "tags": [
+   "readOnlyHint",
+   "openWorldHint"
+  ]
+ },
+ {
+  "slug": "LINEAR_SEARCH_ISSUES",
+  "name": "Search Linear issues",
+  "description": "Search Linear issues using full-text search across identifier, title, and description. Use when you need to find issues by keywords or specific identifiers. Not",
+  "tags": [
+   "important",
+   "openWorldHint",
+   "readOnlyHint",
+   "issues"
+  ]
+ },
+ {
+  "slug": "LINEAR_UPDATE_ISSUE",
+  "name": "Update issue",
+  "description": "Updates an existing Linear issue using its `issue_id`; requires at least one other attribute for modification, and all provided entity IDs (for state, assignee,",
+  "tags": [
+   "important",
+   "openWorldHint",
+   "updateHint"
+  ]
+ }
+]

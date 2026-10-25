@@ -1,0 +1,130 @@
+{
+ "slug": "LINEAR_CREATE_LINEAR_ISSUE",
+ "version": "20260924_00",
+ "schemaPath": "~/.composio/tool_definitions/LINEAR_CREATE_LINEAR_ISSUE.json",
+ "inputSchema": {
+  "type": "object",
+  "title": "CreateIssueRequest",
+  "required": [
+   "team_id",
+   "title"
+  ],
+  "properties": {
+   "title": {
+    "type": "string",
+    "title": "Title",
+    "examples": [
+     "Fix login button bug on homepage"
+    ],
+    "description": "The title of the new issue."
+   },
+   "team_id": {
+    "type": "string",
+    "title": "Team Id",
+    "examples": [
+     "9a7f1e3c-4d5b-6a7f-8e9d-0a1b2c3d4e5f"
+    ],
+    "description": "UUID of the team responsible for this issue. IMPORTANT: You must use a valid team UUID that exists in your Linear workspace and that the authenticated user has access to. Use the LINEAR_GET_ALL_LINEAR_TEAMS action to retrieve the list of available teams and their UUIDs. Do not use team keys (like 'INT' or 'ENG') or team names (like 'Backend' or 'Frontend') - only the UUID format is accepted (e.g., '9a7f1e3c-4d5b-6a7f-8e9d-0a1b2c3d4e5f')."
+   },
+   "cycle_id": {
+    "type": "string",
+    "title": "Cycle Id",
+    "examples": [
+     "8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d"
+    ],
+    "description": "UUID of the cycle (sprint) to assign this issue to. Cycles are time-bound periods used to organize and prioritize work. Only applicable if the team has cycles feature enabled. Must be a valid UUID format. Must belong to the same team as team_id."
+   },
+   "due_date": {
+    "type": "string",
+    "title": "Due Date",
+    "examples": [
+     "2024-12-31",
+     "2024-12-31T23:59:59Z"
+    ],
+    "description": "The target completion date for the issue in ISO8601 datetime format or YYYY-MM-DD TimelessDate format (e.g., '2024-12-31' or '2024-12-31T23:59:59Z')"
+   },
+   "estimate": {
+    "type": "integer",
+    "title": "Estimate",
+    "default": 0,
+    "examples": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "5",
+     "8"
+    ],
+    "description": "The estimated complexity or effort for the issue, represented as a numerical point value (e.g., 1, 2, 3, 5, 8). The specific scale used (e.g., Fibonacci, Linear, T-shirt sizes mapped to numbers) is defined by the team's settings. This field only applies if the estimates feature is enabled for the team. A value of 0 typically means no estimate has been set."
+   },
+   "priority": {
+    "type": "integer",
+    "title": "Priority",
+    "default": 0,
+    "examples": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "4"
+    ],
+    "description": "Priority of the issue. 0 indicates no priority, 1 is Urgent, 2 is High, 3 is Normal, and 4 is Low."
+   },
+   "state_id": {
+    "type": "string",
+    "title": "State Id",
+    "examples": [
+     "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+    ],
+    "description": "UUID of the workflow state to assign to the issue (must be a valid UUID format, not a state name like 'backlog' or 'done') Must belong to the same team as team_id \u2014 cross-team state UUIDs will be rejected."
+   },
+   "label_ids": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    },
+    "title": "Label Ids",
+    "default": [],
+    "examples": [
+     [
+      "c1f6e2b0-1a2b-3c4d-5e6f-7a8b9c0d1e2f",
+      "d4e8f0a0-2b3c-4d5e-6f7a-8b9c0d1e2f3a"
+     ]
+    ],
+    "description": "A list of UUIDs for labels to be added to this issue. EXCLUSIVE GROUP CONSTRAINT: Linear organizes labels into groups where only ONE label per group can be applied. STEP-BY-STEP: (1) Call LINEAR_LIST_LINEAR_LABELS with team_id to get available labels. (2) FILTER OUT any labels where is_group=true (these are parent groups, not usable labels). (3) For remaining labels, group them by parent.id - labels with the SAME parent.id are mutually exclusive. (4) From each group with a shared parent.id, select ONLY ONE label. (5) Labels with parent=null can be freely combined. EXAMPLE: If labels A and B both have parent.id='X', you can only use A OR B, not both. Always call LINEAR_LIST_LINEAR_LABELS with team_id to scope results \u2014 omitting team_id may return workspace-wide label IDs that are rejected for team-scoped issues."
+   },
+   "parent_id": {
+    "type": "string",
+    "title": "Parent Id",
+    "examples": [
+     "7f8e9d0c-1b2a-3c4d-5e6f-7a8b9c0d1e2f"
+    ],
+    "description": "UUID of an existing issue to set as the parent of this new issue, creating a sub-issue relationship (must be a valid UUID format)"
+   },
+   "project_id": {
+    "type": "string",
+    "title": "Project Id",
+    "examples": [
+     "9a7f1e3c-4d5b-6a7f-8e9d-0a1b2c3d4e5f"
+    ],
+    "description": "UUID of the project to associate with this issue. Must be a valid UUID format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx with 8-4-4-4-12 hex characters). IMPORTANT: The project must belong to the same team specified in team_id - Linear requires projects and issues to be in the same team. Use the LIST_LINEAR_PROJECTS action to find projects, then verify the project belongs to the target team before using it here."
+   },
+   "assignee_id": {
+    "type": "string",
+    "title": "Assignee Id",
+    "examples": [
+     "b86e2b0f-6b1a-4db8-9731-41ef97f5ba8e"
+    ],
+    "description": "UUID of the user to assign to this issue (must be a valid UUID format) User must be a member of the team specified in team_id."
+   },
+   "description": {
+    "type": "string",
+    "title": "Description",
+    "examples": [
+     "The login button is unresponsive. This issue started after the v2.3 deployment. Steps to reproduce:\n1. Navigate to the homepage.\n2. Click the login button.\n\nExpected: User is redirected to the login page.\nActual: No action occurs."
+    ],
+    "description": "A detailed description of the issue, which can include markdown formatting."
+   }
+  }
+ }
+}

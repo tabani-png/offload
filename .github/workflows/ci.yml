@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: "true"
+  TZ: UTC
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      brain: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.brain }}
+      mac: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.mac }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            brain:
+              - 'brain/**'
+              - 'packages/**'
+              - 'schemas/**'
+              - 'slices/**'
+              - 'scripts/**'
+              - '.github/workflows/ci.yml'
+            mac:
+              - 'engine/**'
+              - 'app/**'
+              - 'brain/**'
+              - 'schemas/**'
+              - 'slices/**'
+              - 'scripts/**'
+              - '.github/workflows/ci.yml'
+
+  brain:
+    needs: changes
+    if: needs.changes.outputs.brain == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # slice verifies diff against fixed base commits
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.x
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('brain/bun.lock', 'packages/hours-saved/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - name: Install brain
+        working-directory: brain
+        run: bun install --frozen-lockfile
+      - name: Install hours-saved
+        working-directory: packages/hours-saved
+        run: bun install --frozen-lockfile
+      - name: Typecheck brain
+        working-directory: brain
+        run: bunx tsc --noEmit
+      - name: Test brain
+        working-directory: brain
+        run: bun test
+      - name: Typecheck hours-saved
+        working-directory: packages/hours-saved
+        run: bunx tsc --noEmit
+      - name: Test hours-saved
+        working-directory: packages/hours-saved
+        run: bun test tests
+      - name: Brain-only slice verifies
+        run: |
+          failed=()
+          for s in s03-brain-core s04-insights s05-workflows s05b-gate-hardening s05c-brain-ui-gaps s09b-brain-polish \
+                   s10b-review2-brain s12-understanding s13-connector-chain s16-commit-schemas; do
+            echo "::group::$s"
+            if bash "slices/$s/verify.sh"; then r=PASS; else r=FAIL; failed+=("$s"); fi
+            echo "::endgroup::"
+            echo "$s $r"
+          done
+          [ "${#failed[@]}" -eq 0 ] || { echo "::error::failed slices: ${failed[*]}"; exit 1; }
+
+  mac:
+    needs: changes
+    if: needs.changes.outputs.mac == 'true'
+    # macos-26 (GA 2026-02) carries the macOS 26 SDK needed for Vision and FoundationModels.
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Use the Command Line Tools toolchain
+        # build.sh resolves Testing.framework and the testing plugin under $(xcode-select -p) in the CLT layout.
+        run: |
+          sudo xcode-select -s /Library/Developer/CommandLineTools
+          xcode-select -p
+          swiftc --version
+          xcrun --show-sdk-version
+          sw_vers
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.x
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('brain/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - name: Install brain
+        working-directory: brain
+        run: bun install --frozen-lockfile
+      - name: Engine build and tests
+        run: engine/build.sh test
+      - name: App build and tests
+        run: |
+          app/build.sh
+          app/build.sh test
+      - name: Mac slice verifies
+        run: |
+          failed=()
+          for s in s01-engine-scaffold s02-observer s02b-observer-hardening s02c-engine-review-fixes s06-design-system \
+                   s07-rail-and-card s08-review-and-dashboard s09a-wiring s10a-ui-polish s10c-review2-engine \
+                   s10d-ui-round3 s10e-ui-round4 s11-perception s14-any-task-workflows; do
+            echo "::group::$s"
+            if bash "slices/$s/verify.sh"; then r=PASS; else r=FAIL; failed+=("$s"); fi
+            echo "::endgroup::"
+            echo "$s $r"
+          done
+          [ "${#failed[@]}" -eq 0 ] || { echo "::error::failed slices: ${failed[*]}"; exit 1; }

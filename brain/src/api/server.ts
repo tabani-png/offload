@@ -28,6 +28,8 @@ import { ComputerSessions, STOP_REASONS } from "../connectors/computer/session.t
 import { API_VERSION, type CapabilitiesResponse, type ConnectLinkDTO } from "./types.ts";
 import { CAPABILITIES, capabilityById, capabilityDTO, CATALOG_CHECKED_AT } from "../connectors/capabilities.ts";
 import { existsSync } from "node:fs";
+import { connectionsRoute, startUniverseRefresh, type ConnectionsContext } from "./connections-routes.ts";
+import { readUniverse, universeStatus } from "../connectors/universe.ts";
 
 export interface BrainOptions {
   home: string;
@@ -58,6 +60,8 @@ export interface BrainOptions {
   /** s11: the caption worker (vision/worker.ts). Its status is `captioner` in GET /status; startBrainServer starts
    * and stops it. Absent = `serve --captioner off`. */
   vision?: VisionHandle;
+  /** s17: re-sync the Composio app list when it is older than a day (real model, `serve` only; read-only commands). */
+  universe?: { autoRefresh?: boolean };
 }
 
 /** What the server needs from the caption worker. */
@@ -79,6 +83,8 @@ export interface Brain {
   /** s13: the connector chain and the computer-use sessions (tests). */
   readonly chain: ChainResolver;
   readonly computer: ComputerSessions;
+  /** s17: starts a background re-sync of the Composio app list when it is stale (real model). True when one runs. */
+  refreshUniverseIfStale(): boolean;
 }
 
 async function linkBody(req: Request): Promise<{ restart: boolean; method?: Method } | string> {
@@ -246,6 +252,20 @@ export function createBrain(opts: BrainOptions): Brain {
     },
   };
 
+  const connCtx: ConnectionsContext = {
+    home: opts.home,
+    env,
+    now,
+    model,
+    modelLabel,
+    linker,
+    resolver,
+    analysis: () => analysis(undefined),
+    background: wctx.background,
+    withChain: (dto) => withChain(dto, simulated ? "resolve" : "peek"),
+    log: opts.log ?? ((l: string) => console.error(l)),
+  };
+
   async function route(req: Request): Promise<Response> {
     const refused = gate(req);
     if (refused !== null) return refused;
@@ -278,6 +298,9 @@ export function createBrain(opts: BrainOptions): Brain {
       if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed", "use GET");
       return json(200, sessions.dto());
     }
+    // s17: the Connections center (search any app, one-time setup, read-only test, build).
+    const conn = await connectionsRoute(req, path, url, connCtx);
+    if (conn !== null) return conn;
     const link = /^\/connectors\/([^/]+)\/(link|status)$/.exec(path);
     if (link !== null) {
       const id = link[1]!;
@@ -337,6 +360,7 @@ export function createBrain(opts: BrainOptions): Brain {
     modelLabel,
     chain: resolver,
     computer: sessions,
+    refreshUniverseIfStale: () => (universeStatus(readUniverse(opts.home), now()).stale ? startUniverseRefresh(connCtx) : false),
     linkIdle: () => linker.idle(),
     async idle(): Promise<void> {
       while (background.size > 0) await Promise.all([...background]);
@@ -386,6 +410,9 @@ export async function startBrainServer(opts: BrainOptions & { port?: number; sch
   const tick = () => void brain.schedulerTick().catch((err: unknown) => log(`brain: scheduler failed: ${err instanceof Error ? err.message : String(err)}`));
   const timer = interval > 0 ? setInterval(tick, interval) : null;
   if (timer !== null) setTimeout(tick, 0);
+  // s17: the Composio app list, re-synced in the background when it is older than a day (checked every hour).
+  const universeTimer = opts.universe?.autoRefresh === true ? setInterval(() => void brain.refreshUniverseIfStale(), 60 * 60_000) : null;
+  if (opts.universe?.autoRefresh === true) setTimeout(() => void brain.refreshUniverseIfStale(), 0);
   // s11: the caption worker polls for keyframes in the background (local captioner only).
   const stopVision = opts.vision?.start?.() ?? (() => {});
   const listener = Bun.serve({
@@ -404,6 +431,7 @@ export async function startBrainServer(opts: BrainOptions & { port?: number; sch
     url: `http://${LOOPBACK}:${port}/`,
     stop: async () => {
       if (timer !== null) clearInterval(timer);
+      if (universeTimer !== null) clearInterval(universeTimer);
       stopVision();
       stopPurge();
       await listener.stop(true);

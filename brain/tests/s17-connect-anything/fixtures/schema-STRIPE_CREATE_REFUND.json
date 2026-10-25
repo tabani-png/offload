@@ -1,0 +1,68 @@
+{
+ "slug": "STRIPE_CREATE_REFUND",
+ "version": "20261014_00",
+ "schemaPath": "~/.composio/tool_definitions/STRIPE_CREATE_REFUND.json",
+ "inputSchema": {
+  "type": "object",
+  "title": "CreateRefundRequest",
+  "properties": {
+   "amount": {
+    "type": "integer",
+    "title": "Amount",
+    "examples": [
+     1000
+    ],
+    "description": "Amount in smallest currency unit (e.g., 1000 for $10.00 USD) to refund. If omitted, a full refund is issued. Cannot exceed the charge's remaining refundable amount."
+   },
+   "charge": {
+    "type": "string",
+    "title": "Charge",
+    "examples": [
+     "ch_1234567890"
+    ],
+    "description": "Identifier of the charge to refund. Required if `payment_intent` is not provided."
+   },
+   "reason": {
+    "enum": [
+     "duplicate",
+     "fraudulent",
+     "requested_by_customer"
+    ],
+    "type": "string",
+    "title": "RefundReason",
+    "examples": [
+     "duplicate",
+     "fraudulent",
+     "requested_by_customer"
+    ],
+    "description": "Reasons for issuing a refund in Stripe."
+   },
+   "metadata": {
+    "type": "object",
+    "title": "Metadata",
+    "description": "Key-value pairs to attach to the refund, for storing structured information like order numbers or internal IDs.",
+    "additionalProperties": {
+     "type": "string"
+    }
+   },
+   "payment_intent": {
+    "type": "string",
+    "title": "Payment Intent",
+    "examples": [
+     "pi_1234567890"
+    ],
+    "description": "Identifier of the PaymentIntent to refund. Required if `charge` is not provided."
+   },
+   "reverse_transfer": {
+    "type": "boolean",
+    "title": "Reverse Transfer",
+    "description": "Reverse an associated transfer? Reversal is proportional to refund amount. Applies if the original charge had a reversible transfer."
+   },
+   "refund_application_fee": {
+    "type": "boolean",
+    "title": "Refund Application Fee",
+    "description": "Refund the application fee? If true, full refunds refund the entire fee; partials refund proportionally. Applies if the original charge had an application fee."
+   }
+  }
+ }
+}

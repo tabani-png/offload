@@ -42,6 +42,8 @@ import { readWorkflow } from "./workflows/store.ts";
 import { ObserverFrameSource } from "./vision/frames.ts";
 import { DEFAULT_OLLAMA_URL, DEFAULT_VISION_MODEL, loopbackOrigin, OllamaCaptioner } from "./vision/ollama.ts";
 import { StubCaptioner } from "./vision/stub.ts";
+import { SpawnLinkRunner } from "./connectors/link.ts";
+import { fetchSchema, readUniverse, syncUniverse, UniverseSyncError, universeStatus } from "./connectors/universe.ts";
 import { CaptionWorker } from "./vision/worker.ts";
 
 const USAGE = `usage:
@@ -54,6 +56,7 @@ const USAGE = `usage:
   bun run brain/src/cli.ts draft --insight N|ins_ID --home DIR [--facts FILE] [--json]
   bun run brain/src/cli.ts dry-run (--workflow ID | --insight N|ins_ID) --home DIR [--limit N] [--model stub|claude] [--json]
   bun run brain/src/cli.ts purge --home DIR [--json]
+  bun run brain/src/cli.ts universe sync|status|schema SLUG --home DIR [--json]   (s17, read-only Composio listing)
   serve also takes --log-file FILE, --captioner off|stub|ollama|claude|auto, --vision-model TAG|auto, --claude-vision-model M, --ollama-url URL`;
 
 class UsageError extends Error {}
@@ -323,7 +326,55 @@ async function mailSource(args: Args): Promise<{ source: MailSource; close: () =
   return { source: new McpMailSource({ caller: conn.caller, tool: config.mail.listTool, args: config.mail.args, ...(config.mail.limitArg === undefined ? {} : { limitArg: config.mail.limitArg }) }), close: conn.close };
 }
 
+/** s17: `universe sync|status|schema SLUG --home DIR [--json]`: the Composio app list (read-only commands only). */
+async function universeCommand(argv: readonly string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  let home = "";
+  let json = false;
+  let slug = "";
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--home") home = rest[++i] ?? "";
+    else if (rest[i] === "--json") json = true;
+    else if (sub === "schema" && slug === "" && !rest[i]!.startsWith("-")) slug = rest[i]!;
+    else throw new UsageError(`unknown argument ${rest[i]}`);
+  }
+  if (home === "") throw new UsageError("--home DIR is required");
+  const runner = new SpawnLinkRunner();
+  if (sub === "sync") {
+    const r = await syncUniverse({ home, runner, env: process.env, now: Date.now, log: (l) => console.error(l) });
+    const s = universeStatus(r.index, Date.now());
+    console.log(json ? JSON.stringify({ ...s, failedToolkits: r.failedToolkits, commands: r.commands }) : `synced ${s.toolkits} apps, ${s.tools} tools (read ${s.classes.read}, commit ${s.classes.commit}, draft ${s.classes.draft}, denied ${s.classes.denied}); ${r.failedToolkits.length} apps kept from before; ${r.commands} read-only commands`);
+    return 0;
+  }
+  if (sub === "status") {
+    const s = universeStatus(readUniverse(home), Date.now());
+    console.log(json ? JSON.stringify(s) : s.syncedAt === null ? "no app list yet (run: universe sync)" : `${s.toolkits} apps, ${s.tools} tools, synced ${new Date(s.syncedAt).toISOString()}${s.stale ? " (stale)" : ""}`);
+    return 0;
+  }
+  if (sub === "schema") {
+    if (slug === "") throw new UsageError("universe schema needs a tool slug");
+    const r = await fetchSchema({ home, runner, env: process.env, now: Date.now, slug, maxAgeMs: 0 });
+    if (r === null) {
+      console.error(`brain: no schema for ${slug}`);
+      return 1;
+    }
+    const props = Object.keys((r.inputSchema.properties as Record<string, unknown> | undefined) ?? {});
+    console.log(json ? JSON.stringify(r) : `${slug}: ${props.length} fields (${props.join(", ")}); required ${JSON.stringify(r.inputSchema.required ?? [])}; sha256 ${r.hash}`);
+    return 0;
+  }
+  throw new UsageError(`unknown universe command ${sub ?? "(none)"} (sync, status, schema SLUG)`);
+}
+
 async function main(argv: readonly string[]): Promise<number> {
+  if (argv[0] === "universe") {
+    try {
+      return await universeCommand(argv.slice(1));
+    } catch (err) {
+      if (!(err instanceof UsageError) && !(err instanceof UniverseSyncError)) throw err;
+      console.error(`brain: ${err.message}`);
+      return 2;
+    }
+  }
   let args: Args;
   try {
     args = parse(argv);
@@ -430,7 +481,7 @@ async function runCommand(args: Args): Promise<number> {
   const choice = await chooseVision(args, model instanceof RoutedModel ? { router: model.router } : {});
   if (args.captioner !== "off") console.error(`brain: captioner ${choice.label}; images are masked by the observer first${choice.label.includes("claude") ? " and go only to your Anthropic account" : " and stay on this Mac"}`);
   const vision = choice.worker ?? (choice.needsYou === null ? undefined : { status: () => ({ ...CAPTIONER_OFF, needsYou: choice.needsYou }) });
-  const srv = await startBrainServer({ home: args.home, token, port: args.port, workflows: { model, modelLabel: args.model }, ...(Object.keys(u).length === 0 ? {} : { analyze: u }), ...(vision === undefined ? {} : { vision }) });
+  const srv = await startBrainServer({ home: args.home, token, port: args.port, workflows: { model, modelLabel: args.model }, ...(args.model === "real" && process.env.OFFLOAD_UNIVERSE_SYNC !== "0" ? { universe: { autoRefresh: true } } : {}), ...(Object.keys(u).length === 0 ? {} : { analyze: u }), ...(vision === undefined ? {} : { vision }) });
   // The first stdout line, machine-readable; startup logs went to stderr (brain/API.md "Connection").
   process.stdout.write(formatReadyLine(srv.port, token) + "\n");
   console.log(`brain listening on ${srv.url}`);

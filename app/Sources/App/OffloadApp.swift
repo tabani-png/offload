@@ -49,6 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var review: ReviewWindowController?
   private var dashboard: DashboardWindowController?
   private var onboarding: OnboardingWindowController?
+  /// s17: the Connections center window and its model.
+  private var connections: ConnectionsWindowController?
+  private var connectionsModel: ConnectionsModel?
   private let dashboardModel: DashboardModel
   private var qaBackdrop: NSWindow?
   private var refreshTimer: Timer?
@@ -560,6 +563,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
+  /// s17: any app Composio supports, set up once, then handed to the workflow builder.
+  @objc func openConnections() {
+    if let c = connections { c.show(); return }
+    let m = connectionsModel ?? ConnectionsModel(client: client, store: isMock ? MemorySecretStore() : KeychainStore())
+    connectionsModel = m
+    m.onOpenReview = { [weak self] id in self?.openReview(workflowId: id) }
+    m.onOpenURL = { url in NSWorkspace.shared.open(url) }
+    let c = ConnectionsWindowController(model: m)
+    m.onClose = { [weak c] in c?.window.performClose(nil) }
+    c.onClose = { [weak self] in self?.connections = nil }
+    connections = c
+    Task {
+      await m.load()
+      c.show()
+      qaRecord("connections", c.window)
+    }
+  }
+
   /// QA: appends `name=windowNumber` to $OFFLOAD_QA_WINDOWS so live captures take our windows only.
   private func qaRecord(_ name: String, _ w: NSWindow) {
     guard let path = ProcessInfo.processInfo.environment["OFFLOAD_QA_WINDOWS"] else { return }
@@ -583,6 +604,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// windows) and writes the capture rect and window numbers to $OFFLOAD_QA_FILE.
   private func runQAHooks() {
     let args = CommandLine.arguments
+    if args.contains("--open-connections") { openConnections() }
     if args.contains("--open-review") { openReview(insightId: model.state.insights.first?.id ?? MockBrainClient.outreach.id) }
     if args.contains("--open-dashboard") {
       openDashboard()
@@ -673,6 +695,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let dash = menu.addItem(withTitle: "Dashboard", action: #selector(openDashboard), keyEquivalent: "d")
     dash.keyEquivalentModifierMask = .command
     dash.target = self
+    let conn = menu.addItem(withTitle: "Connections…", action: #selector(openConnections), keyEquivalent: "k")
+    conn.keyEquivalentModifierMask = .command
+    conn.target = self
     menu.addItem(withTitle: "Welcome and permissions…", action: #selector(openOnboardingMenu), keyEquivalent: "").target = self
     menu.addItem(.separator())
     menu.addItem(withTitle: "Quit Offload", action: #selector(quit), keyEquivalent: "q").target = self

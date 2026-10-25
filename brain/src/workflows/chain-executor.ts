@@ -18,6 +18,9 @@ import { missingEnv, toMcpServers, type ConnectorsConfig, type Env } from "../co
 import type { Method } from "../connectors/link.ts";
 import type { ChainTarget } from "../connectors/targets.ts";
 import type { ToolPolicy } from "./allowlist.ts";
+import type { BatchItem } from "./batch.ts";
+import { genericPolicy, parseGenericCommit } from "./generic.ts";
+import { fetchSchema, readUniverse } from "../connectors/universe.ts";
 import type { ExecJob, ExecResult, Executor, ToolCallRecord } from "./executor.ts";
 import type { GateAction } from "./gate.ts";
 
@@ -94,6 +97,26 @@ export interface BuildChainOptions {
   executors?: Partial<Record<Method, Executor>>;
   computer?: { driver: ComputerDriver; planner: Planner; sessions: ComputerSessions };
   log?: (line: string) => void;
+  /** s17: the batch's items. Items approved field by field (workflows/generic.ts) get one generic policy per tool,
+   * built from the tool's schema fetched fresh now (none when it cannot be fetched: the gate then denies). */
+  batchItems?: readonly BatchItem[];
+}
+
+/** s17: generic policies for the target's items: schema fetched fresh (maxAge 0), only tools of the target's toolkit. */
+export async function genericPoliciesFor(o: Pick<BuildChainOptions, "home" | "env" | "resolver" | "log">, target: ChainTarget, items: readonly BatchItem[]): Promise<ToolPolicy[]> {
+  const idx = readUniverse(o.home);
+  const slugs = [...new Set(items.map((i) => parseGenericCommit(i)?.slug).filter((x): x is string => x !== undefined))];
+  const out: ToolPolicy[] = [];
+  for (const slug of slugs) {
+    if (idx?.tools[slug]?.toolkit !== target.toolkit || idx.tools[slug]!.class !== "commit") continue;
+    const rec = await fetchSchema({ home: o.home, runner: o.resolver.deps.runner, env: o.env, now: o.resolver.deps.now, slug, maxAgeMs: 0 });
+    if (rec === null) {
+      o.log?.(`brain: chain: the fields of ${slug} could not be checked now, so its items are not sent`);
+      continue;
+    }
+    out.push(genericPolicy(rec, target.id));
+  }
+  return out;
 }
 
 export interface ChainBuild {
@@ -148,7 +171,9 @@ export async function buildChain(o: BuildChainOptions): Promise<ChainBuild | nul
         if (s?.info?.account !== undefined) accounts[id] = s.info.account;
       }
       servers[COMPOSIO_CLI_SERVER] = [...ids];
-      steps.push({ method: "composio", executor: o.executors?.composio ?? new ComposioCliExecutor({ runner: o.resolver.deps.runner, env: o.env, accounts }) });
+      const generic = o.batchItems === undefined ? [] : await genericPoliciesFor(o, target, o.batchItems);
+      policies.push(...generic);
+      steps.push({ method: "composio", executor: o.executors?.composio ?? new ComposioCliExecutor({ runner: o.resolver.deps.runner, env: o.env, accounts, ...(generic.length === 0 ? {} : { generic }) }) });
     } else if (st.method === "api") {
       if (o.config === null && o.executors?.api === undefined) continue;
       for (const id of ids) servers[apiServer(id)] = [id];
