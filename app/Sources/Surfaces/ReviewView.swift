@@ -21,7 +21,13 @@ struct ReviewView: View {
       if isSnapshot {
         content
       } else {
-        ScrollView { content }
+        ScrollViewReader { proxy in
+          ScrollView { content }
+            .onChange(of: model.scrollRequest) { _, id in
+              guard let id else { return }
+              withAnimation(Motion.outExpo(Tokens.Duration.slow)) { proxy.scrollTo(id, anchor: .top) }
+            }
+        }
       }
       ReviewActionBar(model: model)
     }
@@ -33,7 +39,7 @@ struct ReviewView: View {
       if parts.contains(.header) { ReviewHeader(model: model) }
       if parts.contains(.steps) { StepsSection(workflow: model.workflow) }
       if parts.contains(.tone) { ToneSection(model: model) }
-      if parts.contains(.dryRun) { DryRunSection(model: model) }
+      if parts.contains(.dryRun) { DryRunSection(model: model).id(ReviewModel.dryRunSectionId) }
     }
     .padding(.horizontal, 24)
     .padding(.top, 28)
@@ -68,11 +74,17 @@ private struct ReviewHeader: View {
         .padding(.top, 6)
       HStack(spacing: 8) {
         ForEach(w.connectors) { c in ConnectorChip(connector: c) { model.onConnect?($0) } }
-        Chip(text: w.schedule.summary, symbol: "clock")
         Spacer(minLength: 8)
         Chip(text: "Saves ~" + Format.perWeek(w.estimatedHoursPerWeek), style: .positive, symbol: "arrow.down.right")
       }
       .padding(.top, 16)
+      // s09a: the brain's schedule note is a sentence, not a chip label; it wraps instead of widening the window.
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
+        Image(systemName: "clock").font(.system(size: 10, weight: .medium))
+        Text(w.schedule.summary).font(.system(size: 12)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+      }
+      .foregroundStyle(p.ink2)
+      .padding(.top, 10)
     }
   }
 }
@@ -168,11 +180,10 @@ private struct ToneSection: View {
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    WindowSection(title: "Your voice", trailing: model.workflow.toneCard.isEmpty ? nil
-                  : (model.toneEdited ? "Edited · used on the next dry run" : "From 40 sent emails · click to edit")) {
-      if model.workflow.toneCard.isEmpty {
+    WindowSection(title: "Your voice", trailing: toneTrailing) {
+      if model.workflow.toneCard.isEmpty && !(model.toneLoaded && model.tone != nil) {
         RingBox(padding: 16) {
-          Text("The brain keeps the tone card with your sent mail and does not send it to this window yet.")
+          Text(model.toneLoaded ? "The brain did not send a tone card for this workflow." : "Loading the tone card…")
             .font(.system(size: 13)).foregroundStyle(p.ink2)
         }
       } else {
@@ -199,8 +210,28 @@ private struct ToneSection: View {
         .padding(.horizontal, 11)
         .padding(.vertical, 12)
       }
+      if model.tone?.text == nil && model.toneLoaded && !isSnapshot {
+        Text("No tone card yet: write a few lines on how you sound, or build one from your sent mail (tone build).")
+          .font(.system(size: 12)).foregroundStyle(p.ink3)
+      }
+      if model.toneUnsaved {
+        HStack {
+          Spacer()
+          SecondaryButton(title: model.saving ? "Saving…" : "Save tone card") { model.saveTone() }
+            .disabled(model.saving)
+        }
+      }
       }
     }
+  }
+
+  private var toneTrailing: String? {
+    if let t = model.tone {
+      if model.toneUnsaved { return "Not saved yet" }
+      return t.text == nil ? "\(t.bucketLabel) · empty" : (t.edited ? "\(t.bucketLabel) · edited by you" : "\(t.bucketLabel) · built from your sent mail")
+    }
+    if model.workflow.toneCard.isEmpty { return nil }
+    return model.toneEdited ? "Edited · used on the next dry run" : "From 40 sent emails · click to edit"
   }
 }
 
@@ -307,7 +338,8 @@ struct ReviewActionBar: View {
         } else {
           SecondaryButton(title: "Discard", key: "⌘⌫") { model.send(.discard) }
           if let m = model.message {
-            Text(m).font(.system(size: 12)).foregroundStyle(p.ink2).lineLimit(1).padding(.leading, 6)
+            Text(m).font(.system(size: 12)).foregroundStyle(p.ink2).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+              .padding(.leading, 6)
           }
           Spacer(minLength: 12)
           SecondaryButton(title: model.runningDryRun ? "Running…" : "Run dry run again", key: "R") { model.send(.rerun) }
@@ -373,7 +405,8 @@ struct ConfirmSheet: View {
         .frame(width: 34, height: 34)
         VStack(alignment: .leading, spacing: 4) {
           Text("Turn on \(plan.workflowName)?").font(.system(size: 17, weight: .medium)).tracking(-0.3).foregroundStyle(p.ink1)
-          Text("First run \(Format.runTime(plan.firstRunAt, now: frozenNow ?? Date(), past: false)). Then \(plan.schedule.lowercased()).")
+          Text(plan.firstRunAt == nil ? BrainError.sentence(plan.schedule)
+               : "First run \(Format.runTime(plan.firstRunAt, now: frozenNow ?? Date(), past: false)). Then \(plan.schedule.lowercased()).")
             .font(.system(size: 13)).foregroundStyle(p.ink2)
         }
       }
@@ -464,16 +497,21 @@ struct SkillSheet: View {
       HStack {
         Image(systemName: "doc.text").foregroundStyle(p.ink2)
         Text("SKILL.md").font(.system(size: 15, weight: .medium)).foregroundStyle(p.ink1)
-        Text(editing ? "Editing" : "Read only").font(.system(size: 12)).foregroundStyle(p.ink3)
+        Text(editing ? "Editing the words; steps, tools and the gate stay as they are" : "Read only")
+          .font(.system(size: 12)).foregroundStyle(p.ink3)
         Spacer()
-        SecondaryButton(title: "Done", key: "esc") { model.dismissSheet() }
+        if editing && model.skillEdit != nil {
+          SecondaryButton(title: "Cancel", key: "esc") { model.dismissSheet() }
+          PrimaryButton(title: model.saving ? "Saving…" : "Save") { model.saveSkill() }
+            .disabled(model.saving || !model.skillUnsaved)
+        } else {
+          SecondaryButton(title: "Done", key: "esc") { model.dismissSheet() }
+        }
       }
       RingBox(padding: 0) {
         Group {
           if editing && !isSnapshot {
-            TextEditor(text: $model.skillDraft)
-              .font(.system(size: 12, design: .monospaced))
-              .scrollContentBackground(.hidden)
+            SkillEditForm(model: model)
           } else if isSnapshot {
             // Offscreen rendering cannot draw a scroll view; same text, clipped to the same box.
             Text(model.skillDraft)
@@ -498,5 +536,58 @@ struct SkillSheet: View {
     .padding(20)
     .frame(width: 640)
     .background(p.isDark ? Color(hex: 0x202023) : Color(hex: 0xFBFBFC))
+  }
+}
+
+/// Edit mode of the SKILL.md sheet (s05c): the description and each step's title and detail, nothing else. Gate
+/// steps are shown locked.
+private struct SkillEditForm: View {
+  @ObservedObject var model: ReviewModel
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    if model.skillEdit == nil {
+      Text(model.skillDoc == nil ? "Loading SKILL.md…" : "")
+        .font(.system(size: 13)).foregroundStyle(p.ink2)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    } else {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          Text("Description").font(.system(size: 12, weight: .medium)).foregroundStyle(p.ink2)
+          TextField("What this workflow does", text: binding(\.description), axis: .vertical)
+            .textFieldStyle(.roundedBorder).lineLimit(2...4)
+          ForEach(Array((model.skillEdit?.steps ?? []).enumerated()), id: \.element.id) { i, step in
+            VStack(alignment: .leading, spacing: 6) {
+              HStack(spacing: 6) {
+                Text("Step \(i + 1)").font(.system(size: 12, weight: .medium)).foregroundStyle(p.ink2)
+                if step.isGate {
+                  Image(systemName: "lock.fill").font(.system(size: 10)).foregroundStyle(p.status(.needsYou))
+                  Text("Approval gate, not editable").font(.system(size: 11)).foregroundStyle(p.ink3)
+                }
+              }
+              if step.isGate {
+                Text(step.title).font(.system(size: 13)).foregroundStyle(p.ink1)
+                Text(step.detail).font(.system(size: 12)).foregroundStyle(p.ink3)
+              } else {
+                TextField("Title", text: stepBinding(i, \.title)).textFieldStyle(.roundedBorder)
+                TextField("Detail", text: stepBinding(i, \.detail), axis: .vertical)
+                  .textFieldStyle(.roundedBorder).lineLimit(1...4)
+              }
+            }
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+    }
+  }
+
+  private func binding(_ kp: WritableKeyPath<SkillDoc, String>) -> Binding<String> {
+    Binding(get: { model.skillEdit?[keyPath: kp] ?? "" }, set: { model.skillEdit?[keyPath: kp] = $0 })
+  }
+
+  private func stepBinding(_ i: Int, _ kp: WritableKeyPath<SkillStep, String>) -> Binding<String> {
+    Binding(get: { model.skillEdit.flatMap { $0.steps.indices.contains(i) ? $0.steps[i][keyPath: kp] : nil } ?? "" },
+            set: { v in if model.skillEdit?.steps.indices.contains(i) == true { model.skillEdit?.steps[i][keyPath: kp] = v } })
   }
 }

@@ -3,11 +3,11 @@
 # Tools' libPackageDescription does not link. No Xcode, no asset catalogs.
 #
 #   app/build.sh                 build app/.build/Offload.app
-#   app/build.sh test [args]     build and run the S06/S07/S08 Swift Testing suites (extra args go to the runner)
+#   app/build.sh test [args]     build and run the S06/S07/S08/S09A Swift Testing suites (extra args go to the runner)
 #   app/build.sh snapshot DIR    build, then render every component and surface to PNGs in DIR
 #
 # Layout: Sources/Core is Foundation-only (models, BrainClient, formatting, keyboard + undo state machine,
-# token values). The test binary is Core + the tests of slices s06, s07 and s08.
+# token values). The test binary is Core + the tests of slices s06, s07, s08 and s09a.
 # The app binary is Core + Design + Surfaces + App.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -30,6 +30,12 @@ build_app() {
     -framework AppKit -framework SwiftUI -framework Carbon \
     -o "$APP/Contents/MacOS/Offload"
   cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
+  # s09a: bundle the observer beside the app when it has been built (the app finds it in Contents/MacOS first).
+  if [ -x "$ROOT/engine/.build/offload-observer" ]; then
+    cp "$ROOT/engine/.build/offload-observer" "$APP/Contents/MacOS/offload-observer"
+    [ -f "$ROOT/engine/.build/libOffloadCore.dylib" ] && cp "$ROOT/engine/.build/libOffloadCore.dylib" "$APP/Contents/MacOS/"
+    codesign --force --sign - "$APP/Contents/MacOS/libOffloadCore.dylib" "$APP/Contents/MacOS/offload-observer" >/dev/null 2>&1 || true
+  fi
   codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 }
 
@@ -41,7 +47,7 @@ build_tests() {
     -F "$FW" -I "$DEVLIB" -L "$DEVLIB" -framework Testing \
     -plugin-path "$CLT/usr/lib/swift/host/plugins/testing" \
     -Xlinker -rpath -Xlinker "$FW" -Xlinker -rpath -Xlinker "$DEVLIB" \
-    $(swift_files "$HERE/Sources/Core" "$ROOT/slices/s06-design-system/tests" "$ROOT/slices/s07-rail-and-card/tests" "$ROOT/slices/s08-review-and-dashboard/tests") \
+    $(swift_files "$HERE/Sources/Core" "$ROOT/slices/s06-design-system/tests" "$ROOT/slices/s07-rail-and-card/tests" "$ROOT/slices/s08-review-and-dashboard/tests" "$ROOT/slices/s09a-wiring/tests") \
     "$main" -o "$OUT/offload-tests"
 }
 

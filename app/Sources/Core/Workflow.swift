@@ -97,6 +97,8 @@ struct Workflow: Codable, Equatable, Identifiable, Sendable {
   var estimatedHoursPerWeek: Double
   /// The brain binds an approval to this exact batch (s05 AC-5).
   var batchHash: String
+  /// Why an active workflow waits for you, in the brain's plain words (s09a). Empty otherwise.
+  var needsYou: [String] = []
 
   var gate: WorkflowStep? { steps.first(where: \.isGate) }
 

@@ -116,6 +116,7 @@ final class ReviewWindowController: TitledWindowController {
     model.$flow.map(\.workflow.state).removeDuplicates()
       .sink { [weak self] s in self?.window.subtitle = "Drafted from your week · \(s.label)" }.store(in: &bag)
     model.loadDryRunIfNeeded()
+    model.loadEditables()
   }
 
   override var toolbarButtons: [ToolbarButton] {

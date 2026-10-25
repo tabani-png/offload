@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Dashboard window: the hero number (honestly labelled), automations with needs-you on top, a 7-day timeline
@@ -48,6 +49,9 @@ struct DashboardView: View {
         if parts.contains(.automations) { AutomationsSection(model: model, now: now) }
         if parts.contains(.timeline) { TimelineSection(model: model, data: d, now: now).id("section.timeline") }
         if parts.contains(.observing) { ObservingSection(model: model, observing: d.observing, now: now) }
+      } else if let problem = model.problem {
+        EmptyState(title: "The dashboard is not available yet.", message: problem)
+          .padding(.top, 80)
       } else {
         EmptyState(title: "No automations yet.", message: "When you approve a workflow it shows up here\nwith the hours it saves.")
           .padding(.top, 80)
@@ -408,23 +412,52 @@ private struct ObservingSection: View {
         }
         .padding(.horizontal, 12).frame(height: 40)
         RowDivider(inset: 40)
-        HStack(spacing: 0) {
-          Image(systemName: "hand.raised").font(.system(size: 11)).foregroundStyle(p.ink3).frame(width: 24)
-          Text("Permissions").font(.system(size: 13)).foregroundStyle(p.ink2).frame(width: 112, alignment: .leading).padding(.leading, 4)
-          HStack(spacing: 16) {
-            ForEach(observing.permissions) { perm in
-              HStack(spacing: 6) {
-                Circle().fill(p.status(perm.role)).frame(width: 6, height: 6)
-                Text(perm.name).font(.system(size: 13)).foregroundStyle(p.ink1)
-                Text(perm.label).font(.system(size: 12)).foregroundStyle(p.ink3)
-              }
-              .accessibilityElement(children: .combine)
-            }
-          }
-          Spacer()
+        ForEach(Array(observing.permissions.enumerated()), id: \.element.id) { i, perm in
+          if i > 0 { RowDivider(inset: 40) }
+          PermissionRow(permission: perm, header: i == 0 ? "Permissions" : nil)
         }
-        .padding(.horizontal, 12).frame(height: 40)
       }
     }
+  }
+}
+
+/// One permission: what it is for, its real state from the observer, and Open Settings to the right pane (s09a).
+struct PermissionRow: View {
+  var permission: PermissionState
+  var header: String?
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    HStack(spacing: 0) {
+      Image(systemName: "hand.raised").font(.system(size: 11)).foregroundStyle(p.ink3).opacity(header == nil ? 0 : 1).frame(width: 24)
+      Text(header ?? "").font(.system(size: 13)).foregroundStyle(p.ink2).frame(width: 112, alignment: .leading).padding(.leading, 4)
+      Circle().fill(p.status(permission.role)).frame(width: 6, height: 6).padding(.trailing, 8)
+      VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 6) {
+          Text(permission.name).font(.system(size: 13)).foregroundStyle(p.ink1)
+          Text(permission.label)
+            .font(.system(size: 12)).foregroundStyle(permission.role == .needsYou ? p.status(.needsYou) : p.ink3)
+        }
+        if !permission.purpose.isEmpty {
+          Text(permission.purpose)
+            .font(.system(size: 12)).foregroundStyle(p.ink3).lineLimit(1)
+        }
+      }
+      Spacer(minLength: 8)
+      if permission.offersSettings, let url = permission.settingsURL {
+        SecondaryButton(title: "Open Settings") { SystemSettings.open(url) }
+      }
+    }
+    .padding(.horizontal, 12).frame(minHeight: 50)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("\(permission.name), \(permission.label). \(permission.purpose)")
+  }
+}
+
+/// Opens a System Settings pane. Snapshot renders never get here.
+enum SystemSettings {
+  static func open(_ url: URL) {
+    NSWorkspace.shared.open(url)
   }
 }

@@ -81,7 +81,43 @@ enum Snapshotter {
       ("card-undo", card(undo)),
       ("card-empty", card(empty)),
       ("scene", AnyView(Scene(state: base, now: now, rail: rail))),
-    ] + s08Surfaces()
+    ] + s08Surfaces() + s09aSurfaces()
+  }
+
+  // MARK: s09a fixtures
+
+  static func onboardingModel(_ step: OnboardingStep, permissions: [PermissionState]? = nil,
+                              granted: [PermissionState]? = nil) -> OnboardingModel {
+    let m = OnboardingModel(readPermissions: { [] })
+    m.preview(step: step, permissions: permissions, granted: granted)
+    return m
+  }
+
+  static func onboardingChrome(_ m: OnboardingModel) -> AnyView {
+    AnyView(Backdrop(padding: 32) {
+      WindowChrome(title: "Welcome to Offload", subtitle: nil, width: OnboardingView.width) { OnboardingView(model: m) }
+    })
+  }
+
+  static func s09aSurfaces() -> [(String, AnyView)] {
+    let off = PermissionKind.allCases.map { PermissionState($0, granted: false) }
+    var partly = off
+    partly[0] = PermissionState(.screenRecording, granted: true)
+    return [
+      ("onboarding-watches", onboardingChrome(onboardingModel(.watches))),
+      ("onboarding-permissions", onboardingChrome(onboardingModel(.permissions, permissions: off, granted: partly))),
+      ("onboarding-comeback", onboardingChrome(onboardingModel(.comeBack))),
+      ("review-real-schedule", {
+        // The real brain's schedule note is a full sentence (live e2e); it must wrap, not widen the window.
+        var w = MockBrainClient.outreachWorkflow
+        w.schedule.summary = "Weekdays at 09:00 a new batch is drafted and waits for your review. · 20 a batch"
+        let m = ReviewModel(workflow: w, dryRun: MockBrainClient.outreachDryRun, client: MockBrainClient(), clock: { reviewNow })
+        return reviewChrome(m) { ReviewView(model: m, parts: [.header]) }
+      }()),
+      ("dashboard-permissions", dashboardChrome {
+        DashboardView(model: dashboardModel(), parts: [.observing], frozenNow: reviewNow)
+      }),
+    ]
   }
 
   // MARK: s08 fixtures

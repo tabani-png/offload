@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "workflowId": "wf_d4abee865ad6",
+  "ranAt": 1792900831869,
+  "batchHash": "0857b78f141ce1ae8e471fdd5635cd5e90af820e57eccf415dea9131cf36d424",
+  "instances": [
+    {
+      "instanceId": "in_01M5MRTRMQ9534S40MMNQDXB5R",
+      "day": "2026-10-23",
+      "start": 1792772235927,
+      "recipient": {
+        "email": "daniel@hustlefund.vc",
+        "firstName": "Daniel",
+        "org": "Hustle Fund"
+      },
+      "subject": "Acme seed round: Hustle Fund",
+      "draft": "Hi Daniel,\n\nI think it fits Hustle Fund.\n\nOpen to a short call next week?\n\nMuhammad",
+      "observed": {
+        "excerpt": "Hi Daniel,\n\nI'm Sam, founder of Acme. We help finance teams close the books in two days instead of ten.\nYour team's bet on Deel is close to what we are building.\n\nWe are raising a $3M seed round. Traction: $40k MRR, growing 18% month over month, 31 paying customers.\n\nWould you be open to a 20 minute call next week? Deck attached.\n\nBest,\nSam\nAcme | acme.io",
+        "minutes": 2.8,
+        "eventIds": [
+          "01M5MRTRMQ9534S40MMNQDXB5R",
+          "01M5MRTTK7X6N7FY6VRWYX5MC8",
+          "01M5MRVZPQQPJ72YDNEP8GZP74",
+          "01M5MRW45M77MCSR2JF0RJEFAG",
+          "01M5MRY8W3RR18Y5C8W12PXBT9",
+          "01M5MRYAAZM257RDKK77KKDFC9",
+          "01M5MRZSBMF53B4FBEH21RASCB"
+        ]
+      },
+      "estimate": {
+        "observedMinutes": 2.8,
+        "reviewSeconds": 20,
+        "savedMinutes": 2.5
+      },
+      "examplesUsed": [],
+      "warnings": []
+    },
+    {
+      "instanceId": "in_01M5MRMGSXKAKFTFPV08ZAZ3AR",
+      "day": "2026-10-23",
+      "start": 1792772031293,
+      "recipient": {
+        "email": "daniel@costanoa.vc",
+        "firstName": "Daniel",
+        "org": "Costanoa"
+      },
+      "subject": "Acme seed round: Costanoa",
+      "draft": "Hi Daniel,\n\nI think it fits Costanoa.\n\nOpen to a short call next week?\n\nMuhammad",
+      "observed": {
+        "excerpt": "Hi Daniel,\n\nI'm Sam, founder of Acme. We help finance teams close the books in two days instead of ten.\nYour team's bet on Alation is close to what we are building.\n\nWe are raising a $3M seed round. Traction: $40k MRR, growing 18% month over month, 31 paying customers.\n\nWould you be open to a 20 minute call next week? Deck attached.\n\nBest,\nSam\nAcme | acme.io",
+        "minutes": 3.1,
+        "eventIds": [
+          "01M5MRMGSXKAKFTFPV08ZAZ3AR",
+          "01M5MRMJRD33S9ZC42Z2XPZSF3",
+          "01M5MRMSSMDZYCGJ8FG953ASP3",
+          "01M5MRNQVXKN73M3EHZXHXW3YZ",
+          "01M5MRPMCM1MYEV0JNQWVBJKF8",
+          "01M5MRR5ZXDPPAF8ZXRE82E9VM",
+          "01M5MRREZMBWDVYYS5QYA1A2VC"
+        ]
+      },
+      "estimate": {
+        "observedMinutes": 3.1,
+        "reviewSeconds": 20,
+        "savedMinutes": 2.8
+      },
+      "examplesUsed": [],
+      "warnings": []
+    }
+  ],
+  "skipped": 0,
+  "sideEffects": {
+    "attempted": 4,
+    "denied": 4
+  },
+  "totals": {
+    "instances": 2,
+    "observedMinutes": 5.9,
+    "reviewMinutes": 0.7,
+    "savedMinutes": 5.2,
+    "arithmetic": "you spent 5.9 min on these 2 → review 2 × 20 s = 0.7 min → saves 5.2 min"
+  },
+  "gateLog": [
+    {
+      "at": 1792900831869,
+      "tool": "mcp__gmail__send_email",
+      "toolClass": "side_effect",
+      "decision": "deny",
+      "reason": "dry run: side effects are disabled"
+    },
+    {
+      "at": 1792900831869,
+      "tool": "mcp__gmail__send_email",
+      "toolClass": "side_effect",
+      "decision": "deny",
+      "reason": "dry run: side effects are disabled"
+    },
+    {
+      "at": 1792900831869,
+      "tool": "mcp__sheets__append_row",
+      "toolClass": "side_effect",
+      "decision": "deny",
+      "reason": "dry run: side effects are disabled"
+    },
+    {
+      "at": 1792900831869,
+      "tool": "mcp__sheets__append_row",
+      "toolClass": "side_effect",
+      "decision": "deny",
+      "reason": "dry run: side effects are disabled"
+    }
+  ],
+  "warnings": [
+    "no tone pack yet: run `tone build` so drafts follow your past emails",
+    "facts.md is mostly empty: drafts will show [missing: ...] gaps"
+  ]
+}

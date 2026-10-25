@@ -84,11 +84,12 @@ struct S08DashboardLogicTests {
     #expect(o.purgeLabel(now: now, calendar: cal) == "Nothing stored yet")
   }
 
-  @Test("permission rows: allowed green, not allowed amber, not needed grey")
+  @Test("permission rows: allowed green, not allowed amber, optional off grey")
   func permissions() {
+    // s09a: the observer's three real permissions; Screen Recording is required (screen text), no mic row.
     let p = MockBrainClient.dashboardObserving.permissions
-    #expect(p.map(\.role) == [.done, .neutral, .neutral])  // the mic is optional: off is not a problem
-    #expect(p.map(\.label) == ["Allowed", "Not needed", "Off, optional"])
+    #expect(p.map(\.role) == [.done, .done, .neutral])  // Input Monitoring is optional: off is not a problem
+    #expect(p.map(\.label) == ["Allowed", "Allowed", "Off, optional"])
     #expect(PermissionState(name: "Accessibility", grant: .notGranted).role == .needsYou)
   }
 

@@ -242,9 +242,9 @@ extension MockBrainClient {
   static let dashboardObserving = ObservingState(
     state: .watching, daysStored: 7, keepDays: 7, nextPurgeDay: "2026-10-17", nextPurgeAt: local(24, 0, 0),
     permissions: [
-      PermissionState(name: "Accessibility", grant: .granted),
-      PermissionState(name: "Screen Recording", grant: .notNeeded),
-      PermissionState(name: "Microphone", grant: .notGranted, required: false),
+      PermissionState(.screenRecording, granted: true),
+      PermissionState(.accessibility, granted: true),
+      PermissionState(.inputMonitoring, granted: false),
     ])
 
   static let timelineTasks: [TimelineTask] = [

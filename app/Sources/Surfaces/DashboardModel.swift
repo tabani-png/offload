@@ -8,6 +8,8 @@ final class DashboardModel: ObservableObject {
   @Published private(set) var selection = DashboardSelection([])
   @Published private(set) var pointer: PointerRequest?
   @Published private(set) var paused = false
+  /// Why the dashboard could not load, as one calm sentence (s09a).
+  @Published private(set) var problem: String?
 
   var onOpenWorkflow: ((String) -> Void)?
   var onConnect: ((Connector) -> Void)?
@@ -29,8 +31,20 @@ final class DashboardModel: ObservableObject {
   var now: Date { clock() }
 
   func load() async {
-    guard let d = try? await client.dashboard() else { return }
-    set(d)
+    do {
+      set(try await client.dashboard())
+      problem = nil
+    } catch {
+      problem = BrainError.message(for: error)
+    }
+  }
+
+  /// Fresh permission rows from the observer, without reloading the brain.
+  func updatePermissions(_ rows: [PermissionState], paused observerPaused: Bool?) {
+    guard var d = data else { return }
+    d.observing.permissions = rows
+    data = d
+    if let observerPaused { paused = observerPaused }
   }
 
   func set(_ d: DashboardData) {

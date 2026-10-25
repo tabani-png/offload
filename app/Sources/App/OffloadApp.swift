@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @main
@@ -32,15 +33,50 @@ enum OffloadMain {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-  private let client = MockBrainClient()
-  private lazy var model = InboxModel(client: client)
+  private let options = LaunchOptions.parse(arguments: CommandLine.arguments,
+                                            environment: ProcessInfo.processInfo.environment)
+  private let repo = BrainLaunch.findRepo(bundleURL: Bundle.main.bundleURL, environment: ProcessInfo.processInfo.environment)
+  private let endpoint = BrainEndpointBox()
+  private var supervisor: BrainSupervisor?
+  private let token = BrainLaunch.newToken()
+  private var home: URL
+  private var observer: ObserverControl
+  private let client: BrainClient
+  private let model: InboxModel
   private var rail: RailController!
   private var card: CardController!
   private var hotKey: HotKey?
   private var review: ReviewWindowController?
   private var dashboard: DashboardWindowController?
-  private let dashboardModel = DashboardModel(client: MockBrainClient())
+  private var onboarding: OnboardingWindowController?
+  private let dashboardModel: DashboardModel
   private var qaBackdrop: NSWindow?
+  private var refreshTimer: Timer?
+  private var lastObserverPaused: Bool?
+
+  override init() {
+    let env = ProcessInfo.processInfo.environment
+    home = options.home
+    let obsBin = ObserverLocator.locate(environment: env, executableDir: Bundle.main.executableURL?.deletingLastPathComponent(),
+                                        repo: repo)
+    let obs = ObserverControl(binary: obsBin, home: options.home)
+    observer = obs
+    switch options.brain {
+    case .mock:
+      client = MockBrainClient()
+    case .attach(let url):
+      endpoint.endpoint = BrainEndpoint(baseURL: url, token: env["OFFLOAD_TOKEN"] ?? "")
+      client = HTTPBrainClient(endpoint: endpoint, permissions: { await obs.permissionRows() })
+    case .spawn:
+      endpoint.starting = true
+      client = HTTPBrainClient(endpoint: endpoint, permissions: { await obs.permissionRows() })
+    }
+    model = InboxModel(client: client)
+    dashboardModel = DashboardModel(client: client)
+    super.init()
+  }
+
+  private var isMock: Bool { options.brain == .mock }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     // QA: `--qa-appearance light|dark` pins the appearance so both can be checked live on one Mac.
@@ -55,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     card.onDashboard = { [weak self] in self?.openDashboard() }
     model.onClose = { [weak self] in self?.card.hide() }
     model.onConnect = { [weak self] c in self?.showConnectHelp(c) }
+    model.onTogglePause = { [weak self] paused in self?.setObserverPaused(paused) }
     model.onCommit = { [weak self] action in
       NSLog("Offload: committed %@", String(describing: action))
       if case .build(let insightId) = action {
@@ -65,14 +102,185 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     dashboardModel.onOpenWorkflow = { [weak self] id in self?.openReview(workflowId: id) }
     dashboardModel.onConnect = { [weak self] c in self?.showConnectHelp(c) }
-    dashboardModel.onTogglePause = { [weak self] _ in self?.model.togglePause() }
+    dashboardModel.onTogglePause = { [weak self] paused in self?.setObserverPaused(paused) }
     rail.show()
     hotKey = HotKey { [weak self] in MainActor.assumeIsolated { self?.card.toggle() } }
     if hotKey == nil { NSLog("Offload: %@ is taken by another app; open the card from the rail", HotKey.displayName) }
+    startBrain()
+    startRefreshing()
+    if OnboardingGate.shouldShow(arguments: args, onboarded: UserDefaults.standard.bool(forKey: OnboardingGate.defaultsKey)) {
+      openOnboarding()
+    }
     Task {
+      await waitForBrain(timeout: 30)
       await model.load()
+      await refreshObserver()
       runQAHooks()
     }
+  }
+
+  func applicationWillTerminate(_ notification: Notification) {
+    supervisor?.stop()
+  }
+
+  // MARK: brain + observer
+
+  private func brainSpec(home: URL, demo: Bool = false) -> BrainLaunchSpec? {
+    guard let repo, let bun = BrainLaunch.findBun(environment: ProcessInfo.processInfo.environment) else { return nil }
+    return BrainLaunch.spec(bun: bun, repo: repo, home: home, token: token,
+                            baseEnvironment: Self.environment(demo: demo || options.demo), observer: observer.binary)
+  }
+
+  /// Demo homes use raw key files (OFFLOAD_KEYS=file): nothing touches the real Keychain.
+  static func environment(demo: Bool) -> [String: String] {
+    var env = ProcessInfo.processInfo.environment
+    if demo { env["OFFLOAD_KEYS"] = "file" }
+    return env
+  }
+
+  private static var brainLog: URL {
+    URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Logs/Offload/brain.err.log")
+  }
+
+  private func startBrain() {
+    guard options.brain == .spawn else { return }
+    guard let spec = brainSpec(home: home) else {
+      endpoint.starting = false
+      NSLog("Offload: cannot start the brain (repo %@, bun not found or brain/src/cli.ts missing)", repo?.path ?? "none")
+      return
+    }
+    let s = BrainSupervisor(spec: spec, token: token, endpoint: endpoint, stderrLog: Self.brainLog) { [weak self] state in
+      NSLog("Offload brain: %@", state.label)
+      if case .running = state {
+        Task { @MainActor [weak self] in await self?.brainCameUp() }
+      } else if case .waiting = state {
+        Task { @MainActor [weak self] in await self?.model.load() }
+      }
+    }
+    supervisor = s
+    s.start()
+  }
+
+  private func brainCameUp() async {
+    await model.load()
+    if dashboard != nil { await dashboardModel.load() }
+  }
+
+  /// Waits until the supervisor has an endpoint (or gives up), so the first load is not a "not running".
+  private func waitForBrain(timeout: TimeInterval) async {
+    guard options.brain == .spawn, supervisor != nil else { return }
+    let deadline = Date().addingTimeInterval(timeout)
+    while endpoint.endpoint == nil && Date() < deadline {
+      try? await Task.sleep(nanoseconds: 200_000_000)
+    }
+  }
+
+  /// Every 30 s: the inbox and rail from the brain; every 10 s: the observer's pause flag and permissions.
+  private func startRefreshing() {
+    var tick = 0
+    let t = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated {
+        tick += 1
+        Task {
+          await self?.refreshObserver()
+          if tick % 3 == 0 { await self?.model.load() }
+        }
+      }
+    }
+    RunLoop.main.add(t, forMode: .common)
+    refreshTimer = t
+  }
+
+  private func refreshObserver() async {
+    guard !isMock else { return }
+    let report = await observerReport()
+    let rows = report?.permissionRows() ?? PermissionState.unknownRows
+    lastObserverPaused = report?.paused
+    if let p = report?.paused { model.applyObserverPaused(p) }
+    dashboardModel.updatePermissions(rows, paused: report?.paused)
+  }
+
+  /// The brain's GET /observer (s05c) first, then the observer CLI directly.
+  private func observerReport() async -> ObserverReport? {
+    if let r = try? await client.observer() { return r }
+    return try? await observer.status()
+  }
+
+  /// Rail or dashboard Pause: `offload-observer pause|resume`, then re-read both sides.
+  private func setObserverPaused(_ paused: Bool) {
+    guard !isMock else { return }
+    Task {
+      do {
+        try await observer.setPaused(paused)
+      } catch {
+        NSLog("Offload: observer %@ failed: %@", paused ? "pause" : "resume", String(describing: error))
+        let alert = NSAlert()
+        alert.messageText = paused ? "Could not pause" : "Could not resume"
+        alert.informativeText = (error as? ObserverControlError)?.userMessage ?? "The observer did not answer. Nothing was changed."
+        alert.runModal()
+      }
+      await refreshObserver()
+      await model.load()
+      if let p = lastObserverPaused { model.applyObserverPaused(p) }
+    }
+  }
+
+  // MARK: onboarding
+
+  func openOnboarding() {
+    if let o = onboarding { o.show(); return }
+    let m = OnboardingModel(readPermissions: { [weak self] in
+      await self?.observerReport()?.permissionRows() ?? PermissionState.unknownRows
+    })
+    m.onFinish = { [weak self] in
+      UserDefaults.standard.set(true, forKey: OnboardingGate.defaultsKey)
+      self?.onboarding?.window.close()
+    }
+    m.onDemoWeek = { [weak self] in await self?.useDemoWeek() }
+    let c = OnboardingWindowController(model: m)
+    c.onClose = { [weak self] in self?.onboarding = nil }
+    onboarding = c
+    c.show()
+    // QA: `--qa-onboarding-step 2` opens on the permissions step (live permission reads from the observer).
+    let args = CommandLine.arguments
+    if let i = args.firstIndex(of: "--qa-onboarding-step"), args.indices.contains(i + 1), let n = Int(args[i + 1]) {
+      for _ in 1..<max(1, n) { m.next() }
+    }
+    qaRecord("onboarding", c.window)
+  }
+
+  /// Seeds the fixture week into the demo home (never the real one) and points the brain at it.
+  private func useDemoWeek() async -> String? {
+    guard let repo, let bun = BrainLaunch.findBun(environment: ProcessInfo.processInfo.environment) else {
+      return "The demo week needs the Offload source folder and bun. Run scripts/demo.sh instead."
+    }
+    let appSupport = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+    let demo = DemoWeek.home(repo: repo, appSupport: appSupport)
+    guard DemoWeek.isSafeDemoHome(demo, realHome: options.home) || options.demo else {
+      return "Offload is already pointed at a demo folder."
+    }
+    let args = DemoWeek.generatorArguments(repo: repo, out: demo, start: DemoWeek.startDay(now: Date()))
+    let ok: Bool = await withCheckedContinuation { cont in
+      let p = Process()
+      p.executableURL = bun
+      p.environment = Self.environment(demo: true)
+      p.arguments = args
+      p.currentDirectoryURL = repo
+      p.standardInput = FileHandle.nullDevice
+      p.standardOutput = FileHandle.nullDevice
+      p.standardError = FileHandle.nullDevice
+      p.terminationHandler = { cont.resume(returning: $0.terminationStatus == 0) }
+      do { try p.run() } catch { cont.resume(returning: false) }
+    }
+    guard ok else { return "The demo week could not be written. Nothing else was changed." }
+    home = demo
+    observer = ObserverControl(binary: observer.binary, home: demo, environment: Self.environment(demo: true))
+    if let s = supervisor, let spec = brainSpec(home: demo, demo: true) {
+      s.restart(home: demo, spec: spec)
+      await waitForBrain(timeout: 30)
+    }
+    await model.load()
+    return nil
   }
 
   // MARK: windows
@@ -80,25 +288,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// POST /workflows/draft {insightId}, then the review window with its dry run.
   func openReview(insightId: String) {
     Task {
-      guard let w = try? await client.workflow(forInsight: insightId) else {
-        NSLog("Offload: no workflow draft for %@", insightId)
-        return
+      do {
+        presentReview(try await client.workflow(forInsight: insightId))
+      } catch {
+        NSLog("Offload: no workflow draft for %@: %@", insightId, String(describing: error))
+        showProblem("Could not draft the workflow", error)
       }
-      presentReview(w)
     }
   }
 
   func openReview(workflowId: String) {
     Task {
-      guard let w = try? await client.workflow(id: workflowId) else { return }
-      presentReview(w)
+      do {
+        presentReview(try await client.workflow(id: workflowId))
+      } catch {
+        showProblem("Could not open the workflow", error)
+      }
     }
+  }
+
+  private func showProblem(_ title: String, _ error: Error) {
+    let alert = NSAlert()
+    alert.messageText = title
+    alert.informativeText = BrainError.message(for: error)
+    alert.addButton(withTitle: "OK")
+    NSApp.activate(ignoringOtherApps: true)
+    alert.runModal()
   }
 
   private func presentReview(_ w: Workflow, dryRun: DryRun? = nil) {
     if let r = review, r.model.workflow.id == w.id { r.show(); return }
     review?.window.close()
-    let m = ReviewModel(workflow: w, dryRun: dryRun, client: client)
+    let m = ReviewModel(workflow: w, dryRun: dryRun, client: client, dryRunLimit: options.dryRunLimit)
     m.onConnect = { [weak self] c in self?.showConnectHelp(c) }
     m.onApproved = { [weak self] _ in Task { await self?.dashboardModel.load() } }
     m.onDiscarded = { [weak self] _ in self?.review?.window.close() }
@@ -106,6 +327,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     c.onClose = { [weak self] in self?.review = nil }
     review = c
     c.show()
+    qaRecord("review", c.window)
+    qaWatchReview(m, window: c.window)
+  }
+
+  private var qaBag: Set<AnyCancellable> = []
+
+  /// QA: once the dry run is in, record it and replay OFFLOAD_REVIEW_KEYS one per second ("approve,confirm,…";
+  /// "dashboard" opens the dashboard; anything else waits a second). Records "review-approved" when it turns on.
+  private func qaWatchReview(_ m: ReviewModel, window: NSWindow) {
+    let env = ProcessInfo.processInfo.environment
+    guard env["OFFLOAD_QA_WINDOWS"] != nil || env["OFFLOAD_REVIEW_KEYS"] != nil else { return }
+    let keys = (env["OFFLOAD_REVIEW_KEYS"] ?? "").split(separator: ",").map(String.init)
+    m.$dryRun.compactMap { $0 }.first().sink { [weak self] _ in
+      self?.qaRecord("review-dryrun", window)
+      for (n, k) in keys.enumerated() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2 + Double(n)) { [weak self] in
+          if k == "dashboard" { self?.openDashboard(); return }
+          if k == "scroll-dryrun" { m.scrollRequest = ReviewModel.dryRunSectionId; return }
+          let key: ReviewKey? = ["approve": .approve, "confirm": .confirm, "escape": .escape, "skill": .skill,
+                                 "rerun": .rerun, "edit": .edit, "discard": .discard][k]
+          if let key { m.send(key) }
+          if key == .approve {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+              if let sheet = window.attachedSheet { self?.qaRecord("review-confirm", sheet) }
+            }
+          }
+        }
+      }
+    }.store(in: &qaBag)
+    m.$message.compactMap { $0 }.sink { [weak self] msg in
+      NSLog("Offload QA review message: %@", msg)
+      if msg.hasPrefix("Turned on") { self?.qaRecord("review-approved", window) }
+      else { self?.qaRecord("review-message", window) }
+    }.store(in: &qaBag)
   }
 
   @objc func openDashboard() {
@@ -115,7 +370,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     dashboard = c
     Task {
       await dashboardModel.load()
+      await refreshObserver()
       c.show()
+      qaRecord("dashboard", c.window)
+    }
+  }
+
+  /// QA: appends `name=windowNumber` to $OFFLOAD_QA_WINDOWS so live captures take our windows only.
+  private func qaRecord(_ name: String, _ w: NSWindow) {
+    guard let path = ProcessInfo.processInfo.environment["OFFLOAD_QA_WINDOWS"] else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+      let line = "\(name)=\(w.windowNumber)\n"
+      if let h = FileHandle(forWritingAtPath: path) {
+        h.seekToEndOfFile()
+        h.write(Data(line.utf8))
+        h.closeFile()
+      } else {
+        try? line.write(toFile: path, atomically: true, encoding: .utf8)
+      }
     }
   }
 
@@ -140,20 +412,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// windows) and writes the capture rect and window numbers to $OFFLOAD_QA_FILE.
   private func runQAHooks() {
     let args = CommandLine.arguments
-    if args.contains("--open-review") { openReview(insightId: MockBrainClient.outreach.id) }
+    if args.contains("--open-review") { openReview(insightId: model.state.insights.first?.id ?? MockBrainClient.outreach.id) }
     if args.contains("--open-dashboard") {
       openDashboard()
       if args.contains("--qa-pointer") {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.dashboardModel.send(.point) }
-      }
-    }
-    // OFFLOAD_REVIEW_KEYS="approve,confirm" replays review keys one per second after the window opens.
-    let reviewKeys = (ProcessInfo.processInfo.environment["OFFLOAD_REVIEW_KEYS"] ?? "").split(separator: ",").map(String.init)
-    for (n, k) in reviewKeys.enumerated() {
-      DispatchQueue.main.asyncAfter(deadline: .now() + 1.5 + Double(n)) { [weak self] in
-        let key: ReviewKey? = ["approve": .approve, "confirm": .confirm, "escape": .escape, "skill": .skill,
-                               "rerun": .rerun, "edit": .edit, "discard": .discard][k]
-        if let key { self?.review?.model.send(key) }
       }
     }
     if args.contains("--open-review") || args.contains("--open-dashboard") {
@@ -170,6 +433,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     guard args.contains("--open-card") else { return }
     card.show()
+    qaRecord("card", card.panel)
+    qaRecord("rail", rail.panel)
     let keys = (ProcessInfo.processInfo.environment["OFFLOAD_DEMO_KEYS"] ?? "")
       .split(separator: ",").map { String($0) }
     for (i, k) in keys.enumerated() {
@@ -226,6 +491,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let dash = menu.addItem(withTitle: "Dashboard", action: #selector(openDashboard), keyEquivalent: "d")
     dash.keyEquivalentModifierMask = .command
     dash.target = self
+    menu.addItem(withTitle: "Welcome and permissions…", action: #selector(openOnboardingMenu), keyEquivalent: "").target = self
     menu.addItem(.separator())
     menu.addItem(withTitle: "Quit Offload", action: #selector(quit), keyEquivalent: "q").target = self
     let point = NSPoint(x: 0, y: view.bounds.midY)
@@ -233,5 +499,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   @objc private func openInbox() { card.show() }
+  @objc private func openOnboardingMenu() { openOnboarding() }
   @objc private func quit() { NSApp.terminate(nil) }
 }

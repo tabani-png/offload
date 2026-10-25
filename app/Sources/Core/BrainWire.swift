@@ -291,6 +291,9 @@ struct AutomationDTO: Codable, Equatable {
   var arithmetic: String? = nil
   var measured: MeasuredSavingDTO? = nil
   var pendingBatch: BatchSummaryDTO? = nil
+  // s05c additions (optional): newest live batch and the next cron time, epoch ms.
+  var lastRunAt: Double? = nil
+  var nextRunAt: Double? = nil
 
   /// Rail colours. Reads the s05 `state` when present, else the legacy status.
   func toAutomation() -> Automation {

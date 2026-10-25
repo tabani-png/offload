@@ -1,7 +1,7 @@
 import Foundation
 
-/// What the app needs from the brain (Bun/TS on 127.0.0.1). The live HTTP client lands with s04/s05;
-/// until then the app runs on `MockBrainClient`.
+/// What the app needs from the brain (Bun/TS on 127.0.0.1). `HTTPBrainClient` talks to the real brain (s09a);
+/// `MockBrainClient` serves the sample week for `--mock`, snapshots and tests.
 protocol BrainClient: Sendable {
   func status() async throws -> ObserverStatus
   func insights() async throws -> [Insight]
@@ -16,11 +16,58 @@ protocol BrainClient: Sendable {
   func approve(workflowId: String, batchHash: String) async throws -> Workflow
   func discard(workflowId: String) async throws
   func dashboard() async throws -> DashboardData
+
+  // s05c (defaults in BrainEdits.swift for the mock): tone card, SKILL.md text, observer passthrough.
+  func toneCard(workflowId: String) async throws -> ToneCard
+  func saveToneCard(workflowId: String, text: String) async throws -> ToneCard
+  func skill(workflowId: String) async throws -> SkillDoc
+  func saveSkill(workflowId: String, edit: SkillEdit) async throws -> SkillDoc
+  func observer() async throws -> ObserverReport?
 }
 
 enum BrainError: Error, Equatable {
   case notFound(String)
+  /// Nothing listens: the brain is not running (or is between restarts).
   case unreachable
+  /// The app launched the brain and is waiting for its first line.
+  case starting
+  case timedOut
+  /// 401/403: the per-launch token or the Host check did not match.
+  case unauthorized
+  /// 409: not allowed in the current state. The brain's own words, e.g. "connect Gmail first".
+  case conflict(String)
+  case badRequest(String)
+  case server(Int, String)
+  /// The body did not decode as the v1 contract.
+  case badResponse(String)
+
+  /// One calm sentence for the UI. Never a stack trace, never a status code on its own.
+  var userMessage: String {
+    switch self {
+    case .notFound: return "That is no longer there. It may have been removed."
+    case .unreachable: return "Brain is not running. Offload restarts it on its own; this clears in a few seconds."
+    case .starting: return "Brain is starting. This takes a few seconds."
+    case .timedOut: return "The brain is taking too long to answer. Try again in a moment."
+    case .unauthorized: return "The brain did not accept this app's key. Quit and reopen Offload."
+    case .conflict(let m): return BrainError.sentence(m.isEmpty ? "Not possible right now." : m)
+    case .badRequest: return "The brain could not read that request. Nothing was changed."
+    case .server: return "The brain hit a problem. Nothing was changed; details are in its log."
+    case .badResponse: return "The brain answered in a form this app does not read. Update both together."
+    }
+  }
+
+  /// Capitalised, ends with a full stop.
+  static func sentence(_ s: String) -> String {
+    let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let first = t.first else { return t }
+    let body = first.uppercased() + t.dropFirst()
+    return body.hasSuffix(".") || body.hasSuffix("?") || body.hasSuffix("!") ? body : body + "."
+  }
+
+  /// Any error as a calm sentence.
+  static func message(for error: Error) -> String {
+    (error as? BrainError)?.userMessage ?? BrainError.unreachable.userMessage
+  }
 }
 
 /// Realistic sample data: one founder's week, 38.5 active hours tracked.

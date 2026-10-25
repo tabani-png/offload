@@ -140,6 +140,9 @@ struct WorkflowDTO: Codable, Equatable {
   var arithmetic: String
   var pendingBatch: BatchSummaryDTO?
   var lastDryRunAt: Double?
+  // s05c (optional)
+  var lastRunAt: Double? = nil
+  var nextRunAt: Double? = nil
   // detail
   var path: String?
   var skillMd: String?
@@ -171,10 +174,10 @@ struct WorkflowDTO: Codable, Equatable {
     return Workflow(
       id: id, insightId: insightId, name: name, summary: description, state: WorkflowState(wire: state),
       connectors: conns,
-      schedule: WorkflowSchedule(summary: scheduleSummary, batchSize: batchSize ?? 0, nextRunAt: nil),
+      schedule: WorkflowSchedule(summary: scheduleSummary, batchSize: batchSize ?? 0, nextRunAt: nextRunAt.map(BrainWire.date(ms:))),
       steps: steps, skillMarkdown: skillMd ?? "", toneCard: "", nextBatch: (pendingItems ?? []).map { $0.toRecipient() },
       logTarget: logTarget, sendFrom: "your account", estimatedHoursPerWeek: estimatedHoursSavedPerWeek,
-      batchHash: dryRunHash ?? "")
+      batchHash: dryRunHash ?? "", needsYou: needsYou)
   }
 }
 
@@ -272,13 +275,14 @@ extension AutomationDTO {
     }
   }
 
-  /// No run times in the v1 dashboard: last run is the pending batch's approval (or creation), next run is unknown.
+  /// Run times from the s05c fields; before them, last run is the pending batch's approval (or creation).
   func toDashboardAutomation(taskId: String? = nil) -> DashboardAutomation {
     let st = workflowState
-    let last = pendingBatch.map { BrainWire.date(ms: $0.approvedAt ?? $0.createdAt) }
+    // s05c brains send lastRunAt/nextRunAt; older ones fall back to the pending batch.
+    let last = lastRunAt.map(BrainWire.date(ms:)) ?? pendingBatch.map { BrainWire.date(ms: $0.approvedAt ?? $0.createdAt) }
     return DashboardAutomation(
       id: id, workflowId: workflowId ?? id, insightId: insightId, name: name, state: st,
-      connectors: connectors.map { $0.toConnector() }, lastRunAt: last, nextRunAt: nil,
+      connectors: connectors.map { $0.toConnector() }, lastRunAt: last, nextRunAt: nextRunAt.map(BrainWire.date(ms:)),
       estimatedHoursPerWeek: estimatedHoursSavedPerWeek, measuredHoursPerWeek: measuredHoursSavedPerWeek,
       needsYouReason: (needsYou ?? []).isEmpty ? nil : needsYou!.joined(separator: " "), taskId: taskId)
   }

@@ -15,6 +15,15 @@ final class ReviewModel: ObservableObject {
   @Published private(set) var runningDryRun = false
   @Published private(set) var sheet: ReviewSheet?
   @Published private(set) var message: String?
+  /// A section id the window should scroll to (QA and "show me the dry run").
+  @Published var scrollRequest: String?
+  static let dryRunSectionId = "section.dryrun"
+  /// s05c: the tone card and SKILL.md text from the brain, and the editable copy of the SKILL fields.
+  @Published private(set) var tone: ToneCard?
+  @Published private(set) var toneLoaded = false
+  @Published private(set) var saving = false
+  @Published private(set) var skillDoc: SkillDoc?
+  @Published var skillEdit: SkillDoc?
   @Published var toneDraft: String
   @Published var skillDraft: String
 
@@ -25,11 +34,14 @@ final class ReviewModel: ObservableObject {
   private let client: BrainClient
   private let clock: () -> Date
   private var timer: Timer?
+  /// Instances per dry run (each one is a model call on the real brain).
+  let dryRunLimit: Int
 
-  init(workflow: Workflow, dryRun: DryRun?, client: BrainClient, clock: @escaping () -> Date = Date.init) {
+  init(workflow: Workflow, dryRun: DryRun?, client: BrainClient, dryRunLimit: Int = 5, clock: @escaping () -> Date = Date.init) {
     flow = ApprovalFlow(workflow: workflow)
     self.dryRun = dryRun
     self.client = client
+    self.dryRunLimit = dryRunLimit
     self.clock = clock
     toneDraft = workflow.toneCard
     skillDraft = workflow.skillMarkdown
@@ -44,6 +56,92 @@ final class ReviewModel: ObservableObject {
 
   var workflow: Workflow { flow.workflow }
   var toneEdited: Bool { toneDraft != workflow.toneCard || workflow.toneEdited }
+  /// The draft differs from what the brain holds: Save is offered.
+  var toneUnsaved: Bool { toneLoaded && toneDraft != (tone?.text ?? "") }
+  var skillUnsaved: Bool {
+    guard let a = skillDoc, let b = skillEdit else { return false }
+    return !SkillEdit.diff(from: a, to: b).isEmpty
+  }
+
+  /// GET tone and skill. Failures leave the window as it was and say so once.
+  func loadEditables() {
+    let id = workflow.id
+    Task {
+      do {
+        let t = try await client.toneCard(workflowId: id)
+        tone = t
+        var w = workflow
+        w.toneCard = t.text ?? ""
+        w.toneEdited = t.edited
+        flow.replaceWorkflow(w)
+        toneDraft = t.text ?? ""
+      } catch {
+        NSLog("Offload: tone card: %@", String(describing: error))
+      }
+      toneLoaded = true
+      if let d = try? await client.skill(workflowId: id) {
+        skillDoc = d
+        skillDraft = d.skillMd
+      }
+    }
+  }
+
+  func saveTone() {
+    guard toneUnsaved, !saving else { return }
+    let text = toneDraft
+    if let max = tone?.maxBytes, !ToneCard.fits(text, maxBytes: max) {
+      message = "The tone card is too long. Keep it under \(max / 1024) KB."
+      return
+    }
+    saving = true
+    Task {
+      defer { saving = false }
+      do {
+        let t = try await client.saveToneCard(workflowId: workflow.id, text: text)
+        tone = t
+        var w = workflow
+        w.toneCard = t.text ?? ""
+        w.toneEdited = t.edited
+        flow.replaceWorkflow(w)
+        message = "Tone card saved. The next dry run writes in it."
+      } catch {
+        message = "Tone card not saved. \(BrainError.message(for: error))"
+      }
+    }
+  }
+
+  func saveSkill() {
+    guard let old = skillDoc, let new = skillEdit, !saving else { return }
+    let problems = SkillEdit.problems(new)
+    if let first = problems.first { message = first; return }
+    let edit = SkillEdit.diff(from: old, to: new)
+    if edit.isEmpty { sheet = nil; return }
+    saving = true
+    Task {
+      defer { saving = false }
+      do {
+        let d = try await client.saveSkill(workflowId: workflow.id, edit: edit)
+        skillDoc = d
+        skillEdit = d
+        skillDraft = d.skillMd
+        if let w = try? await client.workflow(id: workflow.id) {
+          var w = w.adopting(dryRun ?? DryRun(workflowId: "", ranAt: Date(), items: [], deniedSideEffects: 0))
+          w.toneCard = workflow.toneCard
+          w.toneEdited = workflow.toneEdited
+          if w.batchHash.isEmpty { w.batchHash = workflow.batchHash }
+          flow.replaceWorkflow(w)
+        }
+        message = "SKILL.md saved. Run the dry run again to see it."
+        sheet = nil
+      } catch {
+        if case .badRequest(let m)? = error as? BrainError {
+          message = "Not saved. \(BrainError.sentence(m))"
+        } else {
+          message = "Not saved. \(BrainError.message(for: error))"
+        }
+      }
+    }
+  }
 
   func send(_ key: ReviewKey) { apply(flow.handle(key, at: clock())) }
 
@@ -73,10 +171,10 @@ final class ReviewModel: ObservableObject {
           do {
             let w = try await client.approve(workflowId: id, batchHash: hash)
             flow.replaceWorkflow(w)
-            message = "Turned on. First run \(Format.runTime(w.schedule.nextRunAt, now: clock(), past: false))."
+            message = ReviewMessages.approved(w, now: clock())
             onApproved?(w)
           } catch {
-            message = "The brain did not accept the approval. Nothing was turned on."
+            message = ReviewMessages.approvalFailed(error)
           }
         }
       case .discarded(let id):
@@ -86,6 +184,7 @@ final class ReviewModel: ObservableObject {
           onDiscarded?(id)
         }
       case .edit:
+        skillEdit = skillDoc
         sheet = .skill(editing: true)
       case .showSkill:
         sheet = .skill(editing: false)
@@ -101,12 +200,12 @@ final class ReviewModel: ObservableObject {
     Task {
       defer { runningDryRun = false }
       do {
-        let d = try await client.dryRun(workflowId: id, limit: 5)
+        let d = try await client.dryRun(workflowId: id, limit: dryRunLimit)
         dryRun = d
         adoptBatchHash(from: d)
         message = nil
       } catch {
-        message = "Dry run failed. The workflow is unchanged."
+        message = ReviewMessages.dryRunFailed(error)
       }
     }
   }

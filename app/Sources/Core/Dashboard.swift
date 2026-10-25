@@ -75,20 +75,75 @@ struct HoursSaved: Codable, Equatable, Sendable {
   }
 }
 
+/// The three macOS permissions the observer uses (engine/README.md "Permissions"). There is no microphone row:
+/// no shipped feature records audio.
+enum PermissionKind: String, Codable, CaseIterable, Sendable {
+  case screenRecording, accessibility, inputMonitoring
+
+  var name: String {
+    switch self {
+    case .screenRecording: return "Screen Recording"
+    case .accessibility: return "Accessibility"
+    case .inputMonitoring: return "Input Monitoring"
+    }
+  }
+
+  /// What it is for, in one line.
+  var purpose: String {
+    switch self {
+    case .screenRecording: return "Reads on-screen text, to tell one email from another"
+    case .accessibility: return "Window titles and browser addresses"
+    case .inputMonitoring: return "Counts keys and clicks, never which ones"
+    }
+  }
+
+  /// Screen text is the core signal and titles name the work; counts only sharpen the estimate.
+  var required: Bool { self != .inputMonitoring }
+
+  /// System Settings > Privacy & Security, the right pane.
+  var settingsURL: URL {
+    let anchor: String
+    switch self {
+    case .screenRecording: anchor = "Privacy_ScreenCapture"
+    case .accessibility: anchor = "Privacy_Accessibility"
+    case .inputMonitoring: anchor = "Privacy_ListenEvent"
+    }
+    return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)")!
+  }
+}
+
 struct PermissionState: Codable, Equatable, Identifiable, Sendable {
-  enum Grant: String, Codable, Sendable { case granted, notGranted = "not_granted", notNeeded = "not_needed" }
+  enum Grant: String, Codable, Sendable {
+    case granted, notGranted = "not_granted", notNeeded = "not_needed"
+    /// The observer could not be asked (not installed, or it failed).
+    case unknown
+  }
   var name: String
   var grant: Grant
-  /// Optional permissions (the mic, for voice) never ask for attention when off.
+  /// Optional permissions never ask for attention when off.
   var required: Bool = true
+  /// Set for the observer's three permissions: purpose line and the Open Settings link.
+  var kind: PermissionKind? = nil
   var id: String { name }
+
+  init(name: String, grant: Grant, required: Bool = true, kind: PermissionKind? = nil) {
+    self.name = name
+    self.grant = grant
+    self.required = required
+    self.kind = kind
+  }
+
+  init(_ kind: PermissionKind, granted: Bool?) {
+    self.init(name: kind.name, grant: granted.map { $0 ? .granted : .notGranted } ?? .unknown,
+              required: kind.required, kind: kind)
+  }
 
   /// Amber only when something Offload needs is missing.
   var role: StatusRole {
     switch grant {
     case .granted: return .done
     case .notGranted: return required ? .needsYou : .neutral
-    case .notNeeded: return .neutral
+    case .notNeeded, .unknown: return .neutral
     }
   }
 
@@ -97,8 +152,14 @@ struct PermissionState: Codable, Equatable, Identifiable, Sendable {
     case .granted: return "Allowed"
     case .notGranted: return required ? "Not allowed" : "Off, optional"
     case .notNeeded: return "Not needed"
+    case .unknown: return "Unknown"
     }
   }
+
+  var purpose: String { kind?.purpose ?? "" }
+  var settingsURL: URL? { kind?.settingsURL }
+  /// The row offers Open Settings unless it is already allowed.
+  var offersSettings: Bool { kind != nil && grant != .granted }
 }
 
 /// The "Observing" section: what is stored, when the oldest day goes, and permissions.
