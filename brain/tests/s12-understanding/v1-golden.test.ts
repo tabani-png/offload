@@ -1,37 +1,23 @@
 // AC-9: v1 stays the default and its output for the founder fixture is byte-identical to before s12.
-// The hash was captured on the base commit (a3f7f28) before any s12 code existed.
-import { afterAll, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { generateFixture, writeFixture } from "../../fixtures/gen.ts";
-import { analyzeHome } from "../../src/analyze.ts";
-import { toInsights } from "../../src/api/dto.ts";
-import { tempHome } from "../helpers.ts";
+// The hash was produced by v1-digest.ts on the base commit (a3f7f28) under TZ=UTC, before any s12 code existed.
+// The digest runs in a child with TZ=UTC because local days and ids depend on the zone (verify-all runs other zones).
+import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 
 const V1_GOLDEN = "12616fc1660f07738066946f21ce33aff87511bc144184dc1bb0f56222fffdb3";
+const DIGEST = join(import.meta.dir, "v1-digest.ts");
 
-const { home, cleanup } = tempHome();
-afterAll(cleanup);
-writeFixture(home, generateFixture({ seed: 42, startDay: "2026-10-12" }), { encrypted: false, seed: 42 });
-const now = new Date(2026, 9, 19, 12).getTime();
-
-function digest(a: Awaited<ReturnType<typeof analyzeHome>>): string {
-  const body = toInsights(a);
-  const insights = body.insights.map((i) => {
-    // `understanding` is the additive v2 block; v1 never sets it.
-    const { understanding, ...rest } = i as typeof i & { understanding?: unknown };
-    expect(understanding).toBeUndefined();
-    return rest;
-  });
-  return createHash("sha256").update(JSON.stringify({ insights, tasks: a.tasks.map((t) => [t.id, t.label, t.instances.length]) })).digest("hex");
+function digest(...args: string[]): string {
+  const r = Bun.spawnSync([process.execPath, "run", DIGEST, ...args], { env: { ...process.env, TZ: "UTC", OFFLOAD_KEYS: "file" } });
+  if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+  return r.stdout.toString().trim();
 }
 
 describe("V1GOLDEN", () => {
-  test("default analysis is byte-identical to the base commit", async () => {
-    const h = digest(await analyzeHome(home, { now: () => now }));
-    expect(h).toBe(V1_GOLDEN);
+  test("default analysis is byte-identical to the base commit", () => {
+    expect(digest()).toBe(V1_GOLDEN);
   });
-  test("understanding: 'v1' is the same as the default", async () => {
-    const h = digest(await analyzeHome(home, { now: () => now, understanding: "v1" } as Parameters<typeof analyzeHome>[1]));
-    expect(h).toBe(V1_GOLDEN);
+  test("understanding: 'v1' is the same as the default", () => {
+    expect(digest("v1")).toBe(V1_GOLDEN);
   });
 });
