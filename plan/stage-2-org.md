@@ -56,3 +56,18 @@ Employee Mac (Stage 1 app)          Company control plane (new)            Cloud
 - Working-time tracking: off by default with notice (recommended) vs on.
 
 Research brief: adam/memory/research/stage2/ (cua cloud sandboxes, RBAC/SCIM, monitoring law, continuity).
+
+## Research outcome (2026-10-25, adam/memory/research/stage2/)
+- Cua Cloud shut down 18 Oct 2026; cua-agent deprecated. Cloud workers v1 = Claude Managed Agents (one agent per role
+  workflow, commit tools "always ask", session spend caps as nightly limits, cron deployments; $0.08/session-hour + tokens).
+  Browserbase only for web tasks with no API. Cua MIT SDK kept as a later option. Always-on desktop per person deferred.
+  Caveat: Managed Agents is not ZDR-eligible.
+- Identity: WorkOS (AuthKit free; SSO/SCIM pass-through enterprise add-on). Roles: owner, admin, department lead, member,
+  auditor, service identity.
+- Monitoring: working-time and per-person views off by default; per-jurisdiction enablement + owner DPIA attestation;
+  team aggregates with minimum group of 5; employee self-view; audit log of admin access; policy/notice templates
+  (Ontario written policy, Quebec 8.1, NY/CT/DE notice, CPRA risk assessment, UK DPIA, German works council).
+- Continuity: tag connections company vs personal; on leave freeze, assign successor/role identity, never send as the
+  departed person, never automate a personal LinkedIn; workflows kept as SOPs without tokens.
+- Hours saved: median observed manual time minus measured review/fix time, successful runs only, A/B/C confidence grade,
+  evidence links, exactly recomputable.
