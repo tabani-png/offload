@@ -3,8 +3,13 @@
 - Home: `$OFFLOAD_HOME`, default `~/Library/Application Support/Offload`.
 - Events: one JSON object per line per `schemas/event.schema.json`, one file per local day:
   `$OFFLOAD_HOME/days/YYYY-MM-DD.jsonl.enc`. Each line is base64 of AES-256-GCM `nonce(12) | ciphertext | tag(16)`
-  over the UTF-8 JSON. One key per day, stored in `$OFFLOAD_HOME/keys/YYYY-MM-DD.key` (32 random bytes, mode 0600)
-  for v1 dev mode; the Keychain-wrapped mode is a later slice. Deleting a day = delete the file AND its key.
+  over the UTF-8 JSON. One key per day in `$OFFLOAD_HOME/keys/YYYY-MM-DD.key`.
+  Default (keychain mode): the key file is 64 bytes, "OKW1" + AES-GCM of the day key under a master key in the
+  login Keychain (service "ai.offload.observer"), with the day name bound in. Readers that are not the observer
+  get plain lines with `offload-observer export-day YYYY-MM-DD` (stdout jsonl). `OFFLOAD_KEYS=file` = legacy
+  raw 32-byte key files (mode 0600), for tests and fixtures only. Deleting a day = delete the file AND its key.
+- Idle: `idle_start` is stamped when idle is DETECTED (threshold 120 s after the last input). Readers backdate it
+  by the threshold.
 - Plain mode for tests and fixtures: `$OFFLOAD_HOME/days/YYYY-MM-DD.jsonl` (no `.enc`), same lines unencrypted.
   The brain reads both. The observer writes plain only when `OFFLOAD_PLAIN=1`.
 - Retention: days older than 7 local days are deleted at start and every hour. A purge appends a line to
