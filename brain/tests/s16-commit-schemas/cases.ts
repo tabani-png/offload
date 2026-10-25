@@ -22,7 +22,7 @@ const TO = "ana@fund.com";
 const SUBJ = "Seed round follow-up";
 const BODY = "Hi Ana,\nthe deck is attached in the data room.\nBest, Sam";
 const email = (): BatchItem => ({ key: TO, to: TO, subject: SUBJ, body: BODY, warnings: [] });
-const commit = (verb: string, fields: Array<[string, string]>, over: Partial<BatchItem> = {}): BatchItem => ({ ...email(), ...over, commit: { verb, fields } });
+const commit = (verb: string, fields: Array<[string, string]>, over: Partial<BatchItem> = {}): BatchItem => ({ ...email(), ...over, key: (over.to ?? TO).toLowerCase(), commit: { verb, fields } });
 const sendWith = (fields: Array<[string, string]>) => commit("send", fields);
 
 export const BATCH12 = (b: Batch) => b.hash.slice(0, 12);
@@ -83,7 +83,7 @@ export const CASES: Record<string, CaseFn> = {
       ["line.2.quantity", "3"],
       ["line.2.unit_amount", "80"],
       ["line.2.account_code", "429"],
-    ], { key: "bill-inv-7781", to: "bills@vendor.com", subject: "Bill INV-7781", body: "" });
+    ], { to: "bills@vendor.com", subject: "Bill INV-7781", body: "" });
     return {
       tool: "XERO_CREATE_INVOICE",
       connector: "xero",
@@ -106,7 +106,7 @@ export const CASES: Record<string, CaseFn> = {
     };
   },
   QUICKBOOKS_CREATE_BILL: () => {
-    const item = commit("create_bill", [["vendor_id", "56"], ["txn_date", "2026-10-20"], ["doc_number", "INV-7781"], ["line.1.amount", "420.50"], ["line.1.description", "October hosting"], ["line.1.account_id", "7"]], { key: "bill-q-7781", to: "bills@vendor.com", subject: "Bill INV-7781", body: "" });
+    const item = commit("create_bill", [["vendor_id", "56"], ["txn_date", "2026-10-20"], ["doc_number", "INV-7781"], ["line.1.amount", "420.50"], ["line.1.description", "October hosting"], ["line.1.account_id", "7"]], { to: "bills@vendor.com", subject: "Bill INV-7781", body: "" });
     return {
       tool: "QUICKBOOKS_CREATE_BILL",
       connector: "quickbooks",
@@ -136,7 +136,7 @@ export const CASES: Record<string, CaseFn> = {
     return { tool: "SLACK_SEND_MESSAGE", connector: "slack", role: "send", item, args: { channel: "C0123ABC", markdown_text: BODY, unfurl_links: false, unfurl_media: false } };
   },
   GREENHOUSE_MOVE_APPLICATION: () => {
-    const item = commit("move_stage", [["application_id", "69102"], ["from_stage_id", "11"], ["to_stage_id", "12"]], { key: "app-69102", to: "cand@mail.com", subject: "Move to onsite", body: "" });
+    const item = commit("move_stage", [["application_id", "69102"], ["from_stage_id", "11"], ["to_stage_id", "12"]], { to: "cand@mail.com", subject: "Move to onsite", body: "" });
     return { tool: "GREENHOUSE_MOVE_APPLICATION", connector: "greenhouse", role: "send", item, args: { id: 69102, from_stage_id: 11, to_stage_id: 12 } };
   },
 };

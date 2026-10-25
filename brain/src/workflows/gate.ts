@@ -7,6 +7,8 @@
 //   not on the allowlist (allowlist.ts) for a connected server -> deny (unknown = deny)
 //   allowlisted read                                        -> allow
 //   (s13) input: a local UI edit, approved batch + declared send through its connector -> allow, consumes nothing
+//   (s16) draft in the user's own mailbox: live intact batch, declared draft step, exact hash of a pending item, once
+//         -> allow WITHOUT an approval token (not an external action, ADR 0006); never marks the item sending
 //   side effect for a dry-run batch                         -> deny
 //   batch items do not match the batch hash                 -> deny
 //   no approval token for this exact batch hash (and auto-run off) -> deny
@@ -133,6 +135,7 @@ export function createGate(ctx: GateContext): Gate {
   const done = new Map<string, Set<string>>([
     ["send", new Set()],
     ["log", new Set()],
+    ["draft", new Set()],
   ]);
   const now = ctx.now ?? Date.now;
   const servers = ctx.servers ?? DEFAULT_SERVERS;
@@ -163,6 +166,45 @@ export function createGate(ctx: GateContext): Gate {
     }
   };
 
+  /** The approved item whose expected arguments hash exactly like `input` under `p`. */
+  function matchItem(p: ToolPolicy, input: Record<string, unknown>): { item: Batch["items"][number] } | { reason: string } {
+    const got = canonicalArgs(p, input);
+    if ("reason" in got) return got;
+    let firstReason: string | null = null;
+    for (const i of ctx.batch.items) {
+      const ck = `${p.tool}\u0000${i.key}`;
+      let exp = expectedCache.get(ck);
+      if (exp === undefined) {
+        exp = expectedHash(p, i, { batchHash: ctx.batch.hash, ...(ctx.crmSheet === undefined ? {} : { crmSheet: ctx.crmSheet }) });
+        expectedCache.set(ck, exp);
+      }
+      if ("reason" in exp) firstReason ??= exp.reason;
+      else if (exp.hash === got.hash) return { item: i };
+    }
+    return { reason: firstReason ?? "arguments differ from every approved item (recipients, subject, body and every other field must be exactly as approved)" };
+  }
+
+  function decideDraft(toolName: string, p: ToolPolicy, input: Record<string, unknown>, consume: boolean): Decision {
+    const deny = (reason: string, itemKey?: string): Decision => ({ allow: false, reason, toolClass: "side_effect", ...(itemKey === undefined ? {} : { itemKey }) });
+    if (!actions.some((a) => a.role === "draft" && a.connector === p.connector)) return deny(`this workflow declares no draft step through ${p.connector}`);
+    const found = matchItem(p, input);
+    if ("reason" in found) return deny(found.reason);
+    const key = found.item.key;
+    const set = done.get("draft")!;
+    if (set.has(key)) return deny(`draft already made for ${key} in this batch`, key);
+    const state = ctx.itemState?.(key);
+    if (state !== undefined && state !== "pending") return deny(`${key} is ${state}: no draft for an item that is not pending`, key);
+    if (consume) {
+      try {
+        ctx.onAllow?.(key, "draft", toolName);
+      } catch (err) {
+        return deny(`could not record the draft before it runs: ${err instanceof Error ? err.message : String(err)}`, key);
+      }
+      set.add(key);
+    }
+    return { allow: true, reason: `draft in your own mailbox for batch ${shortHash(ctx.batch.hash)} (you send it yourself)`, toolClass: "side_effect", itemKey: key, role: "draft" };
+  }
+
   function decide(toolName: string, input: Record<string, unknown>, consume: boolean): Decision {
     if (splitMcpName(toolName) === null) return { allow: false, reason: "built-in tools are disabled in workflow runs", toolClass: "builtin" };
     const p = policyFor(toolName, servers, input, ctx.policies);
@@ -177,6 +219,10 @@ export function createGate(ctx: GateContext): Gate {
     if (p.role === "read") return { allow: true, reason: "allowlisted read tool", toolClass, role: "read" };
     if (ctx.batch.kind !== "live") return deny("dry-run batch: nothing in it can be sent");
     if (!intact) return deny(`batch ${shortHash(ctx.batch.hash)} does not match its hash: it changed after review`);
+    // s16 (ADR 0006): a draft in the user's own mailbox is not an external action. It needs the live, intact batch, a
+    // declared draft step and the exact arguments of one pending item, once, but no approval token, and it never
+    // marks the item sending (the user still sends it).
+    if (p.role === "draft") return decideDraft(toolName, p, input, consume);
     const approval = ctx.approvals(ctx.batch.hash);
     const approved = ctx.runToken !== null && approval !== undefined && tokenEq(approval.token, ctx.runToken);
     if (!approved && !ctx.autoRun) return deny(`no approval for batch ${shortHash(ctx.batch.hash)}`);
@@ -189,24 +235,9 @@ export function createGate(ctx: GateContext): Gate {
     const role = p.role;
     if (!actions.some((a) => a.role === role && a.connector === p.connector)) return deny(`this workflow declares no ${role} step through ${p.connector}`);
 
-    const got = canonicalArgs(p, input);
-    if ("reason" in got) return deny(got.reason);
-    let item: Batch["items"][number] | null = null;
-    let firstReason: string | null = null;
-    for (const i of ctx.batch.items) {
-      const ck = `${p.tool}\u0000${i.key}`;
-      let exp = expectedCache.get(ck);
-      if (exp === undefined) {
-        exp = expectedHash(p, i, { batchHash: ctx.batch.hash, ...(ctx.crmSheet === undefined ? {} : { crmSheet: ctx.crmSheet }) });
-        expectedCache.set(ck, exp);
-      }
-      if ("reason" in exp) firstReason ??= exp.reason;
-      else if (exp.hash === got.hash) {
-        item = i;
-        break;
-      }
-    }
-    if (item === null) return deny(firstReason ?? "arguments differ from every approved item (recipients, subject, body and every other field must be exactly as approved)");
+    const found = matchItem(p, input);
+    if ("reason" in found) return deny(found.reason);
+    const item = found.item;
 
     const set = done.get(role)!;
     if (set.has(item.key)) return deny(`${role} already done for ${item.key} in this batch`, item.key);

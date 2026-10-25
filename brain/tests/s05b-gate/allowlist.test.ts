@@ -4,7 +4,7 @@
 // reads are an explicit allowlist, unknown tools are denied, and a dry run allows zero non-read tools.
 import { describe, expect, test } from "bun:test";
 import { makeBatch, type Batch, type BatchItem } from "../../src/workflows/batch.ts";
-import { canonicalArgs, normaliseAddress, policyFor, TOOL_POLICIES } from "../../src/workflows/allowlist.ts";
+import { canonicalArgs, normaliseAddress, policyFor, REVIEWED_NAMES, TOOL_POLICIES } from "../../src/workflows/allowlist.ts";
 import { classifyTool, createGate, type GateContext } from "../../src/workflows/gate.ts";
 
 const item = (to: string, body: string): BatchItem => ({ key: to.toLowerCase(), to, subject: "Offload seed round", body, warnings: [] });
@@ -44,7 +44,7 @@ describe("s05b gate allowlist", () => {
   });
 
   test("B1: any other side-effect tool naming one approved address is denied as not on the allowlist", () => {
-    for (const tool of ["mcp__gmail__modify_email", "mcp__gmail__create_label", "mcp__gmail__batch_modify_emails", "mcp__composio__GMAIL_CREATE_EMAIL_DRAFT", "mcp__gmail__frobnicate"]) {
+    for (const tool of ["mcp__gmail__modify_email", "mcp__gmail__create_label", "mcp__gmail__batch_modify_emails", "mcp__composio__GMAIL_UPDATE_DRAFT", "mcp__gmail__frobnicate"]) {
       const d = gateFor(A).decide(tool, { to: "a@fund.com", body: i0.body }, true);
       expect(d.allow).toBe(false);
       expect(d.reason).toMatch(/allowlist|never allowed/);
@@ -173,12 +173,14 @@ describe("s05b gate allowlist", () => {
   });
 
   test("B1: exactly one canonical send tool and at most one log tool per connector flavour, each with a schema", () => {
+    // s16 scope change: a connector may have several commit tools, told apart by the item's commit verb; per
+    // connector, flavour, role and verb there is still exactly one (Gmail: one send per flavour, unchanged).
     const groups = new Map<string, { send: number; log: number }>();
     for (const p of TOOL_POLICIES) {
-      const g = groups.get(`${p.connector}/${p.flavor}`) ?? { send: 0, log: 0 };
+      const g = groups.get(`${p.connector}/${p.flavor}/${p.commitVerb ?? "send"}`) ?? { send: 0, log: 0 };
       if (p.role === "send") g.send += 1;
       if (p.role === "log") g.log += 1;
-      groups.set(`${p.connector}/${p.flavor}`, g);
+      groups.set(`${p.connector}/${p.flavor}/${p.commitVerb ?? "send"}`, g);
       if (p.role !== "read") {
         expect(p.fields).toBeDefined();
         expect(p.expected).toBeDefined();
@@ -189,8 +191,11 @@ describe("s05b gate allowlist", () => {
       expect(g.send).toBeLessThanOrEqual(1);
       expect(g.log).toBeLessThanOrEqual(1);
       if (k.startsWith("gmail/")) expect(g.send).toBe(1);
+      if (k.startsWith("gmail/")) expect(TOOL_POLICIES.filter((p) => p.connector === "gmail" && p.flavor === k.split("/")[1] && p.role === "send")).toHaveLength(1);
     }
-    expect(TOOL_POLICIES.some((p) => /forward|reply|draft|execute|bash/i.test(p.tool))).toBe(false);
+    // s16 scope change: reply / draft names only from the reviewed exact list; never forward, execute or bash.
+    expect(TOOL_POLICIES.some((p) => /forward|execute|bash/i.test(p.tool))).toBe(false);
+    expect(TOOL_POLICIES.filter((p) => /reply|draft/i.test(p.tool)).every((p) => REVIEWED_NAMES.has(p.tool))).toBe(true);
   });
 
   test("B1: prototype-named argument keys and server names are denied, never thrown", () => {

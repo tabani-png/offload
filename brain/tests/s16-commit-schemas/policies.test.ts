@@ -98,8 +98,9 @@ describe("s16 policies", () => {
       // the arguments approved for it, so the call is denied.
       const w = world({ ...o, tool: c.tool, connector: c.connector, role: c.role, args: c.args });
       if (w.gate.decide(T(c.tool), c.args, true).allow) {
-        // Only possible when both cases approve the very same content for the same tool.
-        expect(JSON.stringify(o.item.commit ?? null)).toBe(JSON.stringify(c.item.commit ?? null));
+        // Only possible for two email items with the very same recipient, subject and body.
+        expect([o.item.commit?.verb ?? "send", c.item.commit?.verb ?? "send"]).toEqual(["send", "send"]);
+        expect([o.item.to, o.item.subject, o.item.body]).toEqual([c.item.to, c.item.subject, c.item.body]);
       }
     }
   });
