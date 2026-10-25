@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/frame-note.schema.json",
+  "title": "Frame note",
+  "description": "What a local vision model saw on one masked keyframe (ADR 0007). Stored as an event of kind 'frame' in the day store. Text fields are masked before storage.",
+  "type": "object",
+  "required": ["id", "ts", "kind", "frameId", "model", "activity", "confidence"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "description": "ULID" },
+    "ts": { "type": "integer", "description": "ms since epoch of the keyframe" },
+    "kind": { "const": "frame" },
+    "frameId": { "type": "string", "description": "id of the encrypted keyframe blob (frames/YYYY-MM-DD/<frameId>.enc)" },
+    "phash": { "type": "string", "description": "64-bit perceptual hash, hex" },
+    "app": { "type": "string" },
+    "host": { "type": "string" },
+    "model": { "type": "string", "description": "captioner id, e.g. 'ollama:qwen2.5vl:7b' or 'stub'" },
+    "activity": { "type": "string", "maxLength": 200, "description": "one plain sentence: what the user is doing, e.g. 'Reviewing a candidate CV against a job spec'" },
+    "verb": { "type": "string", "maxLength": 40 },
+    "object": { "type": "string", "maxLength": 80, "description": "the thing worked on: invoice, CV, ticket, lead row, email" },
+    "counterpart": { "type": "string", "maxLength": 80, "description": "person or organisation involved, masked if personal" },
+    "surface": { "type": "string", "maxLength": 80, "description": "screen or view: 'Gmail compose', 'Xero bills list', 'Greenhouse candidate page'" },
+    "step": { "type": "string", "maxLength": 120, "description": "where in a process: 'copying amount from PDF into form'" },
+    "inputs": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 80 }, "description": "information read from the screen to do the step" },
+    "outputs": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 80 }, "description": "what the step produced or changed" },
+    "identifiers": { "type": "array", "maxItems": 12, "items": { "type": "string", "maxLength": 120 }, "description": "stable ids seen: invoice no., ticket id, domain, file name (masked)" },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}
