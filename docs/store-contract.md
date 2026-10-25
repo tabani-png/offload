@@ -10,8 +10,10 @@
   raw 32-byte key files (mode 0600), for tests and fixtures only. Deleting a day = delete the file AND its key.
 - Brain keys: the brain keeps its own 32-byte keys in `$OFFLOAD_HOME/keys/brain-NAME.key`, wrapped like day keys
   ("OKW1", same Keychain master key, the name bound in). `offload-observer wrap-key --name NAME` stores one (base64 on
-  stdin, or none to generate) and `unwrap-key --name NAME` returns it; both print only the base64 key on stdout and
-  never replace a stored key. This replaces raw brain key files. Brain keys are not day keys: retention leaves them.
+  stdin with `--import`, or none to generate; a piped key without `--import` exits 2) and `unwrap-key --name NAME`
+  returns it; both print only the base64 key on stdout and never replace a stored key. This replaces raw brain key
+  files. Names that are local dates (`brain-YYYY-MM-DD`) follow the 7-day rule: retention deletes them, and
+  wrap/unwrap of an expired date runs the purge and exits 3. Other names are kept and listed as `otherBrainKeys`.
 - Idle: `idle_start` is stamped when idle is DETECTED (threshold 120 s after the last input). Readers backdate it
   by the threshold.
 - Plain mode for tests and fixtures: `$OFFLOAD_HOME/days/YYYY-MM-DD.jsonl` (no `.enc`), same lines unencrypted.
