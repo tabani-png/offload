@@ -1,0 +1,130 @@
+{
+  "computation": "hs-1",
+  "inputsDigest": "2026388b3780afc942fa552b10ec999cd404ce0e8b9039bf476fbac33982ede3",
+  "scope": {
+    "type": "department",
+    "id": "0000000c-0000-4000-8000-000000000004"
+  },
+  "period": {
+    "from": "2026-11-01",
+    "toExclusive": "2026-11-02",
+    "timezone": "America/Los_Angeles"
+  },
+  "total": {
+    "seconds": 14850,
+    "hours": 4.1,
+    "byGrade": {
+      "A": 13650,
+      "B": 1200,
+      "C": 0
+    },
+    "bySource": {
+      "observed": 14850,
+      "user_estimate": 0
+    },
+    "byRuntime": {
+      "mac": 13650,
+      "cloud": 1200
+    },
+    "overnightSeconds": 1200,
+    "runs": {
+      "success": 13,
+      "failed": 0,
+      "cancelled": 1,
+      "rejected": 0,
+      "capped": 0
+    },
+    "people": 7
+  },
+  "children": [
+    {
+      "scope": {
+        "type": "job_role",
+        "id": "0000000d-0000-4000-8000-000000000004"
+      },
+      "label": "Sourcer",
+      "value": {
+        "suppressed": true,
+        "reason": "group_floor"
+      }
+    },
+    {
+      "scope": {
+        "type": "job_role",
+        "id": "0000000d-0000-4000-8000-000000000005"
+      },
+      "label": "Coordinator",
+      "value": {
+        "suppressed": true,
+        "reason": "group_floor"
+      }
+    },
+    {
+      "scope": {
+        "type": "job_role",
+        "id": "0000000d-0000-4000-8000-000000000006"
+      },
+      "label": "Recruiting ops",
+      "value": {
+        "seconds": 6150,
+        "hours": 1.7,
+        "byGrade": {
+          "A": 6150,
+          "B": 0,
+          "C": 0
+        },
+        "bySource": {
+          "observed": 6150,
+          "user_estimate": 0
+        },
+        "byRuntime": {
+          "mac": 6150,
+          "cloud": 0
+        },
+        "overnightSeconds": 0,
+        "runs": {
+          "success": 6,
+          "failed": 0,
+          "cancelled": 0,
+          "rejected": 0,
+          "capped": 0
+        },
+        "people": 6
+      }
+    }
+  ],
+  "topWorkflows": [
+    {
+      "workflowId": "0000000a-0000-4000-8000-000000000068",
+      "name": "Candidate sourcing",
+      "jobRoleId": "0000000d-0000-4000-8000-000000000004",
+      "grade": "A",
+      "seconds": 7500
+    },
+    {
+      "workflowId": "0000000a-0000-4000-8000-00000000006a",
+      "name": "Offer letters",
+      "jobRoleId": "0000000d-0000-4000-8000-000000000006",
+      "grade": "A",
+      "seconds": 6150
+    }
+  ],
+  "anomalies": [
+    {
+      "code": "outcome_disagreement",
+      "workflowId": "0000000a-0000-4000-8000-00000000006a",
+      "detail": "1 run(s) where the device outcome differs from the broker's"
+    },
+    {
+      "code": "residual_zero_share",
+      "workflowId": null,
+      "detail": "one person in 2026-11: residual 0 on 2 of 2 reviewed runs"
+    },
+    {
+      "code": "small_baseline",
+      "workflowId": "0000000a-0000-4000-8000-000000000069",
+      "detail": "version 1: baseline n = 2 (observed), under 3"
+    }
+  ],
+  "final": false
+}

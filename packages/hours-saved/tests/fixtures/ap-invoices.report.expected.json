@@ -1,0 +1,80 @@
+{
+  "computation": "hs-1",
+  "inputsDigest": "bee4ee87356e97c68da5387697298557bdca6d110e9fb76651a3e70f3f3b925f",
+  "scope": {
+    "type": "company",
+    "id": null
+  },
+  "period": {
+    "from": "2026-10-01",
+    "toExclusive": "2026-11-01",
+    "timezone": "Europe/Berlin"
+  },
+  "total": {
+    "seconds": 8110,
+    "hours": 2.3,
+    "byGrade": {
+      "A": 0,
+      "B": 3430,
+      "C": 4680
+    },
+    "bySource": {
+      "observed": 3430,
+      "user_estimate": 4680
+    },
+    "byRuntime": {
+      "mac": 7330,
+      "cloud": 780
+    },
+    "overnightSeconds": 0,
+    "runs": {
+      "success": 9,
+      "failed": 0,
+      "cancelled": 0,
+      "rejected": 1,
+      "capped": 1
+    },
+    "people": 10
+  },
+  "children": [
+    {
+      "scope": {
+        "type": "department",
+        "id": "0000000c-0000-4000-8000-000000000002"
+      },
+      "label": "Finance",
+      "value": {
+        "suppressed": true,
+        "reason": "group_floor"
+      }
+    },
+    {
+      "scope": {
+        "type": "department",
+        "id": "0000000c-0000-4000-8000-000000000003"
+      },
+      "label": "Operations",
+      "value": {
+        "suppressed": true,
+        "reason": "group_floor"
+      }
+    }
+  ],
+  "topWorkflows": [
+    {
+      "workflowId": "0000000a-0000-4000-8000-000000000067",
+      "name": "Vendor statement match",
+      "jobRoleId": "0000000d-0000-4000-8000-000000000003",
+      "grade": "C",
+      "seconds": 4680
+    }
+  ],
+  "anomalies": [
+    {
+      "code": "small_baseline",
+      "workflowId": "0000000a-0000-4000-8000-000000000067",
+      "detail": "version 1: baseline n = 0 (user_estimate), under 3"
+    }
+  ],
+  "final": false
+}
