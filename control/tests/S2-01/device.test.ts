@@ -84,9 +84,9 @@ describe("DEVICE", () => {
     const claims = JSON.parse(Buffer.from(tk.json.accessToken.split(".")[1], "base64url").toString());
     expect(header.alg).toBe("ES256");
     expect(claims.aud).toBe("device");
-    // Device column of the matrix: sync is the device's (later slice → 404 until built), org reads are not (403).
+    // Device column of the matrix: sync is the device's (built by S2-05), org reads are not (403).
     const dev = asDevice(h, tk.json.accessToken);
-    expect((await dev("GET", "/v1/sync/config")).status).toBe(404);
+    expect((await dev("GET", "/v1/sync/config")).status).toBe(200);
     expect((await dev("GET", "/v1/tenant")).status).toBe(403);
   });
 
