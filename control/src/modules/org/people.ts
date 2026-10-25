@@ -1,6 +1,6 @@
 import type { App, Deps } from "../../app.ts";
-import { actorOf, body, reply, tenantTx } from "../../app.ts";
-import { personById, selectPeople, type PersonDto } from "../../db/people.ts";
+import { actorOf, body, principalOf, reply, tenantTx } from "../../app.ts";
+import { personById, personSummary, selectPeople, type PersonDto } from "../../db/people.ts";
 import { conflict, forbidden, invalid, notFound, page, pageParams } from "../../schema/http.ts";
 import { afterCursor, allow, ensureDepartments, idParam } from "./util.ts";
 
@@ -21,11 +21,15 @@ interface Invite {
 }
 
 const PERSON = "offload/stage2/person.schema.json";
+const PERSON_SUMMARY = "offload/stage2/person-summary.schema.json";
 
 export function peopleRoutes(app: App, deps: Deps): void {
+  // A dept lead gets summaries only; owner, admin and auditor get the full person (ADR 0111 §2).
   app.get("/v1/people", async (c) => {
     const { limit, cursor } = pageParams(c);
     const after = afterCursor(cursor);
+    const p0 = principalOf(c);
+    const summaries = p0.accessRole === "dept_lead";
     const out = await tenantTx(c, deps, async (tx, p) => {
       const dp = c.get("scope") === "Dp";
       const rows = await selectPeople(
@@ -34,13 +38,22 @@ export function peopleRoutes(app: App, deps: Deps): void {
           and (${dp} = false or p.department_id in (select jsonb_array_elements_text(${p.departmentScope}::jsonb)::uuid))`,
         limit + 1,
       );
-      return page(rows, limit, (l) => ({ id: l.id }));
+      const pg = page(rows, limit, (l) => ({ id: l.id }));
+      // One audit event per list read, naming every person read.
+      await deps.ports.audit.write(tx, {
+        actor: actorOf(p),
+        action: "person.list",
+        resource: { type: "person", id: null },
+        detail: { ids: pg.items.map((r) => r.id), view: summaries ? "summary" : "full" },
+      });
+      return summaries ? { ...pg, items: pg.items.map(personSummary) } : pg;
     });
-    return reply(c, deps, 200, out, "offload/control/person-list.json");
+    return reply(c, deps, 200, out, summaries ? "offload/control/person-summary-list.json" : "offload/control/person-list.json");
   });
 
   app.get("/v1/people/:id", async (c) => {
     const id = idParam(c);
+    const p0 = principalOf(c);
     const out = await tenantTx(c, deps, async (tx, p) => {
       const person = await personById(tx, id);
       if (!person) throw notFound();
@@ -56,6 +69,7 @@ export function peopleRoutes(app: App, deps: Deps): void {
       }
       return person;
     });
+    if (p0.accessRole === "dept_lead" && out.id !== p0.personId) return reply(c, deps, 200, personSummary(out), PERSON_SUMMARY);
     return reply(c, deps, 200, out, PERSON);
   });
 
@@ -122,12 +136,13 @@ export function peopleRoutes(app: App, deps: Deps): void {
     const inv = await body<Invite>(c, deps, "offload/control/person-invite.json");
     const { person, orgId } = await tenantTx(c, deps, async (tx, p) => {
       if (inv.departmentId) await ensureDepartments(tx, [inv.departmentId]);
-      const [dup] = await tx`select 1 from people where lower(email) = lower(${inv.email})`;
-      if (dup) throw conflict("a person with this email already exists");
+      // ON CONFLICT on the (tenant, lower(email)) index: a concurrent invite for the same email is a 409, not a 500.
       const [row] = await tx`insert into people (tenant_id, email, display_name, department_id, jurisdiction, source)
         values (current_setting('app.tenant_id')::uuid, ${inv.email}, ${inv.displayName}, ${inv.departmentId},
           ${inv.jurisdiction}, 'invite')
+        on conflict (tenant_id, lower(email)) do nothing
         returning id`;
+      if (!row) throw conflict("a person with this email already exists");
       await deps.ports.audit.write(tx, {
         actor: actorOf(p),
         action: "person.invite",

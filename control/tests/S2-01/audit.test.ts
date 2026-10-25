@@ -79,7 +79,7 @@ describe("AUDIT", () => {
     const victim = rows[1]!.id;
     await h.db.migrator`update audit_events set detail = '{"name":"Forged"}'::jsonb where tenant_id = ${t.id} and id = ${victim}`;
     const r = await ownerB.get("/v1/audit-log/verify");
-    expect(r.json).toEqual({ ok: false, brokenAt: victim });
+    expect(r.json).toEqual({ ok: false, brokenAt: victim, reason: "link" });
     // Tenant A's chain is independent and still verifies.
     expect((await owner.get("/v1/audit-log/verify")).json).toEqual({ ok: true });
   });
@@ -93,7 +93,7 @@ describe("AUDIT", () => {
     expect((await ownerB.get("/v1/audit-log/verify")).json).toEqual({ ok: true });
     const rows = await h.db.migrator`select id from audit_events where tenant_id = ${h.b.id} order by seq`;
     await h.db.migrator`delete from audit_events where tenant_id = ${h.b.id} and id = ${rows[1]!.id}`;
-    expect((await ownerB.get("/v1/audit-log/verify")).json).toEqual({ ok: false, brokenAt: rows[2]!.id });
+    expect((await ownerB.get("/v1/audit-log/verify")).json).toEqual({ ok: false, brokenAt: rows[2]!.id, reason: "link" });
   });
 
   test("AUDIT: offload_app has no UPDATE or DELETE on audit_events", async () => {

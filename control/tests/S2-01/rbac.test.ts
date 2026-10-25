@@ -50,7 +50,7 @@ function samplePath(p: Permission): string {
 }
 
 let h: Harness;
-type Send = (method: string, path: string, body?: unknown) => Promise<{ status: number }>;
+type Send = (method: string, path: string, body?: unknown) => Promise<{ status: number; json?: any }>;
 const callers = {} as Record<Column, Send>;
 
 beforeAll(async () => {
@@ -152,18 +152,19 @@ describe("RBAC every row x every access role over HTTP", () => {
       continue;
     }
     test(`RBAC: ${permissionKey(p)} is enforced for every access role`, async () => {
-      const results: Record<string, number> = {};
+      const actual: Record<string, string> = {};
       const expected: Record<string, string> = {};
       for (const col of COLUMNS) {
         const body = p.method === "GET" || p.method === "DELETE" ? undefined : {};
         const r = await callers[col](p.method, samplePath(p), body);
-        const allowed = parseCell(p.roles[col]).scope !== null;
-        results[col] = r.status;
-        expected[col] = allowed ? "not 403" : "403";
+        const cell = parseCell(p.roles[col]);
+        // Sensitive features are off by default. A person-scope sample names an unknown person: 404 at the gate.
+        expected[col] =
+          cell.scope === null ? "403 forbidden"
+          : cell.features.length > 0 && p.variant !== "scope=person" ? "403 feature_disabled"
+          : "not 403";
+        actual[col] = r.status === 403 ? `403 ${r.json?.error?.code}` : r.status === 401 ? "401" : "not 403";
       }
-      const actual = Object.fromEntries(
-        COLUMNS.map((c) => [c, results[c] === 403 ? "403" : results[c] === 401 ? `401` : "not 403"]),
-      );
       expect(actual).toEqual(expected);
     });
   }

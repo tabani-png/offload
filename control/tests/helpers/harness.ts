@@ -3,7 +3,7 @@ import type { Config } from "../../src/config.ts";
 import { generateEs256SigningKey } from "../../src/auth/jwt.ts";
 import { b64url } from "../../src/schema/encoding.ts";
 import { testDb, type TestDb } from "./db.ts";
-import { FakeWorkOS, WEBHOOK_SECRET } from "./fake-workos.ts";
+import { FAKE_ISSUER, FakeWorkOS, WEBHOOK_SECRET } from "./fake-workos.ts";
 import { createSession, seedTenant, type PersonKey, type SeededTenant, type SessionCred } from "./seed.ts";
 
 export const T0 = Date.UTC(2026, 9, 26, 9, 0, 0);
@@ -21,7 +21,7 @@ export function testConfig(appUrl: string, schema: string): Config {
     appPgUrl: appUrl,
     migratorPgUrl: "unused-in-tests",
     dbSchema: schema,
-    workos: { apiKey: "sk_test_fake", clientId: "client_fake", redirectUri: "https://control.test/auth/callback", webhookSecret: WEBHOOK_SECRET },
+    workos: { apiKey: "sk_test_fake", clientId: "client_fake", redirectUri: "https://control.test/auth/callback", webhookSecret: WEBHOOK_SECRET, issuer: FAKE_ISSUER },
     validateResponses: true,
     afterLoginPath: "/",
   };

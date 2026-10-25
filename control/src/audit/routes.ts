@@ -2,7 +2,7 @@ import type { App, Deps } from "../app.ts";
 import { reply, tenantTx } from "../app.ts";
 import { isUuid } from "../db/tenant.ts";
 import { invalid, page, pageParams } from "../schema/http.ts";
-import { listAudit, verifyChain } from "./audit.ts";
+import { latestAnchor, listAudit, verifyChain } from "./audit.ts";
 
 function tsParam(v: string | undefined, name: string): number | undefined {
   if (v === undefined) return undefined;
@@ -37,7 +37,7 @@ export function auditRoutes(app: App, deps: Deps): void {
   });
 
   app.get("/v1/audit-log/verify", async (c) => {
-    const out = await tenantTx(c, deps, (tx) => verifyChain(tx));
+    const out = await tenantTx(c, deps, async (tx) => verifyChain(tx, await latestAnchor(tx)));
     return reply(c, deps, 200, out, "offload/control/audit-verify.json");
   });
 }

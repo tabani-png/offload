@@ -79,8 +79,8 @@ async function upsertUser(tx: Tx, deps: Deps, u: DirectoryUser, deleted: boolean
 async function groupMembership(tx: Tx, deps: Deps, u: DirectoryUser, g: DirectoryGroup, added: boolean): Promise<void> {
   const [person] = await tx`select id, department_id from people where directory_user_id = ${u.id}`;
   if (!person) return;
-  const [m] = await tx`select department_id from department_group_mappings
-    where directory_group = ${g.id} or directory_group = ${g.name ?? null}`;
+  // By the IdP's group id only: a name is whatever an IdP admin types, so it could impersonate a mapped group.
+  const [m] = await tx`select department_id from department_group_mappings where directory_group = ${g.id}`;
   if (!m) return;
   if (added) {
     await tx`update people set department_id = ${m.department_id} where id = ${person.id}`;
@@ -125,6 +125,11 @@ export function directoryRoutes(app: App, deps: Deps): void {
     if (!tenantId) return c.body(null, 204);
 
     await withTenant(deps.db, { tenantId, accessRole: "system" }, async (tx) => {
+      // WorkOS redelivers until it sees a 2xx: each event id is applied once (in this transaction, so a failed
+      // attempt leaves no mark and the retry still applies).
+      const [fresh] = await tx`insert into directory_events (tenant_id, event_id, received_at)
+        values (${tenantId}, ${evt.id}, ${new Date(now)}) on conflict do nothing returning event_id`;
+      if (!fresh) return;
       switch (evt.event) {
         case "dsync.user.created":
         case "dsync.user.updated":

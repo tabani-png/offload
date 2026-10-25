@@ -8,7 +8,9 @@
     "start": "bun run src/server.ts",
     "test": "bun test tests",
     "typecheck": "tsc --noEmit",
-    "db:up": "docker compose up -d --wait"
+    "db:up": "docker compose up -d --wait",
+    "audit:anchor": "bun run src/audit/anchor-job.ts",
+    "audit:verify-chain": "bun run src/audit/verify-chain.ts"
   },
   "dependencies": {
     "@workos-inc/node": "11.0.0",

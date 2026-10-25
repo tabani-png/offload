@@ -2,14 +2,22 @@ import type { App, Deps } from "../app.ts";
 import { actorOf, authzPrincipal, body, principalOf, reply, tenantTx } from "../app.ts";
 import { isUuid, withLookup, withTenant } from "../db/tenant.ts";
 import { msNN, ms } from "../db/pool.ts";
-import { b64url, fromB64url, randomToken, sha256Hex, ulid } from "../schema/encoding.ts";
-import { forbidden, invalid, notFound, page, pageParams, unauthorized } from "../schema/http.ts";
+import { b64url, fromB64url, randomToken, safeEqual, sha256Hex, ulid } from "../schema/encoding.ts";
+import { HttpError, forbidden, invalid, notFound, page, pageParams, unauthorized } from "../schema/http.ts";
 import { authorize } from "../rbac/permissions.ts";
 import { importEs256Public, signJwt, verifyEs256 } from "./jwt.ts";
 import { DEVICE_AUDIENCE, TOKEN_ISSUER } from "./principal.ts";
-import { DEVICE_NONCE_TTL_MS, DEVICE_TOKEN_TTL_MS, ENROLLMENT_CODE_TTL_MS } from "../config.ts";
+import { DEVICE_NONCES_PER_WINDOW, DEVICE_NONCE_TTL_MS, DEVICE_TOKEN_TTL_MS, ENROLLMENT_CODE_TTL_MS } from "../config.ts";
 
 const DE = "offload/stage2/device-enrollment.schema.json#/$defs";
+/** RFC 7636 §4.1 code_verifier. */
+const VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/;
+
+/** b64url(sha256(verifier)) == code_challenge, compared in constant time (ADR 0111 §1). */
+export function verifierMatches(verifier: string | undefined, challenge: string): boolean {
+  if (verifier === undefined || !VERIFIER.test(verifier)) return false;
+  return safeEqual(b64url(new Bun.CryptoHasher("sha256").update(verifier).digest()), challenge);
+}
 
 /** Enrollment code: `<base64url(tenant uuid bytes)>.<secret>`; the tenant part routes, only sha256(code) is stored. */
 export function makeEnrollmentCode(tenantId: string): string {
@@ -92,12 +100,15 @@ export function deviceRoutes(app: App, deps: Deps): void {
       throw invalid("publicKeyJwk is not a valid P-256 public key");
     }
     const now = deps.clock.now();
+    const verifier = c.req.header("Offload-Code-Verifier");
     const out = await withTenant(deps.db, { tenantId, accessRole: "system" }, async (tx) => {
-      // Single use: the UPDATE claims the code atomically.
+      // Single use: the UPDATE claims the code atomically. A PKCE code is spent even when the verifier is wrong
+      // (the claim commits; nothing else does), so a stolen code gives one guess at most.
       const [code] = await tx`update enrollment_codes set used_at = ${new Date(now)}
         where code_hash = ${sha256Hex(req.enrollmentCode)} and used_at is null and expires_at > ${new Date(now)}
-        returning person_id`;
+        returning person_id, code_challenge`;
       if (!code) return null;
+      if (code.code_challenge !== null && !verifierMatches(verifier, code.code_challenge)) return null;
       const [person] = await tx`select access_role, state from people where id = ${code.person_id}`;
       if (!person || !["active", "leaving"].includes(person.state)) return null;
       const [d] = await tx`insert into devices (tenant_id, person_id, name, app_version, public_key_jwk, enrolled_at)
@@ -106,10 +117,10 @@ export function deviceRoutes(app: App, deps: Deps): void {
         returning id`;
       await deps.ports.audit.write(tx, {
         actor: { type: "person", id: code.person_id, accessRole: person.access_role },
-        action: "device.enroll",
+        action: "device.enrolled",
         subjectPersonId: code.person_id,
         resource: { type: "device", id: d!.id },
-        detail: { name: req.deviceName, appVersion: req.appVersion },
+        detail: { name: req.deviceName, appVersion: req.appVersion, method: code.code_challenge !== null ? "pkce" : "admin_code" },
       });
       return { deviceId: d!.id as string, personId: code.person_id as string, tenantId, enrolledAt: now };
     });
@@ -124,10 +135,20 @@ export function deviceRoutes(app: App, deps: Deps): void {
     const now = deps.clock.now();
     const nonce = randomToken(32);
     const expiresAt = now + DEVICE_NONCE_TTL_MS;
-    await withTenant(deps.db, { tenantId: d.tenant_id, principalId: deviceId, accessRole: "system" }, async (tx) => {
+    const retryAfterMs = await withTenant(deps.db, { tenantId: d.tenant_id, principalId: deviceId, accessRole: "system" }, async (tx) => {
+      // The endpoint is unauthenticated: cap the nonces one device can have live, so calls cannot grow the table.
+      await tx`select pg_advisory_xact_lock(hashtextextended('nonce:' || ${deviceId}, 0))`;
+      const [live] = await tx`select count(*)::int as n, min(expires_at) as first from device_nonces
+        where device_id = ${deviceId} and expires_at > ${new Date(now)}`;
+      if (live!.n >= DEVICE_NONCES_PER_WINDOW) return (live!.first as Date).getTime() - now;
       await tx`insert into device_nonces (tenant_id, nonce, device_id, expires_at)
         values (${d.tenant_id}, ${nonce}, ${deviceId}, ${new Date(expiresAt)})`;
+      return 0;
     });
+    if (retryAfterMs > 0) {
+      c.header("Retry-After", String(Math.max(1, Math.ceil(retryAfterMs / 1000))));
+      throw new HttpError(429, "rate_limited", "too many challenges for this device; retry later");
+    }
     return reply(c, deps, 200, { nonce, expiresAt }, `${DE}/challenge`);
   });
 
@@ -184,7 +205,7 @@ export function deviceRoutes(app: App, deps: Deps): void {
       const [d] = (await tx`select id, person_id, name, app_version, enrolled_at, last_sync_at, state
         from devices where id = ${id}`) as DeviceRow[];
       if (!d) throw notFound();
-      const dec = authorize(authzPrincipal(p0), c.get("perm")!, { personId: d.person_id }, new Set());
+      const dec = authorize(authzPrincipal(p0), c.get("perm")!, { personId: d.person_id }, c.get("features"));
       if (!dec.allow) throw notFound();
       const now = deps.clock.now();
       const [r] = (await tx`update devices set state = 'revoked', revoked_at = coalesce(revoked_at, ${new Date(now)})

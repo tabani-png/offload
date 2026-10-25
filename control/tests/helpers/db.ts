@@ -12,6 +12,9 @@ export interface TestDb {
   /** offload_app: what the server uses. */
   app: Db;
   appUrl: string;
+  /** offload_anchor: the anchoring job and verify-chain. */
+  anchor: Db;
+  anchorUrl: string;
   close(): Promise<void>;
 }
 
@@ -36,13 +39,20 @@ export async function testDb(): Promise<TestDb> {
   u.password = APP_ROLE_PASSWORD;
   const appUrl = u.toString();
   const app = createPool(appUrl, { schema, max: 8 });
+  await migrator.unsafe(`alter role offload_anchor login password '${APP_ROLE_PASSWORD}'`);
+  u.username = "offload_anchor";
+  const anchorUrl = u.toString();
+  const anchor = createPool(anchorUrl, { schema, max: 2 });
   return {
     schema,
     migrator,
     app,
     appUrl,
+    anchor,
+    anchorUrl,
     async close() {
       await app.close();
+      await anchor.close();
       await migrator.unsafe(`drop schema ${schema} cascade`);
       await migrator.close();
     },

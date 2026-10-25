@@ -8,7 +8,7 @@ import { HttpError, invalid, notFound } from "../../schema/http.ts";
 
 /** Resource-level check for the matched matrix row; out of scope is 404 (existence is not revealed). */
 export function allow(c: Context<AppEnv>, p: Principal, resource: AuthzResource): void {
-  const d = authorize(authzPrincipal(p), c.get("perm")!, resource, new Set());
+  const d = authorize(authzPrincipal(p), c.get("perm")!, resource, c.get("features"));
   if (!d.allow) throw new HttpError(d.status, d.code, d.code === "not_found" ? "not found" : "not allowed");
 }
 

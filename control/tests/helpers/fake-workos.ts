@@ -6,8 +6,11 @@ import { randomToken } from "../../src/schema/encoding.ts";
 
 export const FAKE_AUTHKIT_URL = "https://authkit.fake.test/authorize";
 export const WEBHOOK_SECRET = "whsec_test_offload";
+export const FAKE_ISSUER = "https://authkit.fake.test/user_management/client_fake";
 
 export interface FakeLogin {
+  /** Claim overrides, to test issuer and audience checks. */
+  claims?: Record<string, unknown>;
   userId: string;
   email: string;
   orgId: string | null;
@@ -52,7 +55,7 @@ export class FakeWorkOS implements WorkOSIdentity {
     this.codes.delete(code);
     const iat = Math.floor(this.now() / 1000);
     const accessToken = await signJwt(
-      { sub: l.userId, sid: l.sid, ...(l.orgId ? { org_id: l.orgId } : {}), iat, exp: iat + 300 },
+      { iss: FAKE_ISSUER, sub: l.userId, sid: l.sid, ...(l.orgId ? { org_id: l.orgId } : {}), iat, exp: iat + 300, ...l.claims },
       this.key,
     );
     return {
@@ -75,8 +78,8 @@ export class FakeWorkOS implements WorkOSIdentity {
   }
 
   /** A Directory Sync webhook request body + headers, signed like WorkOS does. */
-  async webhook(event: string, data: Record<string, unknown>, opts: { secret?: string; at?: number } = {}) {
-    const body = JSON.stringify({ id: `event_${randomToken(8)}`, event, data, created_at: new Date(this.now()).toISOString() });
+  async webhook(event: string, data: Record<string, unknown>, opts: { secret?: string; at?: number; id?: string } = {}) {
+    const body = JSON.stringify({ id: opts.id ?? `event_${randomToken(8)}`, event, data, created_at: new Date(this.now()).toISOString() });
     const sig = await signWebhook(opts.secret ?? WEBHOOK_SECRET, body, opts.at ?? this.now());
     return { body, headers: { "WorkOS-Signature": sig, "Content-Type": "application/json" } };
   }

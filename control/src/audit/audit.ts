@@ -80,17 +80,48 @@ export async function writeAudit(tx: Tx, input: AuditInput, now: number): Promis
   return { ...base, hash };
 }
 
-/** Recomputes the tenant's chain. `brokenAt` is the first event whose hash or link does not match. */
-export async function verifyChain(tx: Tx): Promise<{ ok: true } | { ok: false; brokenAt: string }> {
-  const rows = (await tx`select * from audit_events order by seq`) as AuditRow[];
+/** A chain head copied out of the app's reach (audit_anchors, signed checkpoint files). */
+export interface AnchorPoint {
+  seq: number;
+  id: string;
+  hash: string;
+}
+
+export type ChainVerdict =
+  | { ok: true }
+  | { ok: false; brokenAt: string; reason: "link" | "truncated" | "rewritten" };
+
+/**
+ * Recomputes the tenant's chain. `brokenAt` is the first event whose hash or link does not match. With an anchor, the
+ * chain must still reach the anchored seq with the anchored event and hash: a shorter chain was truncated, a different
+ * event or hash there means the chain was rewritten (links alone cannot tell, the table owner can recompute them).
+ */
+export async function verifyChain(tx: Tx, anchor: AnchorPoint | null = null): Promise<ChainVerdict> {
+  const rows = (await tx`select * from audit_events order by seq`) as Array<AuditRow & { seq: string | number }>;
   let prev: string | null = null;
+  let atAnchor: { id: string; hash: string } | null = null;
+  let headSeq = 0;
   for (const r of rows) {
     const e = auditDto(r);
     const { hash, ...rest } = e;
-    if (e.prevHash !== prev || chainHash(rest) !== hash) return { ok: false, brokenAt: e.id };
+    if (e.prevHash !== prev || chainHash(rest) !== hash) return { ok: false, brokenAt: e.id, reason: "link" };
     prev = hash;
+    headSeq = Number(r.seq);
+    if (anchor && headSeq === anchor.seq) atAnchor = { id: e.id, hash };
+  }
+  if (anchor) {
+    if (headSeq < anchor.seq) return { ok: false, brokenAt: anchor.id, reason: "truncated" };
+    if (!atAnchor || atAnchor.id !== anchor.id || atAnchor.hash !== anchor.hash) {
+      return { ok: false, brokenAt: anchor.id, reason: "rewritten" };
+    }
   }
   return { ok: true };
+}
+
+/** The tenant's latest anchor from audit_anchors, or null before the first anchoring run. */
+export async function latestAnchor(tx: Tx): Promise<AnchorPoint | null> {
+  const [a] = await tx`select head_seq, head_id, head_hash from audit_anchors order by head_seq desc limit 1`;
+  return a ? { seq: Number(a.head_seq), id: a.head_id as string, hash: a.head_hash as string } : null;
 }
 
 export interface AuditQuery {

@@ -16,6 +16,13 @@ export interface PersonDto {
   noticeAckVersionId: string | null;
 }
 
+/** What a department lead sees about a person in scope (schemas/stage2/person-summary.schema.json, ADR 0111 §2). */
+export type PersonSummaryDto = Pick<PersonDto, "id" | "displayName" | "departmentId" | "jobRoleIds" | "state">;
+
+export function personSummary(p: PersonDto): PersonSummaryDto {
+  return { id: p.id, displayName: p.displayName, departmentId: p.departmentId, jobRoleIds: p.jobRoleIds, state: p.state };
+}
+
 export interface PersonRow {
   id: string;
   email: string;

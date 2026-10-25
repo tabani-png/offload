@@ -41,7 +41,7 @@ describe("DEVICE", () => {
     expect(r.json.tenantId).toBe(h.a.id);
     const list = await member.get("/v1/devices");
     expect(list.json.items.map((d: { id: string }) => d.id)).toContain(r.json.deviceId);
-    const [ev] = await h.db.migrator`select 1 from audit_events where action = 'device.enroll' and resource_id = ${r.json.deviceId}`;
+    const [ev] = await h.db.migrator`select 1 from audit_events where action = 'device.enrolled' and resource_id = ${r.json.deviceId}`;
     expect(ev).toBeTruthy();
   });
 

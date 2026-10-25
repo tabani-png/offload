@@ -79,6 +79,7 @@ export const INLINE_SCHEMAS: Array<{ $id: string } & Record<string, unknown>> = 
     ),
   },
   list("person-list", `${S}/person.schema.json`),
+  list("person-summary-list", `${S}/person-summary.schema.json`),
   {
     $id: `${P}/person-patch.json`,
     ...obj(
@@ -151,7 +152,10 @@ export const INLINE_SCHEMAS: Array<{ $id: string } & Record<string, unknown>> = 
   list("audit-event-list", `${S}/audit-event.schema.json`),
   {
     $id: `${P}/audit-verify.json`,
-    ...obj({ ok: { type: "boolean" }, brokenAt: { $ref: `${C}/ulid` } }, ["ok"]),
+    ...obj(
+      { ok: { type: "boolean" }, brokenAt: { $ref: `${C}/ulid` }, reason: { enum: ["link", "truncated", "rewritten"] } },
+      ["ok"],
+    ),
   },
   {
     // WorkOS webhook envelope: only the fields we read are constrained; WorkOS adds fields over time.

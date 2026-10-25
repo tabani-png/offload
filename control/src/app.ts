@@ -12,7 +12,9 @@ import { withTenant } from "./db/tenant.ts";
 import { defaultPorts, type Clock, type Ports } from "./ports.ts";
 import { createValidator, type Validator } from "./schema/registry.ts";
 import { ERROR_SCHEMA, HttpError, errorBody, forbidden, notFound, readBody, send, unauthorized } from "./schema/http.ts";
-import { matchPermission, parseCell, type AccessRole, type Permission, type Scope } from "./rbac/permissions.ts";
+import {
+  matchPermission, parseCell, type AccessRole, type Permission, type Scope, type SensitiveFeature,
+} from "./rbac/permissions.ts";
 import type { SigningKey } from "./auth/jwt.ts";
 import type { WorkOSIdentity } from "./auth/workos.ts";
 import { authenticate } from "./auth/principal.ts";
@@ -51,6 +53,8 @@ export interface AppEnv {
     principal: Principal | null;
     perm: Permission | null;
     scope: Scope | null;
+    /** Sensitive features enabled for the request's subject, resolved by the gate (empty when the row needs none). */
+    features: ReadonlySet<SensitiveFeature>;
   };
 }
 
@@ -134,6 +138,40 @@ export interface CreateAppOpts {
 }
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const NO_FEATURES: ReadonlySet<SensitiveFeature> = new Set();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Sensitive features for an F:x cell, resolved centrally (ADR 0111 §5: by the subject's jurisdiction). A
+ * `scope=person:<id>` request is about that person (unknown or malformed id: 404). A request with no person subject
+ * (group views) needs the feature on for at least one jurisdiction in the tenant; its handler still drops subjects
+ * whose jurisdiction does not have it.
+ */
+async function subjectFeatures(
+  deps: Deps,
+  p: Principal,
+  scope: Scope,
+  query: URLSearchParams,
+): Promise<ReadonlySet<SensitiveFeature>> {
+  const q = query.get("scope") ?? "";
+  const subject = q.startsWith("person:") ? q.slice("person:".length) : null;
+  if (subject !== null && !UUID_RE.test(subject)) throw notFound();
+  return withTenant(deps.db, { tenantId: p.tenantId, principalPersonId: p.personId, accessRole: "system" }, async (tx) => {
+    if (subject !== null) {
+      const [row] = await tx`select jurisdiction, department_id from people where id = ${subject}`;
+      // Out of the caller's scope is 404 before any feature answer, so a 403 never reveals who exists where.
+      if (!row) throw notFound();
+      if (scope === "S" && subject !== p.personId) throw notFound();
+      if (scope === "Dp" && !p.departmentScope.includes(row.department_id as string)) throw notFound();
+      return deps.ports.features.enabledFor(tx, row.jurisdiction as string);
+    }
+    const all = new Set<SensitiveFeature>();
+    for (const r of await tx`select distinct jurisdiction from people where state in ('active', 'leaving')`) {
+      for (const f of await deps.ports.features.enabledFor(tx, r.jurisdiction as string)) all.add(f);
+    }
+    return all;
+  });
+}
 /** Routes outside the RBAC matrix: the browser login round trip. */
 const PUBLIC = new Set(["GET /auth/login", "GET /auth/callback", "POST /auth/logout"]);
 
@@ -166,6 +204,7 @@ export async function createApp(opts: CreateAppOpts) {
     c.set("principal", null);
     c.set("perm", null);
     c.set("scope", null);
+    c.set("features", NO_FEATURES);
     const url = new URL(c.req.url);
     if (PUBLIC.has(`${c.req.method} ${url.pathname}`)) return next();
     const m = matchPermission(c.req.method, url.pathname, url.searchParams);
@@ -175,11 +214,20 @@ export async function createApp(opts: CreateAppOpts) {
     const principal = await authenticate(c, deps);
     if (!principal) throw unauthorized();
     const column = principal.kind === "device" ? "device" : principal.accessRole;
-    const { scope } = parseCell(m.perm.roles[column]);
+    const { scope, features: needs } = parseCell(m.perm.roles[column]);
     if (scope === null) throw forbidden(`${column} may not ${m.perm.method} ${m.perm.path}`);
     if (principal.kind === "person" && MUTATING.has(c.req.method)) {
       const token = c.req.header("X-CSRF-Token") ?? "";
       if (!safeEqual(token, principal.csrfToken)) throw forbidden("missing or wrong X-CSRF-Token");
+    }
+    // F:x cells are enforced here, before any handler, so no handler can forget them.
+    if (needs.length > 0) {
+      const enabled = await subjectFeatures(deps, principal, scope, url.searchParams);
+      const missing = needs.filter((f) => !enabled.has(f));
+      if (missing.length > 0) {
+        throw new HttpError(403, "feature_disabled", `${missing.join(", ")} is not enabled for this subject`);
+      }
+      c.set("features", enabled);
     }
     c.set("principal", principal);
     c.set("scope", scope);
