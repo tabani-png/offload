@@ -1,0 +1,85 @@
+{
+  "computation": "hs-1",
+  "inputsDigest": "01453fca45fd74af943d81b73b6757c0a92b293abbc3559802cfcc4c41c5eaed",
+  "scope": {
+    "type": "company",
+    "id": null
+  },
+  "period": {
+    "from": "2026-10-01",
+    "toExclusive": "2026-11-01",
+    "timezone": "America/New_York"
+  },
+  "total": {
+    "seconds": 5370,
+    "hours": 1.5,
+    "byGrade": {
+      "A": 5370,
+      "B": 0,
+      "C": 0
+    },
+    "bySource": {
+      "observed": 5370,
+      "user_estimate": 0
+    },
+    "byRuntime": {
+      "mac": 3295,
+      "cloud": 2075
+    },
+    "overnightSeconds": 2075,
+    "runs": {
+      "success": 5,
+      "failed": 1,
+      "cancelled": 0,
+      "rejected": 0,
+      "capped": 0
+    },
+    "people": 5
+  },
+  "children": [
+    {
+      "scope": {
+        "type": "department",
+        "id": "0000000c-0000-4000-8000-000000000001"
+      },
+      "label": "Sales",
+      "value": {
+        "seconds": 5370,
+        "hours": 1.5,
+        "byGrade": {
+          "A": 5370,
+          "B": 0,
+          "C": 0
+        },
+        "bySource": {
+          "observed": 5370,
+          "user_estimate": 0
+        },
+        "byRuntime": {
+          "mac": 3295,
+          "cloud": 2075
+        },
+        "overnightSeconds": 2075,
+        "runs": {
+          "success": 5,
+          "failed": 1,
+          "cancelled": 0,
+          "rejected": 0,
+          "capped": 0
+        },
+        "people": 5
+      }
+    }
+  ],
+  "topWorkflows": [
+    {
+      "workflowId": "0000000a-0000-4000-8000-000000000065",
+      "name": "Outreach emails",
+      "jobRoleId": "0000000d-0000-4000-8000-000000000001",
+      "grade": "A",
+      "seconds": 5370
+    }
+  ],
+  "anomalies": [],
+  "final": false
+}

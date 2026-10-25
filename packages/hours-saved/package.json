@@ -1,0 +1,16 @@
+{
+  "name": "@offload/hours-saved",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "hs-1 hours-saved engine (ADR 0109): pure, dependency-free, integer seconds.",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "bun test tests",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.12",
+    "typescript": "5.9.3"
+  }
+}

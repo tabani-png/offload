@@ -1,0 +1,110 @@
+{
+  "computation": "hs-1",
+  "workflowId": "0000000a-0000-4000-8000-000000000065",
+  "version": 1,
+  "baseline": {
+    "source": "observed",
+    "n": 6,
+    "medianSeconds": 265,
+    "q1": 250,
+    "q3": 280,
+    "grade": "A",
+    "samples": [
+      {
+        "instanceRef": "00000000000000000000000000000001",
+        "activeSeconds": 240,
+        "day": "2026-09-15"
+      },
+      {
+        "instanceRef": "00000000000000000000000000000002",
+        "activeSeconds": 300,
+        "day": "2026-09-15"
+      },
+      {
+        "instanceRef": "00000000000000000000000000000003",
+        "activeSeconds": 260,
+        "day": "2026-09-15"
+      },
+      {
+        "instanceRef": "00000000000000000000000000000004",
+        "activeSeconds": 280,
+        "day": "2026-09-15"
+      },
+      {
+        "instanceRef": "00000000000000000000000000000005",
+        "activeSeconds": 250,
+        "day": "2026-09-15"
+      },
+      {
+        "instanceRef": "00000000000000000000000000000006",
+        "activeSeconds": 270,
+        "day": "2026-09-15"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "runId": "01JC0000000000000000200001",
+      "endedAt": 1791644400000,
+      "outcome": "success",
+      "itemsSucceeded": 10,
+      "baselineSeconds": 265,
+      "residualSeconds": 420,
+      "savedSeconds": 2230,
+      "note": null
+    },
+    {
+      "runId": "01JC0000000000000000200002",
+      "endedAt": 1791730800000,
+      "outcome": "success",
+      "itemsSucceeded": 5,
+      "baselineSeconds": 265,
+      "residualSeconds": 260,
+      "savedSeconds": 1065,
+      "note": null
+    },
+    {
+      "runId": "01JC0000000000000000200003",
+      "endedAt": 1791817200000,
+      "outcome": "success",
+      "itemsSucceeded": 4,
+      "baselineSeconds": 265,
+      "residualSeconds": null,
+      "savedSeconds": 0,
+      "note": "not_reviewed_yet"
+    },
+    {
+      "runId": "01JC0000000000000000200004",
+      "endedAt": 1791903600000,
+      "outcome": "failed",
+      "itemsSucceeded": 0,
+      "baselineSeconds": 265,
+      "residualSeconds": null,
+      "savedSeconds": 0,
+      "note": null
+    },
+    {
+      "runId": "01JC0000000000000000200005",
+      "endedAt": 1791990000000,
+      "outcome": "success",
+      "itemsSucceeded": 2,
+      "baselineSeconds": 265,
+      "residualSeconds": 600,
+      "savedSeconds": 0,
+      "note": null
+    },
+    {
+      "runId": "01JC0000000000000000200006",
+      "endedAt": 1792047600000,
+      "outcome": "success",
+      "itemsSucceeded": 8,
+      "baselineSeconds": 265,
+      "residualSeconds": 45,
+      "savedSeconds": 2075,
+      "note": "policy_committed"
+    }
+  ],
+  "page": {
+    "nextCursor": null
+  }
+}
