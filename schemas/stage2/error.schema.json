@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/error.schema.json",
+  "title": "Error response (every non-2xx)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "error"
+  ],
+  "properties": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "unauthorized",
+            "forbidden",
+            "not_found",
+            "conflict",
+            "validation_failed",
+            "consent_missing",
+            "feature_disabled",
+            "group_floor",
+            "forbidden_binding",
+            "recipient_not_allowed",
+            "hash_mismatch",
+            "token_used",
+            "kill_switch_active",
+            "budget_exceeded",
+            "rate_limited",
+            "replay",
+            "bad_signature",
+            "server_error"
+          ]
+        },
+        "message": {
+          "$ref": "common.schema.json#/$defs/plainText"
+        },
+        "details": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

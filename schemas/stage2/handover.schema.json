@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/handover.schema.json",
+  "title": "Hand-over task DTO (ADR 0107).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "personId",
+    "workflowId",
+    "state",
+    "successor",
+    "inFlight",
+    "inboxStep",
+    "removedConnections",
+    "assignedBy",
+    "assignedAt"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "personId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "workflowId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "state": {
+      "enum": [
+        "open",
+        "assigned",
+        "closed"
+      ]
+    },
+    "successor": {
+      "oneOf": [
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "personId"
+              ],
+              "properties": {
+                "type": {
+                  "const": "person"
+                },
+                "personId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "roleIdentityId"
+              ],
+              "properties": {
+                "type": {
+                  "const": "role_identity"
+                },
+                "roleIdentityId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "inFlight": {
+      "enum": [
+        "pause",
+        "handover_message",
+        "stop"
+      ]
+    },
+    "inboxStep": {
+      "oneOf": [
+        {
+          "enum": [
+            "google_migrate",
+            "google_alias",
+            "google_archive",
+            "m365_shared_mailbox",
+            "none"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "removedConnections": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/uuid"
+      },
+      "maxItems": 100
+    },
+    "assignedBy": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "assignedAt": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/tsMs"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

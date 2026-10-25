@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/notice.schema.json",
+  "title": "Notice version DTO",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "version",
+    "title",
+    "markdown",
+    "features",
+    "jurisdictions",
+    "publishedAt",
+    "replacedAt",
+    "template",
+    "acks"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "title": {
+      "$ref": "common.schema.json#/$defs/name"
+    },
+    "markdown": {
+      "type": "string",
+      "maxLength": 65536
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/feature"
+      },
+      "maxItems": 3
+    },
+    "jurisdictions": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/jurisdiction"
+      },
+      "maxItems": 100
+    },
+    "publishedAt": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/tsMs"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "replacedAt": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/tsMs"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "template": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "acks": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

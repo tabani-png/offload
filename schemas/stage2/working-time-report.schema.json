@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/working-time-report.schema.json",
+  "title": "GET /v1/metrics/working-time (only when working_time is enabled; group floor applies; no per-person ranking).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scope",
+    "period",
+    "value"
+  ],
+  "properties": {
+    "scope": {
+      "$ref": "common.schema.json#/$defs/scope"
+    },
+    "period": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "toExclusive"
+      ],
+      "properties": {
+        "from": {
+          "$ref": "common.schema.json#/$defs/day"
+        },
+        "toExclusive": {
+          "$ref": "common.schema.json#/$defs/day"
+        }
+      }
+    },
+    "value": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "people",
+            "medianActiveMinutesPerDay",
+            "p25",
+            "p75"
+          ],
+          "properties": {
+            "people": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "medianActiveMinutesPerDay": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "p25": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "p75": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "$ref": "common.schema.json#/$defs/suppressed"
+        }
+      ]
+    }
+  }
+}

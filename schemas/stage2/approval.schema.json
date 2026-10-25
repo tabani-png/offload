@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/approval.schema.json",
+  "title": "POST /v1/batches/:hash/approve body and response",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "batchHash",
+        "itemKeys",
+        "edits"
+      ],
+      "properties": {
+        "batchHash": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "itemKeys": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "maxItems": 500
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "edits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "fields"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "string",
+                      "maxLength": 80
+                    },
+                    {
+                      "type": "string",
+                      "maxLength": 20000
+                    }
+                  ],
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "maxItems": 40
+              }
+            }
+          },
+          "maxItems": 500
+        }
+      },
+      "description": "Edits produce a new batch hash; the response returns it and approval applies to the edited batch."
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "batchHash",
+        "state",
+        "approverKind",
+        "approvedBy",
+        "tokenExpiresAt"
+      ],
+      "properties": {
+        "batchHash": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "state": {
+          "enum": [
+            "approved",
+            "sending"
+          ]
+        },
+        "approverKind": {
+          "$ref": "common.schema.json#/$defs/approverKind"
+        },
+        "approvedBy": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "tokenExpiresAt": {
+          "$ref": "common.schema.json#/$defs/tsMs"
+        }
+      }
+    }
+  }
+}

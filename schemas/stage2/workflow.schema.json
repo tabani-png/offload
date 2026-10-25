@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/workflow.schema.json",
+  "title": "Registry workflow DTO",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "state",
+    "jobRoleId",
+    "departmentId",
+    "latestVersion",
+    "proposedBy",
+    "promotedBy",
+    "promotedAt",
+    "baselineGrade",
+    "versions"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "name": {
+      "$ref": "common.schema.json#/$defs/name"
+    },
+    "state": {
+      "enum": [
+        "proposed",
+        "role",
+        "retired",
+        "declined"
+      ]
+    },
+    "jobRoleId": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "departmentId": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "latestVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "proposedBy": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "promotedBy": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "promotedAt": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/tsMs"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "baselineGrade": {
+      "oneOf": [
+        {
+          "enum": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "versions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "definitionHash",
+          "createdAt",
+          "createdBy"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "definitionHash": {
+            "$ref": "common.schema.json#/$defs/sha256"
+          },
+          "createdAt": {
+            "$ref": "common.schema.json#/$defs/tsMs"
+          },
+          "createdBy": {
+            "$ref": "common.schema.json#/$defs/uuid"
+          }
+        }
+      },
+      "maxItems": 500
+    }
+  }
+}

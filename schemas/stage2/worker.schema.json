@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/worker.schema.json",
+  "title": "Cloud worker DTO (Managed Agents agent + environment per role workflow version).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "workflowId",
+    "version",
+    "jobRoleId",
+    "identityId",
+    "state",
+    "schedule",
+    "sessionBudgetCents",
+    "externalRefs",
+    "createdAt"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "workflowId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "jobRoleId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "identityId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "state": {
+      "enum": [
+        "provisioning",
+        "ready",
+        "paused",
+        "failed",
+        "retired"
+      ]
+    },
+    "schedule": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cron",
+            "timezone",
+            "nextRunAt"
+          ],
+          "properties": {
+            "cron": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "timezone": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "nextRunAt": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/tsMs"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sessionBudgetCents": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "externalRefs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agentId",
+        "agentVersion",
+        "environmentId",
+        "deploymentId"
+      ],
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "agentVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "environmentId": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "deploymentId": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "createdAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    }
+  }
+}

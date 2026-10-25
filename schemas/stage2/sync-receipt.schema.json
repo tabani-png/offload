@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/sync-receipt.schema.json",
+  "title": "Response to POST /v1/sync/batches",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "seq",
+    "accepted",
+    "rejected"
+  ],
+  "properties": {
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "accepted": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/ulid"
+      }
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "code",
+          "retryable"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "common.schema.json#/$defs/ulid"
+          },
+          "code": {
+            "enum": [
+              "validation_failed",
+              "consent_missing",
+              "feature_disabled",
+              "duplicate",
+              "unknown_workflow",
+              "rate_limited",
+              "server_error"
+            ]
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

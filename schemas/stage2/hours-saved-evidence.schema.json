@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/hours-saved-evidence.schema.json",
+  "title": "GET /v1/metrics/hours-saved/evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "computation",
+    "workflowId",
+    "version",
+    "baseline",
+    "runs",
+    "page"
+  ],
+  "properties": {
+    "computation": {
+      "const": "hs-1"
+    },
+    "workflowId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "n",
+        "medianSeconds",
+        "q1",
+        "q3",
+        "grade",
+        "samples"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "observed",
+            "user_estimate",
+            "default"
+          ]
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "medianSeconds": {
+          "$ref": "common.schema.json#/$defs/seconds"
+        },
+        "q1": {
+          "$ref": "common.schema.json#/$defs/seconds"
+        },
+        "q3": {
+          "$ref": "common.schema.json#/$defs/seconds"
+        },
+        "grade": {
+          "oneOf": [
+            {
+              "enum": [
+                "A",
+                "B",
+                "C"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "samples": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "instanceRef",
+              "activeSeconds",
+              "day"
+            ],
+            "properties": {
+              "instanceRef": {
+                "$ref": "common.schema.json#/$defs/instanceRef"
+              },
+              "activeSeconds": {
+                "$ref": "common.schema.json#/$defs/seconds"
+              },
+              "day": {
+                "$ref": "common.schema.json#/$defs/day"
+              }
+            }
+          },
+          "maxItems": 500
+        }
+      }
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "runId",
+          "endedAt",
+          "outcome",
+          "itemsSucceeded",
+          "baselineSeconds",
+          "residualSeconds",
+          "savedSeconds",
+          "note"
+        ],
+        "properties": {
+          "runId": {
+            "$ref": "common.schema.json#/$defs/ulid"
+          },
+          "endedAt": {
+            "$ref": "common.schema.json#/$defs/tsMs"
+          },
+          "outcome": {
+            "$ref": "common.schema.json#/$defs/runOutcome"
+          },
+          "itemsSucceeded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "baselineSeconds": {
+            "$ref": "common.schema.json#/$defs/seconds"
+          },
+          "residualSeconds": {
+            "oneOf": [
+              {
+                "$ref": "common.schema.json#/$defs/seconds"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "savedSeconds": {
+            "$ref": "common.schema.json#/$defs/seconds"
+          },
+          "note": {
+            "oneOf": [
+              {
+                "enum": [
+                  "not_reviewed_yet",
+                  "policy_committed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "maxItems": 1000
+    },
+    "page": {
+      "$ref": "common.schema.json#/$defs/page"
+    }
+  }
+}

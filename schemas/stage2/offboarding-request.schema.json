@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/offboarding-request.schema.json",
+  "title": "POST /v1/people/:id/offboard",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "effectiveOn",
+    "reason",
+    "note"
+  ],
+  "properties": {
+    "effectiveOn": {
+      "$ref": "common.schema.json#/$defs/day"
+    },
+    "reason": {
+      "enum": [
+        "directory_deactivated",
+        "admin",
+        "end_date"
+      ]
+    },
+    "note": {
+      "type": "string",
+      "maxLength": 500
+    }
+  }
+}

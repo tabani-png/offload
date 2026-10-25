@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/run-outcome.schema.json",
+  "title": "Sync object or DTO: outcome of one workflow run. No content (ADR 0103).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "createdAt",
+    "runId",
+    "workflowId",
+    "version",
+    "runtime",
+    "startedAt",
+    "endedAt",
+    "outcome",
+    "items",
+    "batchHash",
+    "approverKind",
+    "costCents",
+    "overnight"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/ulid"
+    },
+    "kind": {
+      "const": "run_outcome"
+    },
+    "createdAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "runId": {
+      "$ref": "common.schema.json#/$defs/ulid"
+    },
+    "workflowId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "runtime": {
+      "$ref": "common.schema.json#/$defs/runtime"
+    },
+    "startedAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "endedAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "outcome": {
+      "$ref": "common.schema.json#/$defs/runOutcome"
+    },
+    "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "sent",
+        "failedBeforeSend",
+        "unknown",
+        "pending"
+      ],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sent": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failedBeforeSend": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unknown": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pending": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "batchHash": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "approverKind": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/approverKind"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "overnightPolicyId": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "costCents": {
+      "$ref": "common.schema.json#/$defs/cents"
+    },
+    "errorCode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z_]+$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "overnight": {
+      "type": "boolean"
+    }
+  }
+}

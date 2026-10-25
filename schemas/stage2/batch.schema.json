@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/batch.schema.json",
+  "title": "Commit batch DTO (Stage 1 hash semantics, ADR 0105 \u00a73).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "batchHash",
+    "workflowId",
+    "version",
+    "runId",
+    "runtime",
+    "identity",
+    "state",
+    "createdAt",
+    "expiresAt",
+    "items",
+    "overnightEvaluation"
+  ],
+  "properties": {
+    "batchHash": {
+      "$ref": "common.schema.json#/$defs/sha256"
+    },
+    "workflowId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "runId": {
+      "$ref": "common.schema.json#/$defs/ulid"
+    },
+    "runtime": {
+      "$ref": "common.schema.json#/$defs/runtime"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "person",
+            "role_identity"
+          ]
+        },
+        "id": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        }
+      }
+    },
+    "state": {
+      "enum": [
+        "pending",
+        "approved",
+        "sending",
+        "done",
+        "rejected",
+        "expired"
+      ]
+    },
+    "createdAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "expiresAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "capability",
+          "fields",
+          "itemHash",
+          "state"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "stable item key, Stage 1 semantics"
+          },
+          "capability": {
+            "$ref": "common.schema.json#/$defs/capability"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "string",
+                  "maxLength": 20000
+                }
+              ],
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "maxItems": 40
+          },
+          "itemHash": {
+            "$ref": "common.schema.json#/$defs/sha256"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "sending",
+              "sent",
+              "failed_before_send",
+              "unknown",
+              "rejected"
+            ]
+          }
+        },
+        "description": "fields are [label, value] pairs shown to the approver. Visible to the runner, approvers of the job role and the broker only; never in aggregates."
+      },
+      "maxItems": 500
+    },
+    "overnightEvaluation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "policyId",
+            "result",
+            "reason"
+          ],
+          "properties": {
+            "policyId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "result": {
+              "enum": [
+                "allow",
+                "queue",
+                "trip"
+              ]
+            },
+            "reason": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

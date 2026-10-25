@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/stage2/kill-switch.schema.json",
+  "title": "Kill switch DTO",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scope",
+    "targetId",
+    "active",
+    "setBy",
+    "setAt",
+    "reason"
+  ],
+  "properties": {
+    "scope": {
+      "enum": [
+        "tenant",
+        "person",
+        "workflow"
+      ]
+    },
+    "targetId": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "active": {
+      "type": "boolean"
+    },
+    "setBy": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "setAt": {
+      "$ref": "common.schema.json#/$defs/tsMs"
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 200
+    }
+  }
+}
