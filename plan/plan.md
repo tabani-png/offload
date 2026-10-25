@@ -53,6 +53,11 @@ flowchart LR
 | s08 | workflow review + dashboard + 7-day timeline | UI | s06, s05 API |
 | s09 | demo seed: 7 synthetic days incl. 100 outreach emails/day, end to end | engineer | s02..s05 |
 | s10 | e2e, design review with screenshots, reality check | QA + UI | all |
+| s11 | perception: masked keyframes, local vision Captioner (Ollama), Frame notes in store (ADR 0007) | engineer (Swift + TS) | s02 |
+| s12 | understanding: span descriptions, local embeddings, any-domain task induction, multi-domain fixtures | engineer (TS) | s11 |
+| s13 | connector chain: MCP -> Composio -> API -> computer use, health checks, auto-fallback | engineer (TS) | s10e |
+| s14 | general workflow builder: any task profile -> SKILL.md + steps + gates; onboarding role/industry context | engineer (TS) + UI | s12, s13 |
+| s15 | e2e any-domain + independent design review 4 | QA + UI | all |
 
 ## API (brain, 127.0.0.1, bearer token)
 - `GET /status` observer state, days stored, next purge.
