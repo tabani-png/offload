@@ -23,6 +23,9 @@ export interface ModelRequest {
   stepKey?: string;
   /** s14 router: a check of the reply; a non-null reason escalates to the next tier (Haiku -> Sonnet -> Opus). */
   validate?: (text: string) => string | null;
+  /** s18: the run's name map (privacy/names.ts). The router masks the request with it and restores the reply; one map
+   * per run keeps placeholders stable across calls. Never sent: only its placeholders are. */
+  names?: import("../privacy/names.ts").NameMap;
 }
 
 export interface Model {
@@ -109,7 +112,8 @@ const sentence = (s: string) => (/[.!?]$/.test(s.trim()) ? s.trim() : `${s.trim(
 
 /** The name the examples sign with, when most of them agree. */
 function exampleSign(examples: readonly string[]): string | null {
-  const names = examples.map(lastLine).filter((l): l is string => l !== null && /^[A-Z][\w'-]{1,30}$/.test(l));
+  // s18: a masked sign-off is a person placeholder (<person:2>); the router restores it.
+  const names = examples.map(lastLine).filter((l): l is string => l !== null && /^(?:[A-Z][\w'-]{1,30}|<person:[\w.~]{1,20}>)$/.test(l));
   const top = names[0];
   return top !== undefined && names.filter((n) => n === top).length * 2 > names.length ? top : null;
 }

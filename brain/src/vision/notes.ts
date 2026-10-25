@@ -3,11 +3,13 @@
 // sealed with the brain key of the frame's CAPTURE day (keychain-wrapped via `offload-observer wrap-key`; raw file
 // under OFFLOAD_KEYS=file), so the note goes when the frame's day goes. The brain purge deletes expired files
 // (vault.ts artefacts), and the observer deletes the brain key of an expired day. s12 reads notes with
-// `readFrameNotes(home, day)`. Text fields are masked with grouping/normalize.ts maskText before they are stored.
+// `readFrameNotes(home, day)`. Text fields are masked with grouping/normalize.ts maskText before they are stored, and
+// (s18, ADR 0010) person names in them become <name> (privacy/names.ts maskNamesForStorage).
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { maskText } from "../grouping/normalize.ts";
+import { isOrgOrProductWord, maskNamesForStorage, NameMap } from "../privacy/names.ts";
 import { isExpired, openText, sealText } from "../store/vault.ts";
 import type { ObserverEnv } from "../store/observer.ts";
 import { clip, limits, validateFrameNote } from "./schema.ts";
@@ -43,23 +45,30 @@ const PERSON_NAME = /^[A-Z][a-z'’-]+(?: [A-Z]\.?| [A-Z][a-z'’.-]+){0,2}$/;
  * catches the model ignoring that (BENCH.md: 2 of 11 with qwen3-vl:2b). Organisations and roles pass through. */
 export function maskCounterpart(s: string): string {
   const t = s.trim();
-  return PERSON_NAME.test(t) && !ORG_WORD.test(t) ? "<name>" : t;
+  // s18: the masker's organisation and product words count too ("Brightline Couriers" is a supplier, not a person).
+  return PERSON_NAME.test(t) && !ORG_WORD.test(t) && !t.split(" ").some((w) => isOrgOrProductWord(w)) ? "<name>" : t;
 }
 
-/** maskText over every text field, then back within the schema limits (a mask token can be longer than a digit). */
+/** maskText over every text field, then back within the schema limits (a mask token can be longer than a digit).
+ * s18: person names in every field but identifiers become <name>; names are learned from all fields of the note
+ * first, so "Okafor" in the step is masked when the activity named "Amara Okafor". Identifiers stay the record ids the
+ * grouping needs (sealed on disk, never sent to a model). */
 export function maskFields(f: CaptionFields): CaptionFields {
-  const out: CaptionFields = { activity: maskOne(f.activity, limits("activity").maxLength ?? 200), confidence: f.confidence };
+  const names = new NameMap();
+  for (const v of [f.activity, f.verb, f.object, f.counterpart, f.surface, f.step, ...(f.inputs ?? []), ...(f.outputs ?? [])]) if (v !== undefined) names.learn(v);
+  const masked = (s: string, max: number) => clip(maskNamesForStorage(maskText(s), names), max);
+  const out: CaptionFields = { activity: masked(f.activity, limits("activity").maxLength ?? 200), confidence: f.confidence };
   for (const k of ["verb", "object", "counterpart", "surface", "step"] as const) {
     const v = f[k];
     if (v === undefined) continue;
-    const m = maskOne(k === "counterpart" ? maskCounterpart(v) : v, limits(k).maxLength ?? 80);
+    const m = masked(k === "counterpart" ? maskCounterpart(v) : v, limits(k).maxLength ?? 80);
     if (m !== "") out[k] = m;
   }
   for (const k of ["inputs", "outputs", "identifiers"] as const) {
     const v = f[k];
     if (v === undefined) continue;
     const max = limits(k).items?.maxLength ?? 80;
-    const items = [...new Set(v.map((x) => maskOne(x, max)).filter((x) => x !== ""))];
+    const items = [...new Set(v.map((x) => (k === "identifiers" ? maskOne(x, max) : masked(x, max))).filter((x) => x !== ""))];
     if (items.length > 0) out[k] = items;
   }
   if (out.activity === "") out.activity = "Working in an app";

@@ -406,6 +406,20 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
 - CLI: `draft` and `dry-run` take `--understanding v1|v2` (and the embedder flags); `draft` of a general insight uses
   the stub design model unless `--model real` is given.
 
+## s18: person names (ADR 0010; no API change)
+- No new route and no DTO change. Person names are masked in code before text leaves the Mac or is stored in a note:
+  frame-note fields (activity, verb, object, surface, step, inputs, outputs) and span descriptions store `<name>`;
+  every model request (every router route and backend) carries per-run placeholders (`<person:1>`,
+  `<person:1.first>`, `<person:me>` for the user). Drafts the user reviews (email drafts, text-step drafts in dry runs
+  and runs, style cards) come back with the real names, so batch items, `batchHash` and approvals are on the real text.
+  Task names, refined descriptions and workflow wording keep `<name>`. A draft whose reply holds a placeholder the brain
+  never wrote gets the warning "a name Offload could not fill in: check the names before you approve".
+- `$OFFLOAD_HOME/privacy.json` (optional, file only): `{ "ownName": "Muhammad Ali", "ownNameToClaude": "mask" |
+  "keep" }`. Default `mask`: the user's own name goes out as `<person:me>` and is restored on the Mac; `keep` sends it
+  as written. A workflow's facts.md `sign:` line also counts as the user's own name for its runs. People in any
+  workflow's `recipients.csv` are masked wherever they appear, in any case.
+- Identifiers (record ids) in notes and descriptions stay as they are: sealed on disk, used for grouping, never sent.
+
 ## Connections (s17)
 Any app Composio supports (brain/CONNECTORS.md "Connect anything (s17)"). Nothing here sends: setup and test only
 read; build ends in a dry run. Types: `ConnectionRowDTO`, `ConnectionsResponse`, `ConnectionDetailDTO`,
