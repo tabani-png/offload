@@ -259,7 +259,19 @@ struct EvidenceResponse: Codable, Equatable {
   var instances: [InstanceDTO]
   var spans: [SpanDTO]
 
-  func toEvidenceSpans() -> [EvidenceSpan] { spans.map { $0.toEvidenceSpan() } }
+  /// Spans with their instance's first counterparty attached, so a row can say who it was for first (s08).
+  func toEvidenceSpans() -> [EvidenceSpan] {
+    var who: [String: String] = [:]
+    for inst in instances {
+      guard let first = inst.counterparties.first(where: { !$0.isEmpty }) else { continue }
+      for id in inst.spanIds where who[id] == nil { who[id] = first }
+    }
+    return spans.map { s in
+      var e = s.toEvidenceSpan()
+      e.counterparty = who[s.id]
+      return e
+    }
+  }
 }
 
 // MARK: GET /dashboard
@@ -272,18 +284,38 @@ struct AutomationDTO: Codable, Equatable {
   var connectors: [ConnectorDTO]
   var estimatedHoursSavedPerWeek: Double
   var measuredHoursSavedPerWeek: Double?
+  // s05 additions (optional: older brains omit them). Mapped in WorkflowWire.swift.
+  var workflowId: String? = nil
+  var state: String? = nil
+  var needsYou: [String]? = nil
+  var arithmetic: String? = nil
+  var measured: MeasuredSavingDTO? = nil
+  var pendingBatch: BatchSummaryDTO? = nil
 
+  /// Rail colours. Reads the s05 `state` when present, else the legacy status.
   func toAutomation() -> Automation {
     let s: AutomationStatus
-    switch status {
-    case "approved": s = .running
-    case "dry_run": s = .awaitingApproval
-    case "paused": s = .paused
-    default: s = .draft
+    switch workflowState {
+    case .active: s = .running
+    case .readyForReview: s = .awaitingApproval
+    case .needsYou: s = .failed
+    case .paused: s = .paused
+    case .drafting: s = .draft
     }
     return Automation(id: id, name: name, status: s, hoursSavedEstimated: estimatedHoursSavedPerWeek,
                       hoursSavedMeasured: measuredHoursSavedPerWeek)
   }
+}
+
+// MARK: GET /timeline?day=YYYY-MM-DD
+
+struct TimelineResponse: Codable, Equatable {
+  struct TaskMinutes: Codable, Equatable { var taskId: String; var name: String; var kind: String; var minutes: Double }
+  var version: Int
+  var day: String
+  var activeMinutes: Double
+  var spans: [SpanDTO]
+  var byTask: [TaskMinutes]
 }
 
 struct DashboardResponse: Codable, Equatable {

@@ -58,6 +58,8 @@ struct Connector: Codable, Equatable, Identifiable, Sendable {
   var name: String
   var kind: ConnectorKind
   var connected: Bool
+  /// GET /connectors `missing_env`: a server lists it but an env var it names is unset (s08).
+  var missingEnv: Bool = false
 }
 
 enum ConnectorKind: String, Codable, Sendable {
@@ -75,6 +77,8 @@ struct EvidenceSpan: Codable, Equatable, Identifiable, Sendable {
   var urlHost: String?
   /// Raw event ids behind this span, so every figure traces to rows.
   var eventIds: [String]
+  /// Who the work was for (recipient, attendee), from the instance's counterparties. Shown first (s08).
+  var counterparty: String? = nil
 }
 
 /// One item of GET /dashboard automations (only what the rail needs today; s08 extends it).

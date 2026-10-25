@@ -7,6 +7,15 @@ protocol BrainClient: Sendable {
   func insights() async throws -> [Insight]
   func evidence(insightId: String) async throws -> [EvidenceSpan]
   func automations() async throws -> [Automation]
+
+  // s08: GET /connectors, workflows (s05 AC-7), dashboard.
+  func connectorStates() async throws -> [String: ConnectorState]
+  func workflow(id: String) async throws -> Workflow
+  func workflow(forInsight insightId: String) async throws -> Workflow
+  func dryRun(workflowId: String, limit: Int) async throws -> DryRun
+  func approve(workflowId: String, batchHash: String) async throws -> Workflow
+  func discard(workflowId: String) async throws
+  func dashboard() async throws -> DashboardData
 }
 
 enum BrainError: Error, Equatable {
@@ -30,6 +39,38 @@ struct MockBrainClient: BrainClient {
   }
 
   func automations() async throws -> [Automation] { Self.sampleAutomations }
+
+  func connectorStates() async throws -> [String: ConnectorState] { Self.connectorStates }
+
+  func workflow(id: String) async throws -> Workflow {
+    guard let w = Self.sampleWorkflows.first(where: { $0.id == id }) else { throw BrainError.notFound(id) }
+    return w
+  }
+
+  /// POST /workflows/draft {insightId}. The mock has drafts for outreach and scheduling.
+  func workflow(forInsight insightId: String) async throws -> Workflow {
+    guard let w = Self.sampleWorkflows.first(where: { $0.insightId == insightId }) else {
+      throw BrainError.notFound(insightId)
+    }
+    return w
+  }
+
+  func dryRun(workflowId: String, limit: Int) async throws -> DryRun {
+    guard var d = Self.sampleDryRuns[workflowId] else { throw BrainError.notFound(workflowId) }
+    d.items = Array(d.items.prefix(max(0, limit)))
+    return d
+  }
+
+  func approve(workflowId: String, batchHash: String) async throws -> Workflow {
+    var w = try await workflow(id: workflowId)
+    guard w.batchHash == batchHash else { throw BrainError.notFound(batchHash) }
+    w.state = .active
+    return w
+  }
+
+  func discard(workflowId: String) async throws { _ = try await workflow(id: workflowId) }
+
+  func dashboard() async throws -> DashboardData { Self.sampleDashboard }
 
   // MARK: sample data
 
@@ -70,29 +111,30 @@ struct MockBrainClient: BrainClient {
   ]
 
   private static func span(_ id: String, day: Int, _ h: Int, _ m: Int, minutes: Double,
-                           app: String, title: String, host: String? = nil) -> EvidenceSpan {
+                           app: String, title: String, host: String? = nil, who: String? = nil) -> EvidenceSpan {
     // Wall-clock times in the viewer's own time zone, so "09:14" reads as 09:14 wherever it renders.
     var cal = Calendar(identifier: .gregorian)
     cal.timeZone = .current
     let start = cal.date(from: DateComponents(year: 2026, month: 10, day: 19 + day, hour: h, minute: m))!
     return EvidenceSpan(id: id, start: start, end: start.addingTimeInterval(minutes * 60 + 20), activeMinutes: minutes,
-                        app: app, title: title, urlHost: host, eventIds: ["\(id)_ev1", "\(id)_ev2"])
+                        app: app, title: title, urlHost: host, eventIds: ["\(id)_ev1", "\(id)_ev2"],
+                        counterparty: who)
   }
 
   static let sampleEvidence: [String: [EvidenceSpan]] = [
     "ins_outreach": [
-      span("sp_out_1", day: 0, 9, 14, minutes: 3.2, app: "Chrome", title: "Intro: Offload seed round, Halden Ventures", host: "mail.google.com"),
-      span("sp_out_2", day: 0, 9, 18, minutes: 2.8, app: "Chrome", title: "Following up on our call, Ashgrove Capital", host: "mail.google.com"),
-      span("sp_out_3", day: 1, 10, 2, minutes: 3.1, app: "Chrome", title: "Quick question on your fund thesis", host: "mail.google.com"),
+      span("sp_out_1", day: 0, 9, 14, minutes: 3.2, app: "Chrome", title: "Intro: Offload seed round, Halden Ventures", host: "mail.google.com", who: "Halden Ventures"),
+      span("sp_out_2", day: 0, 9, 18, minutes: 2.8, app: "Chrome", title: "Following up on our call, Ashgrove Capital", host: "mail.google.com", who: "Ashgrove Capital"),
+      span("sp_out_3", day: 1, 10, 2, minutes: 3.1, app: "Chrome", title: "Quick question on your fund thesis", host: "mail.google.com", who: "Northline Fund"),
       span("sp_out_4", day: 1, 10, 6, minutes: 2.9, app: "Numbers", title: "Investor pipeline.numbers"),
-      span("sp_out_5", day: 2, 8, 47, minutes: 3.4, app: "Chrome", title: "Deck and data room access, Pellow Partners", host: "mail.google.com"),
-      span("sp_out_6", day: 3, 16, 31, minutes: 2.7, app: "Chrome", title: "Re: Intro: Offload seed round", host: "mail.google.com"),
+      span("sp_out_5", day: 2, 8, 47, minutes: 3.4, app: "Chrome", title: "Deck and data room access, Pellow Partners", host: "mail.google.com", who: "Pellow Partners"),
+      span("sp_out_6", day: 3, 16, 31, minutes: 2.7, app: "Chrome", title: "Re: Intro: Offload seed round", host: "mail.google.com", who: "Halden Ventures"),
     ],
     "ins_scheduling": [
-      span("sp_sch_1", day: 0, 11, 40, minutes: 6.5, app: "Chrome", title: "Re: Time next week?", host: "mail.google.com"),
+      span("sp_sch_1", day: 0, 11, 40, minutes: 6.5, app: "Chrome", title: "Re: Time next week?", host: "mail.google.com", who: "Daniel Osei"),
       span("sp_sch_2", day: 0, 11, 47, minutes: 4.0, app: "Calendar", title: "Week of 19 October"),
-      span("sp_sch_3", day: 2, 14, 5, minutes: 7.8, app: "Chrome", title: "Re: Moving Thursday's call", host: "mail.google.com"),
-      span("sp_sch_4", day: 3, 9, 30, minutes: 7.1, app: "Chrome", title: "Re: Coffee in SoMa?", host: "mail.google.com"),
+      span("sp_sch_3", day: 2, 14, 5, minutes: 7.8, app: "Chrome", title: "Re: Moving Thursday's call", host: "mail.google.com", who: "Lena Fischer"),
+      span("sp_sch_4", day: 3, 9, 30, minutes: 7.1, app: "Chrome", title: "Re: Coffee in SoMa?", host: "mail.google.com", who: "Priya Raman"),
     ],
     "ins_crm": [
       span("sp_crm_1", day: 0, 17, 2, minutes: 1.6, app: "Chrome", title: "Contacts · Halden Ventures", host: "app.hubspot.com"),

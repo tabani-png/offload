@@ -136,6 +136,8 @@ final class CardController {
   private var clickMonitor: Any?
 
   var isVisible: Bool { panel.isVisible }
+  /// ⌘D while the card is open.
+  var onDashboard: (() -> Void)?
 
   init(model: InboxModel, rail: RailController) {
     self.model = model
@@ -166,6 +168,11 @@ final class CardController {
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
       guard let self, event.window === self.panel else { return event }
       let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+      if flags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "d" {
+        self.hide()
+        self.onDashboard?()
+        return nil
+      }
       guard let key = CardKey(characters: event.charactersIgnoringModifiers ?? "", keyCode: event.keyCode,
                               hasCommandOrControl: flags.contains(.command) || flags.contains(.control)) else { return event }
       self.model.send(key)

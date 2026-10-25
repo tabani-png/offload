@@ -17,6 +17,8 @@ final class InboxModel: ObservableObject {
   var onClose: (() -> Void)?
   /// Called when a staged action lands, so later slices can POST it to the brain.
   var onCommit: ((PendingAction) -> Void)?
+  /// A connector chip's Connect… / Add key… action.
+  var onConnect: ((Connector) -> Void)?
 
   private let client: BrainClient
   private let clock: () -> Date
@@ -40,9 +42,11 @@ final class InboxModel: ObservableObject {
       async let ins = client.insights()
       async let autos = client.automations()
       let (s, i, a) = try await (st, ins, autos)
+      // GET /connectors is best effort: without it the chips keep the insight's own state.
+      let connectors = (try? await client.connectorStates()) ?? [:]
       status = s
       automations = a
-      state.replaceInsights(i)
+      state.replaceInsights(i.map { $0.applying(connectorStates: connectors) })
     } catch {
       // Brain unreachable: the rail stays up in its neutral state; nothing is invented.
       status = nil

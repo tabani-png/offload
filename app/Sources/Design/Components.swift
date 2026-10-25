@@ -89,8 +89,8 @@ struct Chip: View {
     let (ink, fill, ring): (Color, Color, Color) = {
       switch style {
       case .neutral: return (p.ink2, p.fill, p.ring)
-      case .positive: let g = p.status(.done); return (g, g.opacity(0.14), g.opacity(0.22))
-      case .recommended: let a = p.status(.needsYou); return (a, a.opacity(0.15), a.opacity(0.0))
+      case .positive: let g = p.status(.done); return (p.statusInk(.done), g.opacity(0.14), g.opacity(0.22))
+      case .recommended: let a = p.status(.needsYou); return (p.statusInk(.needsYou), a.opacity(0.15), a.opacity(0.0))
       }
     }()
     HStack(spacing: 5) {

@@ -81,6 +81,95 @@ enum Snapshotter {
       ("card-undo", card(undo)),
       ("card-empty", card(empty)),
       ("scene", AnyView(Scene(state: base, now: now, rail: rail))),
+    ] + s08Surfaces()
+  }
+
+  // MARK: s08 fixtures
+
+  static let reviewNow = MockBrainClient.reviewNow
+
+  static func reviewModel(_ keys: [(ReviewKey, Double)] = []) -> ReviewModel {
+    let m = ReviewModel(workflow: MockBrainClient.outreachWorkflow, dryRun: MockBrainClient.outreachDryRun,
+                        client: MockBrainClient(), clock: { reviewNow })
+    m.preview(keys: keys.map { ($0.0, reviewNow.addingTimeInterval($0.1)) })
+    return m
+  }
+
+  static func dashboardModel(pointer: PointerRequest? = nil) -> DashboardModel {
+    let m = DashboardModel(client: MockBrainClient(), clock: { reviewNow })
+    m.preview(MockBrainClient.sampleDashboard, pointer: pointer)
+    return m
+  }
+
+  static let windowWidth: CGFloat = 820
+
+  static func reviewChrome<C: View>(_ m: ReviewModel, @ViewBuilder _ content: () -> C) -> AnyView {
+    AnyView(Backdrop(padding: 32) {
+      WindowChrome(title: "Review workflow", subtitle: "Drafted from your week · \(m.workflow.state.label)",
+                   toolbarItems: [ToolbarItemLook(symbol: "doc.text", title: nil)], width: windowWidth) { content() }
+    })
+  }
+
+  static func dashboardChrome<C: View>(@ViewBuilder _ content: () -> C) -> AnyView {
+    AnyView(Backdrop(padding: 32) {
+      WindowChrome(title: "Offload", subtitle: "Dashboard", width: windowWidth) { content() }
+    })
+  }
+
+  static func s08Surfaces() -> [(String, AnyView)] {
+    let review = reviewModel()
+    let confirm = reviewModel([(.approve, -2)])
+    let armed = reviewModel([(.approve, -3), (.confirm, -1.6)])
+    let evidencePointer = PointerRequest(targetId: "bar.\(MockBrainClient.evidenceBarId)", originId: "timeline.evidence",
+                                         label: DashboardModel.evidenceLabel(
+                                           MockBrainClient.timelineDays.flatMap(\.bars).first { $0.id == MockBrainClient.evidenceBarId }!,
+                                           tasks: MockBrainClient.timelineTasks),
+                                         startedAt: reviewNow)
+    let crm = MockBrainClient.dashboardAutomations.first { $0.state == .needsYou }!
+    let rowTarget = DashboardModel.pointerTarget(for: crm)
+    let rowPointer = PointerRequest(targetId: rowTarget.id, originId: "lead.\(crm.id)", label: rowTarget.label, startedAt: reviewNow)
+    let holdAt = reviewNow.addingTimeInterval(1.4 + 1.5)
+
+    func confirmScene(_ m: ReviewModel) -> AnyView {
+      reviewChrome(m) {
+        ZStack(alignment: .top) {
+          ReviewView(model: m, parts: [.header, .steps])
+            .overlay(Color.black.opacity(0.28))
+          // Sheets drop from the bottom of the toolbar.
+          ConfirmSheet(model: m, frozenNow: reviewNow)
+            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: 12, bottomTrailingRadius: 12, style: .continuous))
+            .overlay(UnevenRoundedRectangle(bottomLeadingRadius: 12, bottomTrailingRadius: 12, style: .continuous)
+              .strokeBorder(.white.opacity(0.10), lineWidth: 1))
+            .compositingGroup()
+            .shadow(color: .black.opacity(0.45), radius: 22, x: 0, y: 12)
+        }
+      }
+    }
+
+    return [
+      ("review", reviewChrome(review) { ReviewView(model: review, parts: [.header, .steps, .tone]) }),
+      ("review-dryrun", reviewChrome(review) { ReviewView(model: review, parts: [.dryRun]) }),
+      ("review-confirm", confirmScene(confirm)),
+      ("review-armed", confirmScene(armed)),
+      ("review-skill", reviewChrome(review) {
+        ZStack(alignment: .top) {
+          ReviewView(model: review, parts: [.header, .steps]).overlay(Color.black.opacity(0.28))
+          SkillSheet(model: review, editing: false)
+            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: 12, bottomTrailingRadius: 12, style: .continuous))
+            .compositingGroup()
+            .shadow(color: .black.opacity(0.45), radius: 22, x: 0, y: 12)
+        }
+      }),
+      ("dashboard", dashboardChrome { DashboardView(model: dashboardModel(), frozenNow: reviewNow) }),
+      ("timeline", AnyView(TimelineSheet(model: dashboardModel()))),
+      ("pointer", dashboardChrome {
+        DashboardView(model: dashboardModel(pointer: evidencePointer), parts: [.hero, .automations, .timeline],
+                      frozenNow: reviewNow, frozenPointerAt: holdAt)
+      }),
+      ("pointer-row", dashboardChrome {
+        DashboardView(model: dashboardModel(pointer: rowPointer), parts: [.hero, .automations],
+                      frozenNow: reviewNow, frozenPointerAt: holdAt)
+      }),
     ]
   }
 
@@ -281,5 +370,18 @@ struct ComponentSheet: View {
       StatusDot(role: role, pulses: pulses)
       Text(label).font(.system(size: 12)).foregroundStyle(Palette(scheme: scheme).ink2)
     }
+  }
+}
+
+/// The timeline on its own, on the window canvas, for a close look.
+struct TimelineSheet: View {
+  @ObservedObject var model: DashboardModel
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    TimelineSection(model: model, data: model.data!, now: Snapshotter.reviewNow)
+      .padding(24)
+      .frame(width: Snapshotter.windowWidth)
+      .background(Palette(scheme: scheme).canvas)
   }
 }

@@ -8,6 +8,7 @@ struct InsightCardView: View {
   var now: Date
   var pressedOption: Int? = nil
   var observerLabel: String = "Watching"
+  var onConnect: (Connector) -> Void = { _ in }
   @Environment(\.colorScheme) private var scheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -74,10 +75,10 @@ struct InsightCardView: View {
         .foregroundStyle(p.ink3)
         .fixedSize(horizontal: false, vertical: true)
       HStack(spacing: 6) {
-        Text("Connect").textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink3)
+        Text("Uses").textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink3)
           .padding(.trailing, 2)
         ForEach(insight.connectors) { c in
-          Chip(text: c.name, dot: c.connected ? .done : .neutral)
+          ConnectorChip(connector: c) { onConnect($0) }
         }
       }
       if state.evidenceOpen {
@@ -143,9 +144,11 @@ struct InsightCardView: View {
   private func evidenceList(_ insight: Insight, _ p: Palette) -> some View {
     VStack(alignment: .leading, spacing: 6) {
       Rectangle().fill(p.ring).frame(height: 1).padding(.vertical, 2)
-      SectionHeader(title: "Evidence",
+      SectionHeader(title: evidence.flatMap { Self.usualApp($0) }.map { "Evidence · \($0)" } ?? "Evidence",
                     trailing: evidence.map { "\($0.count) of \(Format.count(insight.instanceCount)) \(insight.unitPlural)" })
       if let spans = evidence {
+        // The usual app is said once in the header; a row names its app only when it is a different one.
+        let usual = Self.usualApp(spans)
         ForEach(spans) { span in
           HStack(spacing: 10) {
             Text(Format.spanTime(span))
@@ -154,16 +157,15 @@ struct InsightCardView: View {
               .foregroundStyle(p.ink3)
               .fixedSize()
               .frame(minWidth: 62, alignment: .leading)
-            Text(span.title)
-              .font(.system(size: 12))
-              .foregroundStyle(p.ink1)
-              .lineLimit(1)
-              .truncationMode(.middle)
+            evidenceTitle(EvidenceTitle.make(title: span.title, counterparty: span.counterparty), p)
               .frame(maxWidth: .infinity, alignment: .leading)
-            Text(span.app)
-              .font(.system(size: 12))
-              .foregroundStyle(p.ink3)
-              .lineLimit(1)
+            if span.app != usual {
+              Text(span.app)
+                .font(.system(size: 12))
+                .foregroundStyle(p.ink3)
+                .lineLimit(1)
+                .fixedSize()
+            }
             Text(Format.spanDuration(span))
               .font(.system(size: 12))
               .monospacedDigit()
@@ -171,10 +173,40 @@ struct InsightCardView: View {
               .frame(width: 38, alignment: .trailing)
           }
           .frame(height: 18)
-          .accessibilityElement(children: .combine)
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel("\(Format.spanTime(span)), \(EvidenceTitle.make(title: span.title, counterparty: span.counterparty).plain), \(span.app), \(Format.spanDuration(span))")
         }
       } else {
         Text("Loading spans…").font(.system(size: 12)).foregroundStyle(p.ink3)
+      }
+    }
+  }
+
+  /// The app most spans happened in (ties: the first seen).
+  static func usualApp(_ spans: [EvidenceSpan]) -> String? {
+    var counts: [String: Int] = [:]
+    for sp in spans { counts[sp.app, default: 0] += 1 }
+    return spans.map(\.app).first { counts[$0] == counts.values.max() }
+  }
+
+  /// Who it was for first, then the subject, cut at the tail: "Pellow Partners  Deck and data ro…".
+  /// The counterparty keeps its full width unless it alone would take more than the row.
+  private func evidenceTitle(_ t: EvidenceTitle, _ p: Palette) -> some View {
+    HStack(spacing: 6) {
+      if let lead = t.lead {
+        Text(lead)
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(p.ink1)
+          .lineLimit(1)
+          .truncationMode(.tail)
+          .layoutPriority(1)
+      }
+      if !t.subject.isEmpty {
+        Text(t.subject)
+          .font(.system(size: 12))
+          .foregroundStyle(t.lead == nil ? p.ink1 : p.ink2)
+          .lineLimit(1)
+          .truncationMode(.tail)
       }
     }
   }
@@ -252,7 +284,8 @@ struct LiveInsightCard: View {
                       evidence: model.state.current.flatMap { model.evidence[$0.id] },
                       now: ctx.date,
                       pressedOption: model.pressedOption,
-                      observerLabel: model.rail.observerLabel)
+                      observerLabel: model.rail.observerLabel,
+                      onConnect: { model.onConnect?($0) })
     }
   }
 }

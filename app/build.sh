@@ -3,11 +3,11 @@
 # Tools' libPackageDescription does not link. No Xcode, no asset catalogs.
 #
 #   app/build.sh                 build app/.build/Offload.app
-#   app/build.sh test [args]     build and run the S06/S07 Swift Testing suites (extra args go to the runner)
+#   app/build.sh test [args]     build and run the S06/S07/S08 Swift Testing suites (extra args go to the runner)
 #   app/build.sh snapshot DIR    build, then render every component and surface to PNGs in DIR
 #
 # Layout: Sources/Core is Foundation-only (models, BrainClient, formatting, keyboard + undo state machine,
-# token values). The test binary is Core + slices/s06-design-system/tests + slices/s07-rail-and-card/tests.
+# token values). The test binary is Core + the tests of slices s06, s07 and s08.
 # The app binary is Core + Design + Surfaces + App.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -41,7 +41,7 @@ build_tests() {
     -F "$FW" -I "$DEVLIB" -L "$DEVLIB" -framework Testing \
     -plugin-path "$CLT/usr/lib/swift/host/plugins/testing" \
     -Xlinker -rpath -Xlinker "$FW" -Xlinker -rpath -Xlinker "$DEVLIB" \
-    $(swift_files "$HERE/Sources/Core" "$ROOT/slices/s06-design-system/tests" "$ROOT/slices/s07-rail-and-card/tests") \
+    $(swift_files "$HERE/Sources/Core" "$ROOT/slices/s06-design-system/tests" "$ROOT/slices/s07-rail-and-card/tests" "$ROOT/slices/s08-review-and-dashboard/tests") \
     "$main" -o "$OUT/offload-tests"
 }
 

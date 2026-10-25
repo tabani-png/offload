@@ -6,19 +6,22 @@ import SwiftUI
 struct VisualEffect: NSViewRepresentable {
   var material: NSVisualEffectView.Material
   var cornerRadius: CGFloat
+  /// Pins the material to our appearance with the vibrant variant, so a dark card stays a dark HUD over a white
+  /// page (and a light one stays light over a dark page) instead of following whatever is behind it.
+  var dark: Bool = true
 
   func makeNSView(context: Context) -> NSVisualEffectView {
     let v = NSVisualEffectView()
-    v.material = material
     v.blendingMode = .behindWindow
     v.state = .active
     v.isEmphasized = false
-    v.maskImage = Self.mask(radius: cornerRadius)
+    updateNSView(v, context: context)
     return v
   }
 
   func updateNSView(_ v: NSVisualEffectView, context: Context) {
     v.material = material
+    v.appearance = NSAppearance(named: dark ? .vibrantDark : .vibrantLight)
     v.maskImage = Self.mask(radius: cornerRadius)
   }
 
@@ -55,19 +58,30 @@ struct GlassBackground: View {
   var shadow = true
   @Environment(\.colorScheme) private var scheme
   @Environment(\.isSnapshot) private var isSnapshot
+  @Environment(\.colorSchemeContrast) private var contrast
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+  /// Veil opacity solved for the worst backdrop (GlassVeil): tertiary ink keeps 4.5:1 over a white page under the
+  /// dark card and over a black page under the light one, 7:1 with Increase Contrast, opaque with Reduce
+  /// Transparency. Over calm backdrops the same veil reads as clear glass; it only has to win the bright case.
+  static func veilOpacity(dark: Bool, increaseContrast: Bool, reduceTransparency: Bool) -> Double {
+    GlassVeil.opacity(dark ? .dark : .light, increaseContrast: increaseContrast, reduceTransparency: reduceTransparency)
+  }
 
   var body: some View {
     let p = Palette(scheme: scheme)
     let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    let veil = Self.veilOpacity(dark: p.isDark, increaseContrast: contrast == .increased,
+                                reduceTransparency: reduceTransparency)
     ZStack {
       if isSnapshot {
         shape.fill(p.glassSimulated)
       } else {
-        VisualEffect(material: material.nsMaterial, cornerRadius: cornerRadius)
-        shape.fill(p.glassVeil)
+        VisualEffect(material: material.nsMaterial, cornerRadius: cornerRadius, dark: p.isDark)
+        shape.fill(p.glassVeilBase.opacity(veil))
       }
-      // Edge ring.
-      shape.strokeBorder(p.ring, lineWidth: 1)
+      // Edge ring (stronger with Increase Contrast).
+      shape.strokeBorder(contrast == .increased ? p.ringStrong : p.ring, lineWidth: 1)
       // Top specular: bright at the top edge, gone by a third of the way down.
       shape.strokeBorder(
         LinearGradient(stops: [.init(color: p.specular, location: 0), .init(color: .clear, location: 0.35)],

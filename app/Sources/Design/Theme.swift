@@ -9,8 +9,10 @@ struct Palette {
 
   // Ink ladder (opacity steps, not weight).
   var ink1: Color { isDark ? .white.opacity(0.96) : .black.opacity(0.86) }
-  var ink2: Color { isDark ? .white.opacity(Tokens.Ink.secondary) : .black.opacity(0.56) }
-  var ink3: Color { isDark ? .white.opacity(Tokens.Ink.tertiary) : .black.opacity(0.46) }
+  var ink2: Color { isDark ? .white.opacity(Tokens.Ink.secondary) : .black.opacity(0.72) }
+  // Light tertiary was 46% black: 3.5:1 even over pure white, below AA. Thin 11-pt dark text also renders lighter
+  // than its nominal ink, so 63% is what measured 4.5:1 live (s08 DESIGN-REVIEW, "Glass").
+  var ink3: Color { isDark ? .white.opacity(Tokens.Ink.tertiary) : .black.opacity(0.63) }
 
   // Rings and fills.
   var ring: Color { isDark ? .white.opacity(0.10) : .black.opacity(0.08) }
@@ -21,8 +23,9 @@ struct Palette {
 
   /// Top specular highlight on glass.
   var specular: Color { isDark ? .white.opacity(0.26) : .white.opacity(0.9) }
-  /// Veil laid over the system material so it reads as graphite, not grey frost.
-  var glassVeil: Color { isDark ? Color(red: 0.04, green: 0.045, blue: 0.06).opacity(0.58) : .white.opacity(0.50) }
+  /// Veil colour laid over the system material so it reads as graphite, not grey frost. Its opacity is solved
+  /// per appearance in GlassBackground (GlassVeil), not fixed here.
+  var glassVeilBase: Color { isDark ? Color(red: 0.04, green: 0.045, blue: 0.06) : Color(red: 0.985, green: 0.985, blue: 0.985) }
   /// Snapshot stand-in for the live blur (cacheDisplay cannot capture behind-window blending).
   var glassSimulated: Color {
     isDark ? Color(red: 0.08, green: 0.085, blue: 0.10).opacity(0.74) : Color(red: 0.98, green: 0.98, blue: 0.985).opacity(0.70)
@@ -40,6 +43,20 @@ struct Palette {
     case .done: return isDark ? Color(hex: 0x30D158) : Color(hex: 0x1FA84A)
     case .recording: return isDark ? Color(hex: 0xFF453A) : Color(hex: 0xFF3B30)
     case .neutral: return isDark ? .white.opacity(0.38) : .black.opacity(0.28)
+    }
+  }
+
+  /// A status colour that is safe as text (11-13 pt) on light surfaces: the light-mode status hues are fills and
+  /// dots, and as text they sit near 2.2:1. These darker inks reach at least 4.5:1 on white and on their own 15%
+  /// tint. Dark mode uses the hue itself.
+  func statusInk(_ role: StatusRole) -> Color {
+    guard !isDark else { return status(role) }
+    switch role {
+    case .working: return Color(hex: 0x0058C4)
+    case .needsYou: return Color(hex: 0x8A5700)
+    case .done: return Color(hex: 0x1A7A3A)
+    case .recording: return Color(hex: 0xC4241B)
+    case .neutral: return ink2
     }
   }
 

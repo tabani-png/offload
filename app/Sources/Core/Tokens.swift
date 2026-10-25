@@ -36,6 +36,8 @@ enum Tokens {
   /// SF Pro via system fonts. Two families (Display above 17 pt, Text at or below, chosen by the system),
   /// three weights, no bold. Hierarchy comes from opacity steps.
   enum TypeScale {
+    /// The dashboard's one big number (s08). Display family, 500, tight tracking.
+    static let hero = TypeStyle(name: "hero", size: 34, weight: 500, tracking: -0.9, lineHeight: 1.0)
     static let display = TypeStyle(name: "display", size: 20, weight: 500, tracking: -0.35, lineHeight: 1.2)
     static let title = TypeStyle(name: "title", size: 15, weight: 500, tracking: -0.15, lineHeight: 1.3)
     static let body = TypeStyle(name: "body", size: 13, weight: 400, tracking: -0.05, lineHeight: 1.45)
@@ -43,7 +45,7 @@ enum Tokens {
     static let caption = TypeStyle(name: "caption", size: 11, weight: 500, tracking: 0.1, lineHeight: 1.2)
     static let badge = TypeStyle(name: "badge", size: 10, weight: 600, tracking: 0, lineHeight: 1)
     static let mono = TypeStyle(name: "mono", size: 11, weight: 500, tracking: 0, lineHeight: 1)
-    static let all: [TypeStyle] = [display, title, body, label, caption, badge, mono]
+    static let all: [TypeStyle] = [hero, display, title, body, label, caption, badge, mono]
   }
 
   /// Seconds.
