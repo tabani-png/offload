@@ -82,6 +82,8 @@ LIVE="e2e-card e2e-rail e2e-review-drafting e2e-review-dryrun e2e-review-confirm
   glass-dark-over-white glass-dark-over-dark glass-light-over-white glass-light-over-dark onboarding-permissions-live
   review-confirm review-skill dashboard-pointer dashboard-evidence-pointer dashboard-autosend dashboard-light
   dashboard-week dashboard-automations dashboard-observing"
+# s10e: later rounds add live captures; their names are listed in that slice's live-set.txt.
+[ -s "$ROOT/slices/s10e-ui-round4/live-set.txt" ] && LIVE="$LIVE $(tr '\n' ' ' < "$ROOT/slices/s10e-ui-round4/live-set.txt")"
 stale=()
 for s in $LIVE; do
   f="$ROOT/app/snapshots/live/$s.png"
