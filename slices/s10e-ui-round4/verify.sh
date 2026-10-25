@@ -15,6 +15,9 @@ trap 'rm -rf "$OUT"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 count() { sed -E 's/\x1b\[[0-9;]*m//g' | grep -Eo 'Test run with [0-9]+ tests' | grep -Eo '[0-9]+' | head -1; }
 mtime() { stat -f %m "$1"; }
+# CI=true: a fresh checkout stamps every file with the checkout time, so PNG-vs-source mtimes mean nothing there;
+# the mtime comparisons are skipped (existence and live-set membership still run). Unset CI: unchanged.
+fresh() { [ "${CI:-}" = "true" ] || [ "$(mtime "$1")" -ge "$newest" ]; }
 BUN="$(command -v bun || echo "$HOME/.bun/bin/bun")"
 
 for f in SPEC.md live-set.txt tests/S10ETests.swift; do [ -s "$HERE/$f" ] || fail "missing $f"; done
@@ -110,18 +113,27 @@ stale=()
 for s in $LIVE; do
   f="$ROOT/app/snapshots/live/$s.png"
   [ -s "$f" ] || fail "missing live capture app/snapshots/live/$s.png (run scripts/live-captures.sh)"
-  [ "$(mtime "$f")" -ge "$newest" ] || stale+=("live/$s.png")
+  fresh "$f" || stale+=("live/$s.png")
 done
-for f in "$ROOT"/app/snapshots/*.png; do [ "$(mtime "$f")" -ge "$newest" ] || stale+=("$(basename "$f")"); done
+for f in "$ROOT"/app/snapshots/*.png; do fresh "$f" || stale+=("$(basename "$f")"); done
 for f in "$ROOT"/app/snapshots/live/*.png; do
   b="$(basename "$f" .png)"; case " $LIVE " in *" $b "*) ;; *) stale+=("live/$b.png (not in the live set)");; esac
 done
 if [ "${#stale[@]}" -gt 0 ]; then printf '  %s\n' "${stale[@]}" >&2; fail "${#stale[@]} PNGs predate the newest source or are unknown"; fi
-echo "ok every committed and live PNG is newer than the source ($(date -r "$newest" '+%H:%M:%S'))"
+if [ "${CI:-}" = "true" ]; then
+  echo "ok every committed and live PNG exists and is in the live set"
+  echo "freshness (PNG mtime vs source): SKIPPED (needs a real screen; run locally)"
+else
+  echo "ok every committed and live PNG is newer than the source ($(date -r "$newest" '+%H:%M:%S'))"
+fi
 
 echo "== live set taken in one run"
+if [ "${CI:-}" = "true" ]; then
+  echo "live set span (capture mtimes): SKIPPED (needs a real screen; run locally)"
+else
 first=""; last=""
 for s in $LIVE; do t="$(mtime "$ROOT/app/snapshots/live/$s.png")"; { [ -z "$first" ] || [ "$t" -lt "$first" ]; } && first="$t"; { [ -z "$last" ] || [ "$t" -gt "$last" ]; } && last="$t"; done
 [ $((last - first)) -le 1800 ] || fail "live captures span $((last - first)) s: re-take them in one run (scripts/live-captures.sh)"
 echo "ok live set spans $((last - first)) s"
+fi
 echo "PASS s10e-ui-round4"

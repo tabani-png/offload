@@ -11,6 +11,9 @@ trap 'rm -rf "$OUT"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 count() { sed -E 's/\x1b\[[0-9;]*m//g' | grep -Eo 'Test run with [0-9]+ tests' | grep -Eo '[0-9]+' | head -1; }
 mtime() { stat -f %m "$1"; }
+# CI=true: a fresh checkout stamps every file with the checkout time, so PNG-vs-source mtimes mean nothing there;
+# the mtime comparisons are skipped (existence and live-set membership still run). Unset CI: unchanged.
+fresh() { [ "${CI:-}" = "true" ] || [ "$(mtime "$1")" -ge "$newest" ]; }
 
 echo "== build"
 "$APP_BUILD" >/dev/null || fail "app build"
@@ -88,14 +91,19 @@ stale=()
 for s in $LIVE; do
   f="$ROOT/app/snapshots/live/$s.png"
   [ -s "$f" ] || fail "missing live capture app/snapshots/live/$s.png (run scripts/live-captures.sh and E2E=1 slices/s09a-wiring/verify.sh)"
-  [ "$(mtime "$f")" -ge "$newest" ] || stale+=("live/$s.png")
+  fresh "$f" || stale+=("live/$s.png")
 done
-for f in "$ROOT"/app/snapshots/*.png; do [ "$(mtime "$f")" -ge "$newest" ] || stale+=("$(basename "$f")"); done
+for f in "$ROOT"/app/snapshots/*.png; do fresh "$f" || stale+=("$(basename "$f")"); done
 for f in "$ROOT"/app/snapshots/live/*.png; do
   b="$(basename "$f" .png)"; case " $(echo $LIVE) " in *" $b "*) ;; *) stale+=("live/$b.png (not in the live set)");; esac
 done
 if [ "${#stale[@]}" -gt 0 ]; then printf '  %s\n' "${stale[@]}" >&2; fail "${#stale[@]} PNGs predate the newest source or are unknown"; fi
-echo "ok every committed and live PNG is newer than the source ($(date -r "$newest" '+%H:%M:%S'))"
+if [ "${CI:-}" = "true" ]; then
+  echo "ok every committed and live PNG exists and is in the live set"
+  echo "freshness (PNG mtime vs source): SKIPPED (needs a real screen; run locally)"
+else
+  echo "ok every committed and live PNG is newer than the source ($(date -r "$newest" '+%H:%M:%S'))"
+fi
 
 for f in SPEC.md; do [ -s "$ROOT/slices/s10d-ui-round3/$f" ] || fail "missing $f"; done
 echo "PASS s10d-ui-round3"
