@@ -27,7 +27,7 @@ export interface S14Context {
   analysis: () => Promise<Analysis>;
   resolver?: CapabilityResolver;
   models?: ModelConfig;
-  /** s14 model router (ADR 0008): GET /models/usage. */
+  /** s14 model router (ADR 0009): GET /models/usage. */
   router?: ModelRouter;
 }
 

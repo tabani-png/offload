@@ -1,4 +1,4 @@
-// s14 model router (ADR 0008): every model call in the brain goes through one place that picks the Claude tier per
+// s14 model router (ADR 0009): every model call in the brain goes through one place that picks the Claude tier per
 // route, escalates on trouble, demotes proven per-item steps, counts tokens and dollars, and enforces a monthly budget.
 //   Opus 5.5   "understand the formula": naming/merging task profiles, deciding what a task really is, workflow design,
 //              choosing between variants (wording; the choice itself is deterministic, ADR 0005), explaining a failure.

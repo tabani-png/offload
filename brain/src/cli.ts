@@ -256,7 +256,7 @@ function understandingOptions(a: Args): Pick<AnalyzeOptions, "understanding" | "
   return { understanding: "v2", embedder: a.embedder === "ollama" ? new OllamaEmbedder({ model: a.embedModel }) : new StubEmbedder(), ...ctx };
 }
 
-/** s14: what `--captioner auto` tries, in order. Claude first (operator decision 2026-10-25, ADR 0008); a one-line
+/** s14: what `--captioner auto` tries, in order. Claude first (operator decision 2026-10-25, ADR 0009); a one-line
  * change puts the local model first. */
 export const AUTO_CAPTIONERS: readonly ("claude" | "ollama")[] = ["claude", "ollama"];
 

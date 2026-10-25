@@ -1,4 +1,4 @@
-# 0008 Model router: Claude by default, the right tier per route
+# 0009 Model router: Claude by default, the right tier per route
 
 Date: 2026-10-25. Status: accepted (operator decision, s14). Note: s13 planned an ADR 0008 for the
 `@anthropic-ai/sdk` dependency; this ADR also records that dependency (1.3.0, already in the lockfile as the Agent

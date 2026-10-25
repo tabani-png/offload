@@ -111,7 +111,7 @@ export interface ClaudeOptions {
   /** SDK retries on 408/409/429/5xx and connection errors (default 2). */
   maxRetries?: number;
   maxTokens?: number;
-  /** s14 model router (models/router.ts, ADR 0008): picks the caption model and counts the cost. Structural, so this
+  /** s14 model router (models/router.ts, ADR 0009): picks the caption model and counts the cost. Structural, so this
    * file does not import the router. */
   router?: CaptionRouter;
 }

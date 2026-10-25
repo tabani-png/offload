@@ -2,6 +2,8 @@
 # Runs every slices/*/verify.sh and prints a table: slice, result, seconds. Exit 0 only when all pass.
 #   scripts/verify-all.sh [FILTER]     only slices whose folder name contains FILTER
 #   scripts/verify-all.sh --list       the slices it would run
+# Stage 2 slices (S2-*) are frozen contracts until their builders run; they are skipped unless FILTER names them
+# (e.g. scripts/verify-all.sh S2-).
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOGS="$(mktemp -d)"
@@ -14,6 +16,7 @@ rows=(); failed=0; total=0; bad=()
 for v in "$ROOT"/slices/*/verify.sh; do
   slice="$(basename "$(dirname "$v")")"
   [ -n "$filter" ] && [[ "$slice" != *"$filter"* ]] && continue
+  [ -z "$filter" ] && [[ "$slice" == S2-* ]] && continue
   total=$((total + 1))
   printf '… %s\n' "$slice"
   t0=$(date +%s)

@@ -15,13 +15,13 @@ landed in "browse"/"other" and could not be named or automated.
 2. A local vision model describes each keyframe (Ollama on the Mac; model chosen by s11 research, swappable).
    Output is a structured Frame note: activity, app surface, object, counterpart, step, inputs seen, outputs made,
    confidence. Images are masked by the engine before anything reads them. With the local captioner they stay on
-   the Mac; with the Claude captioner (opt-in, or `auto` when the user's own Anthropic key is configured, ADR 0008)
+   the Mac; with the Claude captioner (opt-in, or `auto` when the user's own Anthropic key is configured, ADR 0009)
    the masked frame goes only to the user's own Anthropic account at api.anthropic.com, never to another host.
 3. The brain turns frame notes + focus/input events into span descriptions, embeds them locally
    (qwen3-embedding / bge-m3 via Ollama), and groups them into task profiles across any domain (Task Model
    Induction style: profiles with identifiers, embedding + shared identifiers, daily merge). The app/host rules
    stay as features, not as the only signal.
-4. Claude names, scores and designs from masked text profiles through the model router (ADR 0008); the only images it
+4. Claude names, scores and designs from masked text profiles through the model router (ADR 0009); the only images it
    may see are masked keyframes sent to the user's own account by the Claude captioner (point 2). To name,
    score and design workflows. Numbers stay deterministic (ADR 0005).
 5. Onboarding adds one optional step: role + industry (free text + suggestions). It is stored as user context and

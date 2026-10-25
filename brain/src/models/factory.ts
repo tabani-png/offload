@@ -1,4 +1,4 @@
-// s14: the brain's model for `serve` and the CLI: always the router (ADR 0008). Backend: the Claude API when a key is
+// s14: the brain's model for `serve` and the CLI: always the router (ADR 0009). Backend: the Claude API when a key is
 // configured (metered, per-route models), else the local Claude Code login through the Agent SDK (unmetered; status
 // says "add a Claude key"), or the deterministic stub for tests and demos.
 import { ApiBackend, type ApiBackendOptions } from "./api-backend.ts";

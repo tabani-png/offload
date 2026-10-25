@@ -178,7 +178,7 @@ export function createBrain(opts: BrainOptions): Brain {
   const env = opts.workflows?.env ?? process.env;
   const model = opts.workflows?.model ?? new AgentSdkModel();
   const modelLabel: ModelLabel = opts.workflows?.modelLabel ?? (model instanceof StubModel ? "stub" : "real");
-  // s14: the model router behind `model` (ADR 0008), for GET /status `models` and GET /models/usage.
+  // s14: the model router behind `model` (ADR 0009), for GET /status `models` and GET /models/usage.
   const router = model instanceof RoutedModel ? model.router : undefined;
   const observerEnv = opts.observerEnv ?? process.env;
   const simulated = modelLabel === "stub";

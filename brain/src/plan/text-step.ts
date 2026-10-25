@@ -40,7 +40,7 @@ export interface TextStepResult {
   warnings: string[];
 }
 
-/** The router's check of a text step (ADR 0008 ladder): an empty draft or a number not in the source escalates. */
+/** The router's check of a text step (ADR 0009 ladder): an empty draft or a number not in the source escalates. */
 export function stepCheck(source: string): (text: string) => string | null {
   return (text) => {
     if (text.trim() === "") return "empty draft";
