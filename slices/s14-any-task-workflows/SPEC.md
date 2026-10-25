@@ -172,3 +172,19 @@ carries these tools.
   or the Agent SDK". `brain/tests/s11-perception/pipeline.test.ts` C9: `--captioner claude` is valid now; an unknown
   captioner is still a usage error. No other assertion removed.
 - `slices/s09a-wiring/tests/S09ALifecycleTests.swift`: onboarding has 4 steps ("1 of 4").
+
+### After s13 and s16 merged into main
+- Router -> s13 `BrainOptions.chain.pickModel` (route `computer.step` -> the execute tier, Sonnet 5.5); model ids live
+  only in `models/router.ts TIER_MODELS` (s13's own default stays as its fallback).
+- Tool picks read s13's capability catalog (`connectors/capabilities.ts`): MCP/Composio/API facts, reads vs commits,
+  `allowedByGate`. Campaign-wide launches stay denied by design; the copy says "Offload adds each approved lead; you
+  start the campaign in <tool>". A Composio account that only reads (chain code `reads_only`) is a plain needs-you
+  line on the option.
+- `connectors/catalog.ts` gains outlook, instantly, smartlead, salesforce, xero, quickbooks, zendesk, intercom,
+  airtable, greenhouse (host suffix match for per-tenant hosts such as `.zendesk.com`); `connectors/targets.ts`
+  gains the capability names of the s16 commit tools. Gate and allowlist semantics unchanged.
+- Dry-run `commit` carries the labelled fields of the chosen tool's s16 schema (`plan/commit-fields.ts`), with
+  `missing` labels said plainly ("Set up once before Xero can save this: the Xero organisation, ...").
+- Scope changes in other slices' tests for the bigger catalog: s04 connector list, s12 reach example (a non-catalog
+  site instead of Xero), s13 "no commit policy" example (Notion instead of Slack), s10e unknown id ("not-a-tool"
+  instead of "outlook"). The truth changed; no check was dropped.

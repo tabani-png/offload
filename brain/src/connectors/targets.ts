@@ -37,6 +37,23 @@ export const TOOL_CAPABILITY: Readonly<Record<string, string>> = {
   GOOGLECALENDAR_FIND_FREE_SLOTS: "calendar.free_slots",
   GOOGLECALENDAR_EVENTS_LIST: "calendar.events",
   find_free_slots: "calendar.free_slots",
+  // s14: the s16 commit policies, so the builder's capability needs resolve to them.
+  // Drafts (role draft) are not commits and are not mapped: a draft step is resolved by its role.
+  OUTLOOK_SEND_EMAIL: "mail.send",
+  INSTANTLY_ADD_LEADS_BULK: "outreach.add_lead",
+  SMARTLEAD_SEND_SINGLE_EMAIL: "mail.send",
+  SMARTLEAD_RESUME_CAMPAIGN_LEAD: "outreach.resume_lead",
+  HUBSPOT_CREATE_NOTE: "crm.note",
+  ATTIO_CREATE_NOTE: "crm.note",
+  SALESFORCE_CREATE_TASK: "crm.task",
+  XERO_CREATE_INVOICE: "accounting.bill",
+  QUICKBOOKS_CREATE_BILL: "accounting.bill",
+  ZENDESK_REPLY_ZENDESK_TICKET: "ticket.reply",
+  INTERCOM_REPLY_TO_CONVERSATION: "ticket.reply",
+  INTERCOM_REPLY_TICKET: "ticket.reply",
+  AIRTABLE_CREATE_RECORD: "table.create_record",
+  SLACK_SEND_MESSAGE: "chat.post",
+  GREENHOUSE_MOVE_APPLICATION: "ats.move_stage",
 };
 
 /** What computer use reads and commits for an app the catalog has no allowlisted tool for. */

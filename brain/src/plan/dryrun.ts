@@ -16,6 +16,7 @@ import { taskEvidence } from "./evidence.ts";
 import { buildActions, buildFields, round1, shapeOf, sourceText } from "./outputs.ts";
 import { predictedSteps } from "./probe.ts";
 import { draftTextStep } from "./text-step.ts";
+import { commitFor, missingWords } from "./commit-fields.ts";
 
 export interface GeneralDryRunOptions {
   home: string;
@@ -96,6 +97,11 @@ export async function generalDryRun(o: GeneralDryRunOptions): Promise<GeneralDry
     const commitTool = o.wf.tools?.find((t) => v.steps.some((s) => s.type === "commit" && s.id === t.stepId));
     const toolName = commitTool?.options.find((x) => x.id === commitTool.chosen)?.name;
     if (toolName !== undefined) built.ours.summary = `${built.ours.summary} (with ${toolName})`;
+    // s16: the commit in the labelled form the chosen tool's gate policy binds; missing labels are said plainly.
+    const chosenTool = commitTool === undefined || commitTool.chosen.startsWith("screen:") ? null : commitTool.chosen;
+    const spec = commitFor(chosenTool, built.commit?.verb ?? "save", built.ours, inst);
+    built.commit = spec;
+    if (spec.missing.length > 0) built.warnings.push(`Set up once before ${toolName ?? "the tool"} can save this: ${missingWords(spec.missing)}.`);
     const observedMinutes = round1(inst.minutes);
     const savedMinutes = Math.max(0, round1(observedMinutes - o.wf.reviewSecondsPerItem / 60));
     const dto: GeneralDryRunInstanceDTO = {

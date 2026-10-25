@@ -153,6 +153,8 @@ for f in $touched; do
   case "$f" in
     # vision/{claude,routed,types,worker}.ts are in scope since the Claude captioner scope add (SPEC section 7).
     brain/src/vision/claude.ts|brain/src/vision/routed.ts|brain/src/vision/types.ts|brain/src/vision/worker.ts) ;;
+    # catalog.ts and targets.ts: the s16 tools the builder routes to (coordinator, after s13 and s16 merged).
+    brain/src/connectors/catalog.ts|brain/src/connectors/targets.ts) ;;
     engine/*|packet/*|schemas/*|brain/src/connectors/*|brain/src/vision/*|brain/fixtures/gen.ts|brain/fixtures/gen-domains.ts) fail "s14 commit touched out-of-scope $f";;
     brain/src/workflows/gate.ts|brain/src/workflows/allowlist.ts|brain/src/workflows/executor.ts|brain/src/workflows/batch.ts|brain/src/workflows/runner.ts) fail "s14 commit touched s13's $f";;
   esac

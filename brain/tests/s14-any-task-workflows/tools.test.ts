@@ -37,9 +37,9 @@ describe("s14 tools: the best tool for each capability", () => {
     expect(options.map((o) => o.id)).toEqual(["instantly", "smartlead", "gmail"]);
     expect(options.find((o) => o.id === "gmail")!.connected).toBe(true);
     expect(chosen).toBe("instantly");
-    // Instantly's commits have no gate policy yet: it says so instead of failing later.
-    expect(options[0]!.commitsAllowed).toBe(false);
-    expect(options[0]!.needsYou).toContain("not approved for use yet");
+    // s16: adding an approved lead is allowed; starting the campaign stays the person's (said in the suggestion).
+    expect(options[0]!.commitsAllowed).toBe(true);
+    expect(options[0]!.needsYou).toBeNull();
     // A few a day: the connected Gmail is good enough and is the default.
     expect(optionsFor("email.send", "Gmail", new Set(["gmail"]), 8, { current: "gmail" }).chosen).toBe("gmail");
   });
@@ -64,7 +64,7 @@ describe("s14 tools: the best tool for each capability", () => {
       expect(send.chosen).toBe("instantly");
       expect(send.runsWith).toBe("gmail");
       expect(send.catalogCapability).toBe("send-outreach-sequence");
-      expect(send.suggestion).toBe("Use Instantly for sending: Made for bulk cold email: sending accounts, warm-up, follow-ups and reply detection. Reads only for now.");
+      expect(send.suggestion).toBe("Use Instantly for sending: Made for bulk cold email: sending accounts, warm-up, follow-ups and reply detection. Offload adds each approved lead; you start the campaign in Instantly. Connect its MCP server.");
       expect(workflow.tools!.find((t) => t.stepId === "log")!.capability).toBe("crm.log");
       // The template's send step itself is unchanged (the email demo).
       expect(workflow.steps.find((s) => s.id === "send")!.tool).toBe("mcp__gmail__send_email");

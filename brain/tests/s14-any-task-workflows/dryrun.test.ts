@@ -41,7 +41,11 @@ describe("s14 dry run: values and outputs", () => {
     expect(i.ours.fields[1]!.value).toMatch(/^INV-\d{5}$/);
     expect(i.ours.fields[2]!.value).toMatch(/^\d+\.\d{2}$/);
     expect(i.match).toMatchObject({ matched: 3, total: 3, value: 1, arithmetic: "3 of 3 fields match = 100%" });
-    expect(i.commit).toEqual({ verb: "enter", fields: i.ours.fields.map((f) => [f.label, f.value!]) });
+    // s16: the bill in Xero's labelled form, values copied by code; what only the account knows is listed as missing.
+    expect(i.commit).toMatchObject({ tool: "xero", verb: "create_bill", missing: ["tenant_id", "contact_id", "line.1.account_code"] });
+    expect(i.commit!.fields).toContainEqual(["reference", i.ours.fields[1]!.value!]);
+    expect(i.commit!.fields).toContainEqual(["line.1.unit_amount", i.ours.fields[2]!.value!.replace(/,/g, "")]);
+    expect(i.warnings).toContain("Set up once before Xero can save this: the Xero organisation, the supplier in Xero, the expense account.");
     expect(i.theirs.excerpt).toContain("New Bill");
     expect(r.general!.tone).toBeNull();
   });
@@ -74,7 +78,10 @@ describe("s14 dry run: values and outputs", () => {
     expect(i.ours.text).toContain("Thanks for getting in touch");
     expect(i.ours.actions).toEqual(["send the reply", "mark solved"]);
     expect(i.theirs.actions).toEqual(["send the reply", "mark solved"]);
-    expect(i.commit?.fields.at(-1)?.[0]).toBe("text");
+    // s16: a Zendesk reply carries the ticket id from the screen and the drafted body.
+    expect(i.commit).toMatchObject({ tool: "zendesk", verb: "reply_ticket", missing: [] });
+    expect(i.commit!.fields[0]![0]).toBe("ticket_id");
+    expect(i.commit!.fields.at(-1)![0]).toBe("body");
   });
 
   test("DRYRUN: stage changes draft the scorecard as a note and move the stage", async () => {
@@ -101,7 +108,7 @@ describe("s14 dry run: values and outputs", () => {
     const wf = await draftFor(home, v2, v2.insights[0]!);
     const r = await dryRun({ home, analysis: v2, workflowId: wf.id, model: new StubModel(), now: () => NOW, limit: 4 });
     expect(r.sideEffects).toEqual({ attempted: 4, denied: 4 });
-    expect(r.gateLog.every((d) => d.decision === "deny" && d.tool === commitToolName("web-go-xero-com") && d.reason.startsWith("dry run"))).toBe(true);
+    expect(r.gateLog.every((d) => d.decision === "deny" && d.tool === commitToolName("xero") && d.reason.startsWith("dry run"))).toBe(true);
     const b = readBatch(home, wf.id, r.batchHash, NOW)!;
     expect(b.kind).toBe("dry_run");
     expect(b.items.map((x) => x.key)).toEqual(r.general!.instances.map((x) => x.instanceId.toLowerCase()));

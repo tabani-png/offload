@@ -22,12 +22,12 @@ interface Want {
 }
 
 const CASES: Want[] = [
-  { persona: "recruiter", apps: ["com.apple.Preview", "app.greenhouse.io"], out: "stage_change", types: ["read", "decide", "transform", "draft", "commit"], targets: ["app-preview", "web-app-greenhouse-io"] },
-  { persona: "bookkeeper", apps: ["com.apple.Preview", "go.xero.com"], out: "form_fields", types: ["read", "transform", "commit"], targets: ["app-preview", "web-go-xero-com"] },
-  { persona: "support", apps: ["acme.zendesk.com"], out: "ticket_reply", types: ["read", "decide", "read", "draft", "commit"], targets: ["web-acme-zendesk-com", "web-admin-shopify-com"] },
+  { persona: "recruiter", apps: ["com.apple.Preview", "app.greenhouse.io"], out: "stage_change", types: ["read", "decide", "transform", "draft", "commit"], targets: ["app-preview", "greenhouse"] },
+  { persona: "bookkeeper", apps: ["com.apple.Preview", "go.xero.com"], out: "form_fields", types: ["read", "transform", "commit"], targets: ["app-preview", "xero"] },
+  { persona: "support", apps: ["acme.zendesk.com"], out: "ticket_reply", types: ["read", "decide", "read", "draft", "commit"], targets: ["zendesk", "web-admin-shopify-com"] },
   { persona: "salesops", apps: ["docs.google.com", "www.linkedin.com"], out: "rows", types: ["read", "read", "transform", "commit"], targets: ["google-sheets", "linkedin"] },
-  { persona: "mixed", apps: ["com.apple.Preview", "go.xero.com"], out: "form_fields", types: ["read", "transform", "commit"], targets: ["web-go-xero-com"] },
-  { persona: "mixed", apps: ["acme.zendesk.com"], out: "ticket_reply", types: ["read", "decide", "read", "draft", "commit"], targets: ["web-acme-zendesk-com"] },
+  { persona: "mixed", apps: ["com.apple.Preview", "go.xero.com"], out: "form_fields", types: ["read", "transform", "commit"], targets: ["xero"] },
+  { persona: "mixed", apps: ["acme.zendesk.com"], out: "ticket_reply", types: ["read", "decide", "read", "draft", "commit"], targets: ["zendesk"] },
 ];
 
 describe("s14 known answers on the s12 personas", () => {
@@ -78,7 +78,7 @@ describe("s14 known answers on the s12 personas", () => {
     for (const i of g.instances) {
       expect(i.ours.fields.map((f) => f.label)).toEqual(["From", "Reference", "Total"]);
       expect(i.theirs.fields).toEqual(i.ours.fields);
-      expect(i.commit?.fields.length).toBe(3);
+      expect(i.commit).toMatchObject({ tool: "xero", verb: "create_bill" });
     }
   });
 

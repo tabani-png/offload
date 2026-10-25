@@ -2,10 +2,11 @@
 // (MCP -> Composio -> direct API -> computer use) to resolve to a method. This file only NAMES needs; it never picks a
 // method or a tool. Target ids follow s13's convention (connectors/targets.ts appTargetId): a catalog connector id
 // when the surface is in the catalog, else `web-<host slug>` for a site in a browser and `app-<name slug>` for a Mac app.
-// SEAM: once s13 lands, `slugify`/`appTargetId` below can be replaced by its exports, and `CapabilityResolver` is
-// implemented with connectors/chain.ts (resolve(target, [capability])).
+// s13 is merged: commit capabilities come from its targets.ts (catalogTarget); `slugify`/`appTargetId` mirror its
+// convention. SEAM left: `CapabilityResolver` -> connectors/chain.ts resolve(target, [capability]).
 import type { CapabilityNeedDTO, CapabilityResolutionDTO } from "../api/s14-types.ts";
 import { connectorById } from "../connectors/catalog.ts";
+import { catalogTarget } from "../connectors/targets.ts";
 import type { UnderstandingStep } from "../types.ts";
 import { surfaceReach } from "../understanding/reach.ts";
 
@@ -60,11 +61,13 @@ export function readCapability(t: StepTarget): string {
   return "screen.read";
 }
 
-/** Canonical commit capability: the catalog's write where one exists (mail.send, sheet.append), else ui.commit. */
+/** Canonical commit capability: the catalog target's allowlisted commit (s13 targets.ts, from the s16 policies:
+ * mail.send, accounting.bill, ticket.reply, ats.move_stage, ...), else ui.commit (computer use). Sheets only append. */
 export function commitCapability(t: StepTarget, verb: string): string {
-  if (t.connectorId === "gmail") return "mail.send";
-  if (t.connectorId === "google-sheets" && /^(add|append|log|record)$/.test(verb)) return "sheet.append";
-  return "ui.commit";
+  if (t.connectorId === null) return "ui.commit";
+  if (t.connectorId === "google-sheets") return /^(add|append|log|record)$/.test(verb) ? "sheet.append" : "ui.commit";
+  const ct = catalogTarget(t.connectorId);
+  return ct?.sends[0] ?? ct?.logs[0] ?? "ui.commit";
 }
 
 /** The chain's answer for every need. */

@@ -3,8 +3,8 @@ import { CONNECTORS, connectorsFor } from "../../src/connectors/catalog.ts";
 import { profile } from "../helpers.ts";
 
 describe("connector catalog", () => {
-  test("lists the nine v1 connectors", () => {
-    expect(CONNECTORS.map((c) => c.name)).toEqual(["Gmail", "Google Calendar", "Slack", "LinkedIn", "Google Sheets", "Notion", "HubSpot", "Attio", "Zoom"]);
+  test("lists the nine v1 connectors, then the tools s14 routes to (s16 commit schemas)", () => {
+    expect(CONNECTORS.map((c) => c.name)).toEqual(["Gmail", "Google Calendar", "Slack", "LinkedIn", "Google Sheets", "Notion", "HubSpot", "Attio", "Outlook", "Instantly", "Smartlead", "Salesforce", "Xero", "QuickBooks", "Zendesk", "Intercom", "Airtable", "Greenhouse", "Zoom"]);
   });
 
   test("every connector says how it connects: gmail-mcp, composio:<toolkit> or none", () => {

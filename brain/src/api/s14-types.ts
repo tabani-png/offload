@@ -114,7 +114,7 @@ export interface GeneralDryRunInstanceDTO {
   evidence: { eventIds: string[]; spanIds: string[]; frameIds: string[] };
   estimate: { observedMinutes: number; reviewSeconds: number; savedMinutes: number };
   /** The commit the s13 chain would make for this item after your approval (BatchItem.commit). */
-  commit: { verb: string; fields: Array<[string, string]> } | null;
+  commit: { verb: string; fields: Array<[string, string]>; tool?: string; missing?: string[] } | null;
   warnings: string[];
 }
 

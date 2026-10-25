@@ -53,7 +53,8 @@ describe("s14 plan: step typing", () => {
     const s = skeleton(input([step({ id: "r", verb: "review", object: "cv", ...PDF }), step({ id: "w", verb: "update", object: "candidate record", host: "app.greenhouse.io", meanPosition: 1 })]), { coreOnly: false });
     expect(s.map((x) => x.type)).toEqual(["read", "decide", "transform", "commit"]);
     expect(s[0]!.capability).toMatchObject({ target: "app-preview", capability: "file.read", role: "read", via: "local_file" });
-    expect(s[3]!.capability).toMatchObject({ target: "web-app-greenhouse-io", capability: "ui.commit", role: "send", via: "computer_use" });
+    // Greenhouse is a catalog connector since s16: its move-stage commit has a gate policy.
+    expect(s[3]!.capability).toMatchObject({ target: "greenhouse", capability: "ats.move_stage", role: "send", via: "catalog" });
     expect(s[3]!.gated).toBe(true);
     expect(s.filter((x) => x.type !== "commit").every((x) => !x.gated)).toBe(true);
   });
@@ -264,7 +265,7 @@ describe("s14 plan: files and the user's choice", () => {
     expect(md).toContain("auto_run: off");
     expect(md).toContain("output: ticket_reply");
     expect(md).toContain("[COMMIT]");
-    expect(md).toContain("Needs: send reply to support ticket in Zendesk (ui.commit, send)");
+    expect(md).toContain("Needs: send reply to support ticket in Zendesk (ticket.reply, send)");
     expect(md).toContain("Two versions were tried on last week's real items");
     expect(md).not.toContain(i.label.name);
     expect(wf.name).toBe("Ticket replies");

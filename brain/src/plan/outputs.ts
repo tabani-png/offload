@@ -118,7 +118,7 @@ export interface Built {
   ours: OutputDTO;
   theirs: OutputDTO & { excerpt: string };
   match: { matched: number; total: number; value: number; arithmetic: string };
-  commit: { verb: string; fields: Array<[string, string]> } | null;
+  commit: { verb: string; fields: Array<[string, string]>; tool?: string; missing?: string[] } | null;
   warnings: string[];
 }
 

@@ -132,8 +132,12 @@ function viaWords(o: ToolOptionDTO): string {
   return "Runs on screen.";
 }
 
+/** Tools whose campaign is started by the person: Offload adds each approved lead (s16). */
+export const STARTS_IN_TOOL = new Set(["instantly", "smartlead"]);
+
 export function suggestionFor(verb: string, o: ToolOptionDTO): string {
-  return `Use ${o.name} for ${verb}: ${o.why.replace(/\.$/, "")}. ${viaWords(o)}`;
+  const campaign = STARTS_IN_TOOL.has(o.id) ? ` Offload adds each approved lead; you start the campaign in ${o.name}.` : "";
+  return `Use ${o.name} for ${verb}: ${o.why.replace(/\.$/, "")}.${campaign} ${viaWords(o)}`;
 }
 
 /** My family -> s13 capability catalog id (connectors/capabilities.ts, read only). */
@@ -167,7 +171,10 @@ function catalogOptions(capId: string, current: string | null, connected: Readon
     const d = candidateDTO(cand);
     const connectorId = d.catalogId ?? CATALOG_ID[d.toolId] ?? (connectorById(d.toolId) !== undefined ? d.toolId : null);
     const via: Via = d.mcp.status === "CONFIRMED" ? "mcp" : d.composio.status === "CONFIRMED" ? "composio" : "api";
-    const commitsAllowed = d.commits.length === 0 ? null : d.commits.every((c) => c.allowedByGate);
+    // Campaign-wide launches stay denied by design (no item can bind them): the per-item commit is what counts, and
+    // the person starts the campaign in the tool.
+    const perItem = d.commits.filter((c) => c.verb !== "launch");
+    const commitsAllowed = perItem.length === 0 ? (d.commits.length === 0 ? null : false) : perItem.some((c) => c.allowedByGate);
     const isConnected = connectorId !== null && connected.has(connectorId);
     const ro = connectorId === null ? undefined : readsOnly.get(connectorId);
     const needsYou =
@@ -204,7 +211,9 @@ export function optionsFor(family: string, appName: string, connected: ReadonlyS
     options.push({ ...s, connected: false });
   }
   const mailbox = (x: ToolOptionDTO) => x.id === "gmail" || x.id === "outlook";
-  const good = options.find((x) => x.connected && x.needsYou == null && !(family === "email.send_bulk" && mailbox(x) && perDay > MAILBOX_PER_DAY));
+  const enough = (x: ToolOptionDTO) => x.needsYou == null && x.via !== "computer" && !(family === "email.send_bulk" && mailbox(x) && perDay > MAILBOX_PER_DAY);
+  // 1. connected and good enough; 2. the tool the person uses today, when it is good enough; 3. the first option.
+  const good = options.find((x) => x.connected && enough(x)) ?? options.find((x) => o.current != null && (x.connectorId === o.current || x.id === o.current) && enough(x));
   return { options, chosen: good?.id ?? options[0]!.id };
 }
 
