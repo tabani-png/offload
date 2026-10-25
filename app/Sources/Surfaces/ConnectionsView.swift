@@ -313,7 +313,7 @@ struct ConnectionRowView: View {
         Text(ConnectionsCopy.rowCounts(row)).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
       }
       Text(row.status.label).textStyle(Tokens.TypeScale.calloutEmphasis).foregroundStyle(row.status == .notSetUp ? p.ink3 : p.statusInk(row.status.role))
-        .frame(width: 76, alignment: .trailing)
+        .frame(width: Tokens.Layout.savedColumn, alignment: .trailing)
     }
     .padding(.horizontal, Tokens.Space.s12)
     .frame(height: Tokens.Size.row + Tokens.Space.s12)

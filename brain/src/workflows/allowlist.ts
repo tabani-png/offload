@@ -11,6 +11,9 @@
 import { createHash } from "node:crypto";
 import { domainToASCII } from "node:url";
 import type { BatchItem } from "./batch.ts";
+import { DENIED_ON_PURPOSE } from "./denied.ts";
+
+export { DENIED_ON_PURPOSE };
 
 /** read: no side effect. input (s13, computer use only): a local, reversible UI edit (focus a field, type into it)
  * that needs an approved batch but never uses up an item. send: the item's one commit (send, submit, save, pay, post,
@@ -508,23 +511,6 @@ export const NAMED_RE = /reply|draft/i;
 export const REVIEWED_NAMES: ReadonlySet<string> = new Set(["GMAIL_CREATE_EMAIL_DRAFT", "OUTLOOK_CREATE_DRAFT", "ZENDESK_REPLY_ZENDESK_TICKET", "INTERCOM_REPLY_TO_CONVERSATION", "INTERCOM_REPLY_TICKET"]);
 /** Input keys that carry a nested tool call or code. */
 export const NESTED_KEY_RE = /^(tools?|tool_?slug|tool_?name|tool_?calls?|actions?|command|cmd|script|code|slug)$/i;
-
-/** s16 "still denied on purpose" (brain/CONNECTORS.md): commits no approved item can bind (campaign-wide launches,
- * payments, ledger posts, legacy duplicates). s17: never given a generic policy either. */
-export const DENIED_ON_PURPOSE: ReadonlySet<string> = new Set([
-  "INSTANTLY_ACTIVATE_CAMPAIGN",
-  "SMARTLEAD_UPDATE_CAMPAIGN_STATUS",
-  "SMARTLEAD_CREATE_CAMPAIGN",
-  "QUICKBOOKS_CREATE_BILL_PAYMENT",
-  "XERO_POST_INVOICE_UPDATE",
-  "HUBSPOT_CREATE_ENGAGEMENT",
-  "SLACK_CHAT_POST_MESSAGE",
-  "SLACK_SEND_EPHEMERAL_MESSAGE",
-  "INSTANTLY_CREATE_LEAD",
-  "GMAIL_SEND_DRAFT",
-  "GMAIL_UPDATE_DRAFT",
-  "OUTLOOK_SEND_DRAFT",
-]);
 
 /** s17: why a tool name is never allowed (meta, shell, forward, unreviewed reply/draft), or null. */
 export function neverAllowedName(tool: string): string | null {
