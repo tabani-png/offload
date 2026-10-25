@@ -4,7 +4,7 @@ import type { Handover, JobRole, Person, RoleIdentity, Workflow } from "../api/t
 import { Button, Card, ErrorNote, Field, Row, Section, Sheet } from "../design/components.tsx";
 import type { StateRole } from "../design/tokens.ts";
 import { timeText } from "../lib/format.ts";
-import { Load, useDeps, useGet, useKey } from "../app/data.tsx";
+import { Load, useDeps, useList, useKey } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
 import { PERSON_STATE } from "./People.tsx";
 
@@ -29,10 +29,10 @@ const INBOX = {
 } as const;
 
 export function OffboardingScreen() {
-  const handovers = useGet<Handover[]>("/v1/handovers");
-  const people = useGet<Person[]>("/v1/people");
-  const workflows = useGet<Workflow[]>("/v1/workflows");
-  const identities = useGet<RoleIdentity[]>("/v1/role-identities");
+  const handovers = useList<Handover>("/v1/handovers");
+  const people = useList<Person>("/v1/people");
+  const workflows = useList<Workflow>("/v1/workflows");
+  const identities = useList<RoleIdentity>("/v1/role-identities");
   const [open, setOpen] = useState<Handover | null>(null);
   const person = (id: string) => people.data?.find((p) => p.id === id);
   const wfName = (id: string) => workflows.data?.find((w) => w.id === id)?.name ?? "Workflow";
@@ -78,10 +78,10 @@ export function OffboardingScreen() {
 function HandoverSheet(props: { handover: Handover; onClose: () => void; workflowName: string; leaver?: Person }) {
   const { api } = useDeps();
   const qc = useQueryClient();
-  const workflows = useGet<Workflow[]>("/v1/workflows");
-  const roles = useGet<JobRole[]>("/v1/job-roles");
-  const people = useGet<Person[]>("/v1/people");
-  const identities = useGet<RoleIdentity[]>("/v1/role-identities");
+  const workflows = useList<Workflow>("/v1/workflows");
+  const roles = useList<JobRole>("/v1/job-roles");
+  const people = useList<Person>("/v1/people");
+  const identities = useList<RoleIdentity>("/v1/role-identities");
   const wf = workflows.data?.find((w) => w.id === props.handover.workflowId);
   const role = roles.data?.find((r) => r.id === wf?.jobRoleId);
   const candidates = (people.data ?? []).filter((p) => role?.holderPersonIds.includes(p.id) && p.id !== props.handover.personId && p.state === "active");

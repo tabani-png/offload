@@ -6,7 +6,7 @@ import {
   Button, Card, Chip, ErrorNote, Field, Row, Section, Segmented, Sheet, StateTag,
 } from "../design/components.tsx";
 import { shortHash, timeText } from "../lib/format.ts";
-import { Load, useDeps, useGet, useKey, useText } from "../app/data.tsx";
+import { Load, useDeps, useGet, useList, useKey, useText } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
 import { WORKFLOW_STATE } from "./Workflows.tsx";
 
@@ -53,8 +53,8 @@ export function WorkflowScreen() {
   }, [wq.data, version]);
   const v = version ?? wq.data?.latestVersion ?? null;
   const def = useGet<WorkflowDefinition>(v ? `/v1/workflows/${id}/versions/${v}` : null);
-  const roles = useGet<JobRole[]>("/v1/job-roles");
-  const people = useGet<Person[]>("/v1/people");
+  const roles = useList<JobRole>("/v1/job-roles");
+  const people = useList<Person>("/v1/people");
   const personName = (pid: string | null) => people.data?.find((p) => p.id === pid)?.displayName ?? "Someone";
   const w = wq.data;
 
@@ -167,9 +167,9 @@ interface Binding { connectionId: string | null; disable: boolean }
 export function PromoteSheet(props: { open: boolean; onClose: () => void; workflow: Workflow; def: WorkflowDefinition }) {
   const { api } = useDeps();
   const qc = useQueryClient();
-  const roles = useGet<JobRole[]>("/v1/job-roles");
-  const depts = useGet<Department[]>("/v1/departments");
-  const conns = useGet<Connection[]>("/v1/connections");
+  const roles = useList<JobRole>("/v1/job-roles");
+  const depts = useList<Department>("/v1/departments");
+  const conns = useList<Connection>("/v1/connections");
   const company = conns.data?.filter((c) => c.ownership === "company") ?? [];
   const bound = props.def.steps.filter((s) => s.connection !== null);
   const [jobRoleId, setJobRoleId] = useState("");

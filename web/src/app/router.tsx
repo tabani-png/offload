@@ -8,7 +8,7 @@ import { useEffect, type ReactNode } from "react";
 import { Page, ROLE_WORDS } from "./page.tsx";
 import type { Batch, Department } from "../api/types.ts";
 import { Keycap, StateDot } from "../design/components.tsx";
-import { DepsProvider, makeQueryClient, useGet, useSession, type AppDeps } from "./data.tsx";
+import { DepsProvider, makeQueryClient, useList, useSession, type AppDeps } from "./data.tsx";
 import { ApprovalsScreen } from "../screens/Approvals.tsx";
 import { ComplianceScreen } from "../screens/Compliance.tsx";
 import { DepartmentScreen } from "../screens/Department.tsx";
@@ -40,8 +40,8 @@ const isTyping = (t: EventTarget | null) =>
 function Sidebar() {
   const path = useRouterState({ select: (s) => s.location.pathname });
   const session = useSession();
-  const depts = useGet<Department[]>("/v1/departments");
-  const pending = useGet<Batch[]>("/v1/batches?state=pending");
+  const depts = useList<Department>("/v1/departments");
+  const pending = useList<Batch>("/v1/batches?state=pending");
   const active = (to: string) => (to === "/" ? path === "/" : path === to || path.startsWith(`${to}/`));
   return (
     <nav className="sidebar" aria-label="Main">

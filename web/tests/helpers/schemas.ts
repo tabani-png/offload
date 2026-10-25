@@ -24,9 +24,13 @@ let inlineN = 0;
 export function check(shape: ResponseShape, data: unknown): string | null {
   let validate;
   if (shape.kind === "schema") validate = ajv.getSchema(PREFIX + shape.ref);
-  else if (shape.kind === "array") {
-    const id = `${PREFIX}test-array-${shape.ref.replace(/[#/$]/g, "_")}`;
-    validate = ajv.getSchema(id) ?? (ajv.addSchema({ $id: id, type: "array", items: { $ref: shape.ref } }), ajv.getSchema(id));
+  else if (shape.kind === "list") {
+    const id = `${PREFIX}test-list-${inlineN++}.json`;
+    ajv.addSchema({
+      $id: id, type: "object", additionalProperties: false, required: ["items", "page"],
+      properties: { items: { type: "array", items: shape.item }, page: { $ref: "common.schema.json#/$defs/page" } },
+    });
+    validate = ajv.getSchema(id);
   } else if (shape.kind === "inline") {
     const id = `${PREFIX}test-inline-${inlineN++}.json`;
     ajv.addSchema({ ...shape.schema, $id: id });

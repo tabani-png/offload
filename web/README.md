@@ -42,10 +42,17 @@ Workflow page: `P` promote, `S` SOP preview, `E` evidence.
 | typescript | 5.9.3 | SPEC |
 | happy-dom | 21.0.4 | test only |
 | @testing-library/react | 16.3.3 | test only |
-| @testing-library/dom | 10.4.2 | test only; required peer of @testing-library/react |
+| @testing-library/dom | 10.4.2 | test only; required peer of @testing-library/react (approved by the coordinator 2026-10-25) |
 | ajv | 8.20.0 | test only (2020-12 build) |
 | @types/react, @types/react-dom | 19.3.0 | types |
 | @types/bun | 1.3.12 | types; same pin as packages/hours-saved |
 
-The SPEC asks for these under "Scope changes" in SPEC.md, but SPEC.md is frozen for builders, so they are recorded
-here instead.
+The SPEC asks for these under "Scope changes" in SPEC.md, but SPEC.md is frozen for builders; the coordinator agreed
+(2026-10-25) that this table is the record.
+
+## Contract decisions taken in this slice (2026-10-25)
+- Lists: every list endpoint answers `{ items, page: { nextCursor } }` with `?cursor=&limit=` (1..200, default 50).
+  Screens read lists through `useList` / `listAll`, which follow `nextCursor`.
+- Evidence follows the group floor: `GET /v1/metrics/hours-saved/evidence` for a workflow behind fewer than 5 people
+  answers `422 group_floor`; the screen shows the plain words.
+Both are written into `plan/stage-2/API.md` by a separate contract PR so S2-01/S2-05 build to them.

@@ -46,6 +46,17 @@ describe("suppressed cells", () => {
   });
 });
 
+describe("evidence and the group floor", () => {
+  test("STATES: evidence for a workflow behind fewer than 5 people is refused and shown in plain words", async () => {
+    await renderAt(`/workflows/${fx.WF[307]}/evidence`);
+    expect(screen.getByRole("alert").textContent).toBe(ERROR_WORDS.group_floor);
+    expect(main().textContent).not.toContain("samples");
+    cleanup();
+    await renderAt(`/departments/${fx.DEPT.legal}`);
+    expect(screen.queryAllByRole("link", { name: "Evidence" })).toEqual([]);
+  });
+});
+
 describe("sensitive views are gated", () => {
   test("STATES: per-person metrics column is absent and the gate is visible while the feature is off", async () => {
     const { api } = await renderAt("/people");

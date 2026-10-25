@@ -3,18 +3,18 @@ import type { AdoptionReport, Department, HoursSavedReport, Person, Workflow, Wo
 import { isSuppressed } from "../api/types.ts";
 import { Card, FeatureOffPanel, GradeSplit, Row, Section, StatHero, SuppressedCell, Table } from "../design/components.tsx";
 import { hoursText, minutesText, pct } from "../lib/format.ts";
-import { Load, useFeature, useGet } from "../app/data.tsx";
+import { Load, useFeature, useGet, useList } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
 import { GradeCell, HoursCell, PERIOD, confidenceChip, finalChip } from "./Overview.tsx";
 
 export function DepartmentScreen() {
   const { id = "" } = useParams({ strict: false }) as { id?: string };
-  const depts = useGet<Department[]>("/v1/departments");
+  const depts = useList<Department>("/v1/departments");
   const dept = depts.data?.find((d) => d.id === id);
   const report = useGet<HoursSavedReport>(`/v1/metrics/hours-saved?scope=department:${id}&from=${PERIOD.from}&to=${PERIOD.to}`);
   const adoption = useGet<AdoptionReport>(`/v1/metrics/adoption?scope=department:${id}&from=${PERIOD.from}&to=${PERIOD.to}`);
-  const workflows = useGet<Workflow[]>(`/v1/workflows?departmentId=${id}`);
-  const people = useGet<Person[]>("/v1/people");
+  const workflows = useList<Workflow>(`/v1/workflows?departmentId=${id}`);
+  const people = useList<Person>("/v1/people");
   const headcount = people.data?.filter((p) => p.departmentId === id && p.state !== "departed").length;
   // Under the floor, run-level evidence would describe fewer than 5 people, so the link is not offered here.
   const floor = report.data !== undefined && isSuppressed(report.data.total);

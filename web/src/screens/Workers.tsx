@@ -3,7 +3,7 @@ import type { JobRole, Worker, WorkerRun, Workflow } from "../api/types.ts";
 import { Card, Section, StateTag, Table } from "../design/components.tsx";
 import type { StateRole } from "../design/tokens.ts";
 import { relativeText, shortHash, timeText, usd } from "../lib/format.ts";
-import { Load, useDeps, useGet } from "../app/data.tsx";
+import { Load, useDeps, useGet, useList } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
 
 const WORKER_STATE: Record<Worker["state"], { role: StateRole; words: string }> = {
@@ -27,8 +27,8 @@ const RUN_STATE: Record<WorkerRun["state"], { role: StateRole; words: string }> 
 const STOP_WORDS = { end_turn: "Finished", requires_action: "Needs approval", budget_reached: "Budget reached", error: "Error" } as const;
 
 function useNames() {
-  const workflows = useGet<Workflow[]>("/v1/workflows");
-  const roles = useGet<JobRole[]>("/v1/job-roles");
+  const workflows = useList<Workflow>("/v1/workflows");
+  const roles = useList<JobRole>("/v1/job-roles");
   return {
     workflow: (id: string) => workflows.data?.find((w) => w.id === id)?.name ?? "Workflow",
     role: (id: string) => roles.data?.find((r) => r.id === id)?.name ?? "—",
@@ -38,7 +38,7 @@ function useNames() {
 export function WorkersScreen() {
   const navigate = useNavigate();
   const { now } = useDeps();
-  const q = useGet<Worker[]>("/v1/workers");
+  const q = useList<Worker>("/v1/workers");
   const n = useNames();
   return (
     <Page title="Cloud workers" subtitle="Role workflows that run in the cloud">
@@ -65,8 +65,8 @@ export function WorkersScreen() {
 export function WorkerScreen() {
   const { id = "" } = useParams({ strict: false }) as { id?: string };
   const navigate = useNavigate();
-  const workers = useGet<Worker[]>("/v1/workers");
-  const runs = useGet<WorkerRun[]>(`/v1/workers/${id}/runs`);
+  const workers = useList<Worker>("/v1/workers");
+  const runs = useList<WorkerRun>(`/v1/workers/${id}/runs`);
   const n = useNames();
   const w = workers.data?.find((x) => x.id === id);
   return (

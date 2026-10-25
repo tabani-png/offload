@@ -4,7 +4,7 @@ import type { Person, SelfView, Workflow } from "../api/types.ts";
 import { isSuppressed } from "../api/types.ts";
 import { Button, Card, ErrorNote, Field, GradeSplit, Row, Section, Sheet, StatHero, StateTag, Table } from "../design/components.tsx";
 import { hoursText, timeText } from "../lib/format.ts";
-import { Load, useDeps, useGet, useKey } from "../app/data.tsx";
+import { Load, useDeps, useGet, useList, useKey } from "../app/data.tsx";
 import { Page, ROLE_WORDS } from "../app/page.tsx";
 import { confidenceChip } from "./Overview.tsx";
 
@@ -17,8 +17,8 @@ const ACTION_WORDS: Record<string, string> = {
 export function MeScreen() {
   const { api } = useDeps();
   const q = useGet<SelfView>("/v1/me/data");
-  const people = useGet<Person[]>("/v1/people");
-  const workflows = useGet<Workflow[]>("/v1/workflows");
+  const people = useList<Person>("/v1/people");
+  const workflows = useList<Workflow>("/v1/workflows");
   const [correcting, setCorrecting] = useState(false);
   const name = (id: string | null) => people.data?.find((p) => p.id === id)?.displayName ?? "System";
   const wfName = (id: string) => workflows.data?.find((w) => w.id === id)?.name ?? "Workflow";

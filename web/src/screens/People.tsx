@@ -5,7 +5,7 @@ import { isSuppressed } from "../api/types.ts";
 import { Card, FeatureOffPanel, StateTag, SuppressedCell, Table, type Column } from "../design/components.tsx";
 import type { StateRole } from "../design/tokens.ts";
 import { hoursText, timeText } from "../lib/format.ts";
-import { Load, useDeps, useFeature, useGet } from "../app/data.tsx";
+import { Load, useDeps, useFeature, useList } from "../app/data.tsx";
 import { Page, ROLE_WORDS } from "../app/page.tsx";
 import { PERIOD } from "./Overview.tsx";
 
@@ -22,8 +22,8 @@ export const PERSON_STATE: Record<Person["state"], { role: StateRole; words: str
  */
 export function PeopleScreen() {
   const { api } = useDeps();
-  const q = useGet<Person[]>("/v1/people");
-  const depts = useGet<Department[]>("/v1/departments");
+  const q = useList<Person>("/v1/people");
+  const depts = useList<Department>("/v1/departments");
   const ppv = useFeature("per_person_views");
   const deptName = (id: string | null) => depts.data?.find((d) => d.id === id)?.name ?? "—";
   const metrics = useQueries({

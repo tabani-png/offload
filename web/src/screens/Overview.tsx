@@ -6,7 +6,7 @@ import {
   Bars, Button, Card, Chip, GradeSplit, Ring, Row, Section, StatHero, StateTag, SuppressedCell, Table,
 } from "../design/components.tsx";
 import { hoursText, minutesText, monthName, pct, share } from "../lib/format.ts";
-import { Load, useDeps, useGet } from "../app/data.tsx";
+import { Load, useDeps, useGet, useList } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
 
 export const PERIOD = { from: "2026-10-01", to: "2026-10-26", label: "October so far" };
@@ -61,7 +61,7 @@ export function OverviewScreen() {
   const tenant = useGet<Tenant>("/v1/tenant");
   const report = useGet<HoursSavedReport>(`/v1/metrics/hours-saved?scope=company&from=${PERIOD.from}&to=${PERIOD.to}`);
   const adoptionQ = useGet<AdoptionReport>(`/v1/metrics/adoption?scope=company&from=${PERIOD.from}&to=${PERIOD.to}`);
-  const pending = useGet<Batch[]>("/v1/batches?state=pending");
+  const pending = useList<Batch>("/v1/batches?state=pending");
   const waiting = pending.data?.length ?? 0;
 
   return (

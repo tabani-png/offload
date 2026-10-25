@@ -8,12 +8,13 @@ import type {
 } from "../types.ts";
 import * as fx from "./fixtures.ts";
 import { hex64, ulid, uuid } from "./ids.ts";
-import { adoption, evidence, hoursSavedReport, workingTime } from "./metrics.ts";
+import { adoption, evidence, evidenceGroupSize, hoursSavedReport, workingTime } from "./metrics.ts";
 
 /** What a route returns, for schema validation in tests. Ids are schemas/stage2 file names (+ optional pointer). */
 export type ResponseShape =
   | { kind: "schema"; ref: string }
-  | { kind: "array"; ref: string }
+  /** A paged list (API.md "Lists"): `{ items: T[], page: { nextCursor } }`; `item` is the schema of one T. */
+  | { kind: "list"; item: Record<string, unknown> }
   | { kind: "inline"; schema: Record<string, unknown> }
   | { kind: "text" }
   | { kind: "redirect" };
@@ -55,7 +56,8 @@ export interface Route {
 }
 
 const schema = (ref: string): ResponseShape => ({ kind: "schema", ref });
-const array = (ref: string): ResponseShape => ({ kind: "array", ref });
+const list = (ref: string): ResponseShape => ({ kind: "list", item: { $ref: ref } });
+const listOf = (item: Record<string, unknown>): ResponseShape => ({ kind: "list", item });
 const inline = (s: Record<string, unknown>): ResponseShape => ({ kind: "inline", schema: s });
 const notFound = (): never => {
   throw new ApiError("not_found", 404);
@@ -136,7 +138,7 @@ function pick(ref: string, fields: string[]): ResponseShape {
 const ENABLE_FIELDS = ["feature", "jurisdictions", "legalBasis", "dpiaAttestation", "noticeVersionId", "noticePeriodDays",
   "worksAgreementRef", "quebecActivationAck", "purposeLock"];
 
-const ACK_ROWS = inline({ type: "array", items: { type: "object", additionalProperties: false, required: ["personId", "acknowledgedAt"], properties: { personId: { $ref: "common.schema.json#/$defs/uuid" }, acknowledgedAt: { $ref: "common.schema.json#/$defs/tsMs" } } } });
+const ACK_ROWS = listOf({ type: "object", additionalProperties: false, required: ["personId", "acknowledgedAt"], properties: { personId: { $ref: "common.schema.json#/$defs/uuid" }, acknowledgedAt: { $ref: "common.schema.json#/$defs/tsMs" } } });
 
 export const ROUTES: Route[] = [
   // Auth
@@ -150,7 +152,7 @@ export const ROUTES: Route[] = [
   { method: "POST", path: "/auth/logout", response: inline({ type: "object" }), handle: () => ({}) },
 
   // Devices and sync
-  { method: "GET", path: "/v1/devices", response: array("device-enrollment.schema.json#/$defs/device"), handle: () => fx.devices },
+  { method: "GET", path: "/v1/devices", response: list("device-enrollment.schema.json#/$defs/device"), handle: () => fx.devices },
   {
     method: "GET", path: "/v1/sync/config", response: schema("device-config.schema.json"),
     handle: (_r, s) => ({
@@ -163,7 +165,7 @@ export const ROUTES: Route[] = [
 
   // Self-view
   { method: "GET", path: "/v1/me/data", response: schema("self-view.schema.json"), handle: (_r, s) => selfView(s) },
-  { method: "GET", path: "/v1/me/access-log", response: array("audit-event.schema.json"), handle: (_r, s) => s.auditLog.filter((e) => e.subjectPersonId === s.me.id) },
+  { method: "GET", path: "/v1/me/access-log", response: list("audit-event.schema.json"), handle: (_r, s) => s.auditLog.filter((e) => e.subjectPersonId === s.me.id) },
   {
     method: "GET", path: "/v1/me/export", response: schema("self-view.schema.json"),
     handle: (_r, s) => {
@@ -194,9 +196,9 @@ export const ROUTES: Route[] = [
 
   // Org
   { method: "GET", path: "/v1/tenant", response: schema("tenant.schema.json"), handle: () => fx.tenant },
-  { method: "GET", path: "/v1/departments", response: array("department.schema.json"), handle: () => fx.departments },
+  { method: "GET", path: "/v1/departments", response: list("department.schema.json"), handle: () => fx.departments },
   {
-    method: "GET", path: "/v1/people", response: array("person.schema.json"),
+    method: "GET", path: "/v1/people", response: list("person.schema.json"),
     handle: (_r, s) => [...s.people].sort((a, b) => a.displayName.localeCompare(b.displayName)), // directory order: by name
   },
   {
@@ -207,23 +209,23 @@ export const ROUTES: Route[] = [
       return p;
     },
   },
-  { method: "GET", path: "/v1/job-roles", response: array("job-role.schema.json"), handle: () => fx.jobRoles },
-  { method: "GET", path: "/v1/role-identities", response: array("role-identity.schema.json"), handle: () => fx.roleIdentities },
+  { method: "GET", path: "/v1/job-roles", response: list("job-role.schema.json"), handle: () => fx.jobRoles },
+  { method: "GET", path: "/v1/role-identities", response: list("role-identity.schema.json"), handle: () => fx.roleIdentities },
 
   // Connections and policies
-  { method: "GET", path: "/v1/connections", response: array("connection.schema.json"), handle: () => fx.connections },
+  { method: "GET", path: "/v1/connections", response: list("connection.schema.json"), handle: () => fx.connections },
   {
     method: "GET", path: "/v1/policies/job-roles/:id", response: schema("role-policy.schema.json"),
     handle: (r) => (fx.jobRoles.some((j) => j.id === r.params.id) ? fx.rolePolicyFor(r.params.id!) : notFound()),
   },
   {
-    method: "GET", path: "/v1/overnight-policies", response: array("overnight-policy.schema.json"),
+    method: "GET", path: "/v1/overnight-policies", response: list("overnight-policy.schema.json"),
     handle: (r) => fx.overnightPolicies.filter((p) => !r.query.get("workflowId") || p.workflowId === r.query.get("workflowId")),
   },
 
   // Registry
   {
-    method: "GET", path: "/v1/workflows", response: array("workflow.schema.json"),
+    method: "GET", path: "/v1/workflows", response: list("workflow.schema.json"),
     handle: (r, s) => s.workflows.filter((w) =>
       (!r.query.get("state") || w.state === r.query.get("state"))
       && (!r.query.get("jobRoleId") || w.jobRoleId === r.query.get("jobRoleId"))
@@ -273,7 +275,7 @@ export const ROUTES: Route[] = [
 
   // Broker
   {
-    method: "GET", path: "/v1/batches", response: array("batch.schema.json"),
+    method: "GET", path: "/v1/batches", response: list("batch.schema.json"),
     handle: (r, s) => s.batches.filter((b) => !r.query.get("state") || b.state === r.query.get("state")),
   },
   {
@@ -307,7 +309,7 @@ export const ROUTES: Route[] = [
       return b;
     },
   },
-  { method: "GET", path: "/v1/kill-switches", response: array("kill-switch.schema.json"), handle: (_r, s) => s.killSwitches },
+  { method: "GET", path: "/v1/kill-switches", response: list("kill-switch.schema.json"), handle: (_r, s) => s.killSwitches },
   {
     method: "POST", path: "/v1/kill-switches", response: schema("kill-switch.schema.json"),
     handle: (r, s) => {
@@ -320,9 +322,9 @@ export const ROUTES: Route[] = [
   },
 
   // Cloud workers
-  { method: "GET", path: "/v1/workers", response: array("worker.schema.json"), handle: () => fx.workers },
+  { method: "GET", path: "/v1/workers", response: list("worker.schema.json"), handle: () => fx.workers },
   {
-    method: "GET", path: "/v1/workers/:id/runs", response: array("worker-run.schema.json"),
+    method: "GET", path: "/v1/workers/:id/runs", response: list("worker-run.schema.json"),
     handle: (r) => (fx.workers.some((w) => w.id === r.params.id) ? fx.workerRuns.filter((x) => x.workerId === r.params.id) : notFound()),
   },
   { method: "GET", path: "/v1/worker-runs/:id", response: schema("worker-run.schema.json"), handle: (r) => fx.workerRuns.find((x) => x.id === r.params.id) ?? notFound() },
@@ -342,7 +344,12 @@ export const ROUTES: Route[] = [
   },
   {
     method: "GET", path: "/v1/metrics/hours-saved/evidence", response: schema("hours-saved-evidence.schema.json"),
-    handle: (r) => evidence(r.query.get("workflowId") ?? "", Number(r.query.get("version") ?? "1")) ?? notFound(),
+    handle: (r) => {
+      const id = r.query.get("workflowId") ?? "";
+      const ev = evidence(id, Number(r.query.get("version") ?? "1")) ?? notFound();
+      if (evidenceGroupSize(id) < fx.tenant.groupFloor) fail("group_floor", 422);
+      return ev;
+    },
   },
   {
     method: "GET", path: "/v1/metrics/adoption", response: schema("adoption-report.schema.json"),
@@ -364,7 +371,7 @@ export const ROUTES: Route[] = [
 
   // Continuity
   {
-    method: "GET", path: "/v1/handovers", response: array("handover.schema.json"),
+    method: "GET", path: "/v1/handovers", response: list("handover.schema.json"),
     handle: (r, s) => s.handovers.filter((x) => !r.query.get("state") || x.state === r.query.get("state")),
   },
   {
@@ -386,7 +393,7 @@ export const ROUTES: Route[] = [
   },
 
   // Compliance
-  { method: "GET", path: "/v1/compliance/features", response: array("feature-enablement.schema.json"), handle: (_r, s) => s.features },
+  { method: "GET", path: "/v1/compliance/features", response: list("feature-enablement.schema.json"), handle: (_r, s) => s.features },
   {
     method: "POST", path: "/v1/compliance/features/:feature/enable", request: pick("feature-enablement.schema.json", ENABLE_FIELDS), response: schema("feature-enablement.schema.json"),
     handle: (r, s, o) => {
@@ -408,7 +415,7 @@ export const ROUTES: Route[] = [
       return e;
     },
   },
-  { method: "GET", path: "/v1/compliance/notices", response: array("notice.schema.json"), handle: (_r, s) => s.notices },
+  { method: "GET", path: "/v1/compliance/notices", response: list("notice.schema.json"), handle: (_r, s) => s.notices },
   {
     method: "GET", path: "/v1/compliance/notices/:id/acks", response: ACK_ROWS,
     handle: (r, s) => {
@@ -427,11 +434,11 @@ export const ROUTES: Route[] = [
   },
   {
     method: "GET", path: "/v1/compliance/templates",
-    response: inline({ type: "array", items: { type: "object", additionalProperties: false, required: ["id", "title", "jurisdictions"], properties: { id: { type: "string" }, title: { type: "string" }, jurisdictions: { type: "array", items: { $ref: "common.schema.json#/$defs/jurisdiction" } } } } }),
+    response: listOf({ type: "object", additionalProperties: false, required: ["id", "title", "jurisdictions"], properties: { id: { type: "string" }, title: { type: "string" }, jurisdictions: { type: "array", items: { $ref: "common.schema.json#/$defs/jurisdiction" } } } }),
     handle: () => fx.templates,
   },
   {
-    method: "GET", path: "/v1/audit-log", response: array("audit-event.schema.json"),
+    method: "GET", path: "/v1/audit-log", response: list("audit-event.schema.json"),
     handle: (r, s) => [...s.auditLog].reverse().filter((e) =>
       (!r.query.get("action") || e.action === r.query.get("action"))
       && (!r.query.get("subjectPersonId") || e.subjectPersonId === r.query.get("subjectPersonId"))),
@@ -467,6 +474,17 @@ export function findRoute(method: string, path: string): { route: Route; params:
   return undefined;
 }
 
+/** API.md "Lists": `?cursor=&limit=` (1..200, default 50). The mock's cursor is an opaque offset. */
+export function paginate<T>(rows: T[], q: URLSearchParams): { items: T[]; page: { nextCursor: string | null } } {
+  const limit = q.has("limit") ? Number(q.get("limit")) : 50;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) fail("validation_failed", 400);
+  const raw = q.get("cursor");
+  const offset = raw ? Number(/^o(\d+)$/.exec(raw)?.[1] ?? NaN) : 0;
+  if (!Number.isInteger(offset) || offset < 0) fail("validation_failed", 400);
+  const items = rows.slice(offset, offset + limit);
+  return { items, page: { nextCursor: offset + limit < rows.length ? `o${offset + limit}` : null } };
+}
+
 export interface MockClient extends ApiClient {
   /** Calls made so far, for tests ("GET /v1/people"). */
   readonly calls: string[];
@@ -493,8 +511,9 @@ export function createMockClient(options: MockOptions = {}): MockClient {
     if (!found) throw new ApiError("not_found", 404);
     const forced = o.failures[`${method} ${found.route.path}`];
     if (forced) throw new ApiError(forced, forced === "feature_disabled" || forced === "forbidden" ? 403 : 500);
-    const result = found.route.handle({ params: found.params, query: new URLSearchParams(qs ?? ""), body }, s, o);
-    return structuredClone(result);
+    const query = new URLSearchParams(qs ?? "");
+    const result = found.route.handle({ params: found.params, query, body }, s, o);
+    return structuredClone(found.route.response.kind === "list" ? paginate(result as unknown[], query) : result);
   }
 
   return {

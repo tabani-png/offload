@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { Department, JobRole, Workflow } from "../api/types.ts";
 import { Card, Segmented, StateTag, Table } from "../design/components.tsx";
 import type { StateRole } from "../design/tokens.ts";
-import { Load, useGet } from "../app/data.tsx";
+import { Load, useList } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
 
 export const WORKFLOW_STATE: Record<Workflow["state"], { role: StateRole; words: string }> = {
@@ -18,9 +18,9 @@ type Filter = "all" | Workflow["state"];
 export function WorkflowsScreen() {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<Filter>("all");
-  const q = useGet<Workflow[]>(filter === "all" ? "/v1/workflows" : `/v1/workflows?state=${filter}`);
-  const roles = useGet<JobRole[]>("/v1/job-roles");
-  const depts = useGet<Department[]>("/v1/departments");
+  const q = useList<Workflow>(filter === "all" ? "/v1/workflows" : `/v1/workflows?state=${filter}`);
+  const roles = useList<JobRole>("/v1/job-roles");
+  const depts = useList<Department>("/v1/departments");
   const roleName = (id: string | null) => roles.data?.find((r) => r.id === id)?.name ?? "—";
   const deptName = (id: string | null) => depts.data?.find((d) => d.id === id)?.name ?? "—";
 

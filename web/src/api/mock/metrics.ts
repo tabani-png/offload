@@ -197,6 +197,17 @@ export function hoursSavedReport(scope: Scope, from: string, toExclusive: string
   };
 }
 
+/**
+ * People behind a workflow's evidence: the smaller of its job role's holders and its department's headcount. A
+ * proposal belongs to one person. Evidence for a group under the floor is refused with group_floor (decided
+ * 2026-10-25: the floor applies to evidence like every other aggregate; self-view is S2-11's concern).
+ */
+export function evidenceGroupSize(workflowId: string): number {
+  const s = WORKFLOW_SPECS.find((x) => uuid(x.n) === workflowId);
+  if (!s || s.jobRoleId === null || s.departmentId === null) return 1;
+  return Math.min(holdersOf(s.jobRoleId), headcount(s.departmentId));
+}
+
 export function evidence(workflowId: string, version: number): HoursSavedEvidence | undefined {
   const s = WORKFLOW_SPECS.find((x) => uuid(x.n) === workflowId);
   if (!s || version < 1 || version > s.versions) return undefined;

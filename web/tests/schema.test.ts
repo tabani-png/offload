@@ -95,7 +95,7 @@ describe("mock API against schemas/stage2", () => {
     expect(api.get(`/v1/metrics/hours-saved?scope=person:${fx.people[0]!.id}`)).rejects.toMatchObject({ code: "feature_disabled" });
     // Self is always allowed (API.md: S always).
     expect(check({ kind: "schema", ref: "hours-saved-report.schema.json" }, await api.get(`/v1/metrics/hours-saved?scope=person:${fx.ME.id}`))).toBeNull();
-    expect(await api.get<unknown[]>("/v1/compliance/features")).toEqual([]);
+    expect(await api.get<unknown>("/v1/compliance/features")).toEqual({ items: [], page: { nextCursor: null } });
   });
 
   test("SCHEMA: every route with a request schema accepts the body its screen sends", async () => {
@@ -114,6 +114,25 @@ describe("mock API against schemas/stage2", () => {
     for (const r of withReq) expect(check(r.request!, bodies[r.path])).toBeNull();
     // and a malformed body is rejected by the same schema
     expect(check(findRoute("POST", `/v1/batches/${H}/approve`)!.route.request!, { batchHash: "nope" })).not.toBeNull();
+  });
+
+  test("SCHEMA: lists are { items, page } with cursor paging (API.md Lists) and listAll reads every page", async () => {
+    const api = createMockClient();
+    const first = await api.get<{ items: unknown[]; page: { nextCursor: string | null } }>("/v1/people?limit=20");
+    expect(first.items.length).toBe(20);
+    expect(first.page.nextCursor).not.toBeNull();
+    const second = await api.get<{ items: unknown[]; page: { nextCursor: string | null } }>(`/v1/people?limit=20&cursor=${first.page.nextCursor}`);
+    expect(second.items).not.toEqual(first.items);
+    expect(api.get("/v1/people?limit=0")).rejects.toMatchObject({ code: "validation_failed" });
+    expect(api.get("/v1/people?limit=201")).rejects.toMatchObject({ code: "validation_failed" });
+    const { listAll } = await import("../src/api/client.ts");
+    const all = await listAll<{ id: string }>(api, "/v1/people");
+    expect(all.length).toBe(fx.people.length);
+    // listAll follows nextCursor across pages when a list is longer than one page
+    const paged: string[] = [];
+    const small = { ...api, get: <T,>(p: string) => { paged.push(p); return api.get<T>(p.replace("limit=200", "limit=10")); } };
+    expect((await listAll(small, "/v1/people")).length).toBe(fx.people.length);
+    expect(paged.length).toBe(Math.ceil(fx.people.length / 10));
   });
 
   test("SCHEMA: list errors use codes from error.schema.json", async () => {

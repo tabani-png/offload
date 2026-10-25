@@ -5,7 +5,7 @@ import type {
 } from "../api/types.ts";
 import { Button, Card, Chip, ErrorNote, Field, Row, Section, Sheet, StateTag, Table } from "../design/components.tsx";
 import { timeText } from "../lib/format.ts";
-import { Load, featureState, useDeps, useGet, useSession } from "../app/data.tsx";
+import { Load, featureState, useDeps, useList, useSession } from "../app/data.tsx";
 import { Page, ROLE_WORDS } from "../app/page.tsx";
 
 export const FEATURE_NAMES: Record<SensitiveFeature, string> = {
@@ -77,10 +77,10 @@ export function toEnableRequest(feature: SensitiveFeature, f: EnableForm): Featu
 export function ComplianceScreen() {
   const { now } = useDeps();
   const session = useSession();
-  const features = useGet<FeatureEnablement[]>("/v1/compliance/features");
-  const notices = useGet<Notice[]>("/v1/compliance/notices");
-  const audit = useGet<AuditEvent[]>("/v1/audit-log");
-  const people = useGet<Person[]>("/v1/people");
+  const features = useList<FeatureEnablement>("/v1/compliance/features");
+  const notices = useList<Notice>("/v1/compliance/notices");
+  const audit = useList<AuditEvent>("/v1/audit-log");
+  const people = useList<Person>("/v1/people");
   const [enabling, setEnabling] = useState<SensitiveFeature | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const isOwner = session.data?.person.accessRole === "owner";
@@ -167,7 +167,7 @@ function VerifyChain() {
 }
 
 function NoticeSheet(props: { notice: Notice; onClose: () => void }) {
-  const acks = useGet<NoticeAckRow[]>(props.notice.publishedAt ? `/v1/compliance/notices/${props.notice.id}/acks` : null);
+  const acks = useList<NoticeAckRow>(props.notice.publishedAt ? `/v1/compliance/notices/${props.notice.id}/acks` : null);
   const n = props.notice;
   return (
     <Sheet open onClose={props.onClose} wide title={`${n.title}, v${n.version}`}>

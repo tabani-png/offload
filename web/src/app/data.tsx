@@ -2,7 +2,7 @@
 
 import { QueryClient, useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
-import { ApiError, type ApiClient } from "../api/client.ts";
+import { ApiError, listAll, type ApiClient } from "../api/client.ts";
 import type { FeatureEnablement, SensitiveFeature, Session } from "../api/types.ts";
 import { ErrorNote, Loading } from "../design/components.tsx";
 
@@ -42,6 +42,12 @@ export function useGet<T>(path: string | null): UseQueryResult<T> {
   return useQuery({ queryKey: [path], queryFn: () => api.get<T>(path!), enabled: path !== null });
 }
 
+/** A list endpoint, all pages, as a plain array. */
+export function useList<T>(path: string | null): UseQueryResult<T[]> {
+  const { api } = useDeps();
+  return useQuery({ queryKey: ["list", path], queryFn: () => listAll<T>(api, path!), enabled: path !== null });
+}
+
 export function useText(path: string | null): UseQueryResult<string> {
   const { api } = useDeps();
   return useQuery({ queryKey: ["text", path], queryFn: () => api.getText(path!), enabled: path !== null });
@@ -67,7 +73,7 @@ export function featureState(records: FeatureEnablement[] | undefined, f: Sensit
 
 export function useFeature(f: SensitiveFeature) {
   const { now } = useDeps();
-  const q = useGet<FeatureEnablement[]>("/v1/compliance/features");
+  const q = useList<FeatureEnablement>("/v1/compliance/features");
   return { ...featureState(q.data, f, now()), loaded: q.data !== undefined || q.isError };
 }
 

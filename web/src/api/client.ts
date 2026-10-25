@@ -60,6 +60,26 @@ export interface ApiClient {
   delete<T>(path: string): Promise<T>;
 }
 
+/** API.md "Lists": every list endpoint answers `{ items, page: { nextCursor } }`. */
+export interface Page<T> {
+  items: T[];
+  page: { nextCursor: string | null };
+}
+
+/** Read every page of a list (limit 200 per page, at most `maxPages`). */
+export async function listAll<T>(api: ApiClient, path: string, maxPages = 50): Promise<T[]> {
+  const out: T[] = [];
+  let cursor: string | null = null;
+  for (let i = 0; i < maxPages; i++) {
+    const sep = path.includes("?") ? "&" : "?";
+    const page: Page<T> = await api.get<Page<T>>(`${path}${sep}limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+    out.push(...page.items);
+    cursor = page.page.nextCursor;
+    if (cursor === null) return out;
+  }
+  return out;
+}
+
 const STATUS_CODE: Record<number, ErrorCode> = {
   400: "validation_failed",
   401: "unauthorized",

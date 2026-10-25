@@ -3,13 +3,13 @@ import { useState } from "react";
 import type { ApprovalResponse, Batch, JobRole, RoleIdentity, Workflow } from "../api/types.ts";
 import { Button, Card, Chip, ErrorNote, Row, Sheet, StateTag } from "../design/components.tsx";
 import { relativeText, shortHash } from "../lib/format.ts";
-import { Load, useDeps, useGet, useKey, useSession } from "../app/data.tsx";
+import { Load, useDeps, useGet, useList, useKey, useSession } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
 
 export function ApprovalsScreen() {
   const { now } = useDeps();
-  const q = useGet<Batch[]>("/v1/batches?state=pending");
-  const workflows = useGet<Workflow[]>("/v1/workflows");
+  const q = useList<Batch>("/v1/batches?state=pending");
+  const workflows = useList<Workflow>("/v1/workflows");
   const [open, setOpen] = useState<string | null>(null);
   const name = (id: string) => workflows.data?.find((w) => w.id === id)?.name ?? "Workflow";
   const first = q.data?.[0];
@@ -50,8 +50,8 @@ function BatchSheet(props: { hash: string; onClose: () => void; workflowName: (i
   const qc = useQueryClient();
   const session = useSession();
   const q = useGet<Batch>(`/v1/batches/${props.hash}`);
-  const identities = useGet<RoleIdentity[]>("/v1/role-identities");
-  const roles = useGet<JobRole[]>("/v1/job-roles");
+  const identities = useList<RoleIdentity>("/v1/role-identities");
+  const roles = useList<JobRole>("/v1/job-roles");
   const done = () => {
     void qc.invalidateQueries();
     props.onClose();
