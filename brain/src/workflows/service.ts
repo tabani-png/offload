@@ -16,14 +16,18 @@ import {
 import { insightConnectors } from "../api/dto.ts";
 import { CONNECTORS, connectorById } from "../connectors/catalog.ts";
 import { catalogStatus, loadConnectorsConfig, missingEnv, type ConnectorStatus, type Env } from "../connectors/config.ts";
+import { roleOfTool } from "./allowlist.ts";
 import { shortHash, type Batch } from "./batch.ts";
 import { pendingLiveBatch } from "./runner.ts";
 import { listBatches, listWorkflows, readText, workflowDir } from "./store.ts";
 import type { WorkflowJson } from "./types.ts";
 
 export function batchSummary(b: Batch): BatchSummaryDTO {
-  const sent = new Set(b.results.filter((r) => r.ok && /send|reply|forward/i.test(r.tool)).map((r) => r.key)).size;
-  return { hash: b.hash, kind: b.kind, state: b.state, createdAt: b.createdAt, approvedAt: b.approvedAt, items: b.items.length, sent };
+  const states = b.items.map((i) => b.itemStates?.[i.key]?.state);
+  // Batches from before s05b have no item states: count allowlisted send results.
+  const sent = b.itemStates === undefined ? new Set(b.results.filter((r) => r.ok && roleOfTool(r.tool) === "send").map((r) => r.key)).size : states.filter((s) => s === "sent").length;
+  const unknown = states.filter((s) => s === "unknown").length;
+  return { hash: b.hash, kind: b.kind, state: b.state, createdAt: b.createdAt, approvedAt: b.approvedAt, items: b.items.length, sent, unknown };
 }
 
 export function workflowConnectors(wf: WorkflowJson, status: Record<string, ConnectorStatus>): WorkflowConnectorDTO[] {
@@ -41,9 +45,9 @@ export function stateOf(wf: WorkflowJson, connectors: readonly WorkflowConnector
   return { state: needsYou.length > 0 ? "needs_you" : "active", needsYou };
 }
 
-export function summaryOf(home: string, wf: WorkflowJson, status: Record<string, ConnectorStatus>): WorkflowSummaryDTO {
+export function summaryOf(home: string, wf: WorkflowJson, status: Record<string, ConnectorStatus>, now: number = Date.now()): WorkflowSummaryDTO {
   const connectors = workflowConnectors(wf, status);
-  const pending = pendingLiveBatch(home, wf.id);
+  const pending = pendingLiveBatch(home, wf.id, now);
   const { state, needsYou } = stateOf(wf, connectors, pending);
   return {
     id: wf.id,
@@ -65,10 +69,10 @@ export function summaryOf(home: string, wf: WorkflowJson, status: Record<string,
   };
 }
 
-export function detailOf(home: string, wf: WorkflowJson, status: Record<string, ConnectorStatus>): WorkflowDetailDTO {
-  const pending = pendingLiveBatch(home, wf.id);
+export function detailOf(home: string, wf: WorkflowJson, status: Record<string, ConnectorStatus>, now: number = Date.now()): WorkflowDetailDTO {
+  const pending = pendingLiveBatch(home, wf.id, now);
   return {
-    ...summaryOf(home, wf, status),
+    ...summaryOf(home, wf, status, now),
     path: workflowDir(home, wf.id),
     skillMd: readText(home, wf.id, "SKILL.md") ?? "",
     facts: readText(home, wf.id, "facts.md") ?? "",
@@ -77,7 +81,7 @@ export function detailOf(home: string, wf: WorkflowJson, status: Record<string, 
     trigger: wf.trigger,
     batchSize: wf.batchSize,
     models: { ...wf.models },
-    batches: listBatches(home, wf.id).map(batchSummary),
+    batches: listBatches(home, wf.id, now).map(batchSummary),
     pendingItems: (pending?.items ?? []).map((i) => ({ key: i.key, to: i.to, subject: i.subject, body: i.body, warnings: [...i.warnings] })),
   };
 }
@@ -135,10 +139,10 @@ function legacyStatus(state: WorkflowState, wf: WorkflowJson): AutomationStatus 
   return wf.lastDryRunAt === null ? "draft" : "dry_run";
 }
 
-export function dashboard(a: Analysis, home: string, env: Env): DashboardResponse {
+export function dashboard(a: Analysis, home: string, env: Env, now: number = Date.now()): DashboardResponse {
   const status = connectorStatus(home, env);
   const automations: AutomationDTO[] = listWorkflows(home).map((wf) => {
-    const s = summaryOf(home, wf, status);
+    const s = summaryOf(home, wf, status, now);
     const measured = measuredSaving(a, wf.taskId, wf.activatedAt);
     const insight = a.insights.find((i) => i.id === wf.insightId);
     return {

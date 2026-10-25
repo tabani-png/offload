@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { localDay } from "../../src/store/vault.ts";
 import { tempHome } from "../helpers.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -16,8 +17,10 @@ describe("cli", () => {
   test("the fixture generator writes 7 encrypted days with keys", () => {
     const r = run(["fixtures/gen.ts", "--out", fx.home, "--seed", "42", "--encrypted"]);
     expect(r.code).toBe(0);
-    expect(existsSync(join(fx.home, "days", "2026-10-12.jsonl.enc"))).toBe(true);
-    expect(existsSync(join(fx.home, "keys", "2026-10-12.key"))).toBe(true);
+    // Default start: the 7 days ending yesterday (the reader refuses days older than 7 local days).
+    const start = localDay(Date.now() - 7 * 86_400_000);
+    expect(existsSync(join(fx.home, "days", `${start}.jsonl.enc`))).toBe(true);
+    expect(existsSync(join(fx.home, "keys", `${start}.key`))).toBe(true);
   });
 
   test("analyze prints the top insights with their arithmetic", () => {

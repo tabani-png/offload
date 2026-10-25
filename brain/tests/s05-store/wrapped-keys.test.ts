@@ -110,7 +110,7 @@ describe("s05 store: keychain-wrapped day keys", () => {
   test("readStore passes env through to every day", () => {
     writeWrappedDay([ev(1), ev(2)]);
     bin = fakeObserver("ok");
-    const s = readStore(home, { env: { OFFLOAD_OBSERVER_BIN: bin } });
+    const s = readStore(home, { env: { OFFLOAD_OBSERVER_BIN: bin }, now: new Date(2026, 9, 21, 12).getTime() });
     expect(s.eventCount).toBe(2);
     expect(s.badLineCount).toBe(0);
   });

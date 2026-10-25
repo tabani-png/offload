@@ -1,82 +1,39 @@
-// The approval gate (ADR 0006), enforced in code. The runner passes `canUseTool` and `preToolUse` to the Agent SDK;
-// the same functions run in tests with a fake tool set. Rules, in order:
-//   built-in tool (no mcp__ prefix)          -> deny (workflow runs get MCP tools only)
-//   read tool (read verb, no write verb)      -> allow
-//   side effect in a dry run                  -> deny
-//   side effect for a dry-run batch           -> deny
+// The approval gate (ADR 0006, REVIEW-1 B1/H1/M1/M3/L2), enforced in code. The runner passes `canUseTool` and
+// `preToolUse` to the Agent SDK; the same functions run in tests with a fake tool set. Rules, in order:
+//   built-in tool (no mcp__ prefix)                        -> deny (workflow runs get MCP tools only)
+//   the run was cancelled (pause, delete)                   -> deny
+//   anything that is not an allowlisted read in a dry run   -> deny (a dry run allows zero non-read tools)
+//   meta / shell / forward / reply / draft tool, nested tool call in the input -> deny
+//   not on the allowlist (allowlist.ts) for a connected server -> deny (unknown = deny)
+//   allowlisted read                                        -> allow
+//   side effect for a dry-run batch                         -> deny
+//   batch items do not match the batch hash                 -> deny
 //   no approval token for this exact batch hash (and auto-run off) -> deny
-//   input does not match exactly one batch item (recipients and body) -> deny
-//   that item already done by this tool class -> deny
-//   otherwise                                 -> allow, and mark the item done
+//   role not declared by the workflow's steps               -> deny
+//   canonical hash of the FULL arguments != expected hash of any approved item -> deny
+//   that item already had this role (send once, log once and only after its send) -> deny
+//   the durable journal could not record the call           -> deny
+//   otherwise                                               -> allow, journal it, mark the item done
 // Every decision is logged (callback and, when given, workflows/<id>/gate-log.jsonl).
 import type { CanUseTool, HookCallback, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { appendFileSync } from "node:fs";
+import { canonicalArgs, DEFAULT_SERVERS, expectedHash, policyFor, splitMcpName, type CrmSheet, type Role } from "./allowlist.ts";
+import { batchHash, shortHash, type Batch, type ItemState } from "./batch.ts";
+
+export { splitMcpName };
 
 /** Compile-time proof that the gate plugs into the SDK as is. */
 export type _GateFitsSdk = GateCanUseTool extends CanUseTool ? true : never;
-import { createHash, timingSafeEqual } from "node:crypto";
-import { appendFileSync } from "node:fs";
-import { shortHash, type Batch, type BatchItem } from "./batch.ts";
 
 export type ToolClass = "read" | "side_effect" | "builtin";
+export type ServerMap = Readonly<Record<string, readonly string[]>>;
 
-const READ_VERBS = new Set("get list search read fetch find query lookup view describe count check retrieve show".split(" "));
-const WRITE_VERBS = new Set(
-  "send create update delete insert append write post reply forward trash modify patch move label add remove draft batch upload share set archive mark schedule invite put upsert import execute run cancel accept decline respond copy rename clear".split(" "),
-);
-
-export function splitMcpName(name: string): { server: string; tool: string } | null {
-  const parts = name.split("__");
-  if (parts[0] !== "mcp" || parts.length < 3) return null;
-  return { server: parts[1]!, tool: parts.slice(2).join("__") };
-}
-
-export function classifyTool(name: string): ToolClass {
-  const mcp = splitMcpName(name);
-  if (mcp === null) return "builtin";
-  const words = mcp.tool
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((w) => w !== "");
-  const read = words.some((w) => READ_VERBS.has(w));
-  const write = words.some((w) => WRITE_VERBS.has(w));
-  return read && !write ? "read" : "side_effect";
-}
-
-const SEND_CLASS_RE = /send|reply|forward/i;
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-
-function stringLeaves(x: unknown, out: string[] = [], depth = 0): string[] {
-  if (depth > 8) return out;
-  if (typeof x === "string") out.push(x);
-  else if (Array.isArray(x)) for (const v of x) stringLeaves(v, out, depth + 1);
-  else if (typeof x === "object" && x !== null) for (const v of Object.values(x)) stringLeaves(v, out, depth + 1);
-  return out;
-}
-
-const norm = (s: string) =>
-  s
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-/** The one batch item this tool input is for, or the reason it is none. */
-export function matchItem(toolName: string, input: Record<string, unknown>, items: readonly BatchItem[]): { item: BatchItem } | { reason: string } {
-  const leaves = stringLeaves(input);
-  const emails = new Set(leaves.flatMap((l) => l.match(EMAIL_RE) ?? []).map((e) => e.toLowerCase()));
-  const named = items.filter((i) => emails.has(i.key));
-  if (named.length === 0) return { reason: "input names no recipient of the approved batch" };
-  if (named.length > 1) return { reason: `input names ${named.length} batch recipients; one call per item` };
-  const item = named[0]!;
-  if (SEND_CLASS_RE.test(toolName)) {
-    const strangers = [...emails].filter((e) => e !== item.key);
-    if (strangers.length > 0) return { reason: `input adds recipients that were not approved: ${strangers.join(", ")}` };
-    const body = norm(item.body);
-    if (!leaves.some((l) => norm(l) === body)) return { reason: "message body differs from the approved draft" };
-  }
-  return { item };
+/** read only for an allowlisted read tool on a server that covers its connector; everything else is a side effect. */
+export function classifyTool(name: string, servers: ServerMap = DEFAULT_SERVERS): ToolClass {
+  if (splitMcpName(name) === null) return "builtin";
+  const p = policyFor(name, servers);
+  return !("reason" in p) && p.role === "read" ? "read" : "side_effect";
 }
 
 export interface ApprovalRecord {
@@ -96,6 +53,12 @@ export interface GateDecisionLog {
   itemKey?: string;
 }
 
+/** A side-effect action the workflow's steps declare, per item. */
+export interface GateAction {
+  role: Exclude<Role, "read">;
+  connector: string;
+}
+
 export interface GateContext {
   workflowId: string;
   mode: "dry_run" | "live";
@@ -104,8 +67,20 @@ export interface GateContext {
   autoRun: boolean;
   /** The approval token this run holds, null when none. */
   runToken: string | null;
-  /** Stored approvals by batch hash. */
+  /** Stored approvals by batch hash (a snapshot taken when the run started). */
   approvals: (hash: string) => ApprovalRecord | undefined;
+  /** Server name -> catalog ids (from connectors.json). Default DEFAULT_SERVERS. */
+  servers?: ServerMap;
+  /** Side-effect actions the steps declare. Default: send through gmail only. */
+  actions?: readonly GateAction[];
+  /** Where the CRM log tool may append. Without it the log tool is denied. */
+  crmSheet?: CrmSheet;
+  /** Durable state of an item (the runner's journal). A send is only allowed from "pending". */
+  itemState?: (key: string) => ItemState | undefined;
+  /** Called synchronously before an allow is returned; a throw turns the allow into a deny. */
+  onAllow?: (key: string, role: GateAction["role"], tool: string) => void;
+  /** Non-null when the run must stop (paused, deleted): the reason. Checked before every call. */
+  cancelled?: () => string | null;
   log?: (d: GateDecisionLog) => void;
   /** Append decisions here (jsonl). */
   logPath?: string;
@@ -117,6 +92,7 @@ export interface Decision {
   reason: string;
   toolClass: ToolClass;
   itemKey?: string;
+  role?: Role;
 }
 
 /** Assignable to the Agent SDK's CanUseTool (it never returns null and needs no SDK-only options). */
@@ -124,21 +100,28 @@ export type GateCanUseTool = (toolName: string, input: Record<string, unknown>, 
 
 export interface Gate {
   canUseTool: GateCanUseTool;
+  /** canUseTool plus the decision behind it (item key and role), for executors that record results. */
+  check(toolName: string, input: Record<string, unknown>): { result: PermissionResult; decision: Decision };
   preToolUse: HookCallback;
-  /** Pure decision; `consume` marks the item done when allowed. */
+  /** Pure decision; `consume` marks the item done (and journals it) when allowed. */
   decide(toolName: string, input: Record<string, unknown>, consume: boolean): Decision;
-  /** Item keys done per tool class ("send" or "write"). */
+  /** Item keys done per role ("send", "log"). */
   readonly done: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 const tokenEq = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
+const DEFAULT_ACTIONS: readonly GateAction[] = [{ role: "send", connector: "gmail" }];
 
 export function createGate(ctx: GateContext): Gate {
   const done = new Map<string, Set<string>>([
     ["send", new Set()],
-    ["write", new Set()],
+    ["log", new Set()],
   ]);
   const now = ctx.now ?? Date.now;
+  const servers = ctx.servers ?? DEFAULT_SERVERS;
+  const actions = ctx.actions ?? DEFAULT_ACTIONS;
+  const intact = batchHash(ctx.batch.workflowId, ctx.batch.kind, ctx.batch.items) === ctx.batch.hash;
+  const expectedCache = new Map<string, { hash: string } | { reason: string }>();
 
   const record = (tool: string, d: Decision) => {
     const entry: GateDecisionLog = {
@@ -153,33 +136,79 @@ export function createGate(ctx: GateContext): Gate {
       ...(d.itemKey === undefined ? {} : { itemKey: d.itemKey }),
     };
     ctx.log?.(entry);
-    if (ctx.logPath !== undefined) appendFileSync(ctx.logPath, JSON.stringify(entry) + "\n", { mode: 0o600 });
+    if (ctx.logPath !== undefined) {
+      try {
+        appendFileSync(ctx.logPath, JSON.stringify(entry) + "\n", { mode: 0o600 });
+      } catch (err) {
+        // The workflow folder can be deleted mid-run; the decision itself still stands.
+        console.error("brain: gate log not written:", err instanceof Error ? err.message : err);
+      }
+    }
   };
 
   function decide(toolName: string, input: Record<string, unknown>, consume: boolean): Decision {
-    const toolClass = classifyTool(toolName);
+    if (splitMcpName(toolName) === null) return { allow: false, reason: "built-in tools are disabled in workflow runs", toolClass: "builtin" };
+    const p = policyFor(toolName, servers, input);
+    const isRead = !("reason" in p) && p.role === "read";
+    const toolClass: ToolClass = isRead ? "read" : "side_effect";
     const deny = (reason: string, itemKey?: string): Decision => ({ allow: false, reason, toolClass, ...(itemKey === undefined ? {} : { itemKey }) });
-    if (toolClass === "builtin") return deny("built-in tools are disabled in workflow runs");
-    if (toolClass === "read") return { allow: true, reason: "read-only tool", toolClass };
-    if (ctx.mode === "dry_run") return deny("dry run: side effects are disabled");
+    const cancelled = ctx.cancelled?.() ?? null;
+    if (cancelled !== null) return deny(`run cancelled: ${cancelled}`);
+    // Dry runs allow zero non-read tools, before anything else is looked at.
+    if (!isRead && ctx.mode === "dry_run") return deny("dry run: side effects are disabled");
+    if ("reason" in p) return deny(p.reason);
+    if (p.role === "read") return { allow: true, reason: "allowlisted read tool", toolClass, role: "read" };
     if (ctx.batch.kind !== "live") return deny("dry-run batch: nothing in it can be sent");
+    if (!intact) return deny(`batch ${shortHash(ctx.batch.hash)} does not match its hash: it changed after review`);
     const approval = ctx.approvals(ctx.batch.hash);
     const approved = ctx.runToken !== null && approval !== undefined && tokenEq(approval.token, ctx.runToken);
     if (!approved && !ctx.autoRun) return deny(`no approval for batch ${shortHash(ctx.batch.hash)}`);
-    const m = matchItem(toolName, input, ctx.batch.items);
-    if ("reason" in m) return deny(m.reason);
-    const cls = SEND_CLASS_RE.test(toolName) ? "send" : "write";
-    const set = done.get(cls)!;
-    if (set.has(m.item.key)) return deny(`already done for ${m.item.key} in this batch`, m.item.key);
-    if (consume) set.add(m.item.key);
-    return { allow: true, reason: approved ? `approved batch ${shortHash(ctx.batch.hash)}` : "auto-run is on for this workflow", toolClass, itemKey: m.item.key };
+    const role = p.role;
+    if (!actions.some((a) => a.role === role && a.connector === p.connector)) return deny(`this workflow declares no ${role} step through ${p.connector}`);
+
+    const got = canonicalArgs(p, input);
+    if ("reason" in got) return deny(got.reason);
+    let item: Batch["items"][number] | null = null;
+    let firstReason: string | null = null;
+    for (const i of ctx.batch.items) {
+      const ck = `${p.tool}\u0000${i.key}`;
+      let exp = expectedCache.get(ck);
+      if (exp === undefined) {
+        exp = expectedHash(p, i, { batchHash: ctx.batch.hash, ...(ctx.crmSheet === undefined ? {} : { crmSheet: ctx.crmSheet }) });
+        expectedCache.set(ck, exp);
+      }
+      if ("reason" in exp) firstReason ??= exp.reason;
+      else if (exp.hash === got.hash) {
+        item = i;
+        break;
+      }
+    }
+    if (item === null) return deny(firstReason ?? "arguments differ from every approved item (recipients, subject, body and every other field must be exactly as approved)");
+
+    const set = done.get(role)!;
+    if (set.has(item.key)) return deny(`${role} already done for ${item.key} in this batch`, item.key);
+    const state = ctx.itemState?.(item.key);
+    if (role === "send" && state !== undefined && state !== "pending") return deny(`${item.key} is ${state}: never sent twice without your explicit release`, item.key);
+    if (role === "log" && !done.get("send")!.has(item.key) && state !== "sent") return deny(`log for ${item.key} comes only after its send`, item.key);
+    if (consume) {
+      try {
+        ctx.onAllow?.(item.key, role, toolName);
+      } catch (err) {
+        return deny(`could not record the ${role} before it runs: ${err instanceof Error ? err.message : String(err)}`, item.key);
+      }
+      set.add(item.key);
+    }
+    return { allow: true, reason: approved ? `approved batch ${shortHash(ctx.batch.hash)}` : "auto-run is on for this workflow", toolClass, itemKey: item.key, role };
   }
 
-  const canUseTool: GateCanUseTool = async (toolName, input) => {
+  const check = (toolName: string, input: Record<string, unknown>) => {
     const d = decide(toolName, input, true);
     record(toolName, d);
-    return d.allow ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: `Offload approval gate: ${d.reason}` };
+    const result: PermissionResult = d.allow ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: `Offload approval gate: ${d.reason}` };
+    return { result, decision: d };
   };
+
+  const canUseTool: GateCanUseTool = async (toolName, input) => check(toolName, input).result;
 
   // Defence in depth: the hook runs before any permission logic. It denies what the gate would deny and otherwise
   // leaves the decision to canUseTool (it never answers "allow", so settings cannot widen what the gate allows).
@@ -192,5 +221,5 @@ export function createGate(ctx: GateContext): Gate {
     return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `Offload approval gate: ${d.reason}` } };
   };
 
-  return { canUseTool, preToolUse, decide, done };
+  return { canUseTool, check, preToolUse, decide, done };
 }

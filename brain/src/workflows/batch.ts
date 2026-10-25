@@ -17,6 +17,23 @@ export interface BatchItem {
 export type BatchKind = "dry_run" | "live";
 export type BatchState = "pending" | "approved" | "sending" | "sent" | "partial" | "failed";
 
+/**
+ * Durable per-item state, written BEFORE the tool call (REVIEW-1 H2):
+ *   pending -> sending (journalled by the gate before it allows the send) -> sent (the tool reported success)
+ *   pending -> failed_before_send (never called, or denied: provably not sent; eligible for a new batch)
+ *   sending -> unknown (threw, crashed or no result: may have been sent; counts as contacted until you release it)
+ */
+export type ItemState = "pending" | "sending" | "sent" | "failed_before_send" | "unknown";
+
+export interface ItemStateRecord {
+  state: ItemState;
+  at: number;
+  tool?: string;
+  error?: string;
+  /** Set when the user released an unknown item (explicit action). */
+  releasedAt?: number;
+}
+
 export interface BatchResult {
   key: string;
   tool: string;
@@ -35,6 +52,8 @@ export interface Batch {
   items: BatchItem[];
   approvedAt: number | null;
   results: BatchResult[];
+  /** Live batches: state per item key. Missing = pending (batches written before s05b have none). */
+  itemStates?: Record<string, ItemStateRecord>;
 }
 
 export function batchHash(workflowId: string, kind: BatchKind, items: readonly Pick<BatchItem, "to" | "subject" | "body">[]): string {

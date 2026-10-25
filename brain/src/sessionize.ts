@@ -28,6 +28,15 @@ interface Focus {
   host: string;
   url: string;
   eventId: string;
+  /** Carried over from the previous local day (REVIEW-1 L4): its event id belongs to that day. */
+  carried?: boolean;
+}
+
+/** Where a day ended: the focus in effect, whether a segment was open, whether recording was paused. */
+export interface DayEndState {
+  last: Focus | null;
+  open: boolean;
+  paused: boolean;
 }
 
 interface Segment {
@@ -74,18 +83,24 @@ function byTime(a: OffloadEvent, b: OffloadEvent): number {
   return a.ts - b.ts || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
-/** Pass 1: events -> raw segments. A segment ends at the next focus, idle_start, pause, or the last event. */
-function toSegments(events: readonly OffloadEvent[], idleBackdateMs: number): Segment[] {
+/**
+ * Pass 1: events -> raw segments. A segment ends at the next focus, idle_start, pause, or the last event.
+ * `carry` is how the previous local day ended: its focus continues into this day (the observer emits focus only on a
+ * change, so without it input and OCR after midnight were dropped until the next window switch).
+ */
+function toSegments(events: readonly OffloadEvent[], idleBackdateMs: number, carry: DayEndState | null = null): { segments: Segment[]; end: DayEndState } {
   const sorted = [...events].sort(byTime);
   const out: Segment[] = [];
   let cur = null as Segment | null;
-  let last: Focus | null = null;
+  let last: Focus | null = carry !== null && !carry.paused && carry.last !== null ? { ...carry.last, carried: true } : null;
   let paused = false;
+  let openAtFirst = last !== null && carry?.open === true;
 
   const close = (ts: number) => {
     if (cur === null) return;
     cur.end = Math.max(cur.start, ts);
-    out.push(cur);
+    // A carried segment that saw no event of its own is nothing.
+    if (cur.eventIds.length > 0) out.push(cur);
     cur = null;
   };
   const open = (focus: Focus, ts: number, ids: string[]) => {
@@ -93,6 +108,10 @@ function toSegments(events: readonly OffloadEvent[], idleBackdateMs: number): Se
   };
 
   for (const e of sorted) {
+    if (openAtFirst) {
+      openAtFirst = false;
+      if (last !== null) open(last, e.ts, []);
+    }
     switch (e.kind) {
       case "focus": {
         close(e.ts);
@@ -115,7 +134,7 @@ function toSegments(events: readonly OffloadEvent[], idleBackdateMs: number): Se
         break;
       }
       case "idle_end":
-        if (!paused && cur === null && last !== null) open(last, e.ts, [last.eventId, e.id]);
+        if (!paused && cur === null && last !== null) open(last, e.ts, last.carried === true ? [e.id] : [last.eventId, e.id]);
         break;
       case "pause":
         close(e.ts);
@@ -141,10 +160,11 @@ function toSegments(events: readonly OffloadEvent[], idleBackdateMs: number): Se
         break;
     }
   }
+  const end: DayEndState = { last, open: cur !== null || openAtFirst, paused };
   const lastEvent = sorted[sorted.length - 1];
   if (lastEvent !== undefined) close(lastEvent.ts);
   // A focus event re-opened on the same focus right after idle_end may duplicate the focus id; keep ids unique.
-  return out.map((s) => ({ ...s, eventIds: [...new Set(s.eventIds)] }));
+  return { segments: out.map((s) => ({ ...s, eventIds: [...new Set(s.eventIds)] })), end };
 }
 
 function fromSegment(s: Segment): Building {
@@ -205,8 +225,32 @@ function mergeSegments(segments: readonly Segment[], opts: SessionOptions): Buil
   return out;
 }
 
-export function sessionize(events: readonly OffloadEvent[], day: DayLabel, opts: SessionOptions = DEFAULT_SESSION_OPTIONS): Span[] {
-  return mergeSegments(toSegments(events, opts.idleBackdateMs), opts).map((b) => {
+export function sessionize(events: readonly OffloadEvent[], day: DayLabel, opts: SessionOptions = DEFAULT_SESSION_OPTIONS, carry: DayEndState | null = null): Span[] {
+  return toSpans(toSegments(events, opts.idleBackdateMs, carry).segments, day, opts);
+}
+
+const nextDay = (day: DayLabel) => {
+  const [y, m, d] = day.split("-").map(Number) as [number, number, number];
+  const t = new Date(y, m - 1, d + 1);
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+};
+
+/** Sessionizes days in order; a day's end state carries into the next calendar day only (REVIEW-1 L4). */
+export function sessionizeDays(days: ReadonlyArray<{ day: DayLabel; events: readonly OffloadEvent[] }>, opts: SessionOptions = DEFAULT_SESSION_OPTIONS): Span[] {
+  const sorted = [...days].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+  const out: Span[] = [];
+  let prev: { day: DayLabel; end: DayEndState } | null = null;
+  for (const d of sorted) {
+    const carry: DayEndState | null = prev !== null && nextDay(prev.day) === d.day ? prev.end : null;
+    const r = toSegments(d.events, opts.idleBackdateMs, carry);
+    out.push(...toSpans(r.segments, d.day, opts));
+    prev = { day: d.day, end: d.events.length === 0 && carry !== null ? carry : r.end };
+  }
+  return out;
+}
+
+function toSpans(segments: Segment[], day: DayLabel, opts: SessionOptions): Span[] {
+  return mergeSegments(segments, opts).map((b) => {
     const first = b.eventIds[0] ?? b.focus.eventId;
     return {
       id: `sp_${first}`,

@@ -3,6 +3,7 @@
 //   bun run brain/src/cli.ts serve   --home DIR [--port P]        (token: OFFLOAD_TOKEN, or generated and printed once)
 //   bun run brain/src/cli.ts tone build --home DIR [--source fixture|mcp] [--model stub|claude] [--force]
 //   bun run brain/src/cli.ts tone test  --home DIR --hold-back N [--source fixture|mcp] [--model stub|claude]
+//   bun run brain/src/cli.ts tone pairs --home DIR [--answers]       (prints the latest sealed blind-test pairs)
 //   bun run brain/src/cli.ts draft   --insight N|ins_… --home DIR [--facts FILE] [--json]
 //   bun run brain/src/cli.ts dry-run (--workflow ID | --insight N|ins_…) --home DIR [--limit N] [--model stub|claude] [--json]
 import { readFileSync } from "node:fs";
@@ -13,7 +14,7 @@ import type { DryRunResponse } from "./api/types.ts";
 import { loadConnectorsConfig, toMcpServers } from "./connectors/config.ts";
 import { connectMcp } from "./connectors/mcp-client.ts";
 import { AgentSdkModel, loadModelConfig, StubModel, type Model } from "./models/model.ts";
-import { runBlindTest } from "./tone/blind.ts";
+import { latestBlindRun, readBlindFile, runBlindTest } from "./tone/blind.ts";
 import { FixtureMailSource, McpMailSource, type MailSource } from "./tone/mail-source.ts";
 import { buildTonePack } from "./tone/pack.ts";
 import { draftWorkflow, NotFoundError } from "./workflows/drafter.ts";
@@ -25,12 +26,13 @@ const USAGE = `usage:
   bun run brain/src/cli.ts serve --home DIR [--port P]
   bun run brain/src/cli.ts tone build --home DIR [--source fixture|mcp] [--model stub|claude] [--force]
   bun run brain/src/cli.ts tone test --home DIR --hold-back N [--source fixture|mcp] [--model stub|claude]
+  bun run brain/src/cli.ts tone pairs --home DIR [--answers]
   bun run brain/src/cli.ts draft --insight N|ins_ID --home DIR [--facts FILE] [--json]
   bun run brain/src/cli.ts dry-run (--workflow ID | --insight N|ins_ID) --home DIR [--limit N] [--model stub|claude] [--json]`;
 
 class UsageError extends Error {}
 
-type Command = "analyze" | "serve" | "tone build" | "tone test" | "draft" | "dry-run";
+type Command = "analyze" | "serve" | "tone build" | "tone test" | "tone pairs" | "draft" | "dry-run";
 
 interface Args {
   command: Command;
@@ -47,6 +49,7 @@ interface Args {
   source: "fixture" | "mcp";
   force: boolean;
   holdBack: number;
+  answers: boolean;
 }
 
 function parse(argv: readonly string[]): Args {
@@ -54,12 +57,12 @@ function parse(argv: readonly string[]): Args {
   let command: Command;
   if (first === "tone") {
     const sub = rest[0];
-    if (sub !== "build" && sub !== "test") throw new UsageError(`unknown tone command ${sub ?? "(none)"}`);
+    if (sub !== "build" && sub !== "test" && sub !== "pairs") throw new UsageError(`unknown tone command ${sub ?? "(none)"}`);
     command = `tone ${sub}`;
     rest = rest.slice(1);
   } else if (first === "analyze" || first === "serve" || first === "draft" || first === "dry-run") command = first;
   else throw new UsageError(`unknown command ${first ?? "(none)"}`);
-  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "claude", source: "fixture", force: false, holdBack: 0 };
+  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "claude", source: "fixture", force: false, holdBack: 0, answers: false };
   const num = (flag: string, v: string | undefined, min: number, max: number): number => {
     const n = Number(v);
     if (v === undefined || !Number.isFinite(n) || n < min || n > max) throw new UsageError(`${flag} must be a number in [${min}, ${max}]`);
@@ -82,6 +85,7 @@ function parse(argv: readonly string[]): Args {
     else if (a === "--limit") args.limit = Math.floor(num(a, rest[++i], 1, 50));
     else if (a === "--hold-back") args.holdBack = Math.floor(num(a, rest[++i], 1, 100));
     else if (a === "--force") args.force = true;
+    else if (a === "--answers") args.answers = true;
     else if (a === "--model") {
       const v = rest[++i];
       if (v !== "stub" && v !== "claude") throw new UsageError("--model must be stub or claude");
@@ -162,7 +166,7 @@ async function mailSource(args: Args): Promise<{ source: MailSource; close: () =
   if (config === null) throw new UsageError(errors.length > 0 ? errors.join("; ") : `no ${path}: connect Gmail first (brain/CONNECTORS.md)`);
   if (config.mail === undefined) throw new UsageError(`${path} has no "mail" section naming the server and read tool for Sent mail`);
   const servers = toMcpServers({ ...config, servers: { [config.mail.server]: config.servers[config.mail.server]! } }, process.env);
-  const conn = await connectMcp(config.mail.server, servers[config.mail.server]!);
+  const conn = await connectMcp(config.mail.server, servers[config.mail.server]!, config.servers[config.mail.server]!.catalog);
   return { source: new McpMailSource({ caller: conn.caller, tool: config.mail.listTool, args: config.mail.args, ...(config.mail.limitArg === undefined ? {} : { limitArg: config.mail.limitArg }) }), close: conn.close };
 }
 
@@ -195,6 +199,13 @@ async function runCommand(args: Args): Promise<number> {
     } else console.log(formatReport(a, args.top));
     return 0;
   }
+  if (args.command === "tone pairs") {
+    const run = latestBlindRun(args.home);
+    const text = run === null ? null : readBlindFile(args.home, `${run}/${args.answers ? "key.json.enc" : "pairs.md.enc"}`);
+    if (text === null) throw new UsageError("no blind test from the last 7 days: run `tone test` first");
+    console.log(text);
+    return 0;
+  }
   if (args.command === "tone build" || args.command === "tone test") {
     const models = loadModelConfig(args.home);
     const { source, close } = await mailSource(args);
@@ -207,7 +218,7 @@ async function runCommand(args: Args): Promise<number> {
         const r = await runBlindTest({ home: args.home, emails: await source.listSent({ limit: 500 }), holdBack: args.holdBack, model: modelOf(args), models });
         console.log(`blind test: ${r.summary.n} held back, trained on ${r.trainedOn.length}`);
         console.log(`  greeting match ${Math.round(r.summary.greetingMatch * 100)}% · sign-off match ${Math.round(r.summary.signMatch * 100)}% · length ratio ${r.summary.meanWordRatio} · word overlap ${r.summary.meanOverlap}`);
-        console.log(`  pairs for you: ${r.abFile}\n  answer key: ${r.keyFile}\n  rule: ${r.summary.rule}`);
+        console.log(`  pairs for you (sealed, kept 7 days): tone pairs --home ${args.home}\n  answer key: tone pairs --home ${args.home} --answers\n  rule: ${r.summary.rule}`);
       }
     } finally {
       await close();

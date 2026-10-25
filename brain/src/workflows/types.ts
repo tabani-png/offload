@@ -50,7 +50,8 @@ export interface WorkflowJson {
   batchSize: number;
   reviewSecondsPerItem: number;
   connectors: Array<{ id: string; required: boolean }>;
-  inputs: { list: string; crmLog: string; subjectTemplate: string };
+  /** crmSheet: where the CRM log tool may append (optional; without it the gate denies the sheet log tool). */
+  inputs: { list: string; crmLog: string; subjectTemplate: string; crmSheet?: { spreadsheetId: string; range: string } };
   steps: WorkflowStep[];
   estimate: { weeklyHoursSaved: number; savingPct: number; arithmetic: string; lowHoursSaved: number; highHoursSaved: number };
   models: ModelConfig;

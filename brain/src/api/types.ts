@@ -275,6 +275,8 @@ export interface BatchSummaryDTO {
   approvedAt: number | null;
   items: number;
   sent: number;
+  /** Items whose send may have happened but returned no result: never re-sent until you release them. */
+  unknown: number;
 }
 
 export interface BatchItemDTO {

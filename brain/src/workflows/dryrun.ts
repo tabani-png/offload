@@ -1,6 +1,9 @@
 // Dry run (AC-4): the workflow on last week's real instances from the store, every side effect disabled.
 // Per instance: our draft next to what the user really wrote (OCR excerpt) and the time arithmetic (code, ADR 0005).
+// The response carries the OCR excerpt; on disk the dry run and its batch are sealed with the day's brain key and
+// purged after 7 days (store/vault.ts, REVIEW-1 H4).
 import { join } from "node:path";
+import { openText, sealText } from "../store/vault.ts";
 import type { Analysis } from "../analyze.ts";
 import type { DryRunInstanceDTO, DryRunResponse } from "../api/types.ts";
 import { API_VERSION } from "../api/types.ts";
@@ -11,7 +14,7 @@ import { makeBatch, type BatchItem } from "./batch.ts";
 import { createGate, type GateDecisionLog } from "./gate.ts";
 import { parseFacts } from "./facts.ts";
 import { observedInstances } from "./observed.ts";
-import { ensureDir, gateLogPath, readText, readWorkflow, saveBatch, updateWorkflow, workflowDir, writePrivate } from "./store.ts";
+import { ensureDir, gateLogPath, readText, readWorkflow, saveBatch, updateWorkflow, workflowDir } from "./store.ts";
 
 export class DryRunError extends Error {}
 
@@ -33,7 +36,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResponse> {
   const models: ModelConfig = wf.models;
   const limit = Math.max(1, Math.min(50, Math.floor(o.limit ?? 5)));
   const warnings: string[] = [];
-  const pack: TonePack = loadTonePack(o.home) ?? { corpus: [], cards: {} };
+  const pack: TonePack = loadTonePack(o.home, now) ?? { corpus: [], cards: {} };
   if (pack.corpus.length === 0) warnings.push("no tone pack yet: run `tone build` so drafts follow your past emails");
   const factsText = readText(o.home, wf.id, "facts.md") ?? "";
   const facts = parseFacts(factsText);
@@ -57,7 +60,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResponse> {
       items.push({ key: ob.recipient.email, to: ob.recipient.email, subject: ob.subject, body: d.body, sourceInstanceId: ob.instanceId, warnings: d.warnings });
     }
     const observedMinutes = round1(ob.minutes);
-    const savedMinutes = round1(observedMinutes - wf.reviewSecondsPerItem / 60);
+    const savedMinutes = Math.max(0, round1(observedMinutes - wf.reviewSecondsPerItem / 60));
     out.push({
       instanceId: ob.instanceId,
       day: ob.day,
@@ -89,7 +92,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResponse> {
 
   const observedMinutes = round1(out.reduce((n, i) => n + i.estimate.observedMinutes, 0));
   const reviewMinutes = round1((out.length * wf.reviewSecondsPerItem) / 60);
-  const savedMinutes = round1(observedMinutes - reviewMinutes);
+  const savedMinutes = Math.max(0, round1(observedMinutes - reviewMinutes));
   const res: DryRunResponse = {
     version: API_VERSION,
     workflowId: wf.id,
@@ -110,11 +113,17 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResponse> {
   };
   const dir = join(workflowDir(o.home, wf.id), "dry-runs");
   ensureDir(dir);
-  writePrivate(join(dir, `${now}.json`), JSON.stringify(res, null, 2) + "\n");
-  writePrivate(join(workflowDir(o.home, wf.id), "dry-run.json"), JSON.stringify(res, null, 2) + "\n");
+  sealText(o.home, join(dir, `${now}.json.enc`), JSON.stringify(res, null, 2) + "\n", now);
+  sealText(o.home, join(workflowDir(o.home, wf.id), "dry-run.json.enc"), JSON.stringify(res, null, 2) + "\n", now);
   updateWorkflow(o.home, wf.id, (w) => {
     w.lastDryRunAt = now;
     w.lastDryRunHash = items.length > 0 ? batch.hash : null;
   }, now);
   return res;
+}
+
+/** The last dry run of a workflow, or null when there is none or it is older than 7 local days. */
+export function readLastDryRun(home: string, workflowId: string, now: number = Date.now()): DryRunResponse | null {
+  const text = openText(home, join(workflowDir(home, workflowId), "dry-run.json.enc"), now);
+  return text === null ? null : (JSON.parse(text) as DryRunResponse);
 }

@@ -4,9 +4,9 @@ import { groupTasks, indexSpans, type Labeler } from "./grouping/group.ts";
 import { heuristicJudge, type Judge, type JudgeResult } from "./insights/judge.ts";
 import { rankingScore, type ScoreFactors } from "./insights/rank.ts";
 import { estimateSaving, type SavingEstimate } from "./insights/saving.ts";
-import { DEFAULT_SESSION_OPTIONS, sessionize, totalActiveMs, type SessionOptions } from "./sessionize.ts";
+import { DEFAULT_SESSION_OPTIONS, sessionizeDays, totalActiveMs, type SessionOptions } from "./sessionize.ts";
 import { computeTaskStats } from "./stats.ts";
-import { readStore, type StoreRead } from "./store/reader.ts";
+import { readStore, type ReaderEnv, type StoreRead } from "./store/reader.ts";
 import type { DayLabel, OffloadEvent, Span, Task, TaskLabel, TaskProfile, TaskStats } from "./types.ts";
 
 export interface AnalyzeOptions {
@@ -21,7 +21,10 @@ export interface AnalyzeOptions {
   /** Insights whose estimated saving is below this (h/wk) are not offered: nothing to win. Default 0.25. */
   minWeeklyHoursSaved?: number;
   session?: SessionOptions;
+  /** Also the reader's clock: days older than 7 local days at now() are refused. */
   now?: () => number;
+  /** Reader environment (OFFLOAD_OBSERVER_BIN, OFFLOAD_KEYS). Default process.env. */
+  env?: ReaderEnv;
 }
 
 export interface Insight {
@@ -59,7 +62,8 @@ export async function analyzeStore(store: StoreRead, opts: AnalyzeOptions = {}):
   const minSaved = opts.minWeeklyHoursSaved ?? 0.25;
   const maxJudgement = opts.maxJudgement ?? 0.8;
   const windowDays = store.days.map((d) => d.day);
-  const spans = store.days.flatMap((d) => sessionize(d.events, d.day, opts.session ?? DEFAULT_SESSION_OPTIONS));
+  // Days are sessionized in order so the last focus of a day carries into the next one (REVIEW-1 L4).
+  const spans = sessionizeDays(store.days, opts.session ?? DEFAULT_SESSION_OPTIONS);
   const spansById = indexSpans(spans);
   const total = totalActiveMs(spans);
   const tasks = await groupTasks(spans, opts.labeler === undefined ? {} : { labeler: opts.labeler });
@@ -112,5 +116,5 @@ export async function analyzeStore(store: StoreRead, opts: AnalyzeOptions = {}):
 }
 
 export async function analyzeHome(home: string, opts: AnalyzeOptions = {}): Promise<Analysis> {
-  return analyzeStore(readStore(home, { windowDays: opts.windowDays ?? 7 }), opts);
+  return analyzeStore(readStore(home, { windowDays: opts.windowDays ?? 7, now: (opts.now ?? Date.now)(), ...(opts.env === undefined ? {} : { env: opts.env }) }), opts);
 }

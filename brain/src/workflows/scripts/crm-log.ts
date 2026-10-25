@@ -12,7 +12,8 @@ export interface CrmEntry {
   email: string;
   subject: string;
   batch: string;
-  status: "sent" | "failed";
+  /** unknown = the send may have happened (no result came back); it still counts as contacted via the batch. */
+  status: "sent" | "failed" | "unknown";
 }
 
 export function crmLines(entries: readonly CrmEntry[]): string {

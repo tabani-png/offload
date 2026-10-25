@@ -4,6 +4,8 @@ import { analyzeHome, type Analysis } from "../../src/analyze.ts";
 import { validateEvent } from "../../src/store/schema.ts";
 import { tempHome } from "../helpers.ts";
 
+// The fixture week is 2026-10-12..18; analyse it from the day after (the reader refuses days older than 7).
+const FIXTURE_NOW = new Date(2026, 9, 19, 12).getTime();
 const plain = tempHome();
 const enc = tempHome();
 let analysis: Analysis;
@@ -13,8 +15,8 @@ beforeAll(async () => {
   const days = generateFixture({ seed: 42 });
   writeFixture(plain.home, days, { encrypted: false, seed: 42 });
   writeFixture(enc.home, days, { encrypted: true, seed: 42 });
-  analysis = await analyzeHome(plain.home);
-  encAnalysis = await analyzeHome(enc.home);
+  analysis = await analyzeHome(plain.home, { now: () => FIXTURE_NOW });
+  encAnalysis = await analyzeHome(enc.home, { now: () => FIXTURE_NOW });
 });
 afterAll(() => {
   plain.cleanup();
@@ -118,7 +120,7 @@ describe("insights on the fixture week", () => {
   });
 
   test("a different review time changes the saving but not the ranking inputs", async () => {
-    const slow = await analyzeHome(plain.home, { reviewSeconds: 40 });
+    const slow = await analyzeHome(plain.home, { reviewSeconds: 40, now: () => FIXTURE_NOW });
     expect(slow.insights[0]!.saving.savingPct).toBeLessThan(analysis.insights[0]!.saving.savingPct);
     expect(slow.insights[0]!.stats.share.value).toBe(analysis.insights[0]!.stats.share.value);
   });

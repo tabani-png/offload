@@ -136,7 +136,7 @@ describe("endpoints", () => {
 
 describe("real listener", () => {
   test("binds 127.0.0.1 only and serves with the token", async () => {
-    const srv = await startBrainServer({ home: fx.home, token: TOKEN, port: 0 });
+    const srv = await startBrainServer({ home: fx.home, token: TOKEN, port: 0, now: () => Date.UTC(2026, 9, 18, 20, 0) });
     try {
       expect(srv.hostname).toBe("127.0.0.1");
       const ok = await fetch(`${srv.url}status`, { headers: { authorization: `Bearer ${TOKEN}` } });

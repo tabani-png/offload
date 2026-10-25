@@ -1,5 +1,6 @@
 // Bucket sent emails by kind. Rules by default; the cheap model may decide, but only within BUCKETS
 // (any other answer falls back to the rules).
+import { untrustedBlock } from "../workflows/untrusted.ts";
 import { modelFor, type Model, type ModelConfig } from "../models/model.ts";
 import { BUCKETS, type Bucket, type CleanEmail } from "./types.ts";
 
@@ -38,7 +39,7 @@ export function modelBucketer(model: Model, cfg: ModelConfig): Bucketer {
           "follow_up = a nudge on an earlier email; other = anything else.",
           `A rule-based guess is given; overrule it only when it is wrong.`,
           `<bucket_hint>${hint}</bucket_hint>`,
-          `<email>\nSubject: ${e.subject}\n\n${e.core}\n</email>`,
+          untrustedBlock("email", `Subject: ${e.subject}\n\n${e.core}`, ["bucket_hint"]),
         ].join("\n"),
         maxTokens: 10,
       });

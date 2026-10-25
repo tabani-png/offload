@@ -1,11 +1,14 @@
 // Reads the observer store (docs/store-contract.md). Plain `.jsonl` and encrypted `.jsonl.enc` are both supported.
 // Bad lines are never dropped silently: each one is returned with its file, line number and reason.
+// The 7-day rule (REVIEW-1 M4): days older than 7 local days are refused even when their files still exist (the
+// observer may be stopped, so its purge did not run), and the observer is asked to purge them (`purge-now`).
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DayLabel, OffloadEvent } from "../types.ts";
 import { decryptLine, KEY_BYTES, LineCryptoError } from "./crypto.ts";
+import { isExpired, KEEP_DAYS } from "./vault.ts";
 import { validateEvent } from "./schema.ts";
 
 export type BadLineReason = "invalid_base64" | "decrypt_failed" | "invalid_json" | "schema_invalid" | "duplicate_id";
@@ -40,6 +43,8 @@ export type ReaderEnv = Readonly<Record<string, string | undefined>>;
 export interface ReadOptions {
   /** OFFLOAD_OBSERVER_BIN (observer binary for wrapped keys) and OFFLOAD_KEYS. Default process.env. */
   env?: ReaderEnv;
+  /** When given, a day older than 7 local days at this time is refused (no events, one error). */
+  now?: number;
 }
 
 /** engine/.build/offload-observer next to this repo's brain/, unless OFFLOAD_OBSERVER_BIN says otherwise. */
@@ -68,6 +73,8 @@ function exportDay(home: string, day: DayLabel, env: ReaderEnv): { lines: string
 export interface StoreRead {
   home: string;
   days: DayRead[];
+  /** Stored days older than 7 local days: not read. */
+  refused: DayLabel[];
   eventCount: number;
   badLineCount: number;
 }
@@ -152,6 +159,9 @@ function loadKey(home: string, day: DayLabel): { key: Buffer } | { error: string
 
 export function readDay(home: string, day: DayLabel, opts: ReadOptions = {}): DayRead {
   const env = opts.env ?? process.env;
+  if (opts.now !== undefined && isExpired(day, opts.now)) {
+    return { day, source: "plain", files: [], events: [], bad: [], totalLines: 0, blankLines: 0, errors: [`refused: ${day} is older than ${KEEP_DAYS} local days (it should have been purged)`] };
+  }
   const plain = join(daysDir(home), `${day}.jsonl`);
   const enc = join(daysDir(home), `${day}.jsonl.enc`);
   const hasPlain = existsSync(plain);
@@ -239,12 +249,41 @@ function readWrapped(home: string, day: DayLabel, enc: string, lines: readonly s
   out.forEach((line, i) => acceptJson(sink, `${enc} (export-day)`, i + 1, line));
 }
 
-export function readStore(home: string, opts: { windowDays?: number; env?: ReaderEnv } = {}): StoreRead {
+/** Asks the observer to delete expired days now. Returns false when there is no observer binary to ask. */
+export function requestObserverPurge(home: string, env: ReaderEnv): boolean {
+  const bin = observerBin(env);
+  if (!existsSync(bin)) return false;
+  const childEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) childEnv[k] = v;
+  for (const [k, v] of Object.entries(env)) if (v !== undefined) childEnv[k] = v;
+  childEnv.OFFLOAD_HOME = home;
+  const r = spawnSync(bin, ["purge-now", "--home", home], { env: childEnv, encoding: "utf8", timeout: EXPORT_TIMEOUT_MS });
+  if (r.error !== undefined || r.status !== 0) {
+    console.error(`brain: ${bin} purge-now failed: ${r.error?.message ?? (r.stderr ?? "").trim().slice(0, 200)}`);
+    return false;
+  }
+  return true;
+}
+
+export function readStore(home: string, opts: { windowDays?: number; env?: ReaderEnv; now?: number } = {}): StoreRead {
   const window = opts.windowDays ?? 7;
-  const days = listDays(home).slice(-window).map((d) => readDay(home, d, opts.env === undefined ? {} : { env: opts.env }));
+  const now = opts.now ?? Date.now();
+  const env = opts.env ?? process.env;
+  const stored = listDays(home);
+  const refused = stored.filter((d) => isExpired(d, now));
+  const days = stored
+    .filter((d) => !isExpired(d, now))
+    .slice(-window)
+    .map((d) => readDay(home, d, { now, ...(opts.env === undefined ? {} : { env: opts.env }) }));
+  // After reading, so a purge never races the days this read keeps.
+  if (refused.length > 0) {
+    const asked = requestObserverPurge(home, env);
+    console.error(`brain: refused ${refused.length} stored day(s) older than ${KEEP_DAYS} local days (${refused.join(", ")}); ${asked ? "asked the observer to purge them" : "start the observer or run offload-observer purge-now to delete them"}`);
+  }
   return {
     home,
     days,
+    refused,
     eventCount: days.reduce((n, d) => n + d.events.length, 0),
     badLineCount: days.reduce((n, d) => n + d.bad.length, 0),
   };

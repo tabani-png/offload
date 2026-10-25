@@ -1,6 +1,8 @@
 // Workflow drafter: Insight -> $OFFLOAD_HOME/workflows/<id>/ (SKILL.md, workflow.json, facts.md, recipients.csv,
 // scripts/). The structure is deterministic (a template per task kind); the model only writes drafts later, per
 // recipient. The estimate is the insight's saving estimate, copied with its arithmetic (ADR 0005).
+// SKILL.md and the description are fixed template text: insight labels come from observed window titles and hosts
+// (attacker-controllable text), so they stay in workflow.json `name` / `insight` for display only (REVIEW-1 M5).
 import { copyFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Analysis, Insight } from "../analyze.ts";
@@ -35,7 +37,7 @@ interface Template {
   id: TemplateId;
   bucket: Bucket;
   name: (i: Insight) => string;
-  description: (i: Insight) => string;
+  description: () => string;
   steps: (primary: string | null) => WorkflowStep[];
   connectors: (primary: string | null) => Array<{ id: string; required: boolean }>;
   schedule: WorkflowJson["schedule"];
@@ -56,7 +58,7 @@ const TEMPLATES: Record<TemplateId, Template> = {
     id: "investor_outreach",
     bucket: "investor_outreach",
     name: () => "Investor outreach emails",
-    description: (i) => `Drafts your investor outreach emails in your own tone, a batch at a time, and sends them from Gmail after you approve the batch. Replaces: ${i.label.description}`,
+    description: () => "Drafts your investor outreach emails in your own tone, a batch at a time, and sends them from Gmail after you approve the batch.",
     steps: () => [
       { id: "read_list", type: "read", title: "Read the investor list", detail: "Read recipients.csv (an export of your investor sheet: email, first_name, last_name, org, notes).", connector: null, sideEffect: false, script: "scripts/recipients.ts" },
       { id: "pick", type: "read", title: "Pick the next people", detail: "Take the next people on the list who are not in crm-log.csv yet, up to the batch size.", connector: null, sideEffect: false, script: "scripts/recipients.ts" },
@@ -76,7 +78,7 @@ const TEMPLATES: Record<TemplateId, Template> = {
     id: "scheduling_reply",
     bucket: "scheduling",
     name: () => "Scheduling replies",
-    description: (i) => `Finds threads that ask for a meeting time, checks your calendar and drafts a reply with two free slots in your tone. Replaces: ${i.label.description}`,
+    description: () => "Finds threads that ask for a meeting time, checks your calendar and drafts a reply with two free slots in your tone.",
     steps: () => [
       { id: "find_threads", type: "read", title: "Find threads asking for a time", detail: "Search Gmail for unanswered replies that ask when you are free.", connector: "gmail", sideEffect: false, tool: "mcp__gmail__search_emails" },
       { id: "free_slots", type: "read", title: "Check your free slots", detail: "Read your calendar for the next 5 working days and take the first two free 30-minute slots.", connector: "google-calendar", sideEffect: false, tool: "mcp__calendar__find_free_slots" },
@@ -96,7 +98,7 @@ const TEMPLATES: Record<TemplateId, Template> = {
     id: "generic",
     bucket: "other",
     name: (i) => i.label.name,
-    description: (i) => `Drafts this repeated task for your review, then does it through the connected tool. Replaces: ${i.label.description}`,
+    description: () => "Drafts this repeated task for your review, then does it through the connected tool.",
     steps: (primary) => [
       { id: "read", type: "read", title: "Read what needs doing", detail: "Read the items waiting in the connected tool.", connector: primary, sideEffect: false },
       { id: "draft", type: "draft", title: "Draft each item", detail: "Draft each item from your past examples and facts.md.", connector: null, sideEffect: false },
@@ -118,24 +120,33 @@ export function templateFor(kind: string): TemplateId {
 
 const yamlStr = (s: string) => JSON.stringify(s);
 
+/** Fixed SKILL.md titles per template: never the observed label. */
+const SKILL_TITLES: Record<TemplateId, string> = {
+  investor_outreach: "Investor outreach emails",
+  scheduling_reply: "Scheduling replies",
+  generic: "Repeated task",
+};
+
+/** SKILL.md from fixed template text, catalog names and code-computed numbers only. */
 export function renderSkillMd(wf: WorkflowJson): string {
   const gates = wf.steps.filter((s) => s.type === "approval_gate").map((s) => s.id);
   const conn = wf.connectors.map((c) => `${c.id}${c.required ? "" : " (optional)"}`);
-  const slug = wf.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const title = SKILL_TITLES[wf.template];
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return [
     "---",
     `name: ${slug}`,
-    `description: ${yamlStr(wf.description)}`,
+    `description: ${yamlStr(TEMPLATES[wf.template].description())}`,
     `connectors: [${wf.connectors.map((c) => c.id).join(", ")}]`,
     `gates: [${gates.join(", ")}]`,
     `auto_run: ${wf.autoRun ? "on" : "off"}`,
     `models: { draft: ${wf.models.draft}, cheap: ${wf.models.cheap} }`,
     "---",
     "",
-    `# ${wf.name}`,
+    `# ${title}`,
     "",
     "## What this does",
-    wf.description,
+    TEMPLATES[wf.template].description(),
     "",
     `Estimated saving: ${wf.estimate.arithmetic} (range ${wf.estimate.lowHoursSaved.toFixed(1)}-${wf.estimate.highHoursSaved.toFixed(1)} h/wk). Measured time replaces this estimate after the first week.`,
     "",
@@ -190,7 +201,7 @@ export function draftWorkflow(o: DraftWorkflowOptions): { workflow: WorkflowJson
     kind: insight.label.kind,
     template: t.id,
     name: t.name(insight),
-    description: t.description(insight),
+    description: t.description(),
     bucket: t.bucket,
     createdAt: now,
     updatedAt: now,

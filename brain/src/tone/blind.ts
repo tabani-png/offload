@@ -1,10 +1,12 @@
 // Blind test (research section 4): hold back N sent emails, build the pack on the rest, draft each held-back email
 // from its content, and report. Proxy metrics are computed in code; the real test is the human one: a shuffled
 // A/B file (which one did you write?) with the answer key in a separate file. Ship when the user cannot pick their
-// own email in more than 1 of 3 pairs.
+// own email in more than 1 of 3 pairs. Both files hold real mail text, so they are sealed with the day's brain key
+// and purged after 7 days (store/vault.ts): read them with `tone pairs --home DIR [--answers]` or readBlindFile.
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { openText, sealText } from "../store/vault.ts";
 import type { Model, ModelConfig } from "../models/model.ts";
 import { tokenize } from "./bm25.ts";
 import { cleanEmail } from "./clean.ts";
@@ -101,10 +103,10 @@ export async function runBlindTest(o: BlindOptions): Promise<BlindReport> {
     pairs.push(`## Pair ${i + 1}: ${it.subject}`, "", "### A", "", a, "", "### B", "", b, "");
     key.push({ pair: i + 1, id: it.id, real: realFirst ? "A" : "B" });
   });
-  const abFile = join(dir, "pairs.md");
-  const keyFile = join(dir, "key.json");
-  writeFileSync(abFile, pairs.join("\n"), { mode: 0o600 });
-  writeFileSync(keyFile, JSON.stringify(key, null, 2) + "\n", { mode: 0o600 });
+  const abFile = join(dir, "pairs.md.enc");
+  const keyFile = join(dir, "key.json.enc");
+  sealText(o.home, abFile, pairs.join("\n"), now);
+  sealText(o.home, keyFile, JSON.stringify(key, null, 2) + "\n", now);
 
   const mean = (f: (i: BlindItem) => number) => round2(items.reduce((s, i) => s + f(i), 0) / Math.max(1, items.length));
   return {
@@ -121,4 +123,17 @@ export async function runBlindTest(o: BlindOptions): Promise<BlindReport> {
     abFile,
     keyFile,
   };
+}
+
+/** Plain text of a sealed blind-test file, or null when it is gone or older than 7 local days. */
+export function readBlindFile(home: string, path: string, now: number = Date.now()): string | null {
+  return openText(home, path, now);
+}
+
+/** The newest blind-test run folder, or null. */
+export function latestBlindRun(home: string): string | null {
+  const dir = join(toneDir(home), "blind-test");
+  if (!existsSync(dir)) return null;
+  const runs = readdirSync(dir).filter((n) => /^\d+$/.test(n)).sort((a, b) => Number(b) - Number(a));
+  return runs[0] === undefined ? null : join(dir, runs[0]);
 }

@@ -1,8 +1,11 @@
 // Workflow folders on disk: $OFFLOAD_HOME/workflows/<id>/{SKILL.md, workflow.json, facts.md, recipients.csv,
-// crm-log.csv, scripts/, batches/<hash>.json, approvals.json, gate-log.jsonl, dry-runs/<ts>.json}. All 0600/0700.
+// crm-log.csv, scripts/, batches/<hash>.json (live) or <hash>.json.enc (dry run, sealed), approvals.json,
+// gate-log.jsonl, dry-run.json.enc, dry-runs/<ts>.json.enc, preparing.json}. All 0600/0700. Sealed files hold OCR
+// text and are purged after 7 days (store/vault.ts).
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Batch } from "./batch.ts";
+import { openText, sealText } from "../store/vault.ts";
+import { batchHash, type Batch } from "./batch.ts";
 import type { ApprovalRecord, GateDecisionLog } from "./gate.ts";
 import type { WorkflowJson } from "./types.ts";
 
@@ -16,7 +19,7 @@ export function workflowDir(home: string, id: string): string {
 }
 
 export function writePrivate(path: string, text: string): void {
-  const tmp = `${path}.tmp-${process.pid}`;
+  const tmp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   writeFileSync(tmp, text, { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, path);
@@ -75,24 +78,49 @@ export function readText(home: string, id: string, file: string): string | null 
 
 const batchesDir = (home: string, id: string) => join(workflowDir(home, id), "batches");
 
+export class WorkflowGoneError extends Error {}
+
+/** Live batches are plain JSON (the send record); dry-run batches hold OCR-parsed data and are sealed. */
 export function saveBatch(home: string, b: Batch): void {
+  // Never recreate a folder the user deleted mid-run.
+  if (!workflowExists(home, b.workflowId)) throw new WorkflowGoneError(`workflow ${b.workflowId} was deleted`);
   ensureDir(batchesDir(home, b.workflowId));
-  writePrivate(join(batchesDir(home, b.workflowId), `${b.hash}.json`), JSON.stringify(b, null, 2) + "\n");
+  const base = join(batchesDir(home, b.workflowId), `${b.hash}.json`);
+  const text = JSON.stringify(b, null, 2) + "\n";
+  if (b.kind === "dry_run") sealText(home, `${base}.enc`, text, b.createdAt);
+  else writePrivate(base, text);
 }
 
-export function readBatch(home: string, id: string, hash: string): Batch | null {
+/** True when the items on disk still hash to the batch's hash (REVIEW-1 L2). */
+export const batchIntact = (b: Batch) => batchHash(b.workflowId, b.kind, b.items) === b.hash;
+
+function parseBatch(text: string | null): Batch | null {
+  if (text === null) return null;
+  try {
+    return JSON.parse(text) as Batch;
+  } catch {
+    return null;
+  }
+}
+
+export function readBatch(home: string, id: string, hash: string, now: number = Date.now()): Batch | null {
   if (!HASH_RE.test(hash)) return null;
   const p = join(batchesDir(home, id), `${hash}.json`);
-  return existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as Batch) : null;
+  if (existsSync(p)) return parseBatch(readFileSync(p, "utf8"));
+  return parseBatch(openText(home, `${p}.enc`, now));
 }
 
-export function listBatches(home: string, id: string): Batch[] {
+export function listBatches(home: string, id: string, now: number = Date.now()): Batch[] {
   const dir = batchesDir(home, id);
   if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((n) => /^[0-9a-f]{64}\.json$/.test(n))
-    .map((n) => JSON.parse(readFileSync(join(dir, n), "utf8")) as Batch)
-    .sort((a, b) => b.createdAt - a.createdAt || (a.hash < b.hash ? -1 : 1));
+  const out: Batch[] = [];
+  for (const n of readdirSync(dir)) {
+    const m = /^([0-9a-f]{64})\.json(\.enc)?$/.exec(n);
+    if (m === null) continue;
+    const b = m[2] === undefined ? parseBatch(readFileSync(join(dir, n), "utf8")) : parseBatch(openText(home, join(dir, n), now));
+    if (b !== null) out.push(b);
+  }
+  return out.sort((a, b) => b.createdAt - a.createdAt || (a.hash < b.hash ? -1 : 1));
 }
 
 // ---------- approvals and gate log ----------
@@ -105,6 +133,14 @@ export function readApprovals(home: string, id: string): Record<string, Approval
 export function saveApproval(home: string, id: string, hash: string, rec: ApprovalRecord): void {
   const all = readApprovals(home, id);
   all[hash] = rec;
+  writePrivate(join(workflowDir(home, id), "approvals.json"), JSON.stringify(all, null, 2) + "\n");
+}
+
+/** Uses an approval up: an approval token sends its batch once (REVIEW-1 L1). */
+export function deleteApproval(home: string, id: string, hash: string): void {
+  const all = readApprovals(home, id);
+  if (!(hash in all)) return;
+  delete all[hash];
   writePrivate(join(workflowDir(home, id), "approvals.json"), JSON.stringify(all, null, 2) + "\n");
 }
 

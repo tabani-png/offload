@@ -58,11 +58,13 @@ describe("s05 dry run", () => {
   });
 
   test("the dry-run batch is stored and its hash recorded on the workflow", () => {
-    const b = listBatches(w.home, w.outreach.id);
+    const b = listBatches(w.home, w.outreach.id, NOW);
     expect(b).toHaveLength(1);
     expect(b[0]).toMatchObject({ kind: "dry_run", state: "pending", hash: r.batchHash });
     expect(readWorkflow(w.home, w.outreach.id)?.lastDryRunHash).toBe(r.batchHash);
-    expect(existsSync(join(w.home, "workflows", w.outreach.id, "dry-run.json"))).toBe(true);
+    // Sealed: it holds OCR text (s05b, REVIEW-1 H4).
+    expect(existsSync(join(w.home, "workflows", w.outreach.id, "dry-run.json.enc"))).toBe(true);
+    expect(existsSync(join(w.home, "workflows", w.outreach.id, "dry-run.json"))).toBe(false);
   });
 
   test("a draft with a number not in the facts is flagged; no tone pack is a warning", async () => {

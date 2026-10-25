@@ -10,7 +10,7 @@ import { cleanEmail } from "../../src/tone/clean.ts";
 import { FixtureMailSource, McpMailSource, parseMailToolResult } from "../../src/tone/mail-source.ts";
 import { buildTonePack, loadTonePack, retrieveExamples } from "../../src/tone/pack.ts";
 import { measureStyle } from "../../src/tone/style.ts";
-import { runBlindTest } from "../../src/tone/blind.ts";
+import { runBlindTest, readBlindFile } from "../../src/tone/blind.ts";
 import type { SentEmail } from "../../src/tone/types.ts";
 import { tempHome } from "../helpers.ts";
 
@@ -124,7 +124,7 @@ describe("s05 tone: style card and pack", () => {
     expect(card).toContain("## Voice");
     expect(card).toContain("Short and direct");
     expect(existsSync(join(home, "tone", "index.json"))).toBe(true);
-    expect(loadTonePack(home)?.corpus).toHaveLength(40);
+    expect(loadTonePack(home, 1)?.corpus).toHaveLength(40);
     expect(stub.calls.some((c) => c.role === "draft")).toBe(false);
     expect(stub.calls.filter((c) => c.role === "style_card").every((c) => c.model === "claude-sonnet-5-5")).toBe(true);
   });
@@ -160,9 +160,9 @@ describe("s05 tone: blind test", () => {
     expect(r.items).toHaveLength(6);
     expect(new Set(r.items.map((i) => i.id)).size).toBe(6);
     for (const i of r.items) expect(r.trainedOn).not.toContain(i.id);
-    const ab = readFileSync(r.abFile, "utf8");
+    const ab = readBlindFile(home, r.abFile, 1_700_000_000_000) ?? "";
     expect(ab).not.toMatch(/\b(real|draft|generated)\b/i);
-    const key = JSON.parse(readFileSync(r.keyFile, "utf8")) as Array<{ pair: number; real: "A" | "B" }>;
+    const key = JSON.parse(readBlindFile(home, r.keyFile, 1_700_000_000_000) ?? "[]") as Array<{ pair: number; real: "A" | "B" }>;
     expect(key).toHaveLength(6);
     expect(r.summary.signMatch).toBeGreaterThanOrEqual(0);
     expect(r.summary.signMatch).toBeLessThanOrEqual(1);

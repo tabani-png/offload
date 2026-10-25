@@ -1,8 +1,11 @@
 // Tone pack on disk: $OFFLOAD_HOME/tone/<bucket>.md (editable style cards), index.json (hashes, so user edits are
-// kept on rebuild) and corpus.jsonl (cleaned sent emails for retrieval; local only, mode 0600).
+// kept on rebuild) and corpus.jsonl.enc (cleaned sent emails for retrieval, sealed with the day's brain key and
+// purged after 7 days like every other copy of mail text: store/vault.ts, REVIEW-1 H4). After the purge the pack has
+// no corpus and drafting warns "no tone pack yet" until `tone build` runs again.
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { openText, sealText } from "../store/vault.ts";
 import { modelFor, type Model, type ModelConfig } from "../models/model.ts";
 import { Bm25 } from "./bm25.ts";
 import { ruleBucketer, type Bucketer } from "./bucket.ts";
@@ -77,7 +80,7 @@ export async function buildTonePack(o: BuildToneOptions): Promise<BuildToneResul
   const dir = toneDir(o.home);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const corpus = await bucketCorpus(await o.source.listSent({ limit: o.limit ?? 500 }), o.bucketer);
-  writePrivate(join(dir, "corpus.jsonl"), corpus.map((e) => JSON.stringify(e)).join("\n") + (corpus.length > 0 ? "\n" : ""));
+  sealText(o.home, join(dir, "corpus.jsonl.enc"), corpus.map((e) => JSON.stringify(e)).join("\n") + (corpus.length > 0 ? "\n" : ""), now);
 
   const prev = readIndex(o.home);
   const index: ToneIndex = { version: 1, builtAt: now, cheapModel: modelFor("style_card", o.models), corpus: corpus.length, buckets: {} };
@@ -102,11 +105,11 @@ export async function buildTonePack(o: BuildToneOptions): Promise<BuildToneResul
   return result;
 }
 
-export function loadTonePack(home: string): TonePack | null {
+export function loadTonePack(home: string, now: number = Date.now()): TonePack | null {
   const dir = toneDir(home);
-  const corpusPath = join(dir, "corpus.jsonl");
-  if (!existsSync(corpusPath)) return null;
-  const corpus = readFileSync(corpusPath, "utf8")
+  const text = openText(home, join(dir, "corpus.jsonl.enc"), now);
+  if (text === null) return null;
+  const corpus = text
     .split("\n")
     .filter((l) => l.trim() !== "")
     .map((l) => JSON.parse(l) as CorpusEntry);

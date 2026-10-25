@@ -1,5 +1,6 @@
 // Every model call in the brain goes through `Model` so tests run offline and deterministic (StubModel).
 // ADR 0005: models name things and write drafts; they never produce a time or saving figure.
+import { executorEnv } from "../workflows/executor.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -55,7 +56,7 @@ export function loadModelConfig(home: string, env: Readonly<Record<string, strin
 
 /** Pulls `<tag>…</tag>` out of a prompt. */
 export function tagged(prompt: string, tag: string): string | null {
-  const m = new RegExp(`<${tag}>\\n?([\\s\\S]*?)\\n?</${tag}>`).exec(prompt);
+  const m = new RegExp(`<${tag}(?:\\s[^>]*)?>\\n?([\\s\\S]*?)\\n?</${tag}>`).exec(prompt);
   return m?.[1] ?? null;
 }
 
@@ -115,7 +116,9 @@ export class AgentSdkModel implements Model {
         tools: [],
         allowedTools: [],
         settingSources: [],
+        strictMcpConfig: true,
         mcpServers: {},
+        env: executorEnv(process.env),
         maxTurns: 1,
         permissionMode: "default",
         canUseTool: async () => ({ behavior: "deny", message: "model calls have no tools" }),

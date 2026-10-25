@@ -74,10 +74,14 @@ export function estimateSaving(input: SavingInput, opts: SavingOptions = {}): Sa
   const lowAfter = (weeklyItems * (1 - lowManual) * review * lowFactor) / 3600 + (weeklyItems * lowManual * medianMinutes) / 60;
   const highAfter = (weeklyItems * review * highFactor) / 3600;
 
+  // The printed saving is the difference of the printed figures, so it adds up by hand (REVIEW-1 L3).
+  const shownNow = round1(nowH);
+  const shownAfter = round1(Math.min(afterH, nowH));
+  const shownSaved = Math.max(0, round1(shownNow - shownAfter));
   const arithmetic =
-    `${fmtCount(perDay)}/day × ${fmtCount(daysPerWeek)} days × ${fmt1(medianMinutes)} min = ${fmt1(nowH)} h/wk` +
-    ` → review ${fmtCount(weeklyItems)} × ${fmtCount(review)} s = ${fmt1(Math.min(afterH, nowH))} h/wk` +
-    ` → saves ${fmt1(point.hoursSaved)} h/wk (${pctText(point.pct)})`;
+    `${fmtCount(perDay)}/day × ${fmtCount(daysPerWeek)} days × ${fmt1(medianMinutes)} min = ${shownNow.toFixed(1)} h/wk` +
+    ` → review ${fmtCount(weeklyItems)} × ${fmtCount(review)} s = ${shownAfter.toFixed(1)} h/wk` +
+    ` → saves ${shownSaved.toFixed(1)} h/wk (${pctText(point.pct)})`;
 
   return {
     perDay,

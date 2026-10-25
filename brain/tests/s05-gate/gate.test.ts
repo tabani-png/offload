@@ -41,10 +41,12 @@ afterEach(() => cleanup());
 const approvalsFor = (records: Record<string, string>) => (hash: string) => (records[hash] === undefined ? undefined : { token: records[hash]!, approvedAt: 1 });
 
 describe("s05 approval gate", () => {
-  test("classifies tools: read verbs only are reads; writes, unknowns and built-ins are side effects", () => {
+  // s05b (REVIEW-1 M1): reads are an explicit allowlist per connector, no longer inferred from read verbs.
+  test("classifies tools: only allowlisted reads are reads; writes, unknowns and built-ins are side effects", () => {
     expect(classifyTool(READ)).toBe("read");
     expect(classifyTool("mcp__composio__GMAIL_FETCH_EMAILS")).toBe("read");
-    expect(classifyTool("mcp__cal__GOOGLECALENDAR_FIND_FREE_SLOTS")).toBe("read");
+    expect(classifyTool("mcp__composio__GOOGLECALENDAR_FIND_FREE_SLOTS")).toBe("read");
+    expect(classifyTool("mcp__cal__GOOGLECALENDAR_FIND_FREE_SLOTS")).toBe("side_effect");
     expect(classifyTool(SEND)).toBe("side_effect");
     expect(classifyTool("mcp__gmail__create_draft")).toBe("side_effect");
     expect(classifyTool(APPEND)).toBe("side_effect");
@@ -130,12 +132,17 @@ describe("s05 approval gate", () => {
     expect((await gate.canUseTool(READ, { query: "x" }, sig)).behavior).toBe("allow");
   });
 
+  // s05b (REVIEW-1 M3): the CRM write is the canonical sheet append with the exact expected row, after the item's send.
   test("gate: a CRM write is allowed once per approved item and refused when it names several", async () => {
-    const gate = createGate({ workflowId: "wf_a", mode: "live", batch: A, autoRun: false, runToken: "t".repeat(20), approvals: approvalsFor({ [A.hash]: "t".repeat(20) }), log: (d) => log.push(d) });
+    const sheet = { spreadsheetId: "crm_1", range: "CRM!A:D" };
+    const gate = createGate({ workflowId: "wf_a", mode: "live", batch: A, autoRun: false, runToken: "t".repeat(20), approvals: approvalsFor({ [A.hash]: "t".repeat(20) }), log: (d) => log.push(d), actions: [{ role: "send", connector: "gmail" }, { role: "log", connector: "google-sheets" }], crmSheet: sheet });
     const sig = { signal: new AbortController().signal };
-    expect((await gate.canUseTool(APPEND, { values: [["2026-10-24", "anna@northzone.com", "sent"]] }, sig)).behavior).toBe("allow");
-    expect((await gate.canUseTool(APPEND, { values: [["2026-10-24", "anna@northzone.com", "sent"]] }, sig)).behavior).toBe("deny");
-    expect((await gate.canUseTool(APPEND, { values: [["tom@seedcamp.com"], ["anna@northzone.com"]] }, sig)).behavior).toBe("deny");
+    const i0 = A.items[0]!;
+    const row = { ...sheet, values: [[i0.to, i0.subject, A.hash.slice(0, 12), "sent"]] };
+    expect((await gate.canUseTool(SEND, sendInput(i0), sig)).behavior).toBe("allow");
+    expect((await gate.canUseTool(APPEND, row, sig)).behavior).toBe("allow");
+    expect((await gate.canUseTool(APPEND, row, sig)).behavior).toBe("deny");
+    expect((await gate.canUseTool(APPEND, { ...sheet, values: [["tom@seedcamp.com"], ["anna@northzone.com"]] }, sig)).behavior).toBe("deny");
   });
 
   test("gate: the PreToolUse hook denies the same calls without consuming an item", async () => {

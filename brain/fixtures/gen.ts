@@ -442,7 +442,9 @@ function parseArgs(argv: readonly string[]): { out: string; seed: number; encryp
   let out = "";
   let seed = 42;
   let encrypted = false;
-  let start = "2026-10-12";
+  // Default: the 7 days ending yesterday, so the reader's 7-day rule keeps every generated day (REVIEW-1 M4).
+  const t = new Date(Date.now() - 7 * 86_400_000);
+  let start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--out") out = argv[++i] ?? "";

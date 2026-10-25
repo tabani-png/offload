@@ -1,4 +1,5 @@
 // The brain's local API: Bun.serve on 127.0.0.1, bearer token, read-only GET routes (brain/API.md).
+import { localDay, startPurgeSchedule } from "../store/vault.ts";
 import { randomBytes } from "node:crypto";
 import { analyzeHome, type Analysis, type AnalyzeOptions } from "../analyze.ts";
 import { DAY_RE, storeFingerprint } from "../store/reader.ts";
@@ -50,7 +51,8 @@ export function createBrain(opts: BrainOptions): Brain {
   // Cache per store fingerprint and review time; a change to any day file invalidates it.
   const cache = new Map<string, Promise<Analysis>>();
   const analysis = (reviewSeconds: number | undefined): Promise<Analysis> => {
-    const key = `${storeFingerprint(opts.home)}#${reviewSeconds ?? "default"}`;
+    // The local day is part of the key: a day that ages past 7 days drops out even when no file changed (REVIEW-1 M4).
+    const key = `${storeFingerprint(opts.home)}#${localDay(now())}#${reviewSeconds ?? "default"}`;
     let hit = cache.get(key);
     if (hit === undefined) {
       if (cache.size >= 8) cache.clear();
@@ -88,7 +90,7 @@ export function createBrain(opts: BrainOptions): Brain {
     if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed");
 
     if (path === "/status") return json(200, toStatus(await analysis(undefined), now()));
-    if (path === "/dashboard") return json(200, dashboard(await analysis(undefined), opts.home, env));
+    if (path === "/dashboard") return json(200, dashboard(await analysis(undefined), opts.home, env, now()));
     if (path === "/insights") {
       const review = parseReviewSeconds(url.searchParams.get("reviewSeconds"));
       if (review === "invalid") return error(400, "bad_request", "reviewSeconds must be a number in (0, 600]");
@@ -134,6 +136,8 @@ export interface RunningBrain {
 
 export async function startBrainServer(opts: BrainOptions & { port?: number }): Promise<RunningBrain> {
   const brain = createBrain(opts);
+  // Brain artefacts with OCR or mail text: purged at startup and every hour (store/vault.ts, REVIEW-1 H4).
+  const stopPurge = startPurgeSchedule(opts.home, opts.now ?? Date.now);
   const listener = Bun.serve({
     hostname: LOOPBACK,
     port: opts.port ?? 0,
@@ -149,6 +153,7 @@ export async function startBrainServer(opts: BrainOptions & { port?: number }): 
     port,
     url: `http://${LOOPBACK}:${port}/`,
     stop: async () => {
+      stopPurge();
       await listener.stop(true);
     },
   };

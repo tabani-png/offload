@@ -2,6 +2,7 @@
 // The draft is checked in code: numbers must come from the facts or recipient (ADR 0005), gaps are flagged.
 import { readFileSync } from "node:fs";
 import { modelFor, type Model, type ModelConfig } from "../models/model.ts";
+import { untrustedBlock } from "../workflows/untrusted.ts";
 import { retrieveExamples, type TonePack } from "./pack.ts";
 import type { Bucket } from "./types.ts";
 
@@ -52,21 +53,20 @@ export function numbersNotIn(text: string, sources: readonly string[]): string[]
   return out;
 }
 
+const BLOCKS = ["style_card", "examples", "facts", "recipient", "subject"] as const;
+
+/**
+ * The user turn for one draft. Everything copied from mail, the screen (OCR subject and recipient in a dry run), the
+ * recipient list or a model-written style card is an untrusted block (REVIEW-1 M5); the instructions are fixed text.
+ */
 export function draftPrompt(req: Omit<DraftRequest, "model" | "models">, examples: ReturnType<typeof retrieveExamples>): string {
+  const block = (name: (typeof BLOCKS)[number], text: string) => untrustedBlock(name, text, BLOCKS);
   return [
-    "<style_card>",
-    req.pack.cards[req.bucket] ?? "(no style card yet: follow the examples)",
-    "</style_card>",
-    "<examples>",
-    ...examples.map((e, i) => `--- example ${i + 1}\nSubject: ${e.subject}\n\n${e.text}`),
-    "</examples>",
-    "<facts>",
-    req.facts.trim(),
-    "</facts>",
-    "<recipient>",
-    JSON.stringify(req.recipient),
-    "</recipient>",
-    `<subject>${req.subject}</subject>`,
+    block("style_card", req.pack.cards[req.bucket] ?? "(no style card yet: follow the examples)"),
+    block("examples", examples.map((e, i) => `--- example ${i + 1}\nSubject: ${e.subject}\n\n${e.text}`).join("\n")),
+    block("facts", req.facts.trim()),
+    block("recipient", JSON.stringify(req.recipient)),
+    block("subject", req.subject),
     "",
     "Write the email body now.",
   ].join("\n");

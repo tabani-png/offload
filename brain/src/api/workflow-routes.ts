@@ -6,7 +6,7 @@ import type { Model } from "../models/model.ts";
 import { draftWorkflow, NotFoundError } from "../workflows/drafter.ts";
 import { dryRun, DryRunError } from "../workflows/dryrun.ts";
 import type { Executor } from "../workflows/executor.ts";
-import { approveBatch, executeBatch, prepareLiveBatch, RunError } from "../workflows/runner.ts";
+import { approveBatch, executeBatch, prepareLiveBatch, releaseUnknown, requestCancel, RunError } from "../workflows/runner.ts";
 import { batchSummary, connectorStatus, connectorsResponse, detailOf, summaryOf } from "../workflows/service.ts";
 import { deleteWorkflow, listWorkflows, readBatch, readWorkflow, updateWorkflow, WORKFLOW_ID_RE } from "../workflows/store.ts";
 import { error, json } from "./http.ts";
@@ -85,7 +85,7 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
   if (path === "/workflows") {
     methods(req, "GET");
     const st = status();
-    const res: WorkflowsResponse = { version: API_VERSION, workflows: listWorkflows(ctx.home).map((w) => summaryOf(ctx.home, w, st)) };
+    const res: WorkflowsResponse = { version: API_VERSION, workflows: listWorkflows(ctx.home).map((w) => summaryOf(ctx.home, w, st, ctx.now())) };
     return json(200, res);
   }
   if (path === "/workflows/draft") {
@@ -93,7 +93,7 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
     const b = await body(req);
     if (typeof b.insightId !== "string" || !/^ins_[A-Za-z0-9_-]{1,64}$/.test(b.insightId)) throw new HttpError(400, "bad_request", "insightId is required");
     const { workflow, created } = draftWorkflow({ home: ctx.home, analysis: await ctx.analysis(), insightId: b.insightId, now: ctx.now });
-    return json(created ? 201 : 200, detailOf(ctx.home, workflow, status()));
+    return json(created ? 201 : 200, detailOf(ctx.home, workflow, status(), ctx.now()));
   }
 
   const m = /^\/workflows\/([^/]+)(?:\/([a-z-]+))?$/.exec(path);
@@ -105,10 +105,12 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
     methods(req, "GET", "DELETE");
     const wf = mustWorkflow(ctx.home, id);
     if (req.method === "DELETE") {
+      // Stop a running batch before the folder goes (REVIEW-1 M2).
+      requestCancel(ctx.home, wf.id);
       deleteWorkflow(ctx.home, wf.id);
       return json(200, { version: API_VERSION, deleted: wf.id });
     }
-    return json(200, detailOf(ctx.home, wf, status()));
+    return json(200, detailOf(ctx.home, wf, status(), ctx.now()));
   }
 
   methods(req, "POST");
@@ -133,15 +135,25 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
       const hash = b.batchHash;
       // A live batch can only be approved when its connectors can actually be reached.
       const pre = readWorkflow(ctx.home, wf.id)!;
-      const missing = summaryOf(ctx.home, pre, status()).connectors.filter((c) => c.required && c.status !== "connected");
-      if (readBatch(ctx.home, wf.id, hash)?.kind === "live" && missing.length > 0) throw new HttpError(409, "conflict", `connect ${missing.map((c) => c.name).join(", ")} first (brain/CONNECTORS.md)`);
+      const missing = summaryOf(ctx.home, pre, status(), ctx.now()).connectors.filter((c) => c.required && c.status !== "connected");
+      if (readBatch(ctx.home, wf.id, hash, now)?.kind === "live" && missing.length > 0) throw new HttpError(409, "conflict", `connect ${missing.map((c) => c.name).join(", ")} first (brain/CONNECTORS.md)`);
       const { batch, workflow, token } = approveBatch(ctx.home, wf.id, hash, now);
       if (batch.kind === "live") ctx.background(sendBatch(ctx, wf.id, hash, token, workflow.connectors));
-      const res: ApproveResponse = { version: API_VERSION, workflowId: wf.id, batchHash: hash, kind: batch.kind, result: batch.kind === "live" ? "sending" : "activated", workflow: summaryOf(ctx.home, readWorkflow(ctx.home, wf.id)!, status()) };
+      const res: ApproveResponse = { version: API_VERSION, workflowId: wf.id, batchHash: hash, kind: batch.kind, result: batch.kind === "live" ? "sending" : "activated", workflow: summaryOf(ctx.home, readWorkflow(ctx.home, wf.id)!, status(), ctx.now()) };
       return json(200, res);
+    }
+    case "release": {
+      // Explicit user action: these recipients' sends are "unknown" and the user confirms they did not go out.
+      if (typeof b.batchHash !== "string" || !/^[0-9a-f]{64}$/.test(b.batchHash)) throw new HttpError(400, "bad_request", "batchHash (64 hex chars) is required");
+      const keys = b.keys;
+      if (!Array.isArray(keys) || keys.length === 0 || keys.length > 500 || !keys.every((k) => typeof k === "string" && k.length <= 320)) throw new HttpError(400, "bad_request", "keys (the recipient addresses to release) are required");
+      const batch = releaseUnknown(ctx.home, wf.id, b.batchHash, keys as string[], now);
+      return json(200, { version: API_VERSION, workflowId: wf.id, batch: batchSummary(batch) });
     }
     case "pause":
     case "resume": {
+      // Pausing stops a running batch before its next item (REVIEW-1 M2); the gate also re-reads the status.
+      if (action === "pause") requestCancel(ctx.home, wf.id);
       const updated = updateWorkflow(ctx.home, wf.id, (w) => {
         if (action === "pause") {
           w.status = "paused";
@@ -151,13 +163,13 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
           w.pausedAt = null;
         }
       }, now);
-      return json(200, summaryOf(ctx.home, updated, status()));
+      return json(200, summaryOf(ctx.home, updated, status(), ctx.now()));
     }
     case "auto-run": {
       if (typeof b.enabled !== "boolean") throw new HttpError(400, "bad_request", "enabled (boolean) is required");
       const enabled = b.enabled;
       const updated = updateWorkflow(ctx.home, wf.id, (w) => void (w.autoRun = enabled), now);
-      return json(200, summaryOf(ctx.home, updated, status()));
+      return json(200, summaryOf(ctx.home, updated, status(), ctx.now()));
     }
     default:
       throw new HttpError(404, "not_found", "unknown workflow action");
@@ -173,5 +185,8 @@ async function sendBatch(ctx: WorkflowContext, id: string, hash: string, token: 
     console.error("brain: cannot resolve MCP servers for", id, err instanceof Error ? err.message : err);
     mcpServers = {};
   }
-  await executeBatch({ home: ctx.home, workflowId: id, hash, token, executor: ctx.executor, mcpServers, now: ctx.now });
+  // The gate allows a tool only on a server that covers its connector, per connectors.json.
+  const servers: Record<string, string[]> = {};
+  for (const name of Object.keys(mcpServers)) servers[name] = [...(config?.servers[name]?.catalog ?? [])];
+  await executeBatch({ home: ctx.home, workflowId: id, hash, token, executor: ctx.executor, mcpServers, servers, now: ctx.now });
 }
