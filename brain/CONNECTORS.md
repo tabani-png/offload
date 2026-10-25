@@ -58,6 +58,21 @@ passes it from the Keychain later; for now export it in your shell). Values are 
    `COMPOSIO_REMOTE_WORKBENCH`, search/execute helpers) are always denied, so expose the Gmail and Sheets toolkits
    as plain tools in the MCP config.
 
+## Connecting from the app (s10e)
+The app's "Connect Gmail" calls `POST /connectors/gmail/link` and polls `GET /connectors/gmail/link` (brain/API.md).
+Connecting never sends anything: a send still needs an approved batch hash and the allowlist below.
+- Demo (`serve --model stub`): a simulated sign-in. No browser opens, no command runs; after about 2 seconds the id
+  counts as connected (kept in `$OFFLOAD_HOME/connect-sim.json`). A demo sign-in has no server, so nothing is ever
+  sent through it: a live batch cannot be approved on it, and the executor is never started for it. With the real
+  model the file is ignored.
+- Composio (real model): the brain runs `composio link <toolkit> --no-browser --no-wait` and hands the sign-in URL to
+  the app, which opens it. It then polls `composio link <toolkit> --list`. When the account is active the id is
+  connected only once a Composio server in `connectors.json` lists it (with its env var set); until then the app shows
+  "Add it to the Composio server Offload uses".
+- Gmail MCP (real model): the brain runs the server's one-time auth command (`... auth`), which opens its own browser
+  window; the id is connected when `connectors.json` lists the server.
+- The commands get only PATH, HOME, user, shell, temp dir and locale; never `OFFLOAD_TOKEN` or a connector secret.
+
 ## The gate's allowlist (s05b, `src/workflows/allowlist.ts`)
 A tool runs only when it is in this table for a connector the server lists in its `catalog`. Everything else is
 denied outright, including unknown tools, meta or multiplexer tools (`*MULTI_EXECUTE*`, `*EXECUTE*`, `*BASH*`,

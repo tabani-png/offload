@@ -427,7 +427,8 @@ export interface ConnectorsResponse {
   configPath: string;
   configErrors: string[];
   servers: Array<{ name: string; transport: "stdio" | "http"; catalog: string[]; status: "connected" | "missing_env"; missingEnv: string[] }>;
-  catalog: Array<{ id: string; name: string; how: ConnectorHow; status: ConnectorStatus; servers: string[] }>;
+  /** s10e: `simulated` is true when the id counts as connected only through a demo sign-in (stub model only). */
+  catalog: Array<{ id: string; name: string; how: ConnectorHow; status: ConnectorStatus; servers: string[]; simulated?: boolean }>;
   insights: Array<{ insightId: string; name: string; ready: boolean; connectors: Array<{ id: string; name: string; role: "primary" | "also"; status: ConnectorStatus }> }>;
 }
 
@@ -458,6 +459,44 @@ export interface ToneCardDTO {
   updatedAt: number | null;
   /** Largest card a PUT accepts, in UTF-8 bytes. */
   maxBytes: number;
+  /** s10e: the user's voice measured in code from the tone pack's sent emails of this bucket; null when there is no
+   * tone pack or no email in the bucket. */
+  measured: ToneMeasuredDTO | null;
+}
+
+/** s10e: "Your voice" as a fact sheet. Every number is counted in code (tone/style.ts measureStyle). */
+export interface ToneMeasuredDTO {
+  emails: number;
+  medianWords: number;
+  p90Words: number;
+  medianSentences: number;
+  /** The most common greeting form, e.g. { form: "Hi {first},", count: 38 }; null when the emails have none. */
+  greeting: { form: string; count: number } | null;
+  /** The most common sign-off, e.g. { form: "Muhammad", count: 40 }; null when the emails have none. */
+  sign: { form: string; count: number } | null;
+  /** 0..1: share of emails with a question (an ask). */
+  askShare: number;
+  /** 0..1: share of emails with an exclamation mark. */
+  exclamationShare: number;
+  /** One sentence quoted from a real sent email of this bucket (not the greeting or sign-off), at most 140 chars. */
+  sample: string | null;
+  /** Plain words, e.g. "40 sent investor emails". */
+  source: string;
+}
+
+/** s10e: POST /connectors/:id/link starts a sign-in, GET polls it. `message` is shown to a person as it is. */
+export interface ConnectLinkDTO {
+  connectorId: string;
+  name: string;
+  via: "composio" | "gmail-mcp";
+  state: "idle" | "waiting" | "connected" | "failed";
+  /** The sign-in page to open (Composio); null when a browser window opens by itself or in the demo. */
+  url: string | null;
+  /** True for the demo sign-in of the stub model: nothing opens and nothing can ever be sent through it. */
+  simulated: boolean;
+  message: string;
+  startedAt: number | null;
+  connectedAt: number | null;
 }
 
 /** PUT /workflows/:id/tone body. */

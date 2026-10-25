@@ -35,7 +35,7 @@ describe("s05 models", () => {
     const a = await new StubModel().complete({ role: "draft", model: "m", system: "", prompt });
     const b = await new StubModel().complete({ role: "draft", model: "m", system: "", prompt });
     expect(a).toBe(b);
-    expect(a).toBe("Hi Ana,\n\nWe do X.\nRaising $1M.\nI think it fits B Fund.\n\nCall?\n\nMuhammad");
+    expect(a).toBe("Hi Ana,\n\nWe do X.\nB Fund backs tools teams use every day, so I'm writing to you first.\n\nWe are raising $1M. [missing: traction]\n\nCall?\n\nMuhammad");
     expect(tagged("x <a>\nhello\n</a> y", "a")).toBe("hello");
   });
 

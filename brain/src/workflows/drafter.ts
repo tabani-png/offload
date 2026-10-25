@@ -5,7 +5,7 @@
 // (attacker-controllable text), so they never reach a prompt (REVIEW-1 M5). They are observed text too, so they are
 // sealed in labels.json.enc under the capture day of the oldest instance and purged with it; workflow.json keeps
 // fixed template names and ids only (REVIEW-2 N8, workflows/labels.ts).
-import { copyFileSync, existsSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Analysis, Insight } from "../analyze.ts";
 import { insightConnectors } from "../api/dto.ts";
@@ -32,6 +32,16 @@ ask:
 sign:
 subject: {company} <> {org}
 `;
+
+/** s10e: `$OFFLOAD_HOME/default-facts.md`, when present, seeds facts.md of new workflows (scripts/demo.sh writes the
+ * fixture founder's facts there). It is the user's own text, never observed content. */
+export const DEFAULT_FACTS_FILE = "default-facts.md";
+function defaultFacts(home: string): string | null {
+  const p = join(home, DEFAULT_FACTS_FILE);
+  if (!existsSync(p)) return null;
+  const text = readFileSync(p, "utf8");
+  return text.trim() === "" || text.length > 16 * 1024 ? null : text;
+}
 
 export const workflowIdFor = (insightId: string) => `wf_${insightId.replace(/^ins_/, "")}`;
 
@@ -232,7 +242,7 @@ export function draftWorkflow(o: DraftWorkflowOptions): { workflow: WorkflowJson
   const dir = workflowDir(o.home, id);
   ensureDir(join(dir, "scripts"));
   for (const f of SCRIPTS) copyFileSync(new URL(`./scripts/${f}`, import.meta.url), join(dir, "scripts", f));
-  if (!existsSync(join(dir, "facts.md"))) writePrivate(join(dir, "facts.md"), o.facts ?? FACTS_TEMPLATE);
+  if (!existsSync(join(dir, "facts.md"))) writePrivate(join(dir, "facts.md"), o.facts ?? defaultFacts(o.home) ?? FACTS_TEMPLATE);
   if (!existsSync(join(dir, wf.inputs.list))) writePrivate(join(dir, wf.inputs.list), RECIPIENTS_HEADER + "\n");
   if (!existsSync(join(dir, wf.inputs.crmLog))) writePrivate(join(dir, wf.inputs.crmLog), CRM_HEADER + "\n");
   writePrivate(join(dir, "SKILL.md"), renderSkillMd(wf));

@@ -77,6 +77,7 @@ export const FIXTURE_FACTS = `# Facts for drafting
 Only these facts may appear in drafts. Edit freely.
 
 company: Offload
+role: founder
 pitch: Offload is a Mac app that watches a week of your work and automates the parts that repeat.
 raise: Raising a $2.5M seed.
 traction: 40 design partners, 3 paying.

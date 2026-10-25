@@ -15,6 +15,8 @@ import { toEvidence, toInsights, toStatus, toTimeline } from "./dto.ts";
 import { BRAIN_READY_PREFIX, MODEL_HEADER, type BrainReadyDTO, type ModelLabel } from "./types.ts";
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
 import { workflowRoute } from "./workflow-routes.ts";
+import { Linker, LinkNotFound, simPath, type LinkRunner } from "../connectors/link.ts";
+import { existsSync } from "node:fs";
 
 export interface BrainOptions {
   home: string;
@@ -28,6 +30,8 @@ export interface BrainOptions {
   observerEnv?: ObserverEnv;
   /** Startup and purge log lines (default stderr, so nothing precedes the ready line on stdout). */
   log?: (line: string) => void;
+  /** s10e connect-link routes: the demo sign-in time (stub) and the command runner (real). Tests inject both. */
+  link?: { linkMs?: number; runner?: LinkRunner };
 }
 
 export interface Brain {
@@ -38,6 +42,26 @@ export interface Brain {
   schedulerTick(): Promise<SchedulerTick>;
   /** "stub" or "real": on every response (MODEL_HEADER, and `model` in 2xx JSON object bodies). */
   readonly modelLabel: ModelLabel;
+  /** s10e: resolves when background sign-in commands have ended (tests). */
+  linkIdle(): Promise<void>;
+}
+
+async function linkBody(req: Request): Promise<{ restart: boolean } | string> {
+  const text = await req.text();
+  if (text.length > 64 * 1024) return "body over 65536 bytes";
+  if (text.trim() === "") return { restart: false };
+  if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return "content-type must be application/json";
+  let v: unknown;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    return "body is not JSON";
+  }
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return "body must be a JSON object";
+  for (const k of Object.keys(v)) if (k !== "restart") return `${k} is not a link field (send {} or { "restart": true })`;
+  const r = (v as { restart?: unknown }).restart;
+  if (r !== undefined && typeof r !== "boolean") return "restart must be true or false";
+  return { restart: r === true };
 }
 
 /** Adds the model label: the header on every response, `model` on 2xx JSON object bodies that do not have one. */
@@ -117,6 +141,9 @@ export function createBrain(opts: BrainOptions): Brain {
   const model = opts.workflows?.model ?? new AgentSdkModel();
   const modelLabel: ModelLabel = opts.workflows?.modelLabel ?? (model instanceof StubModel ? "stub" : "real");
   const observerEnv = opts.observerEnv ?? process.env;
+  const simulated = modelLabel === "stub";
+  if (!simulated && existsSync(simPath(opts.home))) (opts.log ?? ((l: string) => console.error(l)))("brain: connect-sim.json is ignored: demo sign-ins count only with --model stub");
+  const linker = new Linker({ home: opts.home, env, modelLabel, now, ...(opts.link?.linkMs === undefined ? {} : { linkMs: opts.link.linkMs }), ...(opts.link?.runner === undefined ? {} : { runner: opts.link.runner }), ...(opts.log === undefined ? {} : { log: opts.log }) });
   const wctx = {
     home: opts.home,
     env,
@@ -149,12 +176,29 @@ export function createBrain(opts: BrainOptions): Brain {
       const r = await observerControl(opts.home, action, observerEnv, now());
       return r.ok ? json(200, r.body) : error(409, "conflict", r.error);
     }
+    // s10e: start (POST) or poll (GET) a sign-in for one catalog id. Connecting never sends anything.
+    const link = /^\/connectors\/([^/]+)\/link$/.exec(path);
+    if (link !== null) {
+      const id = link[1]!;
+      if (req.method !== "POST" && req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed", "use GET or POST");
+      try {
+        if (req.method === "POST") {
+          const b = await linkBody(req);
+          if (typeof b === "string") return error(400, "bad_request", b);
+          return json(200, await linker.start(id, b));
+        }
+        return json(200, await linker.poll(id));
+      } catch (err) {
+        if (err instanceof LinkNotFound) return error(404, "not_found", "unknown connector id");
+        throw err;
+      }
+    }
     if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed");
 
     if (path === "/status") return json(200, toStatus(await analysis(undefined), now()));
     // s10b: plus the user files kept until the user deletes them, for the app's "Observing" section.
     if (path === "/observer") return json(200, { ...(await observerStatus(opts.home, observerEnv, now())), keptFiles: keptFiles(opts.home) });
-    if (path === "/dashboard") return json(200, dashboard(await analysis(undefined), opts.home, env, now()));
+    if (path === "/dashboard") return json(200, dashboard(await analysis(undefined), opts.home, env, now(), simulated));
     if (path === "/insights") {
       const review = parseReviewSeconds(url.searchParams.get("reviewSeconds"));
       if (review === "invalid") return error(400, "bad_request", "reviewSeconds must be a number in (0, 600]");
@@ -179,6 +223,7 @@ export function createBrain(opts: BrainOptions): Brain {
   let ticking: Promise<SchedulerTick> | null = null;
   return {
     modelLabel,
+    linkIdle: () => linker.idle(),
     async idle(): Promise<void> {
       while (background.size > 0) await Promise.all([...background]);
     },

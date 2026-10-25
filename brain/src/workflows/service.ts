@@ -17,6 +17,7 @@ import {
 import { insightConnectors } from "../api/dto.ts";
 import { CONNECTORS, connectorById } from "../connectors/catalog.ts";
 import { catalogStatus, loadConnectorsConfig, missingEnv, type ConnectorStatus, type Env } from "../connectors/config.ts";
+import { readSim, withSimulated } from "../connectors/link.ts";
 import { roleOfTool } from "./allowlist.ts";
 import type { Batch } from "./batch.ts";
 import { pendingLiveBatch } from "./runner.ts";
@@ -121,8 +122,11 @@ export function detailOf(home: string, wf: WorkflowJson, status: Record<string, 
   };
 }
 
-export function connectorStatus(home: string, env: Env): Record<string, ConnectorStatus> {
-  return catalogStatus(loadConnectorsConfig(home).config, env);
+/** `simulated` (s10e): true only while the brain runs with the stub model; then demo sign-ins
+ * (connect-sim.json, connectors/link.ts) count as connected. With the real model they are ignored. */
+export function connectorStatus(home: string, env: Env, simulated = false): Record<string, ConnectorStatus> {
+  const status = catalogStatus(loadConnectorsConfig(home).config, env);
+  return simulated ? withSimulated(status, home) : status;
 }
 
 // ---------- measured saving ----------
@@ -174,8 +178,8 @@ function legacyStatus(state: WorkflowState, wf: WorkflowJson): AutomationStatus 
   return wf.lastDryRunAt === null ? "draft" : "dry_run";
 }
 
-export function dashboard(a: Analysis, home: string, env: Env, now: number = Date.now()): DashboardResponse {
-  const status = connectorStatus(home, env);
+export function dashboard(a: Analysis, home: string, env: Env, now: number = Date.now(), simulated = false): DashboardResponse {
+  const status = connectorStatus(home, env, simulated);
   const automations: AutomationDTO[] = listWorkflows(home).map((wf) => {
     const s = summaryOf(home, wf, status, now);
     const measured = measuredSaving(a, wf.taskId, wf.activatedAt);
@@ -218,9 +222,11 @@ export function dashboard(a: Analysis, home: string, env: Env, now: number = Dat
 
 // ---------- connectors ----------
 
-export function connectorsResponse(a: Analysis, home: string, env: Env): ConnectorsResponse {
+export function connectorsResponse(a: Analysis, home: string, env: Env, simulated = false): ConnectorsResponse {
   const { config, errors, path } = loadConnectorsConfig(home);
-  const status = catalogStatus(config, env);
+  const real = catalogStatus(config, env);
+  const status = simulated ? withSimulated(real, home) : real;
+  const sim = simulated ? readSim(home) : {};
   return {
     version: API_VERSION,
     configPath: path,
@@ -237,6 +243,7 @@ export function connectorsResponse(a: Analysis, home: string, env: Env): Connect
       servers: Object.entries(config?.servers ?? {})
         .filter(([, s]) => s.catalog.includes(c.id))
         .map(([n]) => n),
+      ...(simulated ? { simulated: sim[c.id] !== undefined && real[c.id] !== "connected" } : {}),
     })),
     insights: a.insights.map((i) => {
       const conns = [...(i.connectors.primary === null ? [] : [{ c: i.connectors.primary, role: "primary" as const }]), ...i.connectors.also.map((c) => ({ c, role: "also" as const }))];

@@ -21,7 +21,7 @@ Changes inside v1 are additive only.
   unset, a fresh 256-bit token (it is in the ready line). The app passes its per-launch token in the env.
 - Host must be `127.0.0.1` or `localhost` (any port). An `Origin` header, if sent, must equal `http://<host>`.
 - GET (and HEAD) everywhere; POST, PUT and DELETE only on `/workflows…` (s05, s05c); POST on `/observer/pause` and
-  `/observer/resume` (s09b). Bodies are `application/json`,
+  `/observer/resume` (s09b); POST on `/connectors/:id/link` (s10e). Bodies are `application/json`,
   at most 64 KB. No CORS. Every response is `cache-control: no-store`, `x-content-type-options: nosniff`.
 
 | status | body `error` | when |
@@ -129,7 +129,7 @@ top of `active` when a batch waits or a connector is missing. Auto-run is off by
 | `POST /workflows/:id/release` | `{ batchHash, keys[] }` | `{ batch }`: you confirm these `unknown` sends did not go out; they can be drafted again (s05b) |
 | `POST /workflows/:id/auto-run` | `{ enabled }` | `WorkflowSummaryDTO` with `autoRunPin` (s10b): on = pin (again) the recipient rows, facts.md, the tone card and SKILL.md; off = drop the pin and stop an auto batch before its next item |
 | `DELETE /workflows/:id` | | `{ deleted }`. Stops a running batch first |
-| `GET /workflows/:id/tone` | | `ToneCardDTO`: the style card of the workflow's tone bucket (`text` null when none) (s05c) |
+| `GET /workflows/:id/tone` | | `ToneCardDTO`: the style card of the workflow's tone bucket (`text` null when none) (s05c), plus `measured` (s10e, below) |
 | `PUT /workflows/:id/tone` | `ToneCardUpdate { text }` | `ToneCardDTO`. Stored 0600 in `tone/<bucket>.md`; kept by later `tone build` unless `--force` |
 | `GET /workflows/:id/skill` | | `SkillDTO`: SKILL.md, the editable text, the steps, gate ids, limits (s05c) |
 | `PUT /workflows/:id/skill` | `SkillUpdate { description?, steps?: [{ id, title?, detail? }] }` | `SkillDTO`, SKILL.md re-rendered |
@@ -137,6 +137,18 @@ top of `active` when a batch waits or a connector is missing. Auto-run is off by
 Tone PUT: only `text`, a non-blank string without control characters (tab and newlines are fine), at most
 `maxBytes` = 16384 UTF-8 bytes (413 above). The card is the user's own style description; it goes into the drafting
 prompt as before.
+
+Tone `measured` (s10e, `ToneMeasuredDTO | null`, on GET and PUT): "Your voice" as a fact sheet, counted in code
+(`measureStyle`, ADR 0005) over the tone pack's sent emails of the workflow's bucket: `emails`, `medianWords`,
+`p90Words`, `medianSentences`, `greeting` and `sign` (`{ form, count }` of the most common one, e.g.
+`{ form: "Hi {first},", count: 18 }`, null when the emails have none), `askShare` and `exclamationShare` (0..1),
+`sample` (one sentence quoted from a real sent email of the bucket, never the greeting or sign-off, at most 140 chars:
+the first body sentence of 5+ words of the median-length email) and `source` in plain words ("18 sent investor
+emails"). null when there is no tone pack (or it was purged after 7 days) or the bucket has no email. `serve` does
+not build a pack; `tone build` does (scripts/demo.sh builds one for the demo home from the fixture sent mail).
+
+Default facts (s10e): when `$OFFLOAD_HOME/default-facts.md` exists, a new workflow's `facts.md` starts as a copy of it
+(else the empty template). scripts/demo.sh writes the fixture founder's facts there.
 
 Skill PUT edits text only. Allowed keys: `description` (1-1000 chars, may span lines) and per existing step id `title`
 (1-120 chars) and `detail` (1-600 chars), both one line. No line may start with `#`, `---` or a code fence (SKILL.md
@@ -209,3 +221,38 @@ observer }`, where `observer` is a fresh `GET /observer` report. A missing binar
 ## GET /connectors → `ConnectorsResponse`
 Servers from `$OFFLOAD_HOME/connectors.json` (`configErrors` when it is invalid), every catalog id with
 `connected | missing_env | missing`, and per insight its connectors' status and `ready`. Setup: `brain/CONNECTORS.md`.
+s10e: catalog entries carry `simulated: true|false` while the brain runs with the stub model (a demo sign-in, below).
+
+## POST /connectors/:id/link, GET /connectors/:id/link → `ConnectLinkDTO` (s10e)
+"Connect Gmail" from the app. POST (body `{}` or `{ "restart": true }`) starts a sign-in for one catalog id, GET polls
+it (the app polls every few seconds). `:id` must be a catalog id (`src/connectors/catalog.ts`), else 404 `not_found`;
+other methods 405; another body key or a non-boolean `restart` is a 400. Same auth, Host and Origin checks as every
+route. Connecting never sends anything.
+
+`ConnectLinkDTO`: `connectorId`, `name`, `via` (`composio` when a Composio/http server in connectors.json lists the id,
+`gmail-mcp` when a stdio server does, else from the catalog `how`), `state` (`idle | waiting | connected | failed`),
+`url` (the sign-in page to open, or null), `simulated`, `message`, `startedAt`, `connectedAt` (plus `model`).
+`message` is plain words for a person, shown as it is ("Finish signing in to Gmail in your browser. Offload checks
+every few seconds.", "Gmail is connected.", "The sign-in did not start: Composio did not answer in time.").
+
+- GET before any POST: `idle`, or `connected` when the id already is. POST on a connected id answers `connected` and
+  starts nothing. POST while a sign-in is waiting returns it; `restart: true` starts a new one.
+- Stub model (`serve --model stub`): a demo sign-in, `simulated: true`. POST → `waiting`, `url` null; GET →
+  `connected` once `linkMs` has passed since `startedAt` (default 2000 ms, `OFFLOAD_STUB_LINK_MS` 0..60000). The id is
+  then kept in `$OFFLOAD_HOME/connect-sim.json` (0600, `{ "version": 1, "connected": { "<id>": <connectedAt> } }`) and
+  counts as connected everywhere: GET /connectors (catalog and insights), workflow connectors, /dashboard needsYou and
+  the approve check. Nothing can be sent through it: approving a live batch on a demo sign-in is a 409 `conflict`
+  "Demo connection: Offload does not send from a demo sign-in.", auto-run and the run loop leave the batch pending,
+  and any send path that still reaches `sendBatch` never starts the executor (its items end `failed_before_send`).
+  Activation (approving the dry-run batch) works, because it sends nothing. With the real model the file is ignored
+  (one line on stderr at start).
+- Real model, `via: composio`: POST runs `composio link <toolkit> --no-browser --no-wait` (toolkit from the catalog
+  `how`, `gmail` for Gmail; 30 s timeout) and answers `waiting` with the first https URL it prints (or `failed`). GET
+  runs `composio link <toolkit> --list` (15 s timeout, at most every 2 s) and answers `connected` only when the account
+  is active AND the catalog status is connected; active but no server lists the id stays `waiting` with "Gmail is
+  signed in. Add it to the Composio server Offload uses, then Offload connects it."
+- Real model, `via: gmail-mcp`: POST runs the configured stdio server's command and args plus `auth` (default
+  `npx -y @gongrzhe/server-gmail-autoauth-mcp auth`) in the background (10 min timeout) and answers `waiting`, `url`
+  null; GET answers from the catalog status; an auth command that fails ends `failed`.
+- Every command gets only PATH, HOME, USER, LOGNAME, SHELL, TMPDIR and the locale: never `OFFLOAD_TOKEN`, a connector
+  secret or a model login. Tests inject a fake runner (`BrainOptions.link.runner`) and never spawn.

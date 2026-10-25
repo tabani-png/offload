@@ -1,5 +1,6 @@
 // Style card per bucket. The "Measured" section is computed here (ADR 0005: numbers come from code);
 // the "Voice" section is written by the cheap model from examples and is the part the user edits most.
+import type { ToneMeasuredDTO } from "../api/types.ts";
 import { untrustedBlock } from "../workflows/untrusted.ts";
 import type { Bucket, CleanEmail } from "./types.ts";
 
@@ -125,4 +126,54 @@ export function styleCardPrompt(bucket: Bucket, st: StyleStats, examples: readon
     "",
     "Write the bullets only.",
   ].join("\n");
+}
+
+// ---------- "Your voice" fact sheet (s10e, GET /workflows/:id/tone `measured`) ----------
+
+const SOURCE_LABELS: Record<Bucket, string> = { investor_outreach: "investor", scheduling: "scheduling", follow_up: "follow-up", other: "" };
+export const SAMPLE_MAX_CHARS = 140;
+
+/** Sentences of an email body (greeting and sign-off already removed), in order. */
+function bodySentences(core: string): string[] {
+  return core
+    .split(/\n+/)
+    .flatMap((para) => para.split(/(?<=[.!?])\s+/))
+    .map((x) => x.trim())
+    .filter((x) => x !== "");
+}
+
+/**
+ * One sentence quoted from a real sent email: the first body sentence of at least 5 words (else the first) of the
+ * median-length email (ties by id), at most SAMPLE_MAX_CHARS. Deterministic for the same corpus.
+ */
+export function sampleSentence(emails: readonly CleanEmail[]): string | null {
+  if (emails.length === 0) return null;
+  const sorted = [...emails].sort((a, b) => words(a.core) - words(b.core) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const order = [sorted[Math.floor((sorted.length - 1) / 2)]!, ...sorted];
+  for (const e of order) {
+    const ss = bodySentences(e.core).filter((x) => x.length <= SAMPLE_MAX_CHARS);
+    const pick = ss.find((x) => words(x) >= 5) ?? ss[0];
+    if (pick !== undefined) return pick;
+  }
+  return null;
+}
+
+/** The measured voice of one bucket, all counted in code; null without emails. */
+export function toneMeasured(bucket: Bucket, emails: readonly CleanEmail[]): ToneMeasuredDTO | null {
+  if (emails.length === 0) return null;
+  const st = measureStyle(emails);
+  const form = (f: FormCount | null) => (f === null || f.form === "(none)" ? null : { form: f.form, count: f.count });
+  const label = SOURCE_LABELS[bucket];
+  return {
+    emails: st.emails,
+    medianWords: st.medianWords,
+    p90Words: st.p90Words,
+    medianSentences: st.medianSentences,
+    greeting: form(st.topGreeting),
+    sign: form(st.topSign),
+    askShare: st.askShare,
+    exclamationShare: st.exclamationShare,
+    sample: sampleSentence(emails),
+    source: `${st.emails} sent ${label === "" ? "" : `${label} `}email${st.emails === 1 ? "" : "s"}`,
+  };
 }

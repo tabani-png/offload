@@ -4,17 +4,19 @@
 // Writes are POST/PUT/DELETE with a JSON body of at most 64 KB. The approval gate itself lives in workflows/gate.ts.
 import type { Analysis } from "../analyze.ts";
 import { loadConnectorsConfig, toMcpServers, type Env } from "../connectors/config.ts";
+import { DEMO_SEND_REFUSED, simulatedOnly } from "../connectors/link.ts";
 import type { Model } from "../models/model.ts";
 import { draftWorkflow, NotFoundError } from "../workflows/drafter.ts";
 import { dryRun, DryRunError, readLastDryRun } from "../workflows/dryrun.ts";
-import type { Executor } from "../workflows/executor.ts";
+import type { ExecResult, Executor } from "../workflows/executor.ts";
 import { disableAutoRun, enableAutoRun, partitionForAuto } from "../workflows/autorun.ts";
 import type { Batch } from "../workflows/batch.ts";
 import { approveBatch, executeBatch, holdBatch, prepareLiveBatch, releaseUnknown, requestCancel, RunError, splitBatch } from "../workflows/runner.ts";
 import { batchSummary, connectorStatus, connectorsResponse, detailOf, summaryOf } from "../workflows/service.ts";
 import { deleteWorkflow, listWorkflows, readBatch, readWorkflow, updateWorkflow, WORKFLOW_ID_RE } from "../workflows/store.ts";
 import { applySkillUpdate, SkillEditError, skillDTO } from "../workflows/skill.ts";
-import { MAX_TONE_CARD_BYTES, readStyleCard, writeStyleCard, type StyleCard } from "../tone/pack.ts";
+import { loadTonePack, MAX_TONE_CARD_BYTES, readStyleCard, writeStyleCard, type StyleCard } from "../tone/pack.ts";
+import { toneMeasured } from "../tone/style.ts";
 import type { WorkflowJson } from "../workflows/types.ts";
 import { error, json } from "./http.ts";
 import { API_VERSION, type ApproveResponse, type ModelLabel, type RunResponse, type ToneCardDTO, type WorkflowsResponse } from "./types.ts";
@@ -86,11 +88,11 @@ export async function workflowRoute(req: Request, path: string, ctx: WorkflowCon
 }
 
 async function route(req: Request, path: string, ctx: WorkflowContext): Promise<Response> {
-  const status = () => connectorStatus(ctx.home, ctx.env);
+  const status = () => connectorStatus(ctx.home, ctx.env, ctx.modelLabel === "stub");
 
   if (path === "/connectors") {
     methods(req, "GET");
-    return json(200, connectorsResponse(await ctx.analysis(), ctx.home, ctx.env));
+    return json(200, connectorsResponse(await ctx.analysis(), ctx.home, ctx.env, ctx.modelLabel === "stub"));
   }
   if (path === "/workflows") {
     methods(req, "GET");
@@ -137,8 +139,8 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
     methods(req, "GET", "PUT");
     const wf = mustWorkflow(ctx.home, id);
     if (action === "skill") return json(200, req.method === "PUT" ? applySkillUpdate(ctx.home, wf.id, await body(req), ctx.now()) : skillDTO(ctx.home, wf));
-    if (req.method === "PUT") return json(200, toneDTO(wf, writeStyleCard(ctx.home, wf.bucket, toneText(await body(req)))));
-    return json(200, toneDTO(wf, readStyleCard(ctx.home, wf.bucket)));
+    if (req.method === "PUT") return json(200, toneDTO(ctx, wf, writeStyleCard(ctx.home, wf.bucket, toneText(await body(req)))));
+    return json(200, toneDTO(ctx, wf, readStyleCard(ctx.home, wf.bucket)));
   }
 
   methods(req, "POST");
@@ -170,7 +172,10 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
       // A live batch can only be approved when its connectors can actually be reached.
       const pre = readWorkflow(ctx.home, wf.id)!;
       const missing = summaryOf(ctx.home, pre, status(), ctx.now()).connectors.filter((c) => c.required && c.status !== "connected");
-      if (readBatch(ctx.home, wf.id, hash, now)?.kind === "live" && missing.length > 0) throw new HttpError(409, "conflict", `connect ${missing.map((c) => c.name).join(", ")} first (brain/CONNECTORS.md)`);
+      const isLive = readBatch(ctx.home, wf.id, hash, now)?.kind === "live";
+      if (isLive && missing.length > 0) throw new HttpError(409, "conflict", `connect ${missing.map((c) => c.name).join(", ")} first (brain/CONNECTORS.md)`);
+      // s10e: a demo sign-in (stub model) has no server behind it: a live batch is never approved on one.
+      if (isLive && demoOnly(ctx, pre.connectors).length > 0) throw new HttpError(409, "conflict", DEMO_SEND_REFUSED);
       const { batch, workflow, token } = approveBatch(ctx.home, wf.id, hash, now);
       if (batch.kind === "live") ctx.background(sendBatch(ctx, wf.id, hash, token, workflow.connectors));
       const res: ApproveResponse = { version: API_VERSION, workflowId: wf.id, batchHash: hash, kind: batch.kind, result: batch.kind === "live" ? "sending" : "activated", workflow: summaryOf(ctx.home, readWorkflow(ctx.home, wf.id)!, status(), ctx.now()) };
@@ -227,8 +232,11 @@ function toneText(b: Record<string, unknown>): string {
   return b.text;
 }
 
-function toneDTO(wf: WorkflowJson, card: StyleCard): ToneCardDTO {
-  return { version: API_VERSION, workflowId: wf.id, bucket: card.bucket, text: card.text, edited: card.edited, path: card.path, updatedAt: card.updatedAt, maxBytes: MAX_TONE_CARD_BYTES };
+function toneDTO(ctx: WorkflowContext, wf: WorkflowJson, card: StyleCard): ToneCardDTO {
+  // s10e: "Your voice" measured in code from the tone pack's sent emails of this bucket (null without a pack).
+  const pack = loadTonePack(ctx.home, ctx.now());
+  const measured = pack === null ? null : toneMeasured(wf.bucket, pack.corpus.filter((e) => e.bucket === wf.bucket));
+  return { version: API_VERSION, workflowId: wf.id, bucket: card.bucket, text: card.text, edited: card.edited, path: card.path, updatedAt: card.updatedAt, maxBytes: MAX_TONE_CARD_BYTES, measured };
 }
 
 export interface AutoDispatch {
@@ -247,9 +255,14 @@ export interface AutoDispatch {
 export function dispatchAuto(ctx: WorkflowContext, id: string, batch: Batch, now: number, log: (line: string) => void): AutoDispatch {
   const wf = readWorkflow(ctx.home, id);
   if (wf === null || wf.status !== "active" || !wf.autoRun || batch.state !== "pending" || batch.kind !== "live") return { sending: null, held: batch };
-  const missing = summaryOf(ctx.home, wf, connectorStatus(ctx.home, ctx.env), now).connectors.filter((c) => c.required && c.status !== "connected");
+  const missing = summaryOf(ctx.home, wf, connectorStatus(ctx.home, ctx.env, ctx.modelLabel === "stub"), now).connectors.filter((c) => c.required && c.status !== "connected");
   if (missing.length > 0) {
     log(`brain: ${id}: auto-run batch waits: connect ${missing.map((c) => c.name).join(", ")}`);
+    return { sending: null, held: batch };
+  }
+  // s10e: connected only by a demo sign-in: auto-run never sends from it.
+  if (demoOnly(ctx, wf.connectors).length > 0) {
+    log(`brain: ${id}: auto-run batch waits: demo sign-in only, nothing is sent`);
     return { sending: null, held: batch };
   }
   const p = partitionForAuto(ctx.home, wf, batch);
@@ -272,8 +285,29 @@ export function dispatchAuto(ctx: WorkflowContext, id: string, batch: Batch, now
   return { sending: sendable, held };
 }
 
+/** s10e: required connectors that count as connected only through a demo sign-in (stub model; none otherwise). */
+export function demoOnly(ctx: Pick<WorkflowContext, "home" | "env" | "modelLabel">, connectors: ReadonlyArray<{ id: string; required: boolean }>): string[] {
+  if (ctx.modelLabel !== "stub") return [];
+  return simulatedOnly(ctx.home, ctx.env, connectors.filter((c) => c.required).map((c) => c.id));
+}
+
+/** s10e: stands in for the executor when a required connector is a demo sign-in. It never calls a tool, so the gate
+ * sees nothing and every item ends failed_before_send (runner.ts), with this reason in the batch results. */
+export const DEMO_EXECUTOR: Executor = {
+  async execute(): Promise<ExecResult> {
+    throw new Error(DEMO_SEND_REFUSED);
+  },
+};
+
 /** Sends one live batch through the gate with the connectors.json MCP servers. Used by approve, run and the s09b run loop. */
 export async function sendBatch(ctx: WorkflowContext, id: string, hash: string, token: string | null, connectors: ReadonlyArray<{ id: string; required: boolean }>): Promise<void> {
+  // s10e: the one choke point every send path goes through. A demo sign-in has no server: the real executor is
+  // never started for it and no tool call can happen.
+  if (demoOnly(ctx, connectors).length > 0) {
+    console.error(`brain: ${id}: not sent: a required connector is a demo sign-in`);
+    await executeBatch({ home: ctx.home, workflowId: id, hash, token, executor: DEMO_EXECUTOR, mcpServers: {}, servers: {}, now: ctx.now });
+    return;
+  }
   const { config } = loadConnectorsConfig(ctx.home);
   let mcpServers;
   try {

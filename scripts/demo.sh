@@ -43,6 +43,12 @@ if [ "$plain" = 1 ]; then
 else
   "$BUN" run "$ROOT/brain/fixtures/gen.ts" --out "$DEMO" --start "$start" --encrypted
 fi
+# s10e: "Your voice" is filled on the demo home: a tone pack from the fixture sent mail (stub model, raw demo keys,
+# no model cost), and the fixture founder's facts as the default facts.md of new workflows.
+echo "== tone pack from the fixture sent mail (stub model) + default facts"
+OFFLOAD_KEYS=file "$BUN" run "$ROOT/brain/src/cli.ts" tone build --home "$DEMO" --source fixture --model stub >/dev/null
+OFFLOAD_DEMO_FACTS_OUT="$DEMO/default-facts.md" "$BUN" -e "import { FIXTURE_FACTS } from '$ROOT/brain/fixtures/sent-mail.ts'; import { writeFileSync } from 'node:fs'; writeFileSync(process.env.OFFLOAD_DEMO_FACTS_OUT!, FIXTURE_FACTS, { mode: 0o600 });"
+[ -s "$DEMO/default-facts.md" ] && [ -s "$DEMO/tone/investor_outreach.md" ] || { echo "demo.sh: tone pack or default facts missing" >&2; exit 1; }
 
 [ "$open_app" = 1 ] || { echo "seeded; not opening (--no-open)"; exit 0; }
 

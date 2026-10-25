@@ -62,8 +62,10 @@ export function tagged(prompt: string, tag: string): string | null {
 
 /**
  * Offline model for tests and `--model stub`. Same prompt in, same text out.
- * draft: an email built only from the <recipient> and <facts> blocks; bucket: echoes <bucket_hint>;
- * style_card: a fixed voice section.
+ * draft (s10e): a full email shaped like the user's past ones, built only from the <facts> and <recipient> blocks
+ * (plus the sign-off and the kind of ask from <examples> when the facts lack them): greeting, who and what, one line
+ * on the recipient's fund, raise and traction, the ask, the name. A missing fact shows as [missing: ...]; no number
+ * that is not in the facts. bucket: echoes <bucket_hint>; style_card: voice notes read from the examples.
  */
 export class StubModel implements Model {
   readonly calls: ModelRequest[] = [];
@@ -74,20 +76,71 @@ export class StubModel implements Model {
     const o = this.overrides[req.role];
     if (o !== undefined) return o(req);
     if (req.role === "bucket") return tagged(req.prompt, "bucket_hint") ?? "other";
-    if (req.role === "style_card") {
-      return ["- Short and direct. Gets to the point in the first line.", "- One clear ask, usually a short call.", "- No pleasantries, no filler.", "- Signs with the first name only."].join("\n");
-    }
-    const recipient = JSON.parse(tagged(req.prompt, "recipient") ?? "{}") as Record<string, string>;
-    const facts = parseFactLines(tagged(req.prompt, "facts") ?? "");
-    const first = recipient.firstName ?? "there";
-    const lines = [`Hi ${first},`, ""];
-    if (facts.pitch) lines.push(facts.pitch);
-    const traction = [facts.raise, facts.traction].filter((x) => x !== undefined && x !== "").join(" ");
-    if (traction !== "") lines.push(traction);
-    if (recipient.org) lines.push(`I think it fits ${recipient.org}.`);
-    lines.push("", facts.ask ?? "Open to a short call next week?", "", facts.sign ?? "Muhammad");
-    return lines.join("\n");
+    const examples = parseExamples(tagged(req.prompt, "examples") ?? "");
+    if (req.role === "style_card") return stubStyleCard(examples);
+    return stubDraft(req.prompt, examples);
   }
+}
+
+/** Bodies of an <examples> block ("--- example N", "Subject: ...", blank line, body). */
+function parseExamples(block: string): string[] {
+  return block
+    .split(/^--- example \d+\s*$/m)
+    .map((part) => part.replace(/^\s*Subject:[^\n]*\n/, "").trim())
+    .filter((x) => x !== "");
+}
+
+const lastLine = (text: string) => text.split("\n").map((l) => l.trim()).filter((l) => l !== "").at(-1) ?? null;
+const sentence = (s: string) => (/[.!?]$/.test(s.trim()) ? s.trim() : `${s.trim()}.`);
+
+/** The name the examples sign with, when most of them agree. */
+function exampleSign(examples: readonly string[]): string | null {
+  const names = examples.map(lastLine).filter((l): l is string => l !== null && /^[A-Z][\w'-]{1,30}$/.test(l));
+  const top = names[0];
+  return top !== undefined && names.filter((n) => n === top).length * 2 > names.length ? top : null;
+}
+
+/** The first ask (a line ending in "?") the examples make that carries no number. */
+function exampleAsk(examples: readonly string[]): string | null {
+  for (const e of examples)
+    for (const line of e.split("\n")) {
+      const l = line.trim();
+      const q = /[^.!?]*\?/.exec(l)?.[0]?.trim();
+      if (q !== undefined && q.length > 3 && !/\d/.test(q)) return q;
+    }
+  return null;
+}
+
+function stubDraft(prompt: string, examples: readonly string[]): string {
+  const recipient = JSON.parse(tagged(prompt, "recipient") ?? "{}") as Record<string, string>;
+  const facts = parseFactLines(tagged(prompt, "facts") ?? "");
+  const sign = facts.sign ?? exampleSign(examples) ?? "Muhammad";
+  const first = recipient.firstName !== undefined && recipient.firstName !== "" ? recipient.firstName : "there";
+  const intro: string[] = [];
+  if (facts.company !== undefined) intro.push(facts.role !== undefined ? `I'm ${sign}, ${facts.role} of ${facts.company}.` : `I'm ${sign} from ${facts.company}.`);
+  intro.push(facts.pitch !== undefined ? sentence(facts.pitch) : "[missing: pitch]");
+  const lines = [`Hi ${first},`, "", intro.join(" ")];
+  const org = recipient.org?.trim() ?? "";
+  const notes = recipient.notes?.trim() ?? "";
+  if (notes !== "") lines.push(`${sentence(notes)} That is why I'm writing to you first.`);
+  else if (org !== "") lines.push(`${org} backs tools teams use every day, so I'm writing to you first.`);
+  const raise = facts.raise !== undefined ? sentence(facts.raise).replace(/^raising\b/i, "We are raising") : "[missing: raise]";
+  const traction = facts.traction !== undefined ? (/^traction\b/i.test(facts.traction) ? sentence(facts.traction) : `Traction: ${sentence(facts.traction)}`) : "[missing: traction]";
+  lines.push("", `${raise} ${traction}`, "", facts.ask ?? exampleAsk(examples) ?? "Open to a short call next week?", "", sign);
+  return lines.join("\n");
+}
+
+/** Voice notes a person would write about their own emails, read from the examples. No numbers (code measures). */
+function stubStyleCard(examples: readonly string[]): string {
+  const greet = examples.map((e) => /^(Hi|Hello|Hey|Dear)\b/.exec(e.trim())?.[1]).find((g) => g !== undefined);
+  const sign = exampleSign(examples);
+  const ask = exampleAsk(examples);
+  return [
+    greet !== undefined ? `- Opens with "${greet}" and the first name, then gets to the point in the first line.` : "- Opens with a short greeting and gets to the point in the first line.",
+    "- Short and direct: one idea per paragraph, no pleasantries, no filler.",
+    ask !== null ? `- One clear ask at the end, as a plain question ("${ask}").` : "- One clear ask at the end, as a plain question.",
+    sign !== null ? `- Signs with the first name only ("${sign}").` : "- Signs with the first name only.",
+  ].join("\n");
 }
 
 function parseFactLines(text: string): Record<string, string> {
