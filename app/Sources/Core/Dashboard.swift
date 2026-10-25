@@ -98,7 +98,7 @@ enum PermissionKind: String, Codable, CaseIterable, Sendable {
   /// What it is for, in one line.
   var purpose: String {
     switch self {
-    case .screenRecording: return "Reads on-screen text, to tell one email from another"
+    case .screenRecording: return "Reads on-screen text, to tell one piece of work from another"
     case .accessibility: return "Window titles and browser addresses"
     case .inputMonitoring: return "Counts keys and clicks, never which ones"
     }
