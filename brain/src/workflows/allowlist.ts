@@ -104,9 +104,10 @@ const COMPOSIO_SEND_FIELDS: Record<string, FieldSpec> = {
   attachment: { kind: "empty" },
   thread_id: { kind: "empty" },
   // s13: in the live schema (composio execute GMAIL_SEND_EMAIL --get-schema, 2026-10-25). A different sender or an
-  // appended signature would change what the user approved, so only empty / false.
+  // appended signature would change what the user approved, so only empty / false. include_signature is required:
+  // Composio defaults it to true, so leaving it out would append the signature to approved mail.
   from_email: { kind: "empty" },
-  include_signature: { kind: "fixed", values: [false] },
+  include_signature: { kind: "const", value: false },
   is_html: { kind: "fixed", values: [false] },
   user_id: { kind: "fixed", values: ["me"] },
 };
@@ -468,7 +469,7 @@ export const TOOL_POLICIES: readonly ToolPolicy[] = [
   read("gmail", "gmail-mcp", "read_email"),
   read("gmail", "gmail-mcp", "list_email_labels"),
   // Gmail through Composio.
-  { connector: "gmail", flavor: "composio", tool: "GMAIL_SEND_EMAIL", role: "send", verified: true, fields: COMPOSIO_SEND_FIELDS, expected: (i) => ({ recipient_email: i.to, subject: i.subject, body: i.body }) },
+  { connector: "gmail", flavor: "composio", tool: "GMAIL_SEND_EMAIL", role: "send", verified: true, fields: COMPOSIO_SEND_FIELDS, expected: (i) => ({ recipient_email: i.to, subject: i.subject, body: i.body, include_signature: false }) },
   read("gmail", "composio", "GMAIL_FETCH_EMAILS", true),
   read("gmail", "composio", "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", true),
   // The CRM sheet: one append tool per flavour.

@@ -29,7 +29,7 @@ describe("s16 drafts", () => {
     expect(w.gate.decide(T(c.tool), c.args, true).allow).toBe(true);
     expect(w.journal).toEqual([{ key: c.item.key, role: "draft", tool: T(c.tool) }]);
     expect(w.gate.done.get("send")!.size).toBe(0);
-    expect(w.gate.decide(T("GMAIL_SEND_EMAIL"), { recipient_email: c.item.to, subject: c.item.subject, body: c.item.body }, true).allow).toBe(true);
+    expect(w.gate.decide(T("GMAIL_SEND_EMAIL"), { recipient_email: c.item.to, subject: c.item.subject, body: c.item.body, include_signature: false }, true).allow).toBe(true);
   });
 
   test("DRAFT: drafts are denied in dry runs, for dry-run batches, for changed batches and for items no longer pending", () => {

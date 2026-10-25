@@ -106,7 +106,7 @@ describe("s05b gate allowlist", () => {
     expect(g.decide(CSEND, { recipient_email: "a@fund.com", subject: i0.subject, body: i0.body, extra_recipients: ["x@evil.com"] }, true).allow).toBe(false);
     expect(g.decide(CSEND, { recipient_email: "a@fund.com", subject: i0.subject, body: i0.body, is_html: true }, true).allow).toBe(false);
     expect(g.decide(CSEND, { recipient_email: "a@fund.com", subject: i0.subject, body: i0.body, surprise: 1 }, true).allow).toBe(false);
-    expect(g.decide(CSEND, { recipient_email: "a@fund.com", subject: i0.subject, body: i0.body, is_html: false, user_id: "me" }, true).allow).toBe(true);
+    expect(g.decide(CSEND, { recipient_email: "a@fund.com", subject: i0.subject, body: i0.body, include_signature: false, is_html: false, user_id: "me" }, true).allow).toBe(true);
     const unknownKey = canonicalArgs(policyFor(SEND, { gmail: ["gmail"] }) as never, { ...exact(i0), priority: "high" });
     expect("reason" in unknownKey && unknownKey.reason).toContain("priority");
   });

@@ -132,7 +132,7 @@ describe("s13 composio CLI executor", () => {
     const run = runner.calls.filter((c) => c.argv[1] === "execute");
     expect(run).toHaveLength(1);
     expect(run[0]!.argv.slice(0, 4)).toEqual(["composio", "execute", "GMAIL_SEND_EMAIL", "-d"]);
-    expect(JSON.parse(run[0]!.argv[4]!)).toEqual({ recipient_email: ITEM.to, subject: ITEM.subject, body: ITEM.body });
+    expect(JSON.parse(run[0]!.argv[4]!)).toEqual({ recipient_email: ITEM.to, subject: ITEM.subject, body: ITEM.body, include_signature: false });
     expect(run[0]!.argv.slice(5)).toEqual(["--account", "gmail_live-one"]);
     expect(run[0]!.env.OFFLOAD_TOKEN).toBeUndefined();
     expect(recs).toEqual([expect.objectContaining({ tool: "mcp__composio_cli__GMAIL_SEND_EMAIL", allowed: true, ok: true, itemKey: ITEM.key, role: "send" })]);
