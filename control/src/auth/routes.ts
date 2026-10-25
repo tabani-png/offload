@@ -83,14 +83,19 @@ export function authRoutes(app: App, deps: Deps): void {
       }
       const mac: MacLogin = { redirectUri, state: macState, challenge, authState: state };
       setCookie(c, MAC_LOGIN_COOKIE, b64url(new TextEncoder().encode(JSON.stringify(mac))), { ...cookieOpts, maxAge: 600 });
+    } else if (getCookie(c, MAC_LOGIN_COOKIE)) {
+      deleteCookie(c, MAC_LOGIN_COOKIE, cookieOpts);
     }
     setCookie(c, STATE_COOKIE, state, { ...cookieOpts, maxAge: 600 });
     return c.redirect(deps.workos.authorizationUrl({ state, redirectUri: deps.config.workos.redirectUri }), 302);
   });
 
   app.get("/auth/callback", async (c) => {
-    const mac = readMacLogin(getCookie(c, MAC_LOGIN_COOKIE));
-    if (mac) deleteCookie(c, MAC_LOGIN_COOKIE, cookieOpts);
+    const raw = readMacLogin(getCookie(c, MAC_LOGIN_COOKIE));
+    if (raw) deleteCookie(c, MAC_LOGIN_COOKIE, cookieOpts);
+    // A Mac request left over from another login round trip is not this one's: this is a plain web login.
+    const st = c.req.query("state");
+    const mac = raw && st && safeEqual(raw.authState, st) ? raw : null;
     try {
       return await callback(c, deps, mac);
     } catch (err) {
@@ -138,7 +143,6 @@ async function callback(c: Context<AppEnv>, deps: Deps, mac: MacLogin | null): P
   const state = c.req.query("state");
   const expected = getCookie(c, STATE_COOKIE);
   if (!code || !state || !expected || !safeEqual(state, expected)) throw unauthorized("login state mismatch");
-  if (mac && !safeEqual(mac.authState, state)) throw unauthorized("login state mismatch");
   deleteCookie(c, STATE_COOKIE, cookieOpts);
 
   let auth: Awaited<ReturnType<Deps["workos"]["authenticateWithCode"]>>;

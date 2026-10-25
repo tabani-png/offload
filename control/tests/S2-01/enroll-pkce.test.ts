@@ -158,6 +158,19 @@ describe("DEVICE loopback PKCE enrollment (ADR 0111 §1)", () => {
     expect(loc!.searchParams.get("code")).toBeNull();
   });
 
+  test("DEVICE: a leftover Mac login cookie does not hijack a later web login", async () => {
+    const { q } = loginQuery();
+    const mac = await h.request("GET", `/auth/login?${q}`);
+    const web = await h.request("GET", "/auth/login");
+    const authState = new URL(web.headers.get("location")!).searchParams.get("state")!;
+    const code = h.workos.issueCode(leadLogin());
+    const cb = await h.request("GET", `/auth/callback?code=${code}&state=${authState}`, {
+      headers: { Cookie: `${cookiesOf(mac).split("; ").find((c) => c.startsWith("__Host-offload_mac_login"))}; __Host-offload_oauth_state=${authState}` },
+    });
+    expect(cb.status).toBe(302);
+    expect(cb.headers.get("location")).toBe("/");
+  });
+
   test("DEVICE: admin-issued codes still enroll without a verifier", async () => {
     const { asPrincipal } = await import("../helpers/harness.ts");
     const member = await asPrincipal(h, "member");
