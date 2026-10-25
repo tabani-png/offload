@@ -74,6 +74,14 @@ enum Format {
   }
 
   /// "4 min" of active time (idle removed).
+  /// s10e: "3 min 12 s": minutes and seconds, so a list of emails shows what each one really took.
+  static func spanDurationPrecise(_ s: EvidenceSpan) -> String {
+    let secs = max(1, Int((s.activeMinutes * 60).rounded()))
+    let m = secs / 60, r = secs % 60
+    if m == 0 { return "\(r) s" }
+    return r == 0 ? "\(m) min" : "\(m) min \(r) s"
+  }
+
   static func spanDuration(_ s: EvidenceSpan) -> String {
     let m = max(1, Int(s.activeMinutes.rounded()))
     return "\(m) min"

@@ -23,7 +23,12 @@ struct RailView: View {
         VStack(alignment: .leading, spacing: Tokens.Space.s4) {
           ForEach(rail.hoverLines, id: \.id) { line in
             HStack(spacing: Tokens.Space.s8) {
-              RailMark(role: line.role, observer: line.id == "observer", pulses: false)
+              if line.id == "inbox" {
+                Image(systemName: "tray").symbolStyle(Tokens.TypeScale.Symbol.small).foregroundStyle(p.status(line.role))
+                  .frame(width: Tokens.Size.dot * 2.4)
+              } else {
+                RailMark(role: line.role, observer: line.id == "observer", pulses: false)
+              }
               Text(line.text).textStyle(Tokens.TypeScale.label).monospacedDigit().foregroundStyle(p.ink1)
             }
           }
@@ -55,13 +60,13 @@ struct RailView: View {
         .glass(cornerRadius: Self.width / 2, material: .popover)
         .overlay(alignment: .topTrailing) {
           if let badge = rail.inboxBadge {
-            // s10d: insights waiting are suggestions, not alarms: a neutral count. Amber stays for what needs you.
+            // s10e (M7): amber, as getone's badge: something waits for you. Its count is the inbox's own.
             Text(badge)
               .textStyle(Tokens.TypeScale.badge)
               .monospacedDigit()
-              .foregroundStyle(p.primaryInk)
+              .foregroundStyle(p.onStatus(rail.inboxBadgeRole))
               .frame(minWidth: Tokens.Space.s16, minHeight: Tokens.Space.s16)
-              .background(Circle().fill(p.ink1))
+              .background(Circle().fill(p.status(rail.inboxBadgeRole)))
               .offset(x: Tokens.Space.nudge, y: -Tokens.Space.nudge)
               .transition(.scale.combined(with: .opacity))
           }
@@ -102,8 +107,8 @@ struct RailView: View {
 
   private func tools(_ p: Palette) -> some View {
     VStack(spacing: 0) {
-      toolButton(rail.observerResumable ? "play.fill" : "pause.fill", ink: p.ink2,
-                 label: rail.observerResumable ? "Resume watching" : "Pause watching", action: onPause)
+      // s10e: ▶ only for paused (grey); ↻ for not recording (amber); pause while watching.
+      toolButton(rail.observerTool.symbol, ink: p.ink2, label: rail.observerTool.label, action: onPause)
       toolButton(rail.micRole == .recording ? "mic.fill" : "mic",
                  ink: rail.micRole == .recording ? p.status(.recording) : p.ink2,
                  label: rail.micRole == .recording ? "Stop listening" : "Talk", action: onMic)

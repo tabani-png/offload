@@ -90,8 +90,6 @@ extension MockBrainClient {
   """
 
   static let outreachTone = """
-  Measured from 40 sent emails: 45 to 80 words, 3 or 4 short paragraphs. Opens "Hi <first name>," every time. Ends with "Muhammad" on its own line. One ask, at the end, with a day in it.
-
   Direct and warm. Lead with something specific to them. State numbers plainly and never round up. No "hope this finds you well", no exclamation marks.
   """
 
@@ -226,7 +224,8 @@ extension MockBrainClient {
       state: .active, connectors: [gmail, sheets.applying(["gsheets": .connected])],
       lastRunAt: local(23, 9, 0), nextRunAt: local(26, 9, 0),
       estimatedHoursPerWeek: 21.9, measuredHoursPerWeek: 16.8, needsYouReason: nil, taskId: "t_outreach",
-      arithmetic: "98.4/day × 5 days × 3.0 min = 24.6 h/wk → review 492 × 20 s = 2.7 h/wk → saves 21.9 h/wk (89%)"),
+      arithmetic: "98.4/day × 5 days × 3.0 min = 24.6 h/wk → review 492 × 20 s = 2.7 h/wk → saves 21.9 h/wk (89%)",
+      activatedAt: outreachActivatedAt),
     DashboardAutomation(
       id: "auto_scheduling", workflowId: "wf_scheduling", insightId: "ins_scheduling", name: "Scheduling replies",
       state: .readyForReview, connectors: [gmail, calendar], lastRunAt: nil, nextRunAt: nil,
@@ -260,7 +259,7 @@ extension MockBrainClient {
 
   /// The sample week's rows come from `MockWeek` (s10d), the one source the card, the timeline and the tracked
   /// total all read, so "64.4% of your week" and the outreach bars are the same minutes.
-  private static let timelineRows: [(Int, [(String, String, String, Bool)])] = MockWeek.rows
+  private static let timelineRows: [MockWeek.Day] = MockWeek.rows
 
   private static let barTitles: [String: (String, String?)] = [
     "t_outreach": ("Intro: Offload seed round", "Halden Ventures"),
@@ -269,7 +268,15 @@ extension MockBrainClient {
     "t_other": ("Slack, Linear and Docs", nil),
   ]
 
-  static let timelineDays: [TimelineDay] = timelineRows.map { day, rows in
+  static let timelineDays: [TimelineDay] = days(timelineRows)
+
+  /// s10e: the week before Offload, all by hand: the card's week.
+  static let beforeDays: [TimelineDay] = days(MockWeek.before)
+
+  /// Wed 21 Oct 09:00, when outreach was turned on.
+  static let outreachActivatedAt = local(MockWeek.activatedDay, 9, 0)
+
+  private static func days(_ rows: [MockWeek.Day]) -> [TimelineDay] { rows.map { day, rows in
     func at(_ s: String) -> Date {
       let p = s.split(separator: ":").compactMap { Int($0) }
       return local(day, p[0], p[1])
@@ -279,14 +286,26 @@ extension MockBrainClient {
                   title: barTitles[r.0]?.0 ?? "", counterparty: barTitles[r.0]?.1)
     }
     return TimelineDay(day: String(format: "2026-10-%02d", day), date: local(day, 0, 0), bars: bars)
-  }
+  } }
 
-  /// The bar "Show the evidence" points at: Monday's first outreach block, done by hand.
-  static let evidenceBarId = "bar_19_0"
+  /// The bar "Show the evidence" points at: the card's week, Monday's first outreach block, by hand.
+  static let evidenceBarId = "bar_12_0"
 
   static let sampleDashboard = DashboardData(
     automations: dashboardAutomations, hours: dashboardHours, observing: dashboardObserving,
-    tasks: timelineTasks, days: timelineDays)
+    tasks: timelineTasks, days: timelineDays, beforeDays: beforeDays)
+
+  /// s10e: what "Your voice" measured from the sample's sent mail (the brain's ToneCardDTO.measured).
+  static let sampleMeasured: [String: ToneMeasured] = [
+    "wf_outreach": ToneMeasured(emails: 40, medianWords: 62, p90Words: 80, medianSentences: 5,
+                                greeting: .init(form: "Hi {first},", count: 40), sign: .init(form: "Muhammad", count: 40),
+                                askShare: 0.95, exclamationShare: 0, sample: "Saw Halden led Tessellate's seed.",
+                                source: "40 sent investor emails"),
+    "wf_scheduling": ToneMeasured(emails: 46, medianWords: 24, p90Words: 38, medianSentences: 2,
+                                  greeting: .init(form: "Hi {first},", count: 44), sign: .init(form: "Muhammad", count: 46),
+                                  askShare: 0.9, exclamationShare: 0, sample: "Pick one and I'll send the invite.",
+                                  source: "46 sent scheduling replies"),
+  ]
 }
 
 /// Everything the dashboard window renders. A live client composes it from GET /dashboard, GET /status,
@@ -297,4 +316,6 @@ struct DashboardData: Codable, Equatable, Sendable {
   var observing: ObservingState
   var tasks: [TimelineTask]
   var days: [TimelineDay]
+  /// s10e: the week before the first automation was turned on (the card's week), when the app has it. Live: empty.
+  var beforeDays: [TimelineDay] = []
 }

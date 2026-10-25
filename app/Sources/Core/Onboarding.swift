@@ -81,7 +81,7 @@ struct OnboardingFlow: Equatable, Sendable {
     }
     if requiredMissing.isEmpty { return "All set." }
     let names = requiredMissing.map(\.name).joined(separator: " and ")
-    return "You can continue now. Without \(names), Offload sees less until you turn it on, here or in the dashboard."
+    return "You can continue now. Without \(names), Offload sees less until you turn \(requiredMissing.count == 1 ? "it" : "them") on, here or in the dashboard."
   }
 }
 

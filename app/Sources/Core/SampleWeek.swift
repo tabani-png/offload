@@ -43,6 +43,12 @@ enum SampleWeek {
 
   static let insights: [Insight] = [outreach, scheduling, crm]
 
+  /// s10e: what the inbox offers once outreach is on (the dashboard's world): the insights not yet automated.
+  static var afterInsights: [Insight] {
+    let on = Set(MockBrainClient.dashboardAutomations.filter { $0.state == .active }.map(\.insightId))
+    return insights.filter { !on.contains($0.id) }
+  }
+
   /// The rail for this week (same status as the dashboard's Observing section).
   static var rail: RailModel { RailModel(status: status, automations: dashboard.automations.map(\.railAutomation), micRecording: false) }
 
@@ -71,15 +77,17 @@ extension RailModel {
   /// s10a: what the hover label says, so the dots have names: "Watching · Day 7 of 7 · 1 running · 2 need you".
   /// s10d: one line per dot, observer first: what the hover card lists so every dot has a name.
   var hoverLines: [(id: String, role: StatusRole, text: String)] {
-    dots.map { d in (d.id, d.role, d.id == "observer" ? observerLabel : (dotNames[d.id] ?? d.id)) }
+    let marks = dots.map { d in (id: d.id, role: d.role, text: d.id == "observer" ? observerLabel : (dotNames[d.id] ?? d.id)) }
+    // s10e: the last line names the inbox badge, so the count is never read as one of the dots.
+    return marks + (inboxLine.map { [(id: "inbox", role: inboxBadgeRole, text: $0)] } ?? [])
   }
 
   var hoverLabel: String {
     let autos = dots.dropFirst()
-    let running = autos.filter { $0.role == .working }.count
+    let running = autos.filter { $0.role == .done }.count
     let need = autos.filter { $0.role == .needsYou }.count
     var parts = [observerLabel]
-    if running > 0 { parts.append("\(running) running") }
+    if running > 0 { parts.append("\(running) on") }
     if need > 0 { parts.append(need == 1 ? "1 needs you" : "\(need) need you") }
     return parts.joined(separator: " · ")
   }

@@ -288,7 +288,8 @@ struct S10ETimelineTests {
 
   @Test("the card's week has no Offload runs, and nothing in it is automated")
   func beforeIsByHand() {
-    #expect(!MockBrainClient.beforeDays.flatMap(\.bars).contains(where: \.automated))
+    let anyRun = MockBrainClient.beforeDays.flatMap(\.bars).contains { $0.automated }
+    #expect(!anyRun)
     #expect(MockBrainClient.beforeDays.count == 7)
     #expect(MockBrainClient.sampleEvidence["ins_outreach"]!.allSatisfy { s in
       MockBrainClient.beforeDays.contains { Calendar.current.isDate($0.date, inSameDayAs: s.start) } })
@@ -299,7 +300,8 @@ struct S10ETimelineTests {
     let d = MockBrainClient.sampleDashboard
     let a = try #require(d.automations.first { $0.state == .active })
     let on = try #require(a.activatedAt)
-    let proof = try #require(MeasuredProof(before: d.beforeDays, after: d.days, focus: a.taskId!, activatedAt: on))
+    let proof = try #require(MeasuredProof(before: d.beforeDays, after: d.days, focus: a.taskId!, activatedAt: on,
+                                            now: MockBrainClient.reviewNow))
     #expect(Figures.hours(proof.beforeHoursPerWeek) == "24.6 h")
     #expect(Figures.hours(proof.afterHoursPerWeek) == "7.8 h")
     #expect(Figures.hours(proof.savedHoursPerWeek) == Figures.hours(d.hours.measured!))

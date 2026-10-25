@@ -146,10 +146,12 @@ struct S08TimelineTests {
     let on = MockBrainClient.local(21, 9, 0)
     for b in days.flatMap(\.bars) {
       if b.automated { #expect(b.taskId == "t_outreach" && b.start >= on) }
-      if b.taskId == "t_outreach" && b.start >= on { #expect(b.automated) }
+      // s10e: Offload drafts the batches; replies stay by hand, so by-hand outreach after 09:00 is allowed.
     }
+    #expect(days.flatMap(\.bars).contains { $0.automated })
     for d in days { #expect(d.bars.map(\.start) == d.bars.map(\.start).sorted()) }
-    #expect(days.flatMap(\.bars).contains { $0.id == MockBrainClient.evidenceBarId && !$0.automated })
+    // s10e: the evidence bar is in the card's week, the week before Offload.
+    #expect(MockBrainClient.beforeDays.flatMap(\.bars).contains { $0.id == MockBrainClient.evidenceBarId && !$0.automated })
   }
 }
 

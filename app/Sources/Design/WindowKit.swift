@@ -153,7 +153,8 @@ struct DiffText: View {
         var run = AttributedString(token)
         let mark = seg.changed && marked && DiffEmphasis.marks(token, other: other)
         run.foregroundColor = mark ? p.ink1 : p.ink2
-        if mark { run.underlineStyle = Text.LineStyle(pattern: .solid, color: p.ink3) }
+        // s10e (M2): a tint behind the changed claim words, never an underline (an underline reads as a link).
+        if mark { run.backgroundColor = p.isDark ? Color.white.opacity(DiffTint.dark) : Color.black.opacity(DiffTint.light) }
         s += run
       }
     }
@@ -265,34 +266,23 @@ struct WindowChrome<Content: View>: View {
           .frame(width: Tokens.Layout.sidebar)
           .frame(maxHeight: .infinity, alignment: .top)
           .background(p.sidebarFill)
+          .dimmed(sheet != nil)
           .overlay(alignment: .trailing) { Rectangle().fill(p.barHairline).frame(width: Tokens.Layout.hairline) }
           VStack(spacing: 0) {
             toolbar(p, lights: false)
-            content
+            content.attachedSheet(sheet != nil) { sheet }
           }
         }
       } else {
         VStack(spacing: 0) {
           toolbar(p, lights: true)
-          content
+          // s10e: the same attached sheet the live window draws, under the toolbar.
+          content.attachedSheet(sheet != nil) { sheet }
         }
       }
     }
     .frame(width: width)
     .background(p.canvas)
-    .overlay {
-      if let sheet {
-        ZStack {
-          Rectangle().fill(.black.opacity(p.isDark ? Tokens.Window.scrimDark : Tokens.Window.scrimLight))
-          let sheetShape = RoundedRectangle(cornerRadius: Tokens.Window.sheetRadius, style: .continuous)
-          sheet
-            .clipShape(sheetShape)
-            .overlay(sheetShape.strokeBorder(p.isDark ? .white.opacity(0.12) : .black.opacity(0.10), lineWidth: Tokens.Layout.hairline))
-            .compositingGroup()
-            .shadow(color: .black.opacity(p.isDark ? 0.5 : 0.22), radius: Tokens.Window.shadowRadius, x: 0, y: Tokens.Window.shadowY)
-        }
-      }
-    }
     .clipShape(shape)
     .overlay(shape.strokeBorder(p.isDark ? .white.opacity(Tokens.Window.ringDark) : .black.opacity(Tokens.Window.ringLight), lineWidth: Tokens.Layout.hairline))
     .compositingGroup()

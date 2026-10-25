@@ -121,7 +121,11 @@ struct OnboardingView: View {
           SecondaryButton(title: model.seeding ? "Preparing demo week…" : "Use demo week") { model.useDemoWeek() }
             .disabled(model.seeding)
         }
-        PrimaryButton(title: model.flow.primaryTitle, key: "↩") { model.next() }
+        if case .openSettings = model.flow.primary {
+          SecondaryButton(title: model.flow.primaryTitle, key: "⌘↩") { model.next() }
+        } else {
+          PrimaryButton(title: model.flow.primaryTitle, key: "↩") { model.next() }
+        }
       }
       .padding(.top, Tokens.Space.s32)
     }
@@ -197,13 +201,18 @@ private struct PermissionsStep: View {
                 Text(perm.kind?.importance ?? (perm.required ? "Recommended" : "Optional"))
                   .textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
               }
-              Text(perm.purpose).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3).lineLimit(1)
+              Text(perm.purpose).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: Tokens.Space.s8)
             if perm.grant == .granted {
               Text("Allowed").textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
             } else if let url = perm.settingsURL {
-              SecondaryButton(title: "Open Settings") { NSWorkspace.shared.open(url) }
+              if flow.primary == .openSettings(perm.kind ?? .screenRecording), perm.kind == .screenRecording {
+                PrimaryButton(title: "Open Settings", key: "↩") { NSWorkspace.shared.open(url) }
+              } else {
+                SecondaryButton(title: "Open Settings") { NSWorkspace.shared.open(url) }
+              }
             }
           }
           .padding(.horizontal, Tokens.Space.s12).frame(minHeight: Tokens.Size.toolbar + Tokens.Space.s4)
@@ -291,7 +300,15 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
       guard let self, e.window === self.window else { return e }
       if e.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) { return e }
-      if ReviewKey.returnKeyCodes.contains(e.keyCode) { self.model.next(); return nil }
+      if ReviewKey.returnKeyCodes.contains(e.keyCode) {
+        // s10e (M8): while Screen Recording is off, ↩ opens its Settings pane (the white primary); ⌘↩ continues.
+        if case .openSettings(let k) = self.model.flow.primary, !e.modifierFlags.contains(.command) {
+          NSWorkspace.shared.open(k.settingsURL)
+        } else {
+          self.model.next()
+        }
+        return nil
+      }
       if e.keyCode == ReviewKey.escapeKeyCode { self.window.performClose(nil); return nil }
       return e
     }

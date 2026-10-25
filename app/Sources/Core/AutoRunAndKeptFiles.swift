@@ -120,7 +120,18 @@ struct KeptFile: Equatable, Identifiable, Sendable {
   }
 
   init(_ d: KeptFileDTO) {
-    self.init(path: d.path, kind: d.kind, note: PlainWords.clean(d.note), bytes: Int(d.bytes))
+    self.init(path: d.path, kind: d.kind, note: Self.shortNote(d.kind) ?? PlainWords.clean(d.note), bytes: Int(d.bytes))
+  }
+
+  /// s10e (P1): one short line per kind, under 60 characters, so no note truncates mid-word.
+  static func shortNote(_ kind: String) -> String? {
+    switch kind {
+    case "recipients": return KeptFileCopy.footnote
+    case "facts": return "What drafts may say about you. Yours to edit."
+    case "send_log": return "One line per email sent: who, when, subject."
+    case "tone_card": return "Your notes on how you write."
+    default: return nil
+    }
   }
 }
 

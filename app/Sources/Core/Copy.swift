@@ -88,13 +88,15 @@ struct EvidenceCopy: Equatable, Sendable {
     trailing = "\(inApp.count) of \(Format.count(insight.instanceCount))"
     rows = inApp.map { s in
       let t = EvidenceTitle.make(title: s.title, counterparty: s.counterparty)
-      return Row(id: s.id, time: Format.spanTime(s), who: t.lead, subject: t.subject, duration: Format.spanDuration(s))
+      // s10e: the measured time of each email, not a rounded average ("3 min 12 s").
+      return Row(id: s.id, time: Format.spanTime(s), who: t.lead, subject: t.subject, duration: Format.spanDurationPrecise(s))
     }
     if others.isEmpty {
       elsewhere = nil
     } else {
       let names = Array(Set(others.map(Self.appName))).sorted()
-      elsewhere = "Also \(others.count) in \(names.joined(separator: " and ")), part of the same task"
+      let sessions = others.count == 1 ? "1 session" : "\(others.count) sessions"
+      elsewhere = "Plus \(sessions) in \(names.joined(separator: " and ")) that \(others.count == 1 ? "was" : "were") part of this task"
     }
   }
 
@@ -216,7 +218,7 @@ struct ReviewCopy: Equatable, Sendable {
     dryRunTitle = "Dry run"
     sampleChip = sample ? "Sample drafts" : nil
     oursTitle = sample ? "Sample draft" : "Our draft"
-    diffNote = "Underlined: words in the draft that your email did not use."
+    diffNote = "Highlighted: words in the draft that your email did not use."
     if let d = dryRun {
       let n = d.items.count
       let what = n == 1 ? "1 of last week's emails" : "\(n) of last week's emails"
@@ -293,6 +295,29 @@ struct ConfirmCopy: Equatable, Sendable {
     [title, subtitle, headline, pendingNote ?? "", footnote, turnOnTitle, connectTitle ?? "", blockedReason ?? ""]
       + people.flatMap { [$0.name, $0.org, $0.email] } + lines.map(\.text) + blockers
   }
+}
+
+// MARK: s10e empty states and short copy
+
+enum InboxEmptyCopy {
+  /// Under "Nothing to decide.": after the learning week says the week is done, not just "still watching".
+  static func message(daysStored: Int, windowDays: Int) -> String {
+    daysStored >= windowDays
+      ? "Week 1 done. Nothing repeated enough yet.\nStill watching."
+      : "Still watching. Offload speaks up\nwhen a task starts to repeat."
+  }
+}
+
+enum AutomationsEmptyCopy {
+  static let title = "No automations yet."
+  static let message = "Approve a workflow from the inbox and it shows up here\nwith the hours it saves."
+  static let action = "Open the inbox"
+}
+
+enum KeptFileCopy {
+  static let footnote = "Who auto-send may write to. Yours to edit."
+  static let section = "Kept until you delete them"
+  static let footer = "What Offload saw is deleted after 7 days. Files you gave it stay."
 }
 
 // MARK: dashboard
@@ -374,7 +399,8 @@ struct DashboardCopy: Equatable, Sendable {
         lastRun: Format.runTime(a.lastRunAt, now: now, past: true),
         nextRun: Self.nextRun(a, now: now),
         saved: measured.map(Figures.hours) ?? Figures.savedHours(value: a.estimatedHoursPerWeek, arithmetic: a.arithmetic) ?? "",
-        savedQualifier: measured == nil ? "estimated" : "measured")
+        // s10e: a row that never ran has saved nothing; it could save this much.
+        savedQualifier: measured != nil ? "measured" : (a.lastRunAt == nil ? "could save" : "estimated"))
     }
     let minutes = d.days.reduce(0.0) { $0 + ($1.trackedMinutes ?? $1.activeMinutes) }
     tracked = "\(Figures.hours(minutes / 60)) tracked"

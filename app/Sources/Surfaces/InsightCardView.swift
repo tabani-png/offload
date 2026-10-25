@@ -260,7 +260,7 @@ struct InsightCardView: View {
       .padding(.horizontal, Tokens.Space.s20)
       .padding(.top, Tokens.Space.s16)
       EmptyState(title: "Nothing to decide.",
-                 message: "Still watching. Offload speaks up\nwhen a task starts to repeat.",
+                 message: InboxEmptyCopy.message(daysStored: Self.day(observerLabel).0, windowDays: Self.day(observerLabel).1),
                  statusLabel: observerLabel)
         .padding(.top, Tokens.Space.s24)
         .padding(.bottom, Tokens.Space.s32)
@@ -269,8 +269,19 @@ struct InsightCardView: View {
 
   // MARK: hint
 
+  /// "Watching · Day 7 of 7" → (7, 7); no day → (0, 7).
+  static func day(_ label: String) -> (Int, Int) {
+    let n = label.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+    return n.count >= 2 ? (n[n.count - 2], n[n.count - 1]) : (0, 7)
+  }
+
   private var hint: some View {
     HintPill {
+      // s10e (P6): with more than one card, J and K move between them.
+      if state.insights.count > 1 {
+        Keycap(label: "J"); Keycap(label: "K")
+        Text("move").padding(.trailing, Tokens.Space.s8)
+      }
       // s10d: one way out in the hint. E still dismisses an insight for good; it is in the 3 row's tooltip.
       Keycap(label: "1"); Keycap(label: "2"); Keycap(label: "3")
       Text("choose").padding(.trailing, Tokens.Space.s8)

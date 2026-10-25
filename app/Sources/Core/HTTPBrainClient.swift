@@ -173,6 +173,16 @@ struct HTTPBrainClient: BrainClient {
     try await get(ConnectorsResponse.self, "connectors").states()
   }
 
+  /// s10e: POST /connectors/:id/link. The brain starts Composio's sign-in (or its demo simulation); nothing is sent.
+  func startLink(connectorId: String) async throws -> ConnectLink {
+    try await call(ConnectLinkDTO.self, "POST", "connectors/\(Self.segment(connectorId))/link", body: [:]).toLink()
+  }
+
+  /// s10e: GET /connectors/:id/link, polled by the connect sheet.
+  func linkStatus(connectorId: String) async throws -> ConnectLink {
+    try await get(ConnectLinkDTO.self, "connectors/\(Self.segment(connectorId))/link").toLink()
+  }
+
   func workflow(id: String) async throws -> Workflow {
     let dto = try await get(WorkflowDTO.self, "workflows/\(Self.segment(id))")
     return dto.toWorkflow(dryRunHash: dto.pendingDryRunHash)
@@ -310,6 +320,7 @@ enum DashboardComposer {
       let wf = byId[a.workflowId ?? a.id]
       var m = a.toDashboardAutomation(taskId: wf?.taskId)
       m.autoRun = wf?.autoRun ?? false
+      m.activatedAt = wf?.activatedAt.map(BrainWire.date(ms:))
       m.autoRunPeople = wf?.autoRunPin?.pinnedRecipients.count
       m.connectors = m.connectors.map { $0.applying(connectors) }
       // The brain's reasons are fragments ("connect Gmail first"); the row shows sentences.

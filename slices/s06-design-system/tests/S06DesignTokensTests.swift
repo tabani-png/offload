@@ -99,7 +99,7 @@ struct S06StatusRoleTests {
   func roles() {
     #expect(StatusRole.forObserver(.watching) == .working)
     #expect(StatusRole.forObserver(.paused) == .neutral)
-    #expect(StatusRole.forAutomation(.running) == .working)
+    #expect(StatusRole.forAutomation(.running) == .done)  // s10e M7: on and healthy is green, as on the dashboard
     #expect(StatusRole.forAutomation(.awaitingApproval) == .needsYou)
     #expect(StatusRole.forAutomation(.failed) == .needsYou)
     #expect(StatusRole.forAutomation(.done) == .done)

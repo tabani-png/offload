@@ -310,8 +310,11 @@ extension TimelineResponse {
     let bars = spans.sorted { $0.start < $1.start }.map { s -> TimelineBar in
       let start = BrainWire.date(ms: s.start)
       let automated = s.taskId.flatMap { activeSince[$0] }.map { start >= $0 } ?? false
-      return TimelineBar(id: s.id, taskId: s.taskId ?? "other", start: start, end: BrainWire.date(ms: s.end),
-                         automated: automated, title: s.title, counterparty: nil)
+      var b = TimelineBar(id: s.id, taskId: s.taskId ?? "other", start: start, end: BrainWire.date(ms: s.end),
+                          automated: automated, title: s.title, counterparty: nil)
+      // s10e: the chart draws the brain's active minutes, so the bars add up to the figures.
+      b.activeMinutes = s.activeMinutes
+      return b
     }
     return TimelineDay(day: day, date: calendar.startOfDay(for: date), bars: bars, trackedMinutes: activeMinutes)
   }

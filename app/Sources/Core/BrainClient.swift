@@ -30,6 +30,10 @@ protocol BrainClient: Sendable {
   // s10d (brain s10b): auto-send with its pin, and the files kept until you delete them.
   func setAutoRun(workflowId: String, enabled: Bool) async throws -> AutoRunResult
   func keptFiles() async throws -> [KeptFile]
+
+  // s10e: connect a tool from inside Offload (POST/GET /connectors/:id/link). Never approves or sends.
+  func startLink(connectorId: String) async throws -> ConnectLink
+  func linkStatus(connectorId: String) async throws -> ConnectLink
 }
 
 enum BrainError: Error, Equatable {
@@ -91,7 +95,29 @@ struct MockBrainClient: BrainClient {
 
   func automations() async throws -> [Automation] { Self.sampleAutomations }
 
-  func connectorStates() async throws -> [String: ConnectorState] { Self.connectorStates }
+  func connectorStates() async throws -> [String: ConnectorState] {
+    var s = Self.connectorStates
+    for id in MockLinks.connected { s[id] = .connected }
+    return s
+  }
+
+  /// s10e: a deterministic demo sign-in: waiting, then connected after `MockLinks.delay` seconds. No browser.
+  func startLink(connectorId: String) async throws -> ConnectLink {
+    MockLinks.start(connectorId)
+    let name = [Self.gmail, Self.sheets, Self.calendar, Self.hubspot].first { $0.id == connectorId }?.name ?? connectorId
+    return ConnectLink(connectorId: connectorId, name: name, via: connectorId == "gmail" ? .gmailMCP : .composio,
+                       state: .waiting, url: nil, simulated: true,
+                       message: "Demo sign-in: no browser opens and nothing is sent.", startedAt: Date(), connectedAt: nil)
+  }
+
+  func linkStatus(connectorId: String) async throws -> ConnectLink {
+    let name = [Self.gmail, Self.sheets, Self.calendar, Self.hubspot].first { $0.id == connectorId }?.name ?? connectorId
+    let done = MockLinks.poll(connectorId)
+    return ConnectLink(connectorId: connectorId, name: name, via: connectorId == "gmail" ? .gmailMCP : .composio,
+                       state: done ? .connected : .waiting, url: nil, simulated: true,
+                       message: done ? "\(name) is connected." : "Demo sign-in: no browser opens and nothing is sent.",
+                       startedAt: nil, connectedAt: done ? Date() : nil)
+  }
 
   func workflow(id: String) async throws -> Workflow {
     guard let w = Self.sampleWorkflows.first(where: { $0.id == id }) else { throw BrainError.notFound(id) }
@@ -168,7 +194,8 @@ struct MockBrainClient: BrainClient {
     // Wall-clock times in the viewer's own time zone, so "09:14" reads as 09:14 wherever it renders.
     var cal = Calendar(identifier: .gregorian)
     cal.timeZone = .current
-    let start = cal.date(from: DateComponents(year: 2026, month: 10, day: 19 + day, hour: h, minute: m))!
+    // s10e: the card's week is the week before Offload (MockWeek.before), Mon 12 to Fri 16.
+    let start = cal.date(from: DateComponents(year: 2026, month: 10, day: 12 + day, hour: h, minute: m))!
     return EvidenceSpan(id: id, start: start, end: start.addingTimeInterval(minutes * 60 + 20), activeMinutes: minutes,
                         app: app, title: title, urlHost: host, eventIds: ["\(id)_ev1", "\(id)_ev2"],
                         counterparty: who)

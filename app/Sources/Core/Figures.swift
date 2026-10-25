@@ -61,6 +61,9 @@ enum Figures {
   }
 
   /// "Saves 2.9 min": a dry-run item's saving, never a bare negative number in green.
+  /// "45 min"
+  static func minutes(_ m: Double) -> String { "\(Int(m.rounded())) min" }
+
   static func minutesSaved(_ m: Double) -> String { "Saves \(String(format: "%.1f", locale: posix, m)) min" }
 
   /// "3.2 min by hand, 20 s to review"

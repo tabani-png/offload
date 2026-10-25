@@ -4,6 +4,8 @@ import Foundation
 enum ReviewSheet: Equatable {
   case skill(editing: Bool)
   case confirm
+  /// s10e: connecting a tool (from the confirm sheet, a chip or the footer). Carries the connector id.
+  case connect(String)
 }
 
 /// Main-actor wrapper around the pure `ApprovalFlow`: owns the clock, the countdown timer, the dry-run calls and
@@ -28,6 +30,12 @@ final class ReviewModel: ObservableObject {
   @Published var skillEdit: SkillDoc?
   @Published var toneDraft: String
   @Published var skillDraft: String
+
+  /// s10e: the connect sheet's session while it is up.
+  @Published private(set) var connect: ConnectSession?
+  /// s10e: "Edit notes" under the voice facts shows the text box.
+  @Published var editingVoice = false
+  var onOpenURL: ((URL) -> Void)?
 
   var onApproved: ((Workflow) -> Void)?
   var onDiscarded: ((String) -> Void)?
@@ -159,6 +167,15 @@ final class ReviewModel: ObservableObject {
   var copy: ReviewCopy { ReviewCopy(workflow: workflow, dryRun: dryRun, running: runningDryRun) }
 
   func send(_ key: ReviewKey) {
+    // s10e: while the connect sheet is up, Esc goes back and ⌘↩ / ↩ press its primary.
+    if let s = connect, case .connect = sheet {
+      switch key {
+      case .escape: s.cancel()
+      case .approve, .confirm: s.primary()
+      default: break
+      }
+      return
+    }
     // s10a: Turn on is disabled while a connector a later step needs is missing; ↩ and ⌘↩ say why instead.
     // s10d: the reason is already in the sheet, once, as the amber lines. ↩ / ⌘↩ press the sheet's primary, which
     // while blocked is "Connect …".
@@ -166,15 +183,46 @@ final class ReviewModel: ObservableObject {
       connectFirstMissing()
       return
     }
+    // s10e (M8): in the review itself, while a step is blocked the footer's primary is Connect, on ⌘↩.
+    if key == .approve, case .reviewing = flow.phase, sheet == nil, case .connect(let c) = ReviewPrimary.forWorkflow(workflow) {
+      openConnect(c)
+      return
+    }
     apply(flow.handle(key, at: clock()))
   }
 
+  /// The footer's Approve, pressed with the mouse while it is secondary: opens the confirmation as ⌘↩ used to.
+  func approveNow() { apply(flow.handle(.approve, at: clock())) }
+
   /// The confirm sheet's primary while Turn on is blocked.
   func connectFirstMissing() {
-    if let c = flow.plan.missing.first { onConnect?(c) }
+    if let c = flow.plan.missing.first { openConnect(c) }
+  }
+
+  /// s10e: the connect sheet, over the confirm sheet's place when that is up (and back to it after).
+  func openConnect(_ c: Connector) {
+    let s = ConnectSession(connector: c, returnsToConfirm: flow.isConfirmOpen, client: client, clock: clock)
+    s.onOpenURL = { [weak self] in self?.onOpenURL?($0) }
+    s.onConnected = { [weak self] k in self?.connected(k) }
+    s.onClose = { [weak self] in self?.closeConnect() }
+    connect = s
+    sheet = .connect(c.id)
+  }
+
+  func closeConnect() {
+    connect = nil
+    sheet = flow.isConfirmOpen ? .confirm : nil
+  }
+
+  private func connected(_ c: Connector) {
+    flow.updateConnectors([:], connected: c)
+    Task {
+      if let states = try? await client.connectorStates() { flow.updateConnectors(states, connected: c) }
+    }
   }
 
   func dismissSheet() {
+    if case .connect = sheet { connect?.cancel(); return }
     if sheet == .confirm { send(.escape) } else { sheet = nil }
   }
 
@@ -274,5 +322,16 @@ final class ReviewModel: ObservableObject {
   func preview(keys: [(ReviewKey, Date)], sheet: ReviewSheet? = nil) {
     for (k, at) in keys { _ = flow.handle(k, at: at) }
     self.sheet = sheet ?? (flow.isConfirmOpen ? .confirm : nil)
+  }
+
+  /// Snapshots: the connect sheet for `c` in a fixed phase (nil link = the intro).
+  func previewConnect(_ c: Connector, link: ConnectLink?) {
+    openConnect(c)
+    if let link { connect?.preview(link) }
+  }
+
+  /// Snapshots: as after connecting `c`, back on the confirm sheet.
+  func previewConnected(_ c: Connector) {
+    flow.updateConnectors([:], connected: c)
   }
 }

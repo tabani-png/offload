@@ -215,8 +215,9 @@ struct S10ATimelineTests {
 
   @Test("the evidence pointer lands on a drawn (merged) bar")
   func evidenceBar() {
+    // s10e: drawn bars are packed (TimelinePack), and the evidence is in the card's week.
     let b = SampleWeek.dashboard.evidenceBar
-    let drawn = SampleWeek.dashboard.days.flatMap { TimelineMerge.merge($0.bars) }
+    let drawn = SampleWeek.dashboard.beforeDays.flatMap { TimelinePack.display($0.bars, focus: "t_outreach") }
     #expect(b.map { bar in drawn.contains { $0.id == bar.id } } == true)
   }
 }

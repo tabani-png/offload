@@ -158,7 +158,7 @@ struct S07WireContractTests {
   func dashboard() throws {
     let autos = try decode(DashboardResponse.self, dashboardJSON).toAutomations()
     #expect(autos.map(\.status) == [.running, .awaitingApproval])
-    #expect(autos.map { StatusRole.forAutomation($0.status) } == [.working, .needsYou])
+    #expect(autos.map { StatusRole.forAutomation($0.status) } == [.done, .needsYou])  // s10e M7
     #expect(autos[0].hoursSavedMeasured == nil)
   }
 }

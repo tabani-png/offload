@@ -106,7 +106,6 @@ private extension NSEvent {
 @MainActor
 final class ReviewWindowController: TitledWindowController {
   let model: ReviewModel
-  private var sheetWindow: NSWindow?
   private var bag: Set<AnyCancellable> = []
 
   init(model: ReviewModel) {
@@ -118,7 +117,8 @@ final class ReviewWindowController: TitledWindowController {
     let host = NSHostingView(rootView: ReviewView(model: model))
     host.sceneBridgingOptions = []  // our title and subtitle, not SwiftUI's (it would reset the subtitle)
     window.contentView = host
-    model.$sheet.removeDuplicates().sink { [weak self] in self?.present($0) }.store(in: &bag)
+    // s10e: a new sheet takes the keys: nothing in the page keeps focus behind it.
+    model.$sheet.removeDuplicates().sink { [weak self] s in if s != nil { self?.window.makeFirstResponder(nil) } }.store(in: &bag)
     model.loadDryRunIfNeeded()
     model.loadEditables()
   }
@@ -150,31 +150,7 @@ final class ReviewWindowController: TitledWindowController {
     return true
   }
 
-  private func present(_ sheet: ReviewSheet?) {
-    if let open = sheetWindow {
-      window.endSheet(open)
-      sheetWindow = nil
-    }
-    guard let sheet else { return }
-    let root: AnyView
-    switch sheet {
-    case .confirm: root = AnyView(ConfirmSheet(model: model))
-    case .skill(let editing):
-      root = AnyView(SkillSheet(model: model, editing: editing, onReveal: { path in
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-      }))
-    }
-    let host = NSHostingView(rootView: root)
-    let w = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.titled], backing: .buffered, defer: false)
-    w.contentView = host
-    sheetWindow = w
-    window.beginSheet(w) { [weak self] _ in
-      // A sheet closed by AppKit (not by the model) still has to reset the flow.
-      guard let self, self.sheetWindow === w else { return }
-      self.sheetWindow = nil
-      if self.model.sheet != nil { self.model.dismissSheet() }
-    }
-  }
+  /// s10e: sheets are drawn inside the window by ReviewView (attached under the toolbar); nothing to present here.
 }
 
 // MARK: dashboard
@@ -185,7 +161,6 @@ final class ReviewWindowController: TitledWindowController {
 final class DashboardWindowController: TitledWindowController {
   let model: DashboardModel
   var onToggle: (() -> Void)?
-  private var sheetWindow: NSWindow?
   private var bag: Set<AnyCancellable> = []
 
   init(model: DashboardModel) {
@@ -212,27 +187,17 @@ final class DashboardWindowController: TitledWindowController {
     window.setFrame(frame, display: false)
     window.setFrameUsingName("OffloadDashboard2")
     model.$section.removeDuplicates().sink { [weak self] s in self?.window.subtitle = s.title }.store(in: &bag)
-    model.$autoSend.map { $0 != nil }.removeDuplicates().sink { [weak self] open in self?.presentAutoSend(open) }.store(in: &bag)
   }
 
   override var tracksSidebar: Bool { true }
 
-  private func presentAutoSend(_ open: Bool) {
-    if let w = sheetWindow { window.endSheet(w); sheetWindow = nil }
-    guard open else { return }
-    let host = NSHostingView(rootView: AutoSendSheetView(model: model))
-    let w = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.titled], backing: .buffered, defer: false)
-    w.contentView = host
-    sheetWindow = w
-    window.beginSheet(w) { [weak self] _ in
-      guard let self, self.sheetWindow === w else { return }
-      self.sheetWindow = nil
-      self.model.dismissAutoSend()
-    }
-  }
-
   override func handleKey(_ e: NSEvent) -> Bool {
     guard owns(e) else { return false }
+    if let c = model.connect {
+      if e.keyCode == ReviewKey.escapeKeyCode { c.cancel(); return true }
+      if ReviewKey.returnKeyCodes.contains(e.keyCode) { c.primary(); return true }
+      return false
+    }
     if model.autoSend != nil {
       if e.keyCode == ReviewKey.escapeKeyCode { model.dismissAutoSend(); return true }
       if ReviewKey.returnKeyCodes.contains(e.keyCode) {

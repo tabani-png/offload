@@ -43,6 +43,11 @@ enum TimelineInk {
   static let darkSurface = darkCanvas.over(.white, alpha: 0.045)
   static let lightSurface = RGB.white
 
+  /// s10e (P3): the focus task by hand is a tinted bar with an 85% ring, so the chart never outshouts the one white
+  /// button. Still at least 3:1 against the box (tested in S06's ladder for rank 3 below it).
+  static let focusFill: Double = 0.7
+  static let focusRing: Double = 0.85
+
   static func opacity(rank: Int, dark isDark: Bool) -> Double {
     let ladder = isDark ? dark : light
     return ladder[min(max(0, rank), ladder.count - 1)]
@@ -118,12 +123,26 @@ enum TimelineMerge {
 }
 
 extension DashboardData {
-  /// The drawn (merged, s10a) bar that holds the top insight's first span, by hand when there is one.
+  /// The drawn (packed, s10e) bar that holds the top insight's first span, by hand: in the card's week when the app
+  /// has it, else this week.
   var evidenceBar: TimelineBar? {
-    let all = days.flatMap(\.bars)
-    guard let raw = all.first(where: { $0.id == MockBrainClient.evidenceBarId }) ?? all.first(where: { !$0.automated }) ?? all.first,
-          let day = days.first(where: { $0.bars.contains { $0.id == raw.id } }) else { return nil }
-    return TimelineMerge.display(day.bars).first { $0.start <= raw.start && raw.start < $0.end } ?? raw
+    for week in [beforeDays, days] {
+      let all = week.flatMap(\.bars)
+      guard let raw = all.first(where: { $0.id == MockBrainClient.evidenceBarId }) ?? all.first(where: { !$0.automated && $0.taskId == focusTaskId })
+              ?? all.first(where: { !$0.automated }),
+            let day = week.first(where: { $0.bars.contains { $0.id == raw.id } }) else { continue }
+      return TimelinePack.display(day.bars, focus: focusTaskId).first { ($0.members ?? [$0.id]).contains(raw.id) } ?? raw
+    }
+    return nil
+  }
+
+  /// The task with the most time (tint 0): the one the chart draws in ink.
+  var focusTaskId: String? { tasks.first { $0.tint == 0 }?.id }
+
+  /// The week the evidence bar is in.
+  var evidenceWeek: TimelineWeek {
+    guard let b = evidenceBar else { return .this }
+    return beforeDays.flatMap(\.bars).contains { ($0.id == b.id) || (b.members ?? []).contains($0.id) } ? .before : .this
   }
 }
 

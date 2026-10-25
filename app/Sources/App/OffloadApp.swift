@@ -90,7 +90,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     card = CardController(model: model, rail: rail)
     card.onDashboard = { [weak self] in self?.openDashboard() }
     model.onClose = { [weak self] in self?.card.hide() }
-    model.onConnect = { [weak self] c in self?.showConnectHelp(c) }
+    // s10e: a Connect… chip on the card opens the connect sheet in the dashboard (the card is not a window).
+    model.onConnect = { [weak self] c in self?.card.hide(); self?.openDashboard(); self?.dashboardModel.openConnect(c) }
     model.onTogglePause = { [weak self] paused in self?.setObserverPaused(paused) }
     model.onCommit = { [weak self] action in
       NSLog("Offload: committed %@", String(describing: action))
@@ -101,7 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
     }
     dashboardModel.onOpenWorkflow = { [weak self] id in self?.openReview(workflowId: id) }
-    dashboardModel.onConnect = { [weak self] c in self?.showConnectHelp(c) }
+    dashboardModel.onOpenInbox = { [weak self] in self?.card.show() }
     dashboardModel.onTogglePause = { [weak self] paused in self?.setObserverPaused(paused) }
     dashboardModel.onOpenURL = { NSWorkspace.shared.open($0) }
     dashboardModel.onReveal = { path in
@@ -376,7 +377,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let stub = BrainLaunch.model(environment: Self.environment(demo: options.demo), demo: options.demo) == "stub"
     let m = ReviewModel(workflow: w, dryRun: dryRun, client: client,
                         dryRunLimit: stub ? max(3, options.dryRunLimit) : options.dryRunLimit)
-    m.onConnect = { [weak self] c in self?.showConnectHelp(c) }
+    m.onOpenURL = { NSWorkspace.shared.open($0) }
     m.onApproved = { [weak self] _ in Task { await self?.dashboardModel.load() } }
     m.onDiscarded = { [weak self] _ in self?.review?.window.close() }
     let c = ReviewWindowController(model: m)
@@ -405,12 +406,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                  "rerun": .rerun, "edit": .edit, "discard": .discard][k]
           if let key { m.send(key) }
           if key == .approve {
+            // s10e: the sheet is drawn in the review window, so the capture is that window.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-              if let sheet = window.attachedSheet { self?.qaRecord("review-confirm", sheet) }
+              if m.sheet == .confirm { self?.qaRecord("review-confirm", window) }
             }
           }
         }
       }
+    }.store(in: &qaBag)
+    // s10e: the connect sheet's moments, for the live captures.
+    m.$connect.compactMap { $0 }.sink { [weak self] session in
+      self?.qaRecord("review-connect", window)
+      session.$flow.map(\.phase).removeDuplicates().sink { [weak self] phase in
+        if phase == .waiting { self?.qaRecord("review-connect-waiting", window) }
+        if phase == .connected { self?.qaRecord("review-connected", window) }
+      }.store(in: &self!.qaBag)
+    }.store(in: &qaBag)
+    m.$sheet.removeDuplicates().dropFirst().sink { [weak self] sheet in
+      if sheet == .confirm, m.connect == nil, m.flow.plan.canTurnOn { self?.qaRecord("review-confirm-ready", window) }
     }.store(in: &qaBag)
     m.$message.compactMap { $0 }.sink { [weak self] msg in
       NSLog("Offload QA review message: %@", msg)
@@ -451,27 +464,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try? line.write(toFile: path, atomically: true, encoding: .utf8)
       }
     }
-  }
-
-  /// Connect… / Sign in… on a chip or the confirm sheet. The brain reads connectors from its own settings; the app
-  /// never asks for or stores a password itself. s10d: plain words, and a sheet on the window you are in (stacked on
-  /// the confirm sheet when that is up), never a modal that stops the app.
-  private func showConnectHelp(_ c: Connector) {
-    let alert = NSAlert()
-    if c.state == .missingEnv {
-      alert.messageText = "Sign in to \(c.name)"
-      alert.informativeText = "\(c.name) is set up on this Mac but signed out, so steps that use it wait. Signing in from inside Offload is not ready yet: whoever set up Offload here can sign it back in. Offload checks again each time this window opens."
-    } else {
-      alert.messageText = "Connect \(c.name)"
-      alert.informativeText = "Offload is not connected to \(c.name) yet, so steps that use it wait. Connecting accounts from inside Offload is not ready yet: whoever set up Offload here can connect \(c.name). Offload checks again each time this window opens."
-    }
-    alert.addButton(withTitle: "OK")
-    NSApp.activate(ignoringOtherApps: true)
-    let host = review?.window.isKeyWindow == true ? review?.window : (dashboard?.window.isKeyWindow == true ? dashboard?.window : (review?.window ?? dashboard?.window))
-    guard let base = host else { alert.runModal(); return }
-    let on = base.attachedSheet ?? base
-    alert.beginSheetModal(for: on) { _ in }
-    if let r = review?.window, base === r { qaRecord("review-message", r) }
   }
 
   // MARK: QA

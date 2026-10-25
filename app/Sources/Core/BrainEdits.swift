@@ -15,6 +15,8 @@ struct ToneCard: Codable, Equatable, Sendable {
   var path: String
   var updatedAt: Double?
   var maxBytes: Int
+  /// s10e: measured from your sent mail (brain ToneCardDTO.measured); nil from an older brain or before a tone pack.
+  var measured: ToneMeasured? = nil
 
   /// "Investor outreach"
   var bucketLabel: String {
@@ -137,7 +139,8 @@ extension BrainClient {
   func toneCard(workflowId: String) async throws -> ToneCard {
     let w = try await workflow(id: workflowId)
     return ToneCard(workflowId: w.id, bucket: "investor_outreach", text: w.toneCard.isEmpty ? nil : w.toneCard,
-                    edited: w.toneEdited, path: "", updatedAt: nil, maxBytes: 16_384)
+                    edited: w.toneEdited, path: "", updatedAt: nil, maxBytes: 16_384,
+                    measured: MockBrainClient.sampleMeasured[w.id])
   }
 
   func saveToneCard(workflowId: String, text: String) async throws -> ToneCard {
@@ -172,4 +175,8 @@ extension BrainClient {
 
   /// nil: no stored dry run (or an older brain); the review runs one.
   func latestDryRun(workflowId: String) async throws -> DryRun? { nil }
+
+  /// An older brain has no link route: the connect sheet says the sign-in did not start.
+  func startLink(connectorId: String) async throws -> ConnectLink { throw BrainError.notFound("connectors/\(connectorId)/link") }
+  func linkStatus(connectorId: String) async throws -> ConnectLink { throw BrainError.notFound("connectors/\(connectorId)/link") }
 }

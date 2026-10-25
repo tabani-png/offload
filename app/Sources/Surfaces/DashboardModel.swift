@@ -15,6 +15,12 @@ final class DashboardModel: ObservableObject {
   @Published private(set) var keptFiles: [KeptFile] = []
   @Published private(set) var autoSend: AutoSendSheet?
   @Published private(set) var autoSendWorking = false
+  /// s10e: the connect sheet while it is up, and which week the timeline shows.
+  @Published private(set) var connect: ConnectSession?
+  @Published var week: TimelineWeek = .this
+
+  /// A sheet is up (auto-send or connect): the window behind is dimmed and keys go to the sheet.
+  var sheetUp: Bool { autoSend != nil || connect != nil }
 
   enum AutoSendSheet: Equatable {
     /// Before: what turning it on does.
@@ -24,7 +30,8 @@ final class DashboardModel: ObservableObject {
   }
 
   var onOpenWorkflow: ((String) -> Void)?
-  var onConnect: ((Connector) -> Void)?
+  /// s10e: the inbox (the empty Automations page's one action).
+  var onOpenInbox: (() -> Void)?
   var onTogglePause: ((Bool) -> Void)?
 
   private let client: BrainClient
@@ -87,6 +94,23 @@ final class DashboardModel: ObservableObject {
 
   func dismissAutoSend() { autoSend = nil }
 
+  // MARK: connect (s10e)
+
+  /// Opens the connect sheet in the dashboard window. Connecting never turns anything on or sends.
+  func openConnect(_ c: Connector) {
+    let s = ConnectSession(connector: c, returnsToConfirm: false, client: client, clock: clock)
+    s.onOpenURL = { [weak self] in self?.onOpenURL?($0) }
+    s.onConnected = { [weak self] _ in Task { await self?.load() } }
+    s.onClose = { [weak self] in self?.connect = nil }
+    connect = s
+  }
+
+  /// Snapshots and QA: the sheet in a fixed phase.
+  func previewConnect(_ c: Connector, link: ConnectLink?) {
+    openConnect(c)
+    if let link { connect?.preview(link) }
+  }
+
   private func markAutoRun(_ id: String, on: Bool, people: Int?) {
     guard var d = data, let i = d.automations.firstIndex(where: { $0.id == id }) else { return }
     d.automations[i].autoRun = on
@@ -122,12 +146,17 @@ final class DashboardModel: ObservableObject {
       }
     case .evidence:
       section = .week
+      if let d = data { week = d.evidenceWeek }
       showEvidence()
     case .open:
       if let id = selection.selectedId, let a = automations.first(where: { $0.id == id }), let wf = a.workflowId {
         onOpenWorkflow?(wf)
       }
     case .escape: clearPointer()
+    case .week:
+      section = .week
+      let weeks = data.map(TimelineWeek.available) ?? [.this]
+      if weeks.count > 1 { week = week == .this ? .before : .this }
     }
   }
 
@@ -201,8 +230,10 @@ final class DashboardModel: ObservableObject {
   // MARK: snapshot support
 
   func preview(_ d: DashboardData, pointer: PointerRequest? = nil, section: DashboardSection = .overview,
-               keptFiles: [KeptFile] = MockBrainClient.sampleKeptFiles, autoSend: AutoSendSheet? = nil) {
+               keptFiles: [KeptFile] = MockBrainClient.sampleKeptFiles, autoSend: AutoSendSheet? = nil,
+               week: TimelineWeek = .this) {
     set(d)
+    self.week = week
     self.pointer = pointer
     self.section = section
     self.keptFiles = keptFiles

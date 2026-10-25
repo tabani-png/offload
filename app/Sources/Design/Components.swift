@@ -161,7 +161,8 @@ extension OptionRow {
     switch state {
     case .chosen: return p.status(.working).opacity(p.isDark ? 0.14 : 0.10)
     case .highlighted: return p.fillStrong
-    case .idle, .muted: return p.fill
+    // s10e (P4): light rows are white 70% so they separate from light glass.
+    case .idle, .muted: return p.isDark ? p.fill : .white.opacity(0.7)
     }
   }
 
@@ -169,7 +170,7 @@ extension OptionRow {
     switch state {
     case .chosen: return p.status(.working).opacity(0.45)
     case .highlighted: return p.ringStrong
-    case .idle, .muted: return p.ring
+    case .idle, .muted: return p.isDark ? p.ring : .black.opacity(0.06)
     }
   }
 }
@@ -254,7 +255,8 @@ struct ProgressHairline: View {
       ZStack(alignment: .leading) {
         Capsule().fill(p.track)
         Capsule()
-          .fill(role.map { p.status($0) } ?? p.ink2)
+          // s10e (P3): a share is data, so it is a grey, never the primary's white.
+          .fill(role.map { p.status($0) } ?? p.ink3)
           .frame(width: max(height, geo.size.width * min(1, max(0, fraction))))
       }
     }
@@ -383,17 +385,14 @@ struct EmptyState: View {
   var body: some View {
     let p = Palette(scheme: scheme)
     VStack(spacing: 0) {
-      Group {
-        if reduceMotion || isSnapshot {
-          OffloadMark(size: 44, lifted: 1)
-        } else {
-          TimelineView(.animation) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
-            OffloadMark(size: 44, lifted: 0.88 + 0.12 * (0.5 + 0.5 * sin(t * 2 * .pi / 4)))
-          }
-        }
-      }
-      .padding(.bottom, Tokens.Space.s16)
+      // s10e (P10): the system tray symbol reads as an inbox at any size; no home-made mark.
+      Image(systemName: "tray")
+        .symbolStyle(Tokens.TypeScale.Symbol.large * 2.2, weight: .regular)
+        .foregroundStyle(p.ink2)
+        .frame(width: Tokens.Space.s48, height: Tokens.Space.s48)
+        .background(Circle().fill(p.fill))
+        .overlay(Circle().strokeBorder(p.ring, lineWidth: Tokens.Layout.hairline))
+        .padding(.bottom, Tokens.Space.s16)
       Text(title).textStyle(Tokens.TypeScale.title).foregroundStyle(p.ink1)
       Text(message)
         .paragraphStyle(Tokens.TypeScale.body)

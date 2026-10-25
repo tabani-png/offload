@@ -188,6 +188,10 @@ struct RailModel: Equatable, Sendable {
 
   var inboxBadge: String?
   var inboxNeedsYou: Bool
+  /// s10e: the badge is amber (something waits for you), never a neutral white count.
+  var inboxBadgeRole: StatusRole { .needsYou }
+  /// s10e: the hover card names the badge: "3 suggestions in your inbox".
+  var inboxLine: String?
   var dots: [RailDot]
   var overflowCount: Int
   var observerLabel: String
@@ -201,6 +205,8 @@ struct RailModel: Equatable, Sendable {
   init(status: ObserverStatus, automations: [Automation], micRecording: Bool) {
     inboxBadge = Self.badgeLabel(status.insightsWaiting)
     inboxNeedsYou = status.insightsWaiting > 0
+    let n = status.insightsWaiting
+    inboxLine = n <= 0 ? nil : (n == 1 ? "1 suggestion in your inbox" : "\(n) suggestions in your inbox")
     let observerRole = StatusRole.forObserver(status.state)
     var all = [RailDot(id: "observer", role: observerRole, pulses: observerRole.pulses(context: .observer))]
     all += automations.filter(\.isActive).map {
@@ -224,7 +230,7 @@ struct RailModel: Equatable, Sendable {
     for a in automations where a.isActive {
       let what: String
       switch a.status {
-      case .running: what = "running"
+      case .running: what = "on"
       case .awaitingApproval: what = "ready for review"
       case .failed: what = "needs you"
       case .paused: what = "paused"
@@ -234,6 +240,14 @@ struct RailModel: Equatable, Sendable {
       dotNames[a.id] = "\(a.name) · \(what)"
     }
     micRole = StatusRole.forMic(recording: micRecording)
+  }
+
+  /// s10e: the observer tool. Paused (grey dot) is ▶; not recording (amber ring) is ↻, so ▶ means one thing.
+  struct ObserverTool: Equatable, Sendable { var symbol: String; var label: String }
+  var observerTool: ObserverTool {
+    if observerPaused { return ObserverTool(symbol: "play.fill", label: "Resume watching") }
+    if observerResumable { return ObserverTool(symbol: "arrow.clockwise", label: "Start watching again") }
+    return ObserverTool(symbol: "pause.fill", label: "Pause watching")
   }
 
   static func badgeLabel(_ n: Int) -> String? {

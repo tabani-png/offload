@@ -17,14 +17,15 @@ enum S10DFixture {
 @Suite("S10D one mock week")
 struct S10DMockWeekTests {
   private func minutes(_ task: String) -> Double {
-    MockBrainClient.timelineDays.flatMap(\.bars).filter { $0.taskId == task }
+    // s10e: the card's week is the week before Offload.
+    MockBrainClient.beforeDays.flatMap(\.bars).filter { $0.taskId == task }
       .reduce(0) { $0 + $1.end.timeIntervalSince($1.start) / 60 }
   }
 
   @Test("the card's share is the outreach bars over every bar, and rounds to the share it prints")
   func shareTies() {
     let i = SampleWeek.outreach
-    let all = MockBrainClient.timelineDays.reduce(0.0) { $0 + $1.activeMinutes }
+    let all = MockBrainClient.beforeDays.reduce(0.0) { $0 + $1.activeMinutes }
     #expect(abs(minutes("t_outreach") / 60 - i.taskHours) < 1e-9)
     #expect(abs(all / 60 - i.trackedHours) < 1e-9)
     let pct = i.taskHours / i.trackedHours * 100
@@ -44,7 +45,10 @@ struct S10DMockWeekTests {
 
   @Test("the dashboard's tracked total is the card's tracked hours")
   func trackedTies() {
-    let d = DashboardCopy(SampleWeek.dashboard, now: MockBrainClient.reviewNow)
+    // s10e: tracked over the card's week (the dashboard's "Week before Offload").
+    var before = SampleWeek.dashboard
+    before.days = before.beforeDays
+    let d = DashboardCopy(before, now: MockBrainClient.reviewNow)
     #expect(d.tracked == "\(Figures.hours(SampleWeek.outreach.trackedHours)) tracked")
     #expect(d.tracked == "38.2 h tracked")
   }
@@ -291,11 +295,12 @@ struct S10DRailTests {
   @Test("every dot has a name in the hover lines, observer first")
   func names() {
     let r = SampleWeek.rail
-    let lines = r.hoverLines
+    // s10e: the hover card also names the inbox badge, last.
+    let lines = r.hoverLines.filter { $0.id != "inbox" }
     #expect(lines.count == r.dots.count)
     #expect(lines.first?.id == "observer" && lines.first?.text == r.observerLabel)
     #expect(lines.dropFirst().allSatisfy { $0.text.contains(" · ") })
-    #expect(lines.contains { $0.text == "Investor outreach emails · running" })
+    #expect(lines.contains { $0.text == "Investor outreach emails · on" })  // s10e M7
   }
 
   @Test("the dashboard's observer action: Pause, Resume, or Settings when Screen Recording is off")

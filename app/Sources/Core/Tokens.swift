@@ -147,6 +147,8 @@ enum Tokens {
     static let editorSheet: Double = 420
     static let confirmSheet: Double = 560
     static let skillSheet: Double = 640
+    /// s10e: the connect sheet and the auto-send sheet.
+    static let connectSheet: Double = 480
     /// The "now" line and bar outline strokes.
     static let nowLine: Double = 1.5
     static let hairline: Double = 1
@@ -163,8 +165,9 @@ enum Tokens {
     static let ringDark: Double = 0.14
     static let ringLight: Double = 0.14
     /// The dimming macOS puts over a window while a sheet is up (measured from the live capture).
-    static let scrimDark: Double = 0.40
-    static let scrimLight: Double = 0.22
+    /// s10e: in-window sheets dim the window so it reads at about a quarter (DESIGN-REVIEW-3 P8).
+    static let scrimDark: Double = 0.62
+    static let scrimLight: Double = 0.38
     static let sheetRadius: Double = 24
   }
 
@@ -242,11 +245,13 @@ enum StatusRole: String, Equatable, Sendable {
     }
   }
 
+  /// s10e (DESIGN-REVIEW-3 M7): the same map as `forWorkflow`, so a rail dot and its dashboard row never disagree.
+  /// Running means "on and healthy" (green); a draft is in flight (blue); review and failures need you (amber).
   static func forAutomation(_ s: AutomationStatus) -> StatusRole {
     switch s {
-    case .running: return .working
-    case .awaitingApproval, .failed, .draft: return .needsYou
-    case .done: return .done
+    case .running, .done: return .done
+    case .draft: return .working
+    case .awaitingApproval, .failed: return .needsYou
     case .paused: return .neutral
     }
   }

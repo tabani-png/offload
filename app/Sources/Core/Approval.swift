@@ -252,6 +252,16 @@ struct ApprovalFlow: Equatable, Sendable {
 
   /// A fresh dry run or an edit replaces the workflow. The batch hash changes with it, so an approval is always
   /// for what you last saw.
+  /// s10e: a connector was connected. The batch and its hash are unchanged, so an open confirmation stays open and
+  /// its plan now reads the new state (Turn on becomes possible).
+  mutating func updateConnectors(_ states: [String: ConnectorState], connected: Connector? = nil) {
+    workflow.connectors = workflow.connectors.map { c in
+      var c = c.applying(states)
+      if let k = connected, k.id == c.id { c.connected = true; c.missingEnv = false }
+      return c
+    }
+  }
+
   mutating func replaceWorkflow(_ w: Workflow) {
     workflow = w
     if case .confirming = phase { phase = .reviewing }

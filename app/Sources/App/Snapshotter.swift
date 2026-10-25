@@ -87,7 +87,43 @@ enum Snapshotter {
       ("card-undo", card(undo)),
       ("card-empty", card(empty)),
       ("scene", AnyView(Scene(state: base, now: now, rail: rail))),
-    ] + s08Surfaces() + s09aSurfaces()
+    ] + s08Surfaces() + s09aSurfaces() + s10eSurfaces()
+  }
+
+  // MARK: s10e fixtures
+
+  static func s10eSurfaces() -> [(String, AnyView)] {
+    let sheets = MockBrainClient.sheets
+    func connectModel(_ link: ConnectLink?) -> ReviewModel {
+      let m = reviewModel([(.approve, -3)])
+      m.previewConnect(sheets, link: link)
+      return m
+    }
+    let link = { (state: ConnectLinkState) in
+      ConnectLink(connectorId: "gsheets", name: "Google Sheets", via: .composio, state: state,
+                  url: URL(string: "https://connect.composio.dev/link/ln_8f2c"), simulated: false,
+                  message: state == .connected ? "Google Sheets is connected." : "Finish signing in to Google Sheets in your browser.",
+                  startedAt: reviewNow, connectedAt: state == .connected ? reviewNow : nil)
+    }
+    let intro = connectModel(nil)
+    let waiting = connectModel(link(.waiting))
+    let done = connectModel(link(.connected))
+    done.previewConnected(sheets)
+    func connectScene(_ m: ReviewModel) -> AnyView {
+      sheetScene(m, sheet: AnyView(ConnectSheet(session: m.connect!))) { ReviewView(model: m, parts: [.header, .steps]) }
+    }
+    let voice = reviewModel()
+    voice.editingVoice = true
+    var empty = MockBrainClient.sampleDashboard
+    empty.automations = []
+    empty.hours = HoursSaved(estimated: 0, measured: nil)
+    return [
+      ("review-connect", connectScene(intro)),
+      ("review-connect-waiting", connectScene(waiting)),
+      ("review-connected", connectScene(done)),
+      ("review-voice-edit", reviewChrome(voice) { ReviewView(model: voice, parts: [.tone]) }),
+      ("dashboard-automations-empty", dashboardScene(dashboardModel(section: .automations, data: empty))),
+    ]
   }
 
   // MARK: s09a fixtures
@@ -136,9 +172,10 @@ enum Snapshotter {
   }
 
   static func dashboardModel(pointer: PointerRequest? = nil, section: DashboardSection = .overview,
-                             autoSend: DashboardModel.AutoSendSheet? = nil) -> DashboardModel {
+                             autoSend: DashboardModel.AutoSendSheet? = nil, week: TimelineWeek = .this,
+                             data: DashboardData = MockBrainClient.sampleDashboard) -> DashboardModel {
     let m = DashboardModel(client: MockBrainClient(), clock: { reviewNow })
-    m.preview(MockBrainClient.sampleDashboard, pointer: pointer, section: section, autoSend: autoSend)
+    m.preview(data, pointer: pointer, section: section, autoSend: autoSend, week: week)
     return m
   }
 
@@ -181,10 +218,9 @@ enum Snapshotter {
   static func s08Surfaces() -> [(String, AnyView)] {
     let review = reviewModel()
     let confirm = reviewModel([(.approve, -2)])
-    let evidencePointer = PointerRequest(targetId: "bar.\(MockBrainClient.evidenceBarId)", originId: "timeline.evidence",
-                                         label: DashboardModel.evidenceLabel(
-                                           MockBrainClient.timelineDays.flatMap(\.bars).first { $0.id == MockBrainClient.evidenceBarId }!,
-                                           tasks: MockBrainClient.timelineTasks),
+    let evidenceBar = MockBrainClient.sampleDashboard.evidenceBar!
+    let evidencePointer = PointerRequest(targetId: "bar.\(evidenceBar.id)", originId: "timeline.evidence",
+                                         label: DashboardModel.evidenceLabel(evidenceBar, tasks: MockBrainClient.timelineTasks),
                                          startedAt: reviewNow)
     let crm = MockBrainClient.dashboardAutomations.first { $0.state == .needsYou }!
     let rowTarget = DashboardModel.pointerTarget(for: crm)
@@ -251,7 +287,8 @@ enum Snapshotter {
       ("dashboard-autosend", dashboardScene(offerModel, sheet: AnyView(AutoSendSheetView(model: offerModel)))),
       ("dashboard-autosend-on", dashboardScene(onModel, sheet: AnyView(AutoSendSheetView(model: onModel)))),
       ("timeline", dashboardScene(dashboardModel(section: .week))),
-      ("pointer", dashboardScene(dashboardModel(pointer: evidencePointer, section: .week), pointerAt: holdAt)),
+      ("timeline-before", dashboardScene(dashboardModel(section: .week, week: .before))),
+      ("pointer", dashboardScene(dashboardModel(pointer: evidencePointer, section: .week, week: .before), pointerAt: holdAt)),
       ("pointer-row", dashboardScene(dashboardModel(pointer: rowPointer, section: .automations), pointerAt: holdAt)),
     ]
   }

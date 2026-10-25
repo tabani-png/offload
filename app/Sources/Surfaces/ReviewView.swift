@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The workflow review window: a normal titled window, no sidebar, one column centred and at most 720 pt wide at
@@ -36,6 +37,8 @@ struct ReviewView: View {
       ReviewActionBar(model: model)
     }
     .background(p.canvas)
+    // s10e: sheets are drawn in the window, attached under the toolbar (live and snapshot alike).
+    .attachedSheet(!isSnapshot && model.sheet != nil) { ReviewSheetContent(model: model) }
   }
 
   private var content: some View {
@@ -82,7 +85,7 @@ private struct ReviewHeader: View {
         .padding(.top, Tokens.Space.s8)
       // Chips wrap: a long connector list or a narrow window adds a line, never pushes the column off screen.
       FlowLayout(spacing: Tokens.Space.s8) {
-        ForEach(w.connectors) { c in ConnectorChip(connector: c) { model.onConnect?($0) } }
+        ForEach(w.connectors) { c in ConnectorChip(connector: c) { model.openConnect($0) } }
         if let saving = copy.savingChip { Chip(text: saving, style: .positive) }
       }
       .padding(.top, Tokens.Space.s16)
@@ -168,47 +171,31 @@ private struct ToneSection: View {
   @Environment(\.colorScheme) private var scheme
   @Environment(\.isSnapshot) private var isSnapshot
 
+  /// s10e (M3): the measured style, from the brain (or the sample week's own numbers in snapshots).
+  private var measured: ToneMeasured? { model.tone?.measured ?? (model.toneLoaded ? nil : MockBrainClient.sampleMeasured[model.workflow.id]) }
+
   var body: some View {
     let p = Palette(scheme: scheme)
     WindowSection(title: "Your voice", trailing: toneTrailing) {
-      if model.workflow.toneCard.isEmpty && !(model.toneLoaded && model.tone != nil) && !model.toneLoaded {
+      if !model.toneLoaded && !isSnapshot {
         RingBox(padding: Tokens.Space.s16) {
-          Text(model.toneLoaded ? "No notes on your voice yet." : "Loading your voice…")
-            .textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
+          HStack(spacing: Tokens.Space.s12) {
+            Spinner()
+            Text("Measuring your voice from your sent mail…").textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
+          }
         }
       } else {
         RingBox(padding: 0) {
-          Group {
-            if isSnapshot {
-              // TextEditor is an AppKit text view, which offscreen rendering cannot draw; same text, same metrics.
-              Text(model.toneDraft)
-                .paragraphStyle(Tokens.TypeScale.body)
-                .foregroundStyle(p.ink1)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(.horizontal, Tokens.Space.s4)
-            } else {
-              TextEditor(text: $model.toneDraft)
-                .paragraphStyle(Tokens.TypeScale.body)
-                .foregroundStyle(p.ink1)
-                .scrollContentBackground(.hidden)
-                .focused($focused)
-                .frame(height: model.toneDraft.isEmpty ? Tokens.Layout.editorMin : Tokens.Layout.editorMax)
-                .overlay(alignment: .topLeading) {
-                  // s10d: the instruction is the empty box's placeholder, not a caption under a tall empty box.
-                  if model.toneDraft.isEmpty {
-                    Text("Write a few lines on how you sound. Drafts follow them.")
-                      .paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink3)
-                      .padding(.leading, Tokens.Space.s4)
-                      .allowsHitTesting(false)
-                  }
-                }
-                .onChange(of: focused) { _, f in model.textEditing = f }
-                .accessibilityLabel("How you write, editable")
-            }
+          if let m = measured {
+            facts(VoiceFacts(m), p)
+          } else {
+            Text("Not measured yet. Offload measures your voice from your sent mail once Gmail is connected.")
+              .paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
+              .fixedSize(horizontal: false, vertical: true)
+              .padding(Tokens.Space.s16)
           }
-          .padding(.horizontal, Tokens.Space.s12)
-          .padding(.vertical, Tokens.Space.s12)
+          RowDivider(inset: 0)
+          notes(p)
         }
         if model.toneUnsaved {
           HStack {
@@ -221,13 +208,100 @@ private struct ToneSection: View {
     }
   }
 
-  private var toneTrailing: String? {
-    if let t = model.tone {
-      if model.toneUnsaved { return "Not saved yet" }
-      return t.text == nil ? nil : (t.edited ? "Edited by you · type to change it" : "Built from your sent mail · type to change it")
+  /// Four measured rows and one line quoted from a real email.
+  private func facts(_ v: VoiceFacts, _ p: Palette) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      ForEach(Array(v.rows.enumerated()), id: \.element.id) { i, r in
+        if i > 0 { RowDivider(inset: Tokens.Space.s16) }
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s12) {
+          Text(r.label).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+            .frame(width: Tokens.Layout.receiptLabel, alignment: .leading)
+          Text(r.value).paragraphStyle(Tokens.TypeScale.body).monospacedDigit().foregroundStyle(p.ink1)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          Text(r.source).textStyle(Tokens.TypeScale.footnote).monospacedDigit().foregroundStyle(p.ink3).fixedSize()
+        }
+        .padding(.horizontal, Tokens.Space.s16).padding(.vertical, Tokens.Space.s8 + Tokens.Space.nudge)
+      }
+      if let q = v.quote {
+        RowDivider(inset: Tokens.Space.s16)
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s12) {
+          Text("In your words").textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+            .frame(width: Tokens.Layout.receiptLabel, alignment: .leading)
+          Text(q).paragraphStyle(Tokens.TypeScale.body).italic().foregroundStyle(p.ink1)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, Tokens.Space.s16).padding(.vertical, Tokens.Space.s8 + Tokens.Space.nudge)
+      }
     }
-    if model.workflow.toneCard.isEmpty { return nil }
-    return model.toneEdited ? "Edited · used on the next dry run" : "Built from your sent mail · type to change it"
+  }
+
+  /// The written notes drafts also follow: collapsed to a line with "Edit notes"; open, the text box.
+  @ViewBuilder
+  private func notes(_ p: Palette) -> some View {
+    if model.editingVoice {
+      Group {
+        if isSnapshot {
+          Text(model.toneDraft).paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink1)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(.horizontal, Tokens.Space.s4)
+        } else {
+          TextEditor(text: $model.toneDraft)
+            .paragraphStyle(Tokens.TypeScale.body)
+            .foregroundStyle(p.ink1)
+            .scrollContentBackground(.hidden)
+            .focused($focused)
+            .frame(height: Tokens.Layout.editorMax)
+            .overlay(alignment: .topLeading) {
+              if model.toneDraft.isEmpty {
+                Text("Write a few lines on how you sound. Drafts follow them.")
+                  .paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink3)
+                  .padding(.leading, Tokens.Space.s4)
+                  .allowsHitTesting(false)
+              }
+            }
+            .onChange(of: focused) { _, f in model.textEditing = f }
+            .onAppear { focused = true }
+            .accessibilityLabel("Notes on how you write, editable")
+        }
+      }
+      .padding(Tokens.Space.s12)
+    } else {
+      HStack(spacing: Tokens.Space.s12) {
+        Text(Self.firstLine(model.toneDraft)).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
+          .lineLimit(1).truncationMode(.tail)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        Button { model.editingVoice = true } label: {
+          Text("Edit notes").textStyle(Tokens.TypeScale.calloutEmphasis).foregroundStyle(p.ink1)
+            .padding(.horizontal, Tokens.Space.s8)
+            .frame(height: Tokens.Size.chip)
+            .overlay(Capsule().strokeBorder(p.ringStrong, lineWidth: Tokens.Layout.hairline))
+        }
+        .buttonStyle(PressStyle())
+      }
+      .padding(.horizontal, Tokens.Space.s16).padding(.vertical, Tokens.Space.s8)
+    }
+  }
+
+  /// The first line of the notes that is not front matter or a heading, for the collapsed row.
+  static func firstLine(_ text: String) -> String {
+    let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+    var inFront = lines.first == "---"
+    for (i, l) in lines.enumerated() {
+      if inFront { if i > 0 && l == "---" { inFront = false }; continue }
+      if l.isEmpty || l.hasPrefix("#") { continue }
+      let t = l.hasPrefix("- ") ? String(l.dropFirst(2)) : l
+      return "Notes: \(t)"
+    }
+    return "No written notes yet."
+  }
+
+  private var toneTrailing: String? {
+    if model.toneUnsaved { return "Not saved yet" }
+    if let m = measured { return VoiceFacts(m).header }
+    return nil
   }
 }
 
@@ -318,7 +392,17 @@ private struct DryRunCard: View {
   private func column(_ title: String, segments: [DiffLite.Segment], marked: Bool, check: String?, other: Set<String>?,
                       p: Palette) -> some View {
     VStack(alignment: .leading, spacing: Tokens.Space.s8) {
-      Text(title).textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink3)
+      HStack(spacing: Tokens.Space.s8) {
+        Text(title).textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink3)
+        if marked {
+          // s10e (M2): how far the draft is from what you sent, said once per draft.
+          let n = DiffSummary.changedPhrases(ours: item.ourDraft, theirs: item.whatYouSent)
+          Text(DiffSummary.label(n)).textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink2)
+            .padding(.horizontal, Tokens.Space.s8).frame(height: Tokens.Size.tag)
+            .background(Capsule().fill(p.fill))
+            .overlay(Capsule().strokeBorder(p.ring, lineWidth: Tokens.Layout.hairline))
+        }
+      }
       if segments.isEmpty {
         Text("No draft. This kind of task has no drafting dry run yet.")
           .textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
@@ -369,8 +453,17 @@ struct ReviewActionBar: View {
           // Always in place, so the bar never reflows: disabled while a dry run is drafting or there is nothing to
           // approve. One white action per view: while the confirmation is up it holds the primary.
           // Disabled keeps its label (s10d), never a blank pill.
-          PrimaryButton(title: "Approve", key: "⌘↩") { model.send(.approve) }
-            .disabled(!model.flow.canApprove || model.runningDryRun || model.sheet != nil)
+          // s10e (M8): while a step's tool is not connected, Connect is the white primary on ⌘↩ and Approve is
+          // secondary, so the block is met here and not only in the next sheet.
+          if case .connect(let c) = ReviewPrimary.forWorkflow(model.workflow), model.flow.canApprove {
+            SecondaryButton(title: "Approve") { model.approveNow() }
+              .disabled(model.runningDryRun || model.sheet != nil)
+            PrimaryButton(title: ReviewPrimary.connect(c).title, key: "⌘↩") { model.openConnect(c) }
+              .disabled(model.sheet != nil)
+          } else {
+            PrimaryButton(title: "Approve", key: "⌘↩") { model.send(.approve) }
+              .disabled(!model.flow.canApprove || model.runningDryRun || model.sheet != nil)
+          }
         }
       }
       .padding(.horizontal, Tokens.Space.s20)
@@ -608,7 +701,12 @@ private struct SkillEditForm: View {
       if snapshot {
         rows.frame(maxHeight: Tokens.Layout.editorSheet, alignment: .top).clipped()
       } else {
-        ScrollView { rows }.frame(height: Tokens.Layout.editorSheet)
+        // s10e (P7): an 8-pt fade at the bottom, so a field cut by the scroll edge reads as "more below".
+        ScrollView { rows.padding(.bottom, Tokens.Space.s8) }.frame(height: Tokens.Layout.editorSheet)
+          .mask(VStack(spacing: 0) {
+            Rectangle()
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: Tokens.Space.s8)
+          })
       }
     } else {
       Text("Loading the steps…")
@@ -650,5 +748,24 @@ private struct SkillEditForm: View {
   private func stepBinding(_ i: Int, _ kp: WritableKeyPath<SkillStep, String>) -> Binding<String> {
     Binding(get: { model.skillEdit.flatMap { $0.steps.indices.contains(i) ? $0.steps[i][keyPath: kp] : nil } ?? "" },
             set: { v in if model.skillEdit?.steps.indices.contains(i) == true { model.skillEdit?.steps[i][keyPath: kp] = v } })
+  }
+}
+
+/// s10e: which sheet the review shows, in the window.
+struct ReviewSheetContent: View {
+  @ObservedObject var model: ReviewModel
+  var frozenNow: Date? = nil
+
+  var body: some View {
+    switch model.sheet {
+    case .confirm?: ConfirmSheet(model: model, frozenNow: frozenNow)
+    case .skill(let editing)?:
+      SkillSheet(model: model, editing: editing, onReveal: { path in
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+      })
+    case .connect?:
+      if let s = model.connect { ConnectSheet(session: s) }
+    case nil: EmptyView()
+    }
   }
 }

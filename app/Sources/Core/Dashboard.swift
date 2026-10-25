@@ -23,6 +23,8 @@ struct DashboardAutomation: Codable, Equatable, Identifiable, Sendable {
   /// s10d: auto-send is on (the brain's WorkflowSummaryDTO autoRun), and how many people it covers.
   var autoRun: Bool = false
   var autoRunPeople: Int? = nil
+  /// s10e: when it was turned on (the brain's workflow activatedAt), for the measured proof under the timeline.
+  var activatedAt: Date? = nil
 }
 
 extension StatusRole {
@@ -238,6 +240,14 @@ struct TimelineBar: Codable, Equatable, Identifiable, Sendable {
   var automated: Bool
   var title: String
   var counterparty: String?
+  /// s10e: the brain's active minutes for this span (GET /timeline). The chart draws this length, so the bars add up
+  /// to the minutes every figure is computed from.
+  var activeMinutes: Double? = nil
+  /// s10e: the spans a drawn (packed) bar stands for.
+  var members: [String]? = nil
+
+  /// What the chart draws: active minutes when the brain sent them, else the wall-clock span.
+  var drawnMinutes: Double { activeMinutes ?? end.timeIntervalSince(start) / 60 }
 }
 
 struct TimelineDay: Codable, Equatable, Identifiable, Sendable {
@@ -295,6 +305,8 @@ struct TimelineLayout: Equatable, Sendable {
 
 enum DashboardKey: Equatable, Sendable {
   case next, previous, point, open, evidence, escape
+  /// s10e: W switches the timeline between the week before Offload and this week.
+  case week
 
   init?(characters: String, keyCode: UInt16, command: Bool) {
     if command { return nil }
@@ -305,6 +317,7 @@ enum DashboardKey: Equatable, Sendable {
     case "k": self = .previous
     case "p": self = .point
     case "2": self = .evidence
+    case "w": self = .week
     default: return nil
     }
   }
