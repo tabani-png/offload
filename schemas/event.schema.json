@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offload/event.schema.json",
+  "title": "Offload Event (decrypted form). The observer writes these; the brain reads them.",
+  "type": "object",
+  "required": ["id", "ts", "kind"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "description": "ULID, sortable by time" },
+    "ts": { "type": "integer", "description": "unix epoch milliseconds" },
+    "kind": { "enum": ["focus", "idle_start", "idle_end", "input", "ocr", "pause", "resume"] },
+    "app": { "type": "string", "description": "bundle id, e.g. com.google.Chrome" },
+    "appName": { "type": "string" },
+    "title": { "type": "string", "description": "window title, masked" },
+    "url": { "type": "string", "description": "full URL for browsers, query string removed" },
+    "host": { "type": "string" },
+    "keys": { "type": "integer", "description": "kind=input: keystroke COUNT in the last 60 s. Never key values." },
+    "clicks": { "type": "integer", "description": "kind=input: click count in the last 60 s" },
+    "text": { "type": "string", "description": "kind=ocr: masked visible text of the focused window, only when it changed" },
+    "textHash": { "type": "string", "description": "kind=ocr: perceptual/text hash used to skip duplicates" }
+  }
+}

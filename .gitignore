@@ -1,0 +1,5 @@
+scratch/
+node_modules/
+.build/
+*.sqlite
+.DS_Store
