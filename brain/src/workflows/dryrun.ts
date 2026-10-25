@@ -15,6 +15,10 @@ import { createGate, type GateDecisionLog } from "./gate.ts";
 import { parseFacts } from "./facts.ts";
 import { observedInstances } from "./observed.ts";
 import { ensureDir, gateLogPath, readText, readWorkflow, saveBatch, updateWorkflow, workflowDir } from "./store.ts";
+import { generalDryRun } from "../plan/dryrun.ts";
+import type { GeneralDryRunDTO } from "../api/s14-types.ts";
+import type { UserContext } from "../types.ts";
+import { readUserContext } from "../context/store.ts";
 
 export class DryRunError extends Error {}
 
@@ -27,25 +31,34 @@ export interface DryRunOptions {
   now?: () => number;
   /** s09b: stored with the result so the UI can say "sample drafts" for the stub. */
   modelLabel?: ModelLabel;
+  /** s14: onboarding context for text steps of general workflows (prompts only). */
+  user?: UserContext;
 }
+
+/** s14: a dry run of a general workflow also carries `general` (per-instance outputs of any type). */
+export type DryRunResult = DryRunResponse & { general?: GeneralDryRunDTO; tools?: Array<{ stepId: string; tool: string; name: string; runsWith: string }> };
 
 const round1 = (x: number) => Math.round(x * 10 + 1e-9) / 10;
 
-export async function dryRun(o: DryRunOptions): Promise<DryRunResponse> {
+export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
   const now = (o.now ?? Date.now)();
   const wf = readWorkflow(o.home, o.workflowId);
   if (wf === null) throw new DryRunError(`no workflow ${o.workflowId}`);
   const models: ModelConfig = wf.models;
   const limit = Math.max(1, Math.min(50, Math.floor(o.limit ?? 5)));
   const warnings: string[] = [];
-  const pack: TonePack = loadTonePack(o.home, now) ?? { corpus: [], cards: {} };
-  if (pack.corpus.length === 0) warnings.push("no tone pack yet: run `tone build` so drafts follow your past emails");
   const factsText = readText(o.home, wf.id, "facts.md") ?? "";
   const facts = parseFacts(factsText);
   const emailWorkflow = wf.template !== "generic";
+  // s14: a general plan dry-runs any output type; the email templates keep the s05 path below.
+  const user = o.user ?? readUserContext(o.home).context;
+  const general = wf.plan === undefined ? null : await generalDryRun({ home: o.home, analysis: o.analysis, wf, model: o.model, models, limit, now, facts: factsText, ...(user === undefined ? {} : { user }) });
+  const pack: TonePack = general !== null ? { corpus: [], cards: {} } : (loadTonePack(o.home, now) ?? { corpus: [], cards: {} });
+  if (general === null && pack.corpus.length === 0) warnings.push("no tone pack yet: run `tone build` so drafts follow your past emails");
+  if (general !== null) warnings.push(...general.warnings);
 
-  const { instances: observed, skipped } = observedInstances(o.analysis, wf.taskId, { limit });
-  if (observed.length === 0) warnings.push("no instance of this task in the store has a readable recipient");
+  const { instances: observed, skipped } = general !== null ? { instances: [], skipped: 0 } : observedInstances(o.analysis, wf.taskId, { limit });
+  if (general === null && observed.length === 0) warnings.push("no instance of this task in the store has a readable recipient");
 
   const items: BatchItem[] = [];
   const out: DryRunInstanceDTO[] = [];
@@ -76,12 +89,13 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResponse> {
       warnings: itemWarnings,
     });
   }
-  if (!emailWorkflow) warnings.push("this workflow kind has no drafting dry run yet; showing what you did and the time only");
+  if (!emailWorkflow && general === null) warnings.push("this workflow kind has no drafting dry run yet; showing what you did and the time only");
+  if (general !== null) items.push(...general.items);
   if (Object.keys(facts).length < 3 && emailWorkflow) warnings.push("facts.md is mostly empty: drafts will show [missing: ...] gaps");
 
   // REVIEW-2 N3: everything this dry run writes is sealed under the capture day of its oldest instance, so it is
   // purged 7 days after that capture, not 7 days after the run.
-  const sealDay = out.map((i) => i.day).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort()[0] ?? localDay(now);
+  const sealDay = [...out.map((i) => i.day), ...(general?.general.instances.map((i) => i.day) ?? [])].filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort()[0] ?? localDay(now);
 
   // Every side-effect step goes through the gate in dry-run mode: all denied, all logged.
   const batch = { ...makeBatch(wf.id, "dry_run", items, now), sealDay };
@@ -94,12 +108,20 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResponse> {
       await gate.canUseTool(step.tool!, { to: it.to, subject: it.subject, body: it.body });
     }
   }
+  // s14: every commit of a general plan is put to the gate too (ADR 0006); in a dry run each one is denied.
+  for (const tool of general?.commitTools ?? []) {
+    for (const it of batch.items) {
+      attempted += 1;
+      await gate.canUseTool(tool, { item: it.key, subject: it.subject, body: it.body });
+    }
+  }
   if (items.length > 0) saveBatch(o.home, batch);
 
-  const observedMinutes = round1(out.reduce((n, i) => n + i.estimate.observedMinutes, 0));
-  const reviewMinutes = round1((out.length * wf.reviewSecondsPerItem) / 60);
+  const timed = general !== null ? general.general.instances.map((i) => i.estimate.observedMinutes) : out.map((i) => i.estimate.observedMinutes);
+  const observedMinutes = round1(timed.reduce((n, m) => n + m, 0));
+  const reviewMinutes = round1((timed.length * wf.reviewSecondsPerItem) / 60);
   const savedMinutes = Math.max(0, round1(observedMinutes - reviewMinutes));
-  const res: DryRunResponse = {
+  const res: DryRunResult = {
     version: API_VERSION,
     workflowId: wf.id,
     ranAt: now,
@@ -108,15 +130,18 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResponse> {
     skipped,
     sideEffects: { attempted, denied: gateLog.filter((d) => d.decision === "deny").length },
     totals: {
-      instances: out.length,
+      instances: timed.length,
       observedMinutes,
       reviewMinutes,
       savedMinutes,
-      arithmetic: `you spent ${observedMinutes.toFixed(1)} min on these ${out.length} → review ${out.length} × ${wf.reviewSecondsPerItem} s = ${reviewMinutes.toFixed(1)} min → saves ${savedMinutes.toFixed(1)} min`,
+      arithmetic: `you spent ${observedMinutes.toFixed(1)} min on these ${timed.length} → review ${timed.length} × ${wf.reviewSecondsPerItem} s = ${reviewMinutes.toFixed(1)} min → saves ${savedMinutes.toFixed(1)} min`,
     },
     gateLog: gateLog.map((d) => ({ at: d.at, tool: d.tool, toolClass: d.toolClass, decision: d.decision, reason: d.reason, ...(d.itemKey === undefined ? {} : { itemKey: d.itemKey }) })),
     warnings,
     ...(o.modelLabel === undefined ? {} : { model: o.modelLabel }),
+    ...(general === null ? {} : { general: general.general }),
+    // s14: the tools this dry run stands for (the chosen option per step), shown next to the result.
+    ...(wf.tools === undefined ? {} : { tools: wf.tools.map((t) => ({ stepId: t.stepId, tool: t.chosen, name: t.options.find((x) => x.id === t.chosen)?.name ?? t.chosen, runsWith: t.runsWith })) }),
   };
   const dir = join(workflowDir(o.home, wf.id), "dry-runs");
   ensureDir(dir);
@@ -130,7 +155,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResponse> {
 }
 
 /** The last dry run of a workflow, or null when there is none or it is older than 7 local days. */
-export function readLastDryRun(home: string, workflowId: string, now: number = Date.now()): DryRunResponse | null {
+export function readLastDryRun(home: string, workflowId: string, now: number = Date.now()): DryRunResult | null {
   const text = openText(home, join(workflowDir(home, workflowId), "dry-run.json.enc"), now);
-  return text === null ? null : (JSON.parse(text) as DryRunResponse);
+  return text === null ? null : (JSON.parse(text) as DryRunResult);
 }

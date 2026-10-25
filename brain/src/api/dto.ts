@@ -1,4 +1,5 @@
 // Analysis -> public JSON shapes (src/api/types.ts). Formatting lives here; numbers come from the pipeline untouched.
+import type { UnderstandingStatusDTO } from "./s14-types.ts";
 import type { Analysis, Insight } from "../analyze.ts";
 import type { Connector } from "../connectors/catalog.ts";
 import type { DayLabel, Figure, Span, TaskStats, TaskUnderstanding } from "../types.ts";
@@ -217,7 +218,7 @@ function localMidnightAfter(day: DayLabel, addDays: number): number {
   return new Date(y ?? 1970, (m ?? 1) - 1, (d ?? 1) + addDays).getTime();
 }
 
-export function toStatus(a: Analysis, now: number, captioner: CaptionerStatusDTO = CAPTIONER_OFF): StatusResponse {
+export function toStatus(a: Analysis, now: number, captioner: CaptionerStatusDTO = CAPTIONER_OFF): StatusResponse & { understanding: UnderstandingStatusDTO } {
   let last: { ts: number; kind: string } | null = null;
   for (const e of a.events) if (last === null || e.ts >= last.ts) last = { ts: e.ts, kind: e.kind };
   let state: ObserverState = "no_data";
@@ -234,5 +235,11 @@ export function toStatus(a: Analysis, now: number, captioner: CaptionerStatusDTO
     retention: { keepDays: KEEP_DAYS, nextPurgeDay: oldest, nextPurgeAt: oldest === null ? null : localMidnightAfter(oldest, KEEP_DAYS + 1) },
     analysis: { generatedAt: a.generatedAt, windowDays: [...a.windowDays], tasks: a.tasks.length, insights: a.insights.length },
     captioner: { ...captioner },
+    // s14 (additive): which task finder ran, so the app can say when the simpler one is in use.
+    understanding: understandingStatus(a),
   };
+}
+
+export function understandingStatus(a: Analysis): UnderstandingStatusDTO {
+  return a.understanding === undefined ? { version: "v1", embedder: null, framesRead: 0 } : { version: "v2", embedder: a.understanding.embedder, framesRead: a.understanding.framesRead };
 }

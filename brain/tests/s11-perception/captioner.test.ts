@@ -179,11 +179,14 @@ describe("s11 privacy", () => {
     expect(loopbackOrigin("http://127.1.2.3:8080/api")).toBe("http://127.1.2.3:8080");
   });
 
-  test("C4: vision code never imports the Claude model or SDK (Claude never receives images)", () => {
+  test("C4: vision code never imports the Claude model or the Agent SDK; only vision/claude.ts uses the Anthropic SDK", () => {
+    // s14 scope change (ADR 0007 rev, ADR 0008): images may go to the user's own Anthropic account through
+    // vision/claude.ts only (host-guarded to api.anthropic.com, masked by the engine first). Nothing else in vision does.
     const dir = join(import.meta.dir, "../../src/vision");
     for (const f of readdirSync(dir)) {
       const src = readFileSync(join(dir, f), "utf8");
-      expect(src).not.toMatch(/models\/model|claude-agent-sdk|@anthropic-ai/);
+      expect(src).not.toMatch(/models\/model|claude-agent-sdk/);
+      if (f !== "claude.ts") expect(src).not.toMatch(/@anthropic-ai/);
     }
     // And the Claude model module does not import vision.
     expect(readFileSync(join(import.meta.dir, "../../src/models/model.ts"), "utf8")).not.toMatch(/vision\//);

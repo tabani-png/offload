@@ -1,5 +1,6 @@
 // Perception types (ADR 0007, slices/s11-perception/SPEC.md). A Frame note is what a LOCAL vision model saw on one
-// masked keyframe; its shape is schemas/frame-note.schema.json. Images never leave the Mac and never reach Claude.
+// masked keyframe; its shape is schemas/frame-note.schema.json. Images are masked by the engine first; they stay on
+// the Mac with the local captioner, or go only to the user's own Anthropic account with the Claude captioner (s14).
 
 /** One keyframe the observer kept: a line of `frames/DAY/index.jsonl.enc` (docs/store-contract.md "Keyframes"). */
 export interface FrameRef {
@@ -66,13 +67,29 @@ export interface CaptionerHealth {
   detail: string;
 }
 
+/** s14: tokens a paid captioner used (Claude). Counts only: never note text or image data. */
+export interface CaptionUsage {
+  frames: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  lastFrame: { inputTokens: number; outputTokens: number } | null;
+  refusals: number;
+  /** $ at the router's prices, when known. */
+  costUsd?: number;
+}
+
 export interface Captioner {
-  /** "stub" or "ollama". */
-  readonly kind: "stub" | "ollama";
+  /** "stub", "ollama" or (s14) "claude". */
+  readonly kind: "stub" | "ollama" | "claude";
   /** The model tag ("stub" for the stub). */
   readonly model: string;
   /** The `model` value written into notes. */
   readonly id: string;
   caption(input: CaptionInput, signal?: AbortSignal): Promise<CaptionFields>;
   health(): Promise<CaptionerHealth>;
+  /** s14: token usage so far (paid captioners). */
+  usage?(): CaptionUsage;
+  /** s14: the captioner actually used for the next frame, when it switches (budget, no key). */
+  active?(): "stub" | "ollama" | "claude";
 }

@@ -105,7 +105,8 @@ export function summaryOf(home: string, wf: WorkflowJson, status: Record<string,
   };
 }
 
-export function detailOf(home: string, wf: WorkflowJson, status: Record<string, ConnectorStatus>, now: number = Date.now()): WorkflowDetailDTO {
+/** s14: `plan` (additive) for workflows built from any task profile (api/s14-types.ts WorkflowPlanDTO). */
+export function detailOf(home: string, wf: WorkflowJson, status: Record<string, ConnectorStatus>, now: number = Date.now()): WorkflowDetailDTO & { plan?: WorkflowJson["plan"]; tools?: WorkflowJson["tools"] } {
   const pending = pendingLiveBatch(home, wf.id, now);
   return {
     ...summaryOf(home, wf, status, now),
@@ -119,6 +120,8 @@ export function detailOf(home: string, wf: WorkflowJson, status: Record<string, 
     models: { ...wf.models },
     batches: listBatches(home, wf.id, now).map(batchSummary),
     pendingItems: (pending?.items ?? []).map((i) => ({ key: i.key, to: i.to, subject: i.subject, body: i.body, warnings: [...i.warnings] })),
+    ...(wf.plan === undefined ? {} : { plan: wf.plan }),
+    ...(wf.tools === undefined ? {} : { tools: wf.tools }),
   };
 }
 

@@ -9,12 +9,15 @@ import { analyzeHome, type Analysis, type AnalyzeOptions } from "../analyze.ts";
 import { DAY_RE, storeFingerprint } from "../store/reader.ts";
 import type { Env } from "../connectors/config.ts";
 import { AgentSdkModel, StubModel, type Model } from "../models/model.ts";
+import { RoutedModel } from "../models/router.ts";
 import { AgentSdkExecutor, type Executor } from "../workflows/executor.ts";
 import { dashboard, keptFiles } from "../workflows/service.ts";
 import { toEvidence, toInsights, toStatus, toTimeline } from "./dto.ts";
 import { BRAIN_READY_PREFIX, CAPTIONER_OFF, MODEL_HEADER, type BrainReadyDTO, type CaptionerStatusDTO, type ModelLabel } from "./types.ts";
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
 import { workflowRoute } from "./workflow-routes.ts";
+import { s14Route } from "./s14-routes.ts";
+import { contextStamp, readUserContext } from "../context/store.ts";
 import { isMethod, Linker, LinkNotFound, METHODS, simPath, type LinkRunner, type Method } from "../connectors/link.ts";
 import { existsSync } from "node:fs";
 
@@ -135,11 +138,13 @@ export function createBrain(opts: BrainOptions): Brain {
   const cache = new Map<string, Promise<Analysis>>();
   const analysis = (reviewSeconds: number | undefined): Promise<Analysis> => {
     // The local day is part of the key: a day that ages past 7 days drops out even when no file changed (REVIEW-1 M4).
-    const key = `${storeFingerprint(opts.home)}#${localDay(now())}#${reviewSeconds ?? "default"}`;
+    // s14: the onboarding context is part of the key (it reaches label prompts); the fingerprint covers frame notes.
+    const key = `${storeFingerprint(opts.home)}#${localDay(now())}#${reviewSeconds ?? "default"}#${contextStamp(opts.home)}`;
     let hit = cache.get(key);
     if (hit === undefined) {
       if (cache.size >= 8) cache.clear();
-      hit = analyzeHome(opts.home, { ...opts.analyze, now, ...(reviewSeconds === undefined ? {} : { reviewSeconds }) });
+      const stored = opts.analyze?.userContext === undefined ? readUserContext(opts.home).context : undefined;
+      hit = analyzeHome(opts.home, { ...opts.analyze, ...(stored === undefined ? {} : { userContext: stored }), now, ...(reviewSeconds === undefined ? {} : { reviewSeconds }) });
       hit.catch(() => cache.delete(key));
       cache.set(key, hit);
     }
@@ -150,6 +155,8 @@ export function createBrain(opts: BrainOptions): Brain {
   const env = opts.workflows?.env ?? process.env;
   const model = opts.workflows?.model ?? new AgentSdkModel();
   const modelLabel: ModelLabel = opts.workflows?.modelLabel ?? (model instanceof StubModel ? "stub" : "real");
+  // s14: the model router behind `model` (ADR 0008), for GET /status `models` and GET /models/usage.
+  const router = model instanceof RoutedModel ? model.router : undefined;
   const observerEnv = opts.observerEnv ?? process.env;
   const simulated = modelLabel === "stub";
   if (!simulated && existsSync(simPath(opts.home))) (opts.log ?? ((l: string) => console.error(l)))("brain: connect-sim.json is ignored: demo sign-ins count only with --model stub");
@@ -174,6 +181,9 @@ export function createBrain(opts: BrainOptions): Brain {
     if (!authorized(req, opts.token)) return error(401, "unauthorized");
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
+    // s14: context, general drafting and plan choice (api/s14-routes.ts); null = not one of its routes.
+    const s14 = await s14Route(req, path, { home: opts.home, env, model, modelLabel, now, analysis: () => analysis(undefined), ...(router === undefined ? {} : { router }) });
+    if (s14 !== null) return s14;
     // Workflow routes take POST and DELETE; everything else is read-only.
     const wf = await workflowRoute(req, path, wctx);
     if (wf !== null) return wf;
@@ -207,7 +217,7 @@ export function createBrain(opts: BrainOptions): Brain {
     }
     if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed");
 
-    if (path === "/status") return json(200, toStatus(await analysis(undefined), now(), opts.vision?.status() ?? CAPTIONER_OFF));
+    if (path === "/status") return json(200, { ...toStatus(await analysis(undefined), now(), opts.vision?.status() ?? CAPTIONER_OFF), ...(router === undefined ? {} : { models: router.summary() }) });
     // s10b: plus the user files kept until the user deletes them, for the app's "Observing" section.
     if (path === "/observer") return json(200, { ...(await observerStatus(opts.home, observerEnv, now())), keptFiles: keptFiles(opts.home) });
     if (path === "/dashboard") return json(200, dashboard(await analysis(undefined), opts.home, env, now(), simulated));

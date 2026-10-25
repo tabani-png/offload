@@ -96,15 +96,28 @@ export function listDays(home: string): DayLabel[] {
 /** Fingerprint of the day files (name, size, mtime) so callers can cache analysis until the store changes. */
 export function storeFingerprint(home: string): string {
   const dir = daysDir(home);
-  if (!existsSync(dir)) return "empty";
-  return readdirSync(dir)
-    .filter((n) => DAY_FILE_RE.test(n))
-    .sort()
-    .map((n) => {
-      const st = statSync(join(dir, n));
-      return `${n}:${st.size}:${st.mtimeMs}`;
-    })
-    .join("|");
+  const days = existsSync(dir)
+    ? readdirSync(dir)
+        .filter((n) => DAY_FILE_RE.test(n))
+        .sort()
+        .map((n) => {
+          const st = statSync(join(dir, n));
+          return `${n}:${st.size}:${st.mtimeMs}`;
+        })
+        .join("|")
+    : "empty";
+  // s14: serve re-analyses when the caption worker writes a note (frame-notes/DAY.jsonl.enc) or a fixture sidecar
+  // (frames/DAY.jsonl[.enc]) changes. Without notes the fingerprint is the s03 one.
+  const notes: string[] = [];
+  for (const [sub, re] of [["frame-notes", /^\d{4}-\d{2}-\d{2}\.jsonl\.enc$/], ["frames", /^\d{4}-\d{2}-\d{2}\.jsonl(\.enc)?$/]] as const) {
+    const d = join(home, sub);
+    if (!existsSync(d)) continue;
+    for (const n of readdirSync(d).filter((x) => re.test(x)).sort()) {
+      const st = statSync(join(d, n));
+      notes.push(`${sub}/${n}:${st.size}:${st.mtimeMs}`);
+    }
+  }
+  return notes.length === 0 ? days : `${days}#${notes.join("|")}`;
 }
 
 function splitLines(content: string): string[] {

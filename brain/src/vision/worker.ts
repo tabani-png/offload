@@ -161,7 +161,9 @@ export class CaptionWorker {
         this.queued.add(ref.frameId);
         return false;
       }
-      const n = (this.attempts.get(ref.frameId) ?? 0) + 1;
+      // s14: a frame the captioner declined (a refusal) is skipped at once: a paid retry would decline again.
+      const noRetry = (err as { noRetry?: unknown }).noRetry === true;
+      const n = noRetry ? this.o.maxAttempts : (this.attempts.get(ref.frameId) ?? 0) + 1;
       this.attempts.set(ref.frameId, n);
       if (n >= this.o.maxAttempts) {
         this.gaveUp.add(ref.frameId);
@@ -212,7 +214,7 @@ export class CaptionWorker {
   status(): CaptionerStatusDTO {
     return {
       enabled: true,
-      captioner: this.o.captioner.kind,
+      captioner: this.o.captioner.active?.() ?? this.o.captioner.kind,
       model: this.o.captioner.model,
       healthy: this.healthy,
       queueDepth: this.queue.length,
@@ -223,6 +225,16 @@ export class CaptionWorker {
       lastCaptionAt: this.stats.lastCaptionAt,
       lastLatencyMs: this.stats.lastLatencyMs,
       lastError: this.stats.lastError,
+      ...(this.o.captioner.usage === undefined ? {} : { usage: usageDTO(this.o.captioner.usage()) }),
+      needsYou: this.healthy === false ? needsYouFor(this.o.captioner.kind) : null,
     };
   }
+}
+
+function usageDTO(u: import("./types.ts").CaptionUsage): NonNullable<CaptionerStatusDTO["usage"]> {
+  return { frames: u.frames, inputTokens: u.inputTokens, outputTokens: u.outputTokens, lastFrame: u.lastFrame, refusals: u.refusals, ...(u.costUsd === undefined ? {} : { costUsd: u.costUsd }) };
+}
+
+function needsYouFor(kind: "stub" | "ollama" | "claude"): string {
+  return kind === "claude" ? "Offload cannot read screens with Claude right now. Check the Claude account in Settings." : "The local screen reader is not running. Start Ollama so Offload can read screens.";
 }

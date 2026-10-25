@@ -54,7 +54,10 @@ tsc_out="$(cd "$BRAIN" && bunx tsc --noEmit 2>&1)" || { echo "$tsc_out" | head -
 rm -rf "$fixture"
 
 # 4. Images never reach Claude.
-if grep -rnE "models/model|claude-agent-sdk|anthropic" "$BRAIN/src/vision"; then fail "brain/src/vision imports the Claude model"; fi
+# s14 scope change (ADR 0007 rev, ADR 0008): only vision/claude.ts may use the Anthropic SDK (host-guarded, opt-in
+# account); no vision file imports the brain's text model or the Agent SDK.
+if grep -rnE "models/model|claude-agent-sdk" "$BRAIN/src/vision"; then fail "brain/src/vision imports the Claude text model"; fi
+if grep -rlE "anthropic" "$BRAIN/src/vision" | grep -v "/vision/claude.ts$" | grep -v "/vision/routed.ts$"; then fail "a vision file other than claude.ts talks to Anthropic"; fi
 
 # 5. Bench.
 [ -s "$SLICE/BENCH.md" ] || fail "no BENCH.md"
