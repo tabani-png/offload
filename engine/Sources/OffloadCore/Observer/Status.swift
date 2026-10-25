@@ -32,6 +32,8 @@ public struct ObserverHeartbeat: Codable, Equatable, Sendable {
     public var keysMode: String?
     public var nextPurgeAt: Int64?
     public var ocrDropped: Int?
+    /// s11 keyframes kept since start (absent in older heartbeats).
+    public var framesKept: Int? = nil
 }
 
 /// One stored day in `status --json`.
@@ -131,7 +133,7 @@ extension Observer {
                           idle: isIdle, plain: plain, eventsWritten: counters.totalWritten,
                           writeErrors: counters.writeErrors, ocrErrors: counters.ocrErrors, permissions: permissions,
                           keysMode: keysMode?.rawValue, nextPurgeAt: nextPurge.map(epochMillis),
-                          ocrDropped: counters.ocrDropped)
+                          ocrDropped: counters.ocrDropped, framesKept: counters.framesKept)
     }
 }
 

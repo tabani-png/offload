@@ -31,6 +31,12 @@ public struct StoreLayout: Sendable {
     /// LaunchAgent stdout/stderr.
     public var logsDir: URL { home.appendingPathComponent("logs", isDirectory: true) }
 
+    /// Keyframes (s11): `frames/DAY/<frameId>.enc` + `frames/DAY/index.jsonl.enc`, purged with the day.
+    public var framesDir: URL { home.appendingPathComponent("frames", isDirectory: true) }
+    public func frameDir(_ day: String) -> URL { framesDir.appendingPathComponent(day, isDirectory: true) }
+    public func frameFile(_ day: String, _ frameId: String) -> URL { frameDir(day).appendingPathComponent("\(frameId).enc") }
+    public func frameIndex(_ day: String) -> URL { frameDir(day).appendingPathComponent("index.jsonl.enc") }
+
     public func encryptedDayFile(_ day: String) -> URL { daysDir.appendingPathComponent("\(day).jsonl.enc") }
     public func plainDayFile(_ day: String) -> URL { daysDir.appendingPathComponent("\(day).jsonl") }
     public func keyFile(_ day: String) -> URL { keysDir.appendingPathComponent("\(day).key") }

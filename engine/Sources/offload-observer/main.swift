@@ -61,7 +61,9 @@ let observer = Observer(clock: clock, workspace: LiveWorkspace(), idle: LiveIdle
                         screenText: nil, pauseState: FilePauseControl(layout: layout),
                         sink: DayStore(layout: layout, plain: plain, keys: vault), retention: Retention(layout: layout),
                         exclusions: exclusions, ocr: ocr, days: DayCalendar(),
-                        logRotation: LogRotation(layout: layout))  // 5 MB, 2 old files, checked every minute
+                        logRotation: LogRotation(layout: layout),  // 5 MB, 2 old files, checked every minute
+                        // s11: masked keyframes, encrypted with the day key; OFFLOAD_KEYFRAMES=0 turns them off.
+                        frames: env["OFFLOAD_KEYFRAMES"] == "0" ? nil : FrameStore(layout: layout, keys: vault))
 let startedAt = Date()
 let pid = ProcessInfo.processInfo.processIdentifier
 

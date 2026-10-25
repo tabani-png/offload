@@ -34,6 +34,13 @@ public struct ObserverCounters: Equatable, Sendable {
     public var purgedDays = 0
     /// Brain keys deleted because their day passed the window (REVIEW-2 N4).
     public var purgedBrainKeys = 0
+    /// s11 keyframes: kept, skipped by the throttle, skipped as near-duplicates, skipped for privacy (secure input),
+    /// and failures to render or store.
+    public var framesKept = 0
+    public var framesSkippedThrottle = 0
+    public var framesSkippedDuplicate = 0
+    public var framesSkippedPrivacy = 0
+    public var frameErrors = 0
 
     public var totalWritten: Int { written.values.reduce(0, +) }
 }
@@ -83,12 +90,20 @@ public final class Observer {
     private var loggedErrors = Set<String>()
     private var warnedInputUnavailable = false
     private var generation = 0
+    /// s11: where kept keyframes go (nil = keyframes off) and their throttle.
+    private let frames: FrameSink?
+    public let keyframes: KeyframeConfig
+    private let throttle: KeyframeThrottle
 
     public init(config: ObserverConfig = ObserverConfig(), clock: Clock, workspace: WorkspaceSource, idle: IdleSource,
                 input: InputCountSource, screenText: ScreenTextSource?, pauseState: PauseState, sink: EventSink,
                 retention: Retention?, policy: ExclusionPolicy = .standard, masker: Masker = Masker(),
                 ids: ULIDGenerator = ULIDGenerator(), exclusions: ExclusionReloader? = nil, ocr: OCRExecutor? = nil,
-                days: DayCalendar = DayCalendar(), logRotation: LogRotation? = nil) {
+                days: DayCalendar = DayCalendar(), logRotation: LogRotation? = nil, frames: FrameSink? = nil,
+                keyframes: KeyframeConfig = KeyframeConfig()) {
+        self.frames = frames
+        self.keyframes = keyframes
+        self.throttle = KeyframeThrottle(config: keyframes)
         self.config = config
         self.clock = clock
         self.workspace = workspace
@@ -176,6 +191,7 @@ public final class Observer {
         isIdle = false
         inputWindowStart = now
         generation += 1  // OCR results asked for before this point are dropped
+        throttle.resetDuplicates()
     }
 
     // MARK: idle
@@ -232,7 +248,10 @@ public final class Observer {
                 if policy.evaluate(snap) != nil || snap.secureInputActive {
                     counters.ocrSkippedExcluded += 1
                 } else {
-                    ocr.submit(OCRJob(snapshot: snap, generation: generation))
+                    // s11: pixels are asked for only when a keyframe could be kept now (K1). Excluded windows and
+                    // secure input never reach this line (K2).
+                    let wantsFrame = frames != nil && throttle.mightKeep(now: now)
+                    ocr.submit(OCRJob(snapshot: snap, generation: generation, wantsFrame: wantsFrame))
                 }
             }
         }
@@ -255,6 +274,7 @@ public final class Observer {
             logOnce("ocr", "screen text failed: \(Log.describe(error))")
             return
         }
+        if let frame = result.frame { keepFrame(frame, snapshot: snap) }
         guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         var text = masker.mask(raw).text
         if text.count > config.maxOCRCharacters { text = String(text.prefix(config.maxOCRCharacters)) }
@@ -265,6 +285,45 @@ public final class Observer {
         }
         lastTextHash = hash
         write(Event(id: "", ts: 0, kind: .ocr, app: snap.bundleID, appName: snap.appName, text: text, textHash: hash))
+    }
+
+    // MARK: keyframes (s11)
+
+    /// Keeps one masked keyframe when privacy, throttle and dedupe allow (SPEC K1-K4). The caller already checked the
+    /// generation and the exclusion policy for this result.
+    private func keepFrame(_ frame: ScreenFrame, snapshot snap: FocusSnapshot) {
+        guard let frames else { return }
+        // K2: never while Secure Event Input is on or idle (the frame may predate either), never for an excluded window.
+        guard !snap.secureInputActive, !isIdle, !isPaused, policy.evaluate(snap) == nil else {
+            counters.framesSkippedPrivacy += 1
+            return
+        }
+        let now = clock.now
+        let hash = PerceptualHash(image: frame.image)
+        switch throttle.decide(now: now, hash: hash) {
+        case .throttled:
+            counters.framesSkippedThrottle += 1
+            return
+        case .duplicate:
+            counters.framesSkippedDuplicate += 1
+            return
+        case .keep:
+            break
+        }
+        do {
+            let masked = try KeyframeRenderer.render(frame, masker: masker, config: keyframes)
+            let ts = epochMillis(now)
+            let fields = observedFields(snap)
+            let meta = FrameMeta(frameId: ids.next(millis: ts), ts: ts, app: snap.bundleID, appName: snap.appName,
+                                 host: fields.host, phash: masked.phash64, width: masked.width, height: masked.height,
+                                 bytes: masked.jpeg.count, maskedRegions: masked.maskedRegions)
+            try frames.storeFrame(masked.jpeg, meta: meta)
+            throttle.record(now: now, hash: hash)
+            counters.framesKept += 1
+        } catch {
+            counters.frameErrors += 1
+            logOnce("frames", "keep keyframe failed: \(Log.describe(error))")
+        }
     }
 
     /// SHA-256 of the masked text, first 16 bytes as hex.

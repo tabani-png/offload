@@ -8,6 +8,10 @@ public enum ObserverCommand: Equatable, Sendable {
     case resume
     case purgeNow
     case exportDay(String)
+    /// s11: `list-frames YYYY-MM-DD`: the day's decrypted keyframe index, one JSON line per frame.
+    case listFrames(String)
+    /// s11: `export-frame FRAMEID`: the decrypted JPEG bytes on stdout.
+    case exportFrame(String)
     case exclude(ExcludeAction)
     case installAgent
     case uninstallAgent
@@ -55,6 +59,8 @@ public enum ObserverCLI {
       pause | resume       stop / restart recording (the running observer notices within 1 s)
       purge-now            delete days older than 7 local days now
       export-day YYYY-MM-DD  print that day's decrypted events as JSON lines (exit 3 + purge if older than 7 days)
+      list-frames YYYY-MM-DD print that day's keyframe index as JSON lines (exit 3 + purge if older than 7 days)
+      export-frame FRAMEID   write that keyframe's decrypted JPEG to stdout (exit 3 + purge if older than 7 days)
       wrap-key --name NAME   store a new random 32-byte brain key wrapped with the Keychain master key in
                            keys/brain-NAME.key (or keep the stored one); prints the key as base64
       wrap-key --name NAME --import  store the 32-byte key given as one base64 line on stdin instead (migration)
@@ -109,6 +115,16 @@ public enum ObserverCLI {
             guard let day = extra.first else { throw ArgumentError.missingValue("export-day") }
             if extra.count > 1 { throw ArgumentError.unexpected(extra[extra.startIndex + 1]) }
             return ParsedArguments(command: .exportDay(day), home: home)
+        case "list-frames":
+            guard let day = extra.first else { throw ArgumentError.missingValue("list-frames") }
+            if extra.count > 1 { throw ArgumentError.unexpected(extra[extra.startIndex + 1]) }
+            guard StoreLayout.isDayName(day) else { throw ArgumentError.invalidValue("list-frames") }
+            return ParsedArguments(command: .listFrames(day), home: home)
+        case "export-frame":
+            guard let id = extra.first else { throw ArgumentError.missingValue("export-frame") }
+            if extra.count > 1 { throw ArgumentError.unexpected(extra[extra.startIndex + 1]) }
+            guard FrameStore.isFrameID(id) else { throw ArgumentError.invalidValue("export-frame") }
+            return ParsedArguments(command: .exportFrame(id), home: home)
         case "wrap-key":
             var args = Array(extra)
             let importing = args.contains("--import")
@@ -178,7 +194,8 @@ public enum ObserverCLI {
                                   permissions: PermissionState? = nil,
                                   executable: String = CommandLine.arguments.first ?? "",
                                   input: () -> Data = { Data() },
-                                  out: (String) -> Void, err: (String) -> Void) -> Int32 {
+                                  out: (String) -> Void, err: (String) -> Void,
+                                  outBytes: (Data) -> Void = { FileHandle.standardOutput.write($0) }) -> Int32 {
         let layout = StoreLayout(home: StoreLayout.resolveHome(flag: parsed.home, environment: environment))
         let keysMode = KeyMode.fromEnvironment(environment)
         switch parsed.command {
@@ -242,6 +259,38 @@ public enum ObserverCLI {
                 return 0
             } catch {
                 err("export-day \(day): \(error)")
+                return 1
+            }
+        case .listFrames(let day):
+            guard days.date(ofDay: day) != nil else {
+                err("list-frames \(day): not a calendar day")
+                return 2
+            }
+            if let code = refuseExpiredFrames("list-frames \(day)", day: day, layout: layout, days: days, now: now, err: err) {
+                return code
+            }
+            do {
+                let store = FrameStore(layout: layout, days: days, keys: DayKeyVault(layout: layout, mode: keysMode, secrets: secrets))
+                for meta in try store.list(day: day) { out(String(decoding: try meta.jsonLine(), as: UTF8.self)) }
+                return 0
+            } catch {
+                err("list-frames \(day): \(error)")
+                return 1
+            }
+        case .exportFrame(let id):
+            let store = FrameStore(layout: layout, days: days, keys: DayKeyVault(layout: layout, mode: keysMode, secrets: secrets))
+            guard let day = store.locate(id) else {
+                err("export-frame \(id): not found")
+                return 1
+            }
+            if let code = refuseExpiredFrames("export-frame \(id)", day: day, layout: layout, days: days, now: now, err: err) {
+                return code
+            }
+            do {
+                outBytes(try store.read(id).jpeg)
+                return 0
+            } catch {
+                err("export-frame \(id): \(error)")
                 return 1
             }
         case .exclude(let action):
@@ -347,6 +396,16 @@ public enum ObserverCLI {
                 return 1
             }
         }
+    }
+
+    /// s11: keyframes of a day past the window are never served; the purge runs (deleting them) and the exit is 3.
+    static func refuseExpiredFrames(_ what: String, day: String, layout: StoreLayout, days: DayCalendar, now: Date,
+                                    err: (String) -> Void) -> Int32? {
+        guard let age = days.age(ofDay: day, now: now), age > Retention.defaultKeepDays else { return nil }
+        let purged = Retention(layout: layout, days: days).purgeAll(now: now)
+        err("\(what): day is older than \(Retention.defaultKeepDays) days and is not served"
+            + " (retention purged \(purged.days.count) expired day(s))")
+        return 3
     }
 
     /// REVIEW-2 N4: a brain key named for a day past the window is never served or created. Runs the retention
