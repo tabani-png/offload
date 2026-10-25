@@ -9,12 +9,13 @@ import { hostname } from "node:os";
 import type { Analysis } from "../analyze.ts";
 import type { ObserverEnv } from "../store/observer.ts";
 import { readWorkflow } from "../workflows/store.ts";
-import { decide, noticeSatisfied, workingTimeAllowed, workingTimeNotice, type ConsentState } from "./consent.ts";
+import { consentStartsAt, decide, noticeSatisfied, workingTimeAllowed, workingTimeNotice, type ConsentState } from "./consent.ts";
 import { loadDeviceSigner, type DeviceSigner } from "./device.ts";
 import { DeviceRevokedError, startLoopback, TokenManager, type LoopbackFlow } from "./enroll.ts";
 import { signEnvelope, splitObjects } from "./envelope.ts";
 import { EvidenceKey } from "./evidence-key.ts";
 import { checkControlUrl, ControlClient, ControlError, type FetchFn } from "./http.ts";
+import { sha256Hex } from "./encoding.ts";
 import { canonicalize } from "./jcs.ts";
 import { Outbox, type OutboxEntry } from "./outbox.ts";
 import { projectBaselineSamples, projectDailyAggregate, projectNoticeAck, projectReviewEvent, projectRunOutcome, projectWorkflowProposal, projectWorkingTime } from "./project/index.ts";
@@ -291,11 +292,13 @@ export class SyncClient {
     return p;
   }
 
-  /** G4 confirm: queues exactly the previewed proposal. `hash` (from the preview) must still match. */
-  share(localId: string, hash: string | null): WorkflowProposal {
+  /** G4 confirm: queues exactly the previewed proposal. `hash` (the preview's definitionHash) is required and must still
+   * match, so the person confirms exactly what they saw. */
+  share(localId: string, hash: string): WorkflowProposal {
+    if (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)) throw new SyncError("bad_request", "confirm needs the preview's definitionHash");
     if (!this.connected(this.state())) throw new SyncError("not_connected", "this Mac is not connected to a company");
     const p = this.proposal(localId);
-    if (hash !== null && hash !== p.definitionHash) throw new SyncError("conflict", "the workflow changed since the preview: preview it again");
+    if (hash !== p.definitionHash) throw new SyncError("conflict", "the workflow changed since the preview: preview it again");
     const at = this.now();
     const s = this.state();
     s.known[p.id] = at;
@@ -306,10 +309,14 @@ export class SyncClient {
 
   // ---------- projection ----------
 
-  /** Projects what consent allows now and queues objects not queued or sent before. */
+  /** Projects what consent allows now and queues objects not queued or sent before. Only what was observed at or after
+   * the notice acknowledgement is projected (ADR 0111 §3). A run outcome whose run changed since it was queued is queued
+   * again under the same id (ADR 0111 §4), replacing an unsent copy. */
   private async enqueueProjected(): Promise<number> {
     const s = this.state();
     const c = this.consent(s);
+    const since = consentStartsAt(c);
+    if (since === null) return 0;
     const allowed = (k: SyncKind) => decide(k, c, { forQueue: true }) === "send";
     const metrics = (["run_outcome", "review_event", "baseline_sample", "daily_aggregate"] as const).some(allowed);
     const wt = allowed("working_time_aggregate") && workingTimeAllowed(c);
@@ -318,28 +325,30 @@ export class SyncClient {
     const ev = this.evidence();
     const ctx = { ids: ev.ids, now };
     const objects: SyncObject[] = [];
-    const runs = collectRuns(this.home, s.bindings, now);
+    const runs = collectRuns(this.home, s.bindings, now, since);
     const reviews = collectReviews(runs, readReviews(this.home));
     const analysis = this.deps.analysis === undefined ? null : await this.deps.analysis();
-    const baselines = analysis === null ? [] : collectBaselines(analysis, this.home, s.bindings, ev, now);
+    const baselines = analysis === null ? [] : collectBaselines(analysis, this.home, s.bindings, ev, now, since);
     if (allowed("run_outcome")) objects.push(...runs.map((r) => projectRunOutcome(r, ctx)));
     if (allowed("review_event")) objects.push(...reviews.map((r) => projectReviewEvent(r, ctx)));
     if (allowed("baseline_sample")) objects.push(...baselines.flatMap((b) => projectBaselineSamples(b, ctx)));
-    if (analysis !== null && allowed("daily_aggregate")) objects.push(...collectDaily(analysis, this.home, s.bindings, runs, reviews, baselines, now).map((d) => projectDailyAggregate(d, ctx)));
+    if (analysis !== null && allowed("daily_aggregate")) objects.push(...collectDaily(analysis, this.home, s.bindings, runs, reviews, baselines, now, since).map((d) => projectDailyAggregate(d, ctx)));
     if (analysis !== null && wt) {
       const notice = workingTimeNotice(s.acks)!;
-      objects.push(...collectWorkingTime(analysis, now, this.config!.workingTimeStartsAt!, notice.noticeVersionId).map((w) => projectWorkingTime(w, ctx)));
+      objects.push(...collectWorkingTime(analysis, now, this.config!.workingTimeStartsAt!, notice.noticeVersionId, since).map((w) => projectWorkingTime(w, ctx)));
     }
     const fresh: OutboxEntry[] = [];
     for (const o of objects) {
-      if (s.known[o.id] !== undefined) continue;
+      const digest = o.kind === "run_outcome" ? sha256Hex(canonicalize(o)) : null;
+      if (s.known[o.id] !== undefined && (digest === null || s.digests[o.id] === digest)) continue;
       assertValid(SCHEMA_OF_KIND[o.kind], o);
       fresh.push({ id: o.id, kind: o.kind, object: o, queuedAt: now, attempts: 0 });
-      s.known[o.id] = now;
+      s.known[o.id] ??= now;
+      if (digest !== null) s.digests[o.id] = digest;
     }
     if (fresh.length > 0) {
       this.save(s);
-      this.outbox.add(fresh, now);
+      this.outbox.put(fresh, now);
     }
     return fresh.length;
   }

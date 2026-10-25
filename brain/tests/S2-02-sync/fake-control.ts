@@ -186,9 +186,9 @@ export class FakeControl {
         receipt.rejected.push({ id: o.id, ...forcedReject });
         continue;
       }
-      // Server-side re-check (ADR 0103 §2): G1 and G2 from its own records.
+      // Server-side re-check (ADR 0103 §2, ADR 0111 §3): G1 and G2 from its own records; no required notice = acks only.
       if (o.kind === "notice_ack") d.acked.add(o.noticeVersionId);
-      else if (this.config.requiredNotice !== null && !d.acked.has(this.config.requiredNotice.noticeVersionId)) {
+      else if (this.config.requiredNotice === null || !d.acked.has(this.config.requiredNotice.noticeVersionId)) {
         receipt.rejected.push({ id: o.id, code: "consent_missing", retryable: false });
         continue;
       } else if (o.kind === "working_time_aggregate" && !this.config.features.working_time) {

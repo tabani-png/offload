@@ -44,7 +44,7 @@ export async function syncRoute(req: Request, path: string, sync: SyncClient): P
       if (!sync.hasWorkflow(id)) return error(404, "not_found", "unknown workflow id");
       if (url.searchParams.get("confirm") !== "1") return json(200, { confirmed: false, proposal: sync.proposal(id) });
       const hash = url.searchParams.get("hash");
-      if (hash !== null && !/^[0-9a-f]{64}$/.test(hash)) return error(400, "bad_request", "hash must be the preview's definitionHash");
+      if (hash === null || !/^[0-9a-f]{64}$/.test(hash)) return error(400, "bad_request", "confirm needs &hash= the preview's definitionHash");
       return json(201, { confirmed: true, proposal: sync.share(id, hash) });
     }
     switch (path) {

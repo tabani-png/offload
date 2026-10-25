@@ -419,13 +419,18 @@ against its schema before it is queued. Raw activity has no code path to the net
   `DeviceSigner` is the seam for a Secure Enclave key. `instanceRef = hex(HMAC-SHA256(deviceEvidenceKey,
   localInstanceId))[0:32]`; the ref -> instance map is sealed per capture day and resolves only on this Mac, 7 days.
 - Consent (checked here before anything but the notice ack is sent; the server re-checks): unknown config = only
-  `notice_ack`; G1 nothing else until the required notice version is acknowledged on this Mac; G2 working time only
+  `notice_ack`; no required notice in the config = only `notice_ack` too (fail closed, ADR 0111 §3); G1 nothing else
+  until the required notice version is acknowledged on this Mac. Consent is forward-only: nothing observed before that
+  acknowledgement time leaves the Mac (runs that started earlier, their reviews, instances that started earlier, daily
+  rows of days that ended earlier, active spans that started earlier; the acknowledgement day counts only what came
+  after it); G2 working time only
   when `working_time` is on, an acknowledged notice lists it and `now >= workingTimeStartsAt` (and never for days
   before that), turned off = queued working-time objects are dropped; G3 daily aggregates always once acknowledged;
   G4 a proposal only after `?confirm=1` on its preview; G5 pause holds everything. A kill switch holds everything but
   acks. Kinds outside `allowedKinds` are held.
 - Outbox: `$OFFLOAD_HOME/sync/outbox/DAY.json.enc`, sealed with the brain day key of the day queued (no plaintext);
-  purged after 7 days with a purge-log line `{day, deletedAt, events: 0, files, by: "sync-outbox"}`. State (ids, seq,
+  purged after 7 days with a purge-log line `{day, deletedAt, events: 0, files, by: "sync-outbox"}` (expired ref maps:
+  `by: "sync-refs"`). State (ids, seq,
   flags, acks, bindings; no secrets) in `sync/state.json`; measured review seconds in `sync/reviews.json`.
 - Envelopes: RFC 8785 JCS body `{v: 1, deviceId, seq, sentAt, objects}` (<= 500 objects, <= 1 MiB), signed ES256 in
   `Offload-Signature: keyid=<deviceId>, sig=<b64url>`; `seq` is written before the request and strictly increases
@@ -434,6 +439,8 @@ against its schema before it is queued. Raw activity has no code path to the net
   outbox, `rate_limited` / `server_error` are retried after a backoff, everything else is dropped and logged.
 - Device tokens: challenge -> ES256 over the nonce -> 15-minute token in memory, refreshed in its last minute. A
   401/403 from the token endpoints marks the device revoked: sync stops until it is connected again (new device id).
+- A `run_outcome`'s object id is derived from its `runId` only (ADR 0111 §4): when the run changes (partial, then the
+  rest sent), the new form is queued again under the same id and goes in a later envelope (higher `seq`).
 - Only workflows bound to a company workflow (`SyncClient.bind`, a role workflow or a promoted proposal) produce run
   outcomes, review events, baselines and per-workflow daily rows.
 
@@ -452,8 +459,10 @@ Routes (bearer token as everywhere):
 - `POST /sync/notice/ack {noticeVersionId}` -> 201 `{ack}` (a `notice_ack`, channel `mac_app`); 409 unless it names
   the notice the config requires.
 - `POST /workflows/:id/share` -> `{confirmed: false, proposal}` (the exact `workflow_proposal` JSON, facts values and
-  recipient-list cells redacted, contacts masked); `?confirm=1[&hash=<definitionHash>]` -> 201 `{confirmed: true,
-  proposal}` and queues it (409 when the hash no longer matches). 404 unknown workflow.
+  recipient-list cells redacted, contacts masked: addresses, links, phone numbers and any dotted host name, whatever its
+  top-level domain); `?confirm=1&hash=<definitionHash>` -> 201 `{confirmed: true, proposal}` and queues it. The hash is
+  required (400 without it): the confirm queues exactly what was previewed (409 when it no longer matches). 404 unknown
+  workflow.
 
 ## Connections (s17)
 Any app Composio supports (brain/CONNECTORS.md "Connect anything (s17)"). Nothing here sends: setup and test only

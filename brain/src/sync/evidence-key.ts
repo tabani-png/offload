@@ -3,7 +3,7 @@
 // the control plane can count and sum refs but cannot resolve or correlate them across devices. The local map
 // ref -> instance is sealed per capture day with the brain day key (`brain-YYYY-MM-DD`) and follows the 7-day rule:
 // a ref of an instance older than 7 days no longer resolves, like the instance itself.
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { hmacHex, ulidFrom } from "./encoding.ts";
 import { DEVICE_EVIDENCE, syncKey } from "./keys.ts";
@@ -85,7 +85,8 @@ export class EvidenceKey {
   }
 }
 
-/** Retention: ref maps of expired days are deleted (store/retention.ts). Returns the days removed. */
+/** Retention: ref maps of expired days are deleted (store/retention.ts) with a purge-log line per day
+ * {day, deletedAt, events: 0, files, by: "sync-refs"}, like the outbox. Returns the days removed. */
 export function purgeRefs(home: string, now: number): string[] {
   if (!existsSync(refsDir(home))) return [];
   const gone: string[] = [];
@@ -96,5 +97,8 @@ export function purgeRefs(home: string, now: number): string[] {
       gone.push(day ?? "unknown");
     }
   }
+  const perDay = new Map<string, number>();
+  for (const d of gone) perDay.set(d, (perDay.get(d) ?? 0) + 1);
+  for (const [day, files] of [...perDay].sort()) appendFileSync(join(home, "purge-log.jsonl"), JSON.stringify({ day, deletedAt: now, events: 0, files, by: "sync-refs" }) + "\n", { mode: 0o600 });
   return gone;
 }

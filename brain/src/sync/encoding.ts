@@ -30,5 +30,13 @@ export function ulid(ts: number, entropy: Uint8Array = randomBytes(10)): string 
   return time + rand;
 }
 
+/** The time (ms) encoded in a ULID's first 10 characters. */
+export function ulidTime(id: string): number {
+  if (!ULID_RE.test(id)) throw new Error("ulidTime: not a ULID");
+  let t = 0;
+  for (const ch of id.slice(0, 10)) t = t * 32 + CROCKFORD.indexOf(ch);
+  return t;
+}
+
 /** A deterministic ULID: the same (key, seed, ts) gives the same id, so re-projecting an object never duplicates it. */
 export const ulidFrom = (key: Uint8Array, seed: string, ts: number): string => ulid(ts, createHmac("sha256", key).update(`ulid\u0000${seed}`, "utf8").digest().subarray(0, 10));

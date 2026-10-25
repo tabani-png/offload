@@ -70,6 +70,25 @@ export async function connect(w: SyncWorld): Promise<void> {
   if (w.client.status().state !== "connected") throw new Error(`connect failed: ${w.client.status().lastError}`);
 }
 
+/** Start of the fixture week (local midnight 2026-10-12). Consent is forward-only (ADR 0111 §3): a test that wants the
+ * fixture's past days to sync acknowledges the notice at this time. */
+export const FIXTURE_ACK_AT = new Date(2026, 9, 12).getTime();
+
+/** Runs `ack` (default: acknowledge `notice` on the client) with the clock at `at`, then puts the clock back. */
+export async function ackAt(w: SyncWorld, notice: string, at = FIXTURE_ACK_AT, ack?: () => Promise<unknown>): Promise<void> {
+  const back = w.clock.now;
+  w.clock.now = at;
+  try {
+    if (ack !== undefined) await ack();
+    else {
+      await w.client.refreshConfig();
+      await w.client.acknowledgeNotice(notice);
+    }
+  } finally {
+    w.clock.now = back;
+  }
+}
+
 /** Connects and acknowledges the required notice. */
 export async function connectAndAck(w: SyncWorld): Promise<void> {
   await connect(w);

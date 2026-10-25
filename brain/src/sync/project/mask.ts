@@ -5,8 +5,10 @@
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const URL_RE = /\b(?:https?|ftp|mailto|file):\/{0,2}[^\s)\]>"'`]+/gi;
 const WWW_RE = /\bwww\.[^\s)\]>"'`]+/gi;
-// Host names with a real top-level domain. File names (recipients.csv, facts.md, workflow.json) are not hosts.
-const HOST_RE = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|vc|co|ai|app|dev|uk|de|fr|ca|us|eu|me|xyz|info|biz|edu|gov|ch|nl|se|no|fi|dk|es|it|jp|au|nz|in|tech|cloud|so|gg|ly|to)\b/gi;
+// Any dotted name whose last label is 2-63 letters is treated as a host: no list of top-level domains, so new or
+// country domains (.studio, .health, .pl, .com.br) are masked too. Only the brain's own workflow file names stay.
+const HOST_RE = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/gi;
+const LOCAL_FILES = new Set(["recipients.csv", "facts.md", "workflow.json", "skill.md"]);
 const PHONE_RE = /\+?\d[\d ().-]{6,}\d/g;
 
 /** Masks emails, URLs, host names and phone-like digit runs (at least 9 digits). */
@@ -15,7 +17,7 @@ export function mask(text: string): string {
     .replace(EMAIL_RE, "[email]")
     .replace(URL_RE, "[link]")
     .replace(WWW_RE, "[link]")
-    .replace(HOST_RE, "[host]")
+    .replace(HOST_RE, (m) => (LOCAL_FILES.has(m.toLowerCase()) ? m : "[host]"))
     .replace(PHONE_RE, (m) => (m.replace(/\D/g, "").length >= 9 ? "[number]" : m))
     .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "");
 }

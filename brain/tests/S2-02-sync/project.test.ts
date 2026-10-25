@@ -12,7 +12,7 @@ import { SCHEMA_OF_KIND, validate } from "../../src/sync/schema.ts";
 import type { ProjectionContext, RunInput, SyncObject } from "../../src/sync/types.ts";
 import { tempHome } from "../helpers.ts";
 import { NOTICE_1, NOTICE_WT, WORKFLOW, defaultConfig } from "./fake-control.ts";
-import { connect, fixtureSyncWorld, NOW, type FixtureSyncWorld } from "./setup.ts";
+import { ackAt, connect, fixtureSyncWorld, NOW, type FixtureSyncWorld } from "./setup.ts";
 
 const t = tempHome();
 const ctx: ProjectionContext = { ids: EvidenceKey.fromBytes(t.home, new Uint8Array(32).fill(3)).ids, now: NOW };
@@ -151,10 +151,9 @@ describe("property: nothing from the fixture's content reaches the outbox", () =
     expect(outreach.instances.length).toBeGreaterThan(450);
     w.control.config = defaultConfig({ requiredNotice: { noticeVersionId: NOTICE_WT, title: "Notice", markdown: "m", features: ["workflow_metrics", "working_time"] }, features: { workflow_metrics: true, per_person_views: true, working_time: true }, workingTimeStartsAt: new Date(2026, 9, 12).getTime() });
     await connect(w);
-    await w.client.refreshConfig();
-    await w.client.acknowledgeNotice(NOTICE_WT);
+    await ackAt(w, NOTICE_WT);
     w.client.recordReview({ workflowId: w.fixture.outreach.id, batchHash: w.batch.hash, at: w.batch.approvedAt!, reviewSeconds: 240, editSeconds: 60, fixSeconds: 0, itemsEdited: 3, decision: "approved_with_edits", surface: "mac_review" });
-    w.client.share(w.fixture.outreach.id, null);
+    w.client.share(w.fixture.outreach.id, w.client.proposal(w.fixture.outreach.id).definitionHash);
     w.client.setPaused(true);
     await w.client.flush({ force: true });
     const entries = new Outbox(w.home).list(NOW);

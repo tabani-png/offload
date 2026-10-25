@@ -74,6 +74,13 @@ export class Outbox {
     this.save([...cur, ...entries.filter((e) => !ids.has(e.id))], now);
   }
 
+  /** Adds entries, replacing a queued entry with the same id (a newer form of the same object). */
+  put(entries: readonly OutboxEntry[], now: number): void {
+    if (entries.length === 0) return;
+    const ids = new Set(entries.map((e) => e.id));
+    this.save([...this.list(now).filter((e) => !ids.has(e.id)), ...entries], now);
+  }
+
   /** Applies `change` to the whole list and writes the result. */
   update(now: number, change: (entries: OutboxEntry[]) => OutboxEntry[]): OutboxEntry[] {
     const next = change(this.list(now));

@@ -8,7 +8,7 @@ import { Outbox } from "../../src/sync/outbox.ts";
 import type { SyncEnvelope, WorkflowProposal } from "../../src/sync/types.ts";
 import { tempHome } from "../helpers.ts";
 import { NOTICE_1 } from "./fake-control.ts";
-import { browser, fixtureSyncWorld, loopbackFetch, type FixtureSyncWorld } from "./setup.ts";
+import { ackAt, browser, fixtureSyncWorld, loopbackFetch, type FixtureSyncWorld } from "./setup.ts";
 
 const TOKEN = "s".repeat(40);
 let w: FixtureSyncWorld;
@@ -98,7 +98,8 @@ describe("flows", () => {
 
   test("ROUTES: GET /sync/preview is byte for byte the next envelope the brain sends", async () => {
     await connectViaApi();
-    await call("/sync/notice/ack", { method: "POST", body: { noticeVersionId: NOTICE_1 } });
+    // Acknowledged at the start of the fixture week, so its runs and days may sync (ADR 0111 §3).
+    await ackAt(w, NOTICE_1, undefined, () => call("/sync/notice/ack", { method: "POST", body: { noticeVersionId: NOTICE_1 } }));
     const p = await call<{ envelope: SyncEnvelope; body: string; held: number }>("/sync/preview");
     expect(p.status).toBe(200);
     expect(p.body.envelope.seq).toBe(1);
@@ -148,7 +149,7 @@ describe("flows", () => {
   });
 
   test("ROUTES: share and preview before connect are 409, never a request to the control plane", async () => {
-    expect((await call(`/workflows/${w.fixture.outreach.id}/share?confirm=1`, { method: "POST" })).status).toBe(409);
+    expect((await call(`/workflows/${w.fixture.outreach.id}/share?confirm=1&hash=${"0".repeat(64)}`, { method: "POST" })).status).toBe(409);
     expect((await call("/sync/preview")).status).toBe(409);
     expect((await call("/sync/notice/ack", { method: "POST", body: { noticeVersionId: NOTICE_1 } })).status).toBe(409);
     expect(w.control.calls).toEqual([]);

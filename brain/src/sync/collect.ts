@@ -3,6 +3,9 @@
 // hashes, and refs computed with the device evidence key. Content (recipients, subjects, bodies, titles, URLs, hosts,
 // OCR) stops here: no input type has a field that could carry it. The one text that leaves is a shared workflow's
 // definition (G4), and its facts values and recipient-list cells are redacted here before the projector masks it.
+// ADR 0111 §3: every per-person collector takes `since` (the notice acknowledgement time, consent.ts consentStartsAt)
+// and leaves out whatever was observed before it: runs that started earlier, instances that started earlier, days that
+// ended earlier and active spans that started earlier.
 import type { Analysis } from "../analyze.ts";
 import { localDay } from "../store/vault.ts";
 import { parseFacts } from "../workflows/facts.ts";
@@ -52,13 +55,13 @@ const dayStart = (day: string) => {
   return new Date(y, m - 1, d).getTime();
 };
 
-export function collectRuns(home: string, bindings: Record<string, Binding>, now: number): RunInput[] {
+export function collectRuns(home: string, bindings: Record<string, Binding>, now: number, since: number): RunInput[] {
   const out: RunInput[] = [];
   for (const [localId, binding] of Object.entries(bindings)) {
     if (readWorkflow(home, localId) === null) continue;
     for (const b of listBatches(home, localId, now)) {
       const r = runOf(b, binding);
-      if (r !== null) out.push(r);
+      if (r !== null && r.startedAt >= since) out.push(r);
     }
   }
   return out.sort((a, b) => a.endedAt - b.endedAt || (a.batchHash < b.batchHash ? -1 : 1));
@@ -76,14 +79,15 @@ export function collectReviews(runs: readonly RunInput[], reviews: readonly Revi
 }
 
 /** Observed instances of each bound workflow's task, as evidence refs + active seconds (idle already excluded). */
-export function collectBaselines(a: Analysis, home: string, bindings: Record<string, Binding>, evidence: EvidenceKey, now: number): BaselineInput[] {
+export function collectBaselines(a: Analysis, home: string, bindings: Record<string, Binding>, evidence: EvidenceKey, now: number, since: number): BaselineInput[] {
   const out: BaselineInput[] = [];
   for (const [localId, binding] of Object.entries(bindings)) {
     const wf = readWorkflow(home, localId);
     const task = wf === null ? undefined : a.tasks.find((t) => t.id === wf.taskId);
-    if (task === undefined || task.instances.length === 0) continue;
-    const refs = evidence.remember(task.instances.map((i) => ({ instanceId: i.id, day: i.day })), now);
-    const instances = task.instances.flatMap((i) => {
+    const observed = task?.instances.filter((i) => i.start >= since) ?? [];
+    if (observed.length === 0) continue;
+    const refs = evidence.remember(observed.map((i) => ({ instanceId: i.id, day: i.day })), now);
+    const instances = observed.flatMap((i) => {
       const ref = refs.get(i.id);
       return ref === undefined ? [] : [{ instanceRef: ref, activeSeconds: Math.round(i.activeMs / 1000), day: i.day }];
     });
@@ -95,10 +99,12 @@ export function collectBaselines(a: Analysis, home: string, bindings: Record<str
 /** Completed local days in the store window (today is still open, so it waits until tomorrow). */
 export const completedDays = (a: Analysis, now: number) => a.windowDays.filter((d) => d < localDay(now));
 
-export function collectDaily(a: Analysis, home: string, bindings: Record<string, Binding>, runs: readonly RunInput[], reviews: readonly ReviewInput[], baselines: readonly BaselineInput[], now: number): DailyInput[] {
+/** Daily rows for completed days that end at or after `since`. Their inputs (runs, reviews, baselines) are already cut
+ * at `since`, so the acknowledgement day counts only what happened after the acknowledgement. */
+export function collectDaily(a: Analysis, home: string, bindings: Record<string, Binding>, runs: readonly RunInput[], reviews: readonly ReviewInput[], baselines: readonly BaselineInput[], now: number, since: number): DailyInput[] {
   const activeWorkflows = listWorkflows(home).filter((w) => w.status === "active").length;
   const residual = new Map(reviews.map((r) => [r.batchHash, r.reviewSeconds + r.editSeconds + r.fixSeconds]));
-  return completedDays(a, now).map((day) => ({
+  return completedDays(a, now).filter((day) => dayEnd(day) >= since).map((day) => ({
     day,
     dayEnd: dayEnd(day),
     activeWorkflows,
@@ -113,12 +119,13 @@ export function collectDaily(a: Analysis, home: string, bindings: Record<string,
 }
 
 /** Active time per completed day on or after `startsAt` (working time is never sent for days before the notice period
- * ended). Span titles, apps and hosts are read here and dropped: only seconds and two minute-of-day numbers remain. */
-export function collectWorkingTime(a: Analysis, now: number, startsAt: number, noticeVersionId: string): WorkingTimeInput[] {
+ * ended), counting only spans that started at or after `since` (the acknowledgement). Span titles, apps and hosts are
+ * read here and dropped: only seconds and two minute-of-day numbers remain. */
+export function collectWorkingTime(a: Analysis, now: number, startsAt: number, noticeVersionId: string, since: number): WorkingTimeInput[] {
   const out: WorkingTimeInput[] = [];
   for (const day of completedDays(a, now)) {
     if (dayStart(day) < startsAt) continue;
-    const spans = a.spans.filter((s) => s.day === day && s.activeMs > 0);
+    const spans = a.spans.filter((s) => s.day === day && s.activeMs > 0 && s.start >= since);
     if (spans.length === 0) continue;
     const midnight = dayStart(day);
     const first = Math.min(...spans.map((s) => s.start));

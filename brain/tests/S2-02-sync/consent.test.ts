@@ -5,13 +5,13 @@ import { decide, noticeSatisfied, workingTimeAllowed, type ConsentState } from "
 import { Outbox } from "../../src/sync/outbox.ts";
 import { SYNC_KINDS, type SyncKind } from "../../src/sync/types.ts";
 import { defaultConfig, NOTICE_1, NOTICE_WT } from "./fake-control.ts";
-import { connect, fixtureSyncWorld, NOW, type FixtureSyncWorld } from "./setup.ts";
+import { ackAt, connect, fixtureSyncWorld, NOW, type FixtureSyncWorld } from "./setup.ts";
 
 const DAY_MS = 86_400_000;
 const acked = [{ noticeVersionId: NOTICE_1, acknowledgedAt: NOW - DAY_MS, features: ["workflow_metrics" as const] }];
 const wtAck = { noticeVersionId: NOTICE_WT, acknowledgedAt: NOW - 20 * DAY_MS, features: ["workflow_metrics" as const, "working_time" as const] };
 const state = (over: Partial<ConsentState> = {}): ConsentState => ({ config: defaultConfig(), acks: acked, paused: false, now: NOW, ...over });
-const wtConfig = (over = {}) => defaultConfig({ requiredNotice: null, features: { workflow_metrics: true, per_person_views: false, working_time: true }, workingTimeStartsAt: NOW - DAY_MS, ...over });
+const wtConfig = (over = {}) => defaultConfig({ requiredNotice: { noticeVersionId: NOTICE_WT, title: "Working time", markdown: "m", features: ["workflow_metrics", "working_time"] }, features: { workflow_metrics: true, per_person_views: false, working_time: true }, workingTimeStartsAt: NOW - DAY_MS, ...over });
 
 describe("the gate", () => {
   test("CONSENT: unknown config sends nothing but notice_ack", () => {
@@ -33,7 +33,7 @@ describe("the gate", () => {
     expect(workingTimeAllowed(ok)).toBe(true);
     expect(decide("working_time_aggregate", ok)).toBe("send");
     // Acked a notice that does not list working_time.
-    expect(decide("working_time_aggregate", state({ config: wtConfig(), acks: acked }))).toBe("hold");
+    expect(decide("working_time_aggregate", state({ config: wtConfig(), acks: [{ ...wtAck, features: ["workflow_metrics"] }] }))).toBe("hold");
     // Still inside the notice period.
     expect(decide("working_time_aggregate", state({ config: wtConfig({ workingTimeStartsAt: NOW + 1 }), acks: [wtAck] }))).toBe("hold");
     expect(decide("working_time_aggregate", state({ config: wtConfig({ workingTimeStartsAt: null }), acks: [wtAck] }))).toBe("hold");
@@ -75,7 +75,7 @@ describe("end to end against the fake control plane", () => {
     const r0 = await w.client.flush({ force: true });
     expect(r0.envelopes).toBe(0);
     expect(new Outbox(w.home).list(NOW)).toEqual([]); // nothing was even projected
-    await w.client.acknowledgeNotice(NOTICE_1);
+    await ackAt(w, NOTICE_1);
     // The ack is queued; a restart before the next flush must not change what goes first.
     w.restart({ analysis: async () => w.fixture.analysis });
     const r1 = await w.client.flush({ force: true });
@@ -93,8 +93,7 @@ describe("end to end against the fake control plane", () => {
     await connect(w);
     await w.client.flush({ force: true });
     expect(w.control.received).toHaveLength(0);
-    await w.client.refreshConfig();
-    await w.client.acknowledgeNotice(NOTICE_WT);
+    await ackAt(w, NOTICE_WT);
     await w.client.flush({ force: true });
     const wt = w.control.acceptedObjects().filter((o) => o.kind === "working_time_aggregate");
     expect(wt.length).toBeGreaterThan(0);
@@ -107,8 +106,7 @@ describe("end to end against the fake control plane", () => {
     w = await fixtureSyncWorld();
     w.control.config = wtConfig({ requiredNotice: { noticeVersionId: NOTICE_WT, title: "Working time", markdown: "m", features: ["working_time"] }, workingTimeStartsAt: NOW + 14 * DAY_MS });
     await connect(w);
-    await w.client.refreshConfig();
-    await w.client.acknowledgeNotice(NOTICE_WT);
+    await ackAt(w, NOTICE_WT);
     await w.client.flush({ force: true });
     expect(w.control.acceptedObjects().some((o) => o.kind === "working_time_aggregate")).toBe(false);
     expect(w.control.acceptedObjects().some((o) => o.kind === "daily_aggregate")).toBe(true);
@@ -118,8 +116,7 @@ describe("end to end against the fake control plane", () => {
     w = await fixtureSyncWorld();
     w.control.config = wtConfig({ requiredNotice: { noticeVersionId: NOTICE_WT, title: "Working time", markdown: "m", features: ["working_time"] }, workingTimeStartsAt: new Date(2026, 9, 12).getTime() });
     await connect(w);
-    await w.client.refreshConfig();
-    await w.client.acknowledgeNotice(NOTICE_WT);
+    await ackAt(w, NOTICE_WT);
     w.client.setPaused(true);
     await w.client.flush({ force: true });
     const queued = new Outbox(w.home).list(NOW).filter((e) => e.kind === "working_time_aggregate").length;
@@ -135,8 +132,7 @@ describe("end to end against the fake control plane", () => {
   test("CONSENT: share previews without queueing; only the confirm queues the exact previewed proposal", async () => {
     w = await fixtureSyncWorld();
     await connect(w);
-    await w.client.refreshConfig();
-    await w.client.acknowledgeNotice(NOTICE_1);
+    await ackAt(w, NOTICE_1);
     await w.client.flush({ force: true });
     const preview = w.client.proposal(w.fixture.outreach.id);
     await w.client.flush({ force: true });

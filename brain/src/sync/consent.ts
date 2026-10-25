@@ -6,6 +6,9 @@
 //   G4  workflow_proposal only after an explicit confirm on a preview of the exact JSON (POST /workflows/:id/share);
 //   G5  paused -> everything is held in the encrypted outbox (7-day purge).
 // Unknown config (never fetched, or unreadable) = send nothing but notice_ack. A kill switch holds everything else too.
+// ADR 0111 §3: consent is forward-only. Nothing observed before the person acknowledged the required notice leaves this
+// Mac (consentStartsAt is the acknowledgement time, not its day), and a config with no required notice lets nothing but
+// notice_ack leave (fail closed).
 import type { DeviceConfig, Feature, SyncKind } from "./types.ts";
 
 export type Decision = "send" | "hold" | "drop";
@@ -28,12 +31,18 @@ export function workingTimeNotice(acks: readonly LocalAck[]): LocalAck | null {
   return [...acks].filter((a) => a.features.includes("working_time")).sort((a, b) => b.acknowledgedAt - a.acknowledgedAt)[0] ?? null;
 }
 
-/** G1: the person acknowledged what the config requires (no notice outstanding, or the required version is acked here). */
+/** G1: the config names a required notice and this Mac acknowledged that version. No required notice = not satisfied. */
 export function noticeSatisfied(s: ConsentState): boolean {
-  const c = s.config;
-  if (c === null) return false;
-  if (c.requiredNotice === null) return true;
-  return s.acks.some((a) => a.noticeVersionId === c.requiredNotice!.noticeVersionId);
+  return consentStartsAt(s) !== null;
+}
+
+/** When consent began: the acknowledgement time of the required notice version on this Mac, or null (none required,
+ * or not acknowledged). Only what was observed at or after this moment may be projected. */
+export function consentStartsAt(s: ConsentState): number | null {
+  const required = s.config?.requiredNotice ?? null;
+  if (required === null) return null;
+  const at = s.acks.filter((a) => a.noticeVersionId === required.noticeVersionId).map((a) => a.acknowledgedAt);
+  return at.length === 0 ? null : Math.min(...at);
 }
 
 /** G2 without the pause: may a working-time aggregate exist and be sent now? */
