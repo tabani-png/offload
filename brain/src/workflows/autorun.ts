@@ -22,10 +22,13 @@ export const rowHash = (r: RecipientRow) => sha(JSON.stringify([r.email.toLowerC
 /** The pinned files, in display order: name -> how to read it. */
 export function pinFiles(home: string, wf: WorkflowJson): Record<string, string> {
   const card = readStyleCard(home, wf.bucket);
+  // s19: playbook.json only when the workflow has one, so pins taken before a playbook existed stay valid.
+  const playbook = readText(home, wf.id, "playbook.json");
   return {
     "facts.md": sha(readText(home, wf.id, "facts.md") ?? ""),
     [`tone/${wf.bucket}.md`]: sha(card.text ?? ""),
     "SKILL.md": sha(readText(home, wf.id, "SKILL.md") ?? ""),
+    ...(playbook === null ? {} : { "playbook.json": sha(playbook) }),
   };
 }
 

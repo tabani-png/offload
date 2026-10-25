@@ -97,9 +97,9 @@ see masked text only, through the router) hold throughout. Decision record: plan
 
 ### 6. API (`api/workflow-routes.ts`, brain/API.md)
 - `GET /workflows/:id/playbook` -> `{version, workflowId, playbook | null, markdown | null}`.
-- `POST /workflows/:id/playbook {action: "build"}` builds from the tone pack (409 when there is no pack or fewer than
-  3 messages; 422 `leak` when the check fails closed). `{action: "notes", notes}` sets notes (string <= 4000 chars,
-  checked; 400 on a leak or a bad body). Other keys 400.
+- `POST /workflows/:id/playbook {action: "build"}` builds from the tone pack (409 `conflict` when there is no pack,
+  fewer than 3 messages, or the check fails closed: the brain's ErrorCode set has no 422). `{action: "notes", notes}`
+  sets notes (string <= 4000 chars, checked; 400 on a leak, a bad body or before the first build). Other keys 400.
 
 ### 7. Seam for S2-06 (`playbook/promote.ts`)
 - `playbookForPromotion(home, workflowId)` -> `{playbook, playbookHash}` (re-checked; null when none), hash =
@@ -122,7 +122,7 @@ see masked text only, through the router) hold throughout. Decision record: plan
 - SUCCESSOR: a different user's tone pack + the founder playbook -> drafts keep the angle (claim + traction) and a
   meeting CTA, never "Muhammad", the founder's sign-off or the founder's phrases.
 - DRYRUN: per draft `follows the playbook: yes/partly/no` with the specific failing rule; absent without a playbook.
-- API: GET/POST playbook, notes edit, leak 400/422, 409 without a pack, 404 unknown workflow, promotion seam hash.
+- API: GET/POST playbook, notes edit, notes leak 400, 409 without a pack, 404 unknown workflow, promotion seam hash.
 
 ## Done-signal
 `verify.sh`: typecheck; s19 suite >= 45 tests with every tag passing; full brain suite green; end-to-end on the

@@ -57,6 +57,8 @@ export const ROLE_ROUTES: Readonly<Record<ModelRole, Route>> = {
   label: "understand",
   refine: "refine",
   explain: "explain",
+  playbook_label: "classify",
+  playbook: "understand",
 };
 
 /** Clean runs before a per-item step moves from Sonnet to Haiku. */

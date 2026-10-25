@@ -406,6 +406,35 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
 - CLI: `draft` and `dry-run` take `--understanding v1|v2` (and the embedder flags); `draft` of a general insight uses
   the stub design model unless `--model real` is given.
 
+## s19: messaging playbook (additive, ADR 0010)
+A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,
+the patterns behind it and what got replies, with nothing personal kept, so a successor or a cloud worker can keep the
+same message going in their own voice. The style card (`/tone`) stays the voice; the playbook is the message.
+- `GET /workflows/:id/playbook` -> `{version, workflowId, playbook | null, markdown | null}`. `playbook` is
+  `playbook.json` (`schema: "offload.playbook/1"`, brain/src/playbook/types.ts `Playbook`): `version` (+1 on every
+  build and notes edit), `message` (2-3 plain sentences), `rules` (`{id, kind: do|dont, text, check?}`; `check` is
+  what the dry run tests in code), `templates` (first message, follow-up, reply: slots in order such as
+  `{greeting} {claim} {proof} {ask} {sign_off}`, each slot with what it says), `skeletons` (3-5), `cadence`, `avoid`,
+  `stats` and `outcomes` (counts, shares and lengths computed in code; outcomes are counts with sample sizes, a pattern
+  needs 5 known outcomes before it is compared and otherwise reads "too few to say"; no rate is ever written), `notes`,
+  `history`, `models`, `warnings`. `markdown` is `PLAYBOOK.md`, a fixed render of the same JSON.
+- `POST /workflows/:id/playbook {action: "build"}` builds from the sealed tone pack: the workflow's own sent messages
+  and the follow-ups in the threads they opened; later replies by the user count as "they replied". Each message is
+  labelled within fixed vocabularies (intent, opener, moves, CTA, proof, personal-hook kind, objection handling,
+  audience) by the rules and Haiku 5.5 (route classify), the wording by Opus 5.5 (route understand), from masked text
+  only. 409 when there is no tone pack or fewer than 3 messages, or when the de-personalisation check fails closed
+  (the message names the kind and field, never the value; nothing is written).
+- `POST /workflows/:id/playbook {action: "notes", notes}`: the user's notes (a string of at most 4000 characters, no
+  control characters), checked like every other field: a name, address, phone, link, figure or the author's identity
+  is 400 and nothing changes. 400 too before the first build and for any other key or action.
+- With a playbook, email drafts (dry run and live runs) say the playbook's message in the current user's voice (their
+  style card and sent mail; with none of this kind, all their sent mail). Dry-run instances gain
+  `playbook: {version, verdict: "yes"|"partly"|"no", rules: [{id, text, pass}]}`. Auto-run pins `playbook.json` once
+  it exists, so a rebuilt playbook holds the next auto batch for review.
+- Promotion seam (S2-06): `playbookForPromotion(home, workflowId)` (brain/src/playbook/promote.ts) returns the
+  re-checked playbook without `history`, `builtAt` and `warnings`, and `playbookHash` = sha256 of its JCS. The registry
+  field is proposed in plan/stage-2/adr/0112-playbook-on-promotion.md (schemas/stage2 is unchanged).
+
 ## Company sync (S2-02, ADR 0103)
 The brain's sync client (`src/sync/`) connects this Mac to the company control plane (`OFFLOAD_CONTROL_URL`, https;
 http only on 127.0.0.1). It can emit only the seven sync objects of `schemas/stage2` (`notice_ack`, `run_outcome`,
