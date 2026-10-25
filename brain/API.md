@@ -454,3 +454,35 @@ Routes (bearer token as everywhere):
 - `POST /workflows/:id/share` -> `{confirmed: false, proposal}` (the exact `workflow_proposal` JSON, facts values and
   recipient-list cells redacted, contacts masked); `?confirm=1[&hash=<definitionHash>]` -> 201 `{confirmed: true,
   proposal}` and queues it (409 when the hash no longer matches). 404 unknown workflow.
+
+## Connections (s17)
+Any app Composio supports (brain/CONNECTORS.md "Connect anything (s17)"). Nothing here sends: setup and test only
+read; build ends in a dry run. Types: `ConnectionRowDTO`, `ConnectionsResponse`, `ConnectionDetailDTO`,
+`ConnectionTestDTO`, `ConnectionBuildDTO`, `UniverseStatusDTO` in `src/api/types.ts`.
+- `GET /connections?q=&limit=` -> `ConnectionsResponse { query, connections[], universe, note }`. Rows `{ id, name,
+  toolkit, description, status: connected | needs_you | not_set_up, statusLine, verified, tools { read, commit,
+  denied }, method }`. `id` is the catalog id when Offload maps the app, else `tk-<toolkit>`. Without `q`: the catalog
+  first, then apps that are set up, then Composio's own order; with `q` (at most 80 characters, else 400): name and
+  slug matches before description words. `limit` 1..300 (default 60). `note` says when the Composio list is not loaded.
+- `GET /connections/universe` -> `UniverseStatusDTO { syncedAt, stale, complete, toolkits, tools, classes,
+  cliVersion }`. `POST /connections/universe/refresh` -> the same plus `started` (real model only; the demo answers
+  `started: false` and runs nothing).
+- `GET /connections/:id` -> `ConnectionDetailDTO`: the row plus `methods[] { method: composio | api_key | mcp, title,
+  detail, steps[], recommended }` (`api_key` when Composio lists key sign-in for the app, or when it is not known),
+  `sample { read[], commit[] }`, `setup { method, startedAt, secretRef, server, test }`, `keychain { service, account }`
+  (where the app saves the key) and `canBuild`. Unknown id 404.
+- `POST /connections/:id/setup`: `{ "method": "composio" }` answers the s10e `ConnectLinkDTO` (poll
+  `GET /connectors/:id/status`); `{ "method": "api_key", "secret": { "keychain": { "service":
+  "offload.connection.<id>", "account": "api-key" } } | { "fromEnv": "NAME" }, "baseUrl"?, "healthPath"?, "header"? }`;
+  `{ "method": "mcp", "url": "https://...", "headers"?: { name: reference } }` or `{ "method": "mcp", "command",
+  "args"?, "env"?: { NAME: reference } }` (tested right away). Answers the detail. 400 for anything that carries a
+  secret value, another Keychain item, plain http (except 127.0.0.1) or an unknown field; the message never echoes it.
+- `POST /connections/:id/test` -> `ConnectionTestDTO { ok, detail, tools, testedAt }` (read-only; the demo reads and
+  starts nothing).
+- `POST /connections/:id/build {insightId?}` -> `ConnectionBuildDTO { workflow, dryRun { instances, commitTool,
+  missing, sent: 0, warnings } }`: drafts the workflow for the given insight (or the top one whose task happens in
+  that app; else 409 "Offload has not seen you work in Linear yet..."), records the connection as the person's pick for
+  the step it fits (a universe tool is added to the commit step when no option is that app), fetches a universe tool's
+  schema read-only, and runs the dry run. A universe tool's dry-run `commit` is `{ tool: "composio:<SLUG>", verb, fields,
+  missing, review { rows[{ path, label, value, highlight, required, description }], warning } }`.
+- The s10e link routes accept `tk-<toolkit>` ids (methods composio, api, computer).

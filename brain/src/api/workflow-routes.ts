@@ -365,6 +365,11 @@ export async function sendBatch(ctx: WorkflowContext, id: string, hash: string, 
             config,
             actions: declaredActions(wf),
             mcpExecutor: ctx.executor,
+            // s17: items approved field by field get their tool's schema checked fresh before the gate is built.
+            ...(() => {
+              const b = readBatch(ctx.home, id, hash, ctx.now());
+              return b === null ? {} : { batchItems: b.items };
+            })(),
             ...(chain.executors === undefined ? {} : { executors: chain.executors }),
             ...(chain.computer === undefined ? {} : { computer: chain.computer }),
             ...(chain.log === undefined ? {} : { log: chain.log }),

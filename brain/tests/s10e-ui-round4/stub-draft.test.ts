@@ -88,7 +88,8 @@ describe("s10e stub draft", () => {
     try {
       writeFixture(home, generateFixture({ seed: 42 }), { encrypted: false, seed: 42 });
       writeFileSync(join(home, DEFAULT_FACTS_FILE), FIXTURE_FACTS);
-      const a = await analyzeHome(home);
+      // The fixture week is fixed (2026-10-12..18); pin the clock inside its 7-day window so the test does not age out.
+      const a = await analyzeHome(home, { now: () => Date.UTC(2026, 9, 19, 12, 0, 0) });
       const { workflow } = draftWorkflow({ home, analysis: a, insightId: a.insights[0]!.id });
       expect(readFileSync(join(home, "workflows", workflow.id, "facts.md"), "utf8")).toBe(FIXTURE_FACTS);
     } finally {

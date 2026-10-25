@@ -87,10 +87,59 @@ enum Snapshotter {
       ("card-undo", card(undo)),
       ("card-empty", card(empty)),
       ("scene", AnyView(Scene(state: base, now: now, rail: rail))),
-    ] + s08Surfaces() + s09aSurfaces() + s10eSurfaces() + s14Surfaces()
+    ] + s08Surfaces() + s09aSurfaces() + s10eSurfaces() + s14Surfaces() + s17Surfaces()
   }
 
   // MARK: s14 fixtures
+
+  /// s17: the Connections center: the list, a search, the detail sheet, the API key and connector server entries, and
+  /// a built workflow. Mock brain and an in-memory secret store (the real Keychain is never touched).
+  static func s17Surfaces() -> [(String, AnyView)] {
+    let client = MockBrainClient()
+    let store = MemorySecretStore()
+    func scene(_ m: ConnectionsModel) -> AnyView {
+      AnyView(Backdrop(padding: 32) {
+        WindowChrome(title: ConnectionsCopy.title, subtitle: ConnectionsCopy.subtitle, width: 760,
+                     sheet: m.sheet.map { AnyView(ConnectionSheetView(model: $0)) }) {
+          ConnectionsView(model: m).frame(height: 600)
+        }
+      })
+    }
+    func list(_ q: String = "", selected: String? = nil, sheet: ConnectionSheetModel? = nil) -> ConnectionsModel {
+      let m = ConnectionsModel(client: client, store: store)
+      m.preview(page: MockConnections.page(q), query: q, selected: selected, sheet: sheet)
+      return m
+    }
+    func sheet(_ id: String, _ change: (inout ConnectionSheetFlow) -> Void = { _ in }) -> ConnectionSheetModel {
+      let s = ConnectionSheetModel(detail: MockConnections.detail(id)!, client: client, store: store)
+      s.preview(change)
+      return s
+    }
+    let keyed = sheet("tk-linear") { f in
+      f.chooseNumber(2)
+      _ = f.primary()
+      f.key.edit("lin_api_sample_not_a_real_key")
+    }
+    keyed.keyText = "lin_api_sample_not_a_real_key"
+    let server = sheet("tk-linear") { f in
+      f.chooseNumber(3)
+      _ = f.primary()
+    }
+    server.serverText = "https://mcp.linear.app/mcp"
+    let built = sheet("tk-linear") { f in
+      f.signedIn()
+      _ = f.primary()
+      f.built(MockConnections.build)
+    }
+    return [
+      ("connections", scene(list(selected: "tk-linear"))),
+      ("connections-search", scene(list("lin"))),
+      ("connections-detail", scene(list(selected: "tk-linear", sheet: sheet("tk-linear")))),
+      ("connections-key", scene(list(selected: "tk-linear", sheet: keyed))),
+      ("connections-server", scene(list(selected: "tk-linear", sheet: server))),
+      ("connections-built", scene(list(selected: "tk-linear", sheet: built))),
+    ]
+  }
 
   static func s14Surfaces() -> [(String, AnyView)] {
     var filled = ContextStepState()

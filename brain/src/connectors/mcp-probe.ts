@@ -19,7 +19,8 @@ export class SdkMcpLister implements McpLister {
     const run = async () => {
       if (server.type === "http") {
         const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
-        await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers ?? {} } }));
+        // s17: no redirects: a sign-in header must never follow the server to another host.
+        await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers ?? {}, redirect: "error" } }));
       } else if (server.type === undefined || server.type === "stdio") {
         const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
         await client.connect(new StdioClientTransport({ command: server.command, args: server.args ?? [], ...(server.env === undefined ? {} : { env: server.env }), stderr: "pipe" }));

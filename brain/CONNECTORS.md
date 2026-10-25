@@ -294,3 +294,52 @@ Apollo, HubSpot, Attio, Salesforce, Xero, QuickBooks (local, preview), Greenhous
 Airtable, Notion, Slack, Calendly; UNKNOWN for Lever and Zendesk), its Composio toolkit (all 19 listed read-only on
 this Mac), the API docs and which Composio calls are reads and which are commits. A listed commit is still denied until
 `allowlist.ts` has its full argument schema; nothing in the catalog was executed against a real account.
+
+## Connect anything (s17)
+17 hand-checked tools were not enough: Offload now knows every app Composio offers and can use any of them, with the
+person approving every field of every action (contract `slices/s17-connect-anything`).
+
+**The Composio list (`src/connectors/universe.ts`).** A local, read-only, versioned index in
+`$OFFLOAD_HOME/composio-universe/index.json` (0600): every toolkit (`composio dev toolkits list --limit 1000`, plus seed
+queries `--query <q>` because one listing stops at 1000) and every toolkit's tools (`composio tools list <toolkit>
+--limit 1000`) with name, description, Composio's hint tags and a class. Input schemas are fetched on demand
+(`composio execute <SLUG> --get-schema`) into `schemas/<SLUG>.json` with the sha256 of the canonical schema. The
+real-model brain re-syncs it in the background when it is older than a day (`OFFLOAD_UNIVERSE_SYNC=0` turns that off);
+everything works from the cache offline. A failed sync keeps the last good index. By hand:
+`bun run brain/src/cli.ts universe sync|status|schema <SLUG> --home DIR`. Measured on this Mac (CLI 0.4.2,
+2026-10-25): 1,651 toolkits, 65,602 tools, 1,687 read-only commands, about 3 minutes, 29 MB.
+
+| class | rule (deterministic, fail closed) | what Offload does with it |
+|---|---|---|
+| denied | the `composio` helper toolkit, `COMPOSIO_*`, execute, bash, shell, workbench, proxy, eval, run, forward, every reply tool, the s16 "still denied on purpose" list | never offered, never allowed |
+| draft | creates a draft | allowed only through the reviewed s16 names (Gmail, Outlook) |
+| read | `readOnlyHint` and no create / update / destructive hint | offered for read steps; not run through the CLI in workflows yet |
+| commit | everything else, tools without hints included | offered for commit steps; allowed only by exact approval (below) |
+
+**Exact approval for any commit tool (`src/workflows/generic.ts`).** A tool with no hand-written s16 policy is approved
+field by field: the approved item carries `commit = { verb: "composio:<SLUG>", fields: [["schema", <sha256>], ["args",
+<canonical JSON>]] }`, inside the batch hash. At run time the schema is fetched fresh (no fetch, no policy: denied) and
+the gate allows `mcp__composio_cli__<SLUG>` only for a live, intact, approved batch with a declared send through that
+connection (`tk-<toolkit>`), when the schema hash still equals the approved one ("the tool's fields changed since you
+approved it" otherwise) and the canonical hash of the full call equals the item's, once. Unknown keys are refused at
+every level whose fields the schema declares; required keys, JSON types and enums are checked; strings are NFC with
+CRLF as LF. Hand-written policies always win: a slug with one never gets a generic policy. The review shows every leaf
+as one row (`genericReview`), recipients, amounts and ids highlighted, destructive tools with a warning line.
+
+**Universe targets.** `tk-<toolkit>` is a chain target with the capabilities `composio.read` / `composio.commit`; the
+Composio probe answers it from the index plus `composio connections list --toolkit` (reads only for an account that
+asks before every call). Tool recommendations (`plan/tools.ts`) add universe tools after every catalog candidate, never
+above a hand-checked one, and never as the default pick while a hand-checked one is offered.
+
+**Connections center (brain/API.md "Connections (s17)").** Search any app, then set it up once:
+- Composio sign-in: the s10e hand-off (`composio link <toolkit> --no-browser --no-wait`), reused.
+- API key: the app writes it straight into the Keychain (generic password, service `offload.connection.<id>`, account
+  `api-key`, this device only, when unlocked). The brain gets `{ "keychain": { service, account } }` and refuses any
+  other item, any `key` / `secret` / `token` / `password` / `value` field and any secret-looking value. A test without
+  a health check only checks the item exists (`security find-generic-password -s -a`, no `-w`); with `baseUrl` and
+  `healthPath` it reads the key in memory for one GET and never reads the answer's body.
+- Connector server: an https address without query or fragment (headers as Keychain references, or env references
+  named `OFFLOAD_CONN_*`) or a command started through npx, uvx, bunx, node, python3 or docker with no code-passing
+  flag; tested with `tools/list` (no redirects), nothing called.
+`$OFFLOAD_HOME/connections.json` (0600) holds methods, references and the last test, never a secret.
+Not verified here: the Keychain read by `security` of an item the app created asks the person once for access.
