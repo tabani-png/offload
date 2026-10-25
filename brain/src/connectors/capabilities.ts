@@ -167,8 +167,8 @@ export const CAPABILITIES: readonly Capability[] = [
     name: "Send one email",
     description: "Send a single approved email (a reply, a follow-up, an intro).",
     candidates: [
-      { tool: "gmail", why: "Sends from the person's own Gmail, as they do today.", cost: "Free with the mailbox.", calls: [r("GMAIL_FETCH_EMAILS"), c("GMAIL_SEND_EMAIL", "send")] },
-      { tool: "outlook", why: "Sends from a Microsoft 365 mailbox.", cost: "Included with Microsoft 365.", calls: [r("OUTLOOK_LIST_MESSAGES"), c("OUTLOOK_SEND_EMAIL", "send"), c("OUTLOOK_REPLY_EMAIL", "send")] },
+      { tool: "gmail", why: "Sends from the person's own Gmail, as they do today.", cost: "Free with the mailbox.", calls: [r("GMAIL_FETCH_EMAILS"), c("GMAIL_SEND_EMAIL", "send"), c("GMAIL_CREATE_EMAIL_DRAFT", "create", "a draft in your own mailbox; you send it yourself")] },
+      { tool: "outlook", why: "Sends from a Microsoft 365 mailbox.", cost: "Included with Microsoft 365.", calls: [r("OUTLOOK_LIST_MESSAGES"), c("OUTLOOK_SEND_EMAIL", "send"), c("OUTLOOK_CREATE_DRAFT", "create", "a draft in your own mailbox; you send it yourself"), c("OUTLOOK_REPLY_EMAIL", "send")] },
     ],
   },
   {

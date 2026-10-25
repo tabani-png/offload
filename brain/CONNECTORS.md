@@ -83,8 +83,8 @@ connector right now: `api` only when `apis` lists it, `computer` only when compu
 ## The gate's allowlist (s05b, `src/workflows/allowlist.ts`)
 A tool runs only when it is in this table for a connector the server lists in its `catalog`. Everything else is
 denied outright, including unknown tools, meta or multiplexer tools (`*MULTI_EXECUTE*`, `*EXECUTE*`, `*BASH*`,
-`*WORKBENCH*`, `*PROXY*`, any input carrying a nested tool name, command or code), `forward`, `reply` and every
-`draft` tool. A dry run allows only the reads.
+`*WORKBENCH*`, `*PROXY*`, any input carrying a nested tool name, command or code), `forward`, and every `reply` and
+`draft` tool except the exact names reviewed in s16 (below). A dry run allows only the reads.
 
 | connector | flavour | role | exact tool name | arguments the gate accepts |
 |---|---|---|---|---|
@@ -92,7 +92,7 @@ denied outright, including unknown tools, meta or multiplexer tools (`*MULTI_EXE
 | gmail | Gmail MCP | read | `search_emails`, `read_email`, `list_email_labels` | any |
 | gmail | Composio | send | `GMAIL_SEND_EMAIL` | `recipient_email`, `subject`, `body` exactly as approved; `is_html` only `false`; `user_id` only `me`; `cc`, `bcc`, `extra_recipients`, `attachment`, `thread_id` only empty |
 | gmail | Composio | read | `GMAIL_FETCH_EMAILS`, `GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID` | any |
-| google-sheets | Composio | log | `GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND` | `spreadsheetId`, `range` = `workflow.json` `inputs.crmSheet`; `values` = one row `[to, subject, batch hash (12), "sent"]`; `valueInputOption` `RAW` or `USER_ENTERED`; `insertDataOption` `INSERT_ROWS` |
+| google-sheets | Composio | log | `GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND` | `spreadsheetId`, `range` = `workflow.json` `inputs.crmSheet`; `values` = one row `[to, subject, batch hash (12), "sent"]`; `valueInputOption` only `RAW` (s16: `USER_ENTERED` would run a subject starting with `=` as a formula); `insertDataOption` `INSERT_ROWS` |
 | google-sheets | Sheets MCP | log | `append_row` | same as above |
 | google-calendar | Composio | read | `GOOGLECALENDAR_FIND_FREE_SLOTS`, `GOOGLECALENDAR_EVENTS_LIST` | any |
 | google-calendar | Calendar MCP | read | `find_free_slots` | any |
@@ -114,6 +114,69 @@ placeholders for whichever Sheets / Calendar MCP server you connect. If your ser
 denies it (fail closed): add the exact name and its argument schema to `allowlist.ts` with a test, never a pattern.
 Reply-in-thread (the scheduling workflow) has no allowlisted tool yet: it needs a reply tool whose `threadId` is bound
 to the approved item, so live scheduling batches stay off.
+
+## Commit schemas (s16)
+More commit tools have a verified gate policy (`src/workflows/allowlist.ts`, contract `slices/s16-commit-schemas`).
+Schemas: **CONFIRMED** = read on this Mac on 2026-10-25 with `composio execute <SLUG> --get-schema` (composio CLI
+0.4.2, read-only, nothing executed, no `--dry-run`), recorded in `tests/s16-commit-schemas/fixtures/composio-schemas.json`
+and checked by the tests. Every argument the schema offers that the policy does not need is refused or pinned.
+
+Rules that hold for all of them: the full arguments must hash-equal one approved item, once; dry runs deny; a server
+that does not cover the connector denies; nested tool calls and Composio meta tools deny. Non-email values (ids, from
+address, campaign, amounts, lines) come from the approved item's commit fields (labels below), which are inside the
+batch hash and shown at review; a missing label means the item cannot be expressed and the call is denied. A
+connector with several commit tools tells them apart by the item's commit verb, so one item fits one tool.
+
+| connector | Composio tool | role | item verb | item fields | forced / refused | schema |
+|---|---|---|---|---|---|---|
+| gmail | `GMAIL_CREATE_EMAIL_DRAFT` | draft | email | to, subject, body | `include_signature` false (required); cc, bcc, extra recipients, attachment, thread refused | CONFIRMED 2026-10-25 |
+| outlook | `OUTLOOK_SEND_EMAIL` | send | email | to, subject, body | `is_html` false (required); `from_address`, `to_name`, cc, bcc, attachment refused; `user_id` only `me` | CONFIRMED 2026-10-25 |
+| outlook | `OUTLOOK_CREATE_DRAFT` | draft | email | to, subject, body | `is_html` false; cc, bcc, attachment, `user_id` refused | CONFIRMED 2026-10-25 |
+| instantly | `INSTANTLY_ADD_LEADS_BULK` | send | `add_to_campaign` | to, `campaign_id`, `first_name`?, `last_name`?, `company_name`?, `personalization`? | one lead; `skip_if_in_campaign` true, `verify` false (required); list, blocklist, phone, website, custom variables refused | CONFIRMED 2026-10-25 |
+| smartlead | `SMARTLEAD_SEND_SINGLE_EMAIL` | send | email | to, subject, body, `from_email`, `from_name`? | `reply_to`, `from_email_id`, attachments refused | CONFIRMED 2026-10-25 |
+| smartlead | `SMARTLEAD_RESUME_CAMPAIGN_LEAD` | send | `resume_lead` | `campaign_id`, `lead_id` | delay refused | CONFIRMED 2026-10-25 |
+| hubspot | `HUBSPOT_CREATE_NOTE` | log | any | `hubspot.contact_id` | note text fixed (`Offload sent "<subject>" to <to> (batch <12 hex>).`), one contact association (type 202); owner, custom properties, attachments refused; `hs_timestamp` any valid timestamp | CONFIRMED 2026-10-25 |
+| attio | `ATTIO_CREATE_NOTE` | log | any | `attio.record_id` | `parent_object` `people`; title and content fixed; `created_at` refused | CONFIRMED 2026-10-25 |
+| salesforce | `SALESFORCE_CREATE_TASK` | log | any | `salesforce.who_id` | subject and description fixed; `status` Completed; owner, related record, custom fields, reminders refused | CONFIRMED 2026-10-25 |
+| xero | `XERO_CREATE_INVOICE` | send | `create_bill` | `tenant_id`, `contact_id`, `date`?, `due_date`?, `reference`?, `currency`?, `line.N.description/quantity/unit_amount/account_code/tax_type?` | `Type` ACCPAY, `Status` DRAFT (both required); `InvoiceNumber`, `ContactName`, line ids, discounts, tracking refused | CONFIRMED 2026-10-25 |
+| quickbooks | `QUICKBOOKS_CREATE_BILL` | send | `create_bill` | `vendor_id`, `txn_date`?, `due_date`?, `doc_number`?, `line.N.amount/description?/account_id` | account-based lines only; A/P account, currency, terms, department, tax settings, private note refused | CONFIRMED 2026-10-25 |
+| zendesk | `ZENDESK_REPLY_ZENDESK_TICKET` | send | `reply_ticket` | `ticket_id`, body | `public` true (required); `assignee_id` refused | CONFIRMED 2026-10-25 |
+| intercom | `INTERCOM_REPLY_TO_CONVERSATION` | send | `reply_conversation` | `conversation_id`, `admin_id`, body | `message_type` comment (no note, no assignment); attachments refused | CONFIRMED 2026-10-25 |
+| intercom | `INTERCOM_REPLY_TICKET` | send | `reply_ticket` | `ticket_id`, `admin_id`, body | `message_type` comment; replying as the contact (`email`, `user_id`, `intercom_user_id`) refused | CONFIRMED 2026-10-25 |
+| airtable | `AIRTABLE_CREATE_RECORD` | send | `create_record` | `base_id`, `table`, `field.<name>` | `typecast` false (required) | CONFIRMED 2026-10-25 |
+| slack | `SLACK_SEND_MESSAGE` | send | `post_message` | `channel`, body | `unfurl_links` and `unfurl_media` false (required); threads, broadcast, blocks refused | CONFIRMED 2026-10-25 |
+| greenhouse | `GREENHOUSE_MOVE_APPLICATION` | send | `move_stage` | `application_id`, `from_stage_id`, `to_stage_id` | job transfer and notification sender refused | CONFIRMED 2026-10-25 |
+
+**Drafts are allowed writes, not commits (ADR 0006).** A draft stays in your own mailbox and you send it yourself, so
+it needs no approval token. It still needs a live batch that has not changed, a declared `draft` step, the exact
+approved recipient, subject and body of an item that is still pending, and it is made once per item per run. It never
+marks the item as sent or contacted. Sending or editing a draft (`GMAIL_SEND_DRAFT`, `GMAIL_UPDATE_DRAFT`,
+`OUTLOOK_SEND_DRAFT`) stays denied.
+
+**Still denied on purpose:** `INSTANTLY_ACTIVATE_CAMPAIGN` and `SMARTLEAD_UPDATE_CAMPAIGN_STATUS` (they start sending to
+every lead in a campaign, which no item can bind: start the campaign yourself in the tool), `SMARTLEAD_CREATE_CAMPAIGN`,
+`QUICKBOOKS_CREATE_BILL_PAYMENT`, `XERO_POST_INVOICE_UPDATE`, `HUBSPOT_CREATE_ENGAGEMENT` (legacy API; the note is the
+log), `SLACK_CHAT_POST_MESSAGE` and `SLACK_SEND_EPHEMERAL_MESSAGE` (one Slack send), every reply-all, forward and
+reply-to-thread tool, `INSTANTLY_CREATE_LEAD` and every move, merge or delete tool.
+
+**Not covered yet:** Instantly reply (no Composio tool, checked 2026-10-25); Lever stage change (no Composio tool: use a
+direct connection, `PUT /opportunities/{id}/stage`, with its own field schema in `apis`); Notion rows; Calendly.
+The connector chain does not route to the new connectors yet: `targets.ts` gives them no capability names and most
+are not catalog connectors (`catalog.ts`), so today they are reached when a workflow names them directly.
+
+### Vendor MCP servers (checked 2026-10-25, vendor pages and vendor repos only, nothing connected)
+| vendor | commit tool | schema | source |
+|---|---|---|---|
+| Gmail (Google, preview) | `create_draft`; no send tool | names CONFIRMED, arguments UNKNOWN | developers.google.com/workspace/gmail/api/guides/configure-mcp-server |
+| Xero | `create-invoice` (bills = ACCPAY; status is fixed to DRAFT in the handler, no status argument) | CONFIRMED (repo source) | github.com/XeroAPI/xero-mcp-server `src/tools/create/create-invoice.tool.ts` |
+| QuickBooks Online (Intuit, preview) | `create-bill` (one `bill` object: `Line`, `VendorRef`, ...) | CONFIRMED (repo source) | github.com/intuit/quickbooks-online-mcp-server `src/tools/create-bill.tool.ts` |
+| Intercom | `add_internal_note` only (teammate note; no customer reply tool) | CONFIRMED | developers.intercom.com/docs/guides/mcp |
+| HubSpot | `manage_crm_objects` | name CONFIRMED, arguments UNKNOWN | developers.hubspot.com (remote HubSpot MCP server) |
+| Instantly, Smartlead, Slack, Airtable, Greenhouse | tool names not published | UNKNOWN | vendor help / docs pages |
+| Zendesk, Lever | no vendor MCP server with public docs | UNKNOWN | |
+
+None of the vendor MCP tools is on the allowlist yet: their schemas were read from docs or source, not from a server on
+this Mac (the s13 rule for `verified`). Adding one = its exact name, a field schema and tests, like the table above.
 
 ## What happens on a run
 - Dry runs never touch a connector: every side-effect step is denied by the gate and logged.
