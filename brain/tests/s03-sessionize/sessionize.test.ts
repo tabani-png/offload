@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { sessionize, totalActiveMs } from "../../src/sessionize.ts";
+import { sessionize, totalActiveMs, DEFAULT_SESSION_OPTIONS } from "../../src/sessionize.ts";
 import { EventBuilder } from "../helpers.ts";
+
+// s03 tests use raw idle timestamps (idle_start = the moment input stopped); s05 tests cover the observer backdate.
+const RAW = { ...DEFAULT_SESSION_OPTIONS, idleBackdateMs: 0 };
 
 const DAY = "2026-10-12";
 
@@ -11,7 +14,7 @@ describe("sessionize", () => {
     b.focus(60, "New Message");
     b.focus(240, "Inbox");
     b.at(300, "idle_start");
-    const spans = sessionize(b.events, DAY);
+    const spans = sessionize(b.events, DAY, RAW);
     expect(spans.map((s) => [s.title, s.activeMs / 1000])).toEqual([
       ["Inbox", 60],
       ["New Message", 180],
@@ -26,7 +29,7 @@ describe("sessionize", () => {
     b.at(100, "idle_start");
     b.at(400, "idle_end");
     b.at(460, "idle_start");
-    const [span] = sessionize(b.events, DAY);
+    const [span] = sessionize(b.events, DAY, RAW);
     expect(span?.activeMs).toBe(160_000);
     expect(span?.end).toBe(EventBuilder.BASE + 460_000);
   });
@@ -38,7 +41,7 @@ describe("sessionize", () => {
     const back = b.at(200, "idle_end");
     b.focus(260, "Inbox");
     b.at(300, "idle_start");
-    const spans = sessionize(b.events, DAY);
+    const spans = sessionize(b.events, DAY, RAW);
     expect(spans.length).toBe(2);
     expect(spans[0]?.activeMs).toBe(120_000);
     expect(spans[0]?.eventIds).toContain(back);
@@ -50,7 +53,7 @@ describe("sessionize", () => {
     const blip = b.focus(100, "#general - Slack", "com.tinyspeck.slackmacgap", "");
     b.focus(105, "New Message");
     b.at(200, "idle_start");
-    const spans = sessionize(b.events, DAY);
+    const spans = sessionize(b.events, DAY, RAW);
     expect(spans.length).toBe(1);
     expect(spans[0]?.activeMs).toBe(200_000);
     expect(spans[0]?.eventIds).toContain(blip);
@@ -62,7 +65,7 @@ describe("sessionize", () => {
     b.focus(50, "Calendar", "com.google.Chrome", "calendar.google.com");
     b.focus(55, "Zoom Meeting", "us.zoom.xos", "");
     b.at(155, "idle_start");
-    const spans = sessionize(b.events, DAY);
+    const spans = sessionize(b.events, DAY, RAW);
     expect(spans.map((s) => [s.title, s.activeMs / 1000])).toEqual([
       ["Inbox", 55],
       ["Zoom Meeting", 100],
@@ -74,7 +77,7 @@ describe("sessionize", () => {
     b.focus(0, "Calendar", "com.google.Chrome", "calendar.google.com");
     b.focus(4, "Inbox");
     b.at(64, "idle_start");
-    const spans = sessionize(b.events, DAY);
+    const spans = sessionize(b.events, DAY, RAW);
     expect(spans.length).toBe(1);
     expect(spans[0]?.title).toBe("Inbox");
     expect(spans[0]?.activeMs).toBe(64_000);
@@ -87,7 +90,7 @@ describe("sessionize", () => {
     b.at(60, "input", { keys: 120, clicks: 4 });
     b.at(120, "input", { keys: 80, clicks: 1 });
     b.at(130, "idle_start");
-    const [span] = sessionize(b.events, DAY);
+    const [span] = sessionize(b.events, DAY, RAW);
     expect(span?.keys).toBe(200);
     expect(span?.clicks).toBe(5);
     expect(span?.ocr.map((o) => o.eventId)).toEqual([ocr]);
@@ -101,7 +104,7 @@ describe("sessionize", () => {
     b.at(600, "resume");
     b.focus(660, "New Message");
     b.at(720, "idle_start");
-    const spans = sessionize(b.events, DAY);
+    const spans = sessionize(b.events, DAY, RAW);
     expect(spans.map((s) => [s.title, s.activeMs / 1000])).toEqual([
       ["Inbox", 60],
       ["New Message", 60],
@@ -113,7 +116,7 @@ describe("sessionize", () => {
     b.focus(0, "Inbox");
     b.focus(60, "New Message");
     b.at(120, "idle_start");
-    const spans = sessionize([...b.events].reverse(), DAY);
+    const spans = sessionize([...b.events].reverse(), DAY, RAW);
     expect(spans.map((s) => s.title)).toEqual(["Inbox", "New Message"]);
   });
 
@@ -122,13 +125,13 @@ describe("sessionize", () => {
     b.focus(0, "Inbox");
     b.focus(60, "New Message");
     b.at(90, "idle_start");
-    expect(totalActiveMs(sessionize(b.events, DAY))).toBe(90_000);
+    expect(totalActiveMs(sessionize(b.events, DAY, RAW))).toBe(90_000);
   });
 
   test("span ids are stable and derived from the first event", () => {
     const b = new EventBuilder();
     const first = b.focus(0, "Inbox");
     b.at(30, "idle_start");
-    expect(sessionize(b.events, DAY)[0]?.id).toBe(`sp_${first}`);
+    expect(sessionize(b.events, DAY, RAW)[0]?.id).toBe(`sp_${first}`);
   });
 });

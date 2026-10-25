@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { clusterTitles, extractEmails, maskText, sequenceSimilarity, tokenize, urlPattern } from "../../src/grouping/normalize.ts";
 import { categoryFor, defaultLabeler, detectOwnEmails, groupTasks, type Labeler } from "../../src/grouping/group.ts";
-import { sessionize } from "../../src/sessionize.ts";
+import { sessionize, DEFAULT_SESSION_OPTIONS } from "../../src/sessionize.ts";
 import type { Span } from "../../src/types.ts";
 import { EventBuilder } from "../helpers.ts";
+
+// s03 tests use raw idle timestamps (idle_start = the moment input stopped); s05 tests cover the observer backdate.
+const RAW = { ...DEFAULT_SESSION_OPTIONS, idleBackdateMs: 0 };
 
 describe("normalisation", () => {
   test("emails, numbers, times and long ids are masked", () => {
@@ -74,7 +77,7 @@ function outreachDay(): Span[] {
     t += 20;
   }
   b.at(t, "idle_start");
-  return sessionize(b.events, "2026-10-12");
+  return sessionize(b.events, "2026-10-12", RAW);
 }
 
 describe("task grouping", () => {
@@ -103,7 +106,7 @@ describe("task grouping", () => {
     b.focus(600, "general (Channel) - Acme - Slack", "com.tinyspeck.slackmacgap", "");
     b.focus(630, "Zoom Meeting", "us.zoom.xos", "");
     b.at(1200, "idle_start");
-    const tasks = await groupTasks(sessionize(b.events, "2026-10-12"));
+    const tasks = await groupTasks(sessionize(b.events, "2026-10-12", RAW));
     const zoom = tasks.find((t) => t.profile.category === "call");
     expect(zoom?.instances.length).toBe(1);
     expect(zoom?.instances[0]?.spanIds.length).toBe(2);

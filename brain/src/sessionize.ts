@@ -7,9 +7,18 @@ export interface SessionOptions {
   minSpanMs: number;
   /** Two segments of the same focus split only by idle merge into one span if the idle gap is at most this long. */
   idleMergeMaxMs: number;
+  /**
+   * The observer writes `idle_start` when it DETECTS idle, i.e. this long after the last input (docs/store-contract.md,
+   * engine Observer.checkIdle). Sessionize moves the stop back by this much so the detection window is not active time.
+   * 0 = take idle_start timestamps as the moment input stopped (synthetic tests only).
+   */
+  idleBackdateMs: number;
 }
 
-export const DEFAULT_SESSION_OPTIONS: SessionOptions = { minSpanMs: 10_000, idleMergeMaxMs: 15 * 60_000 };
+/** Observer idle threshold: no input for 120 s = idle (shared with docs/store-contract.md and the engine). */
+export const IDLE_THRESHOLD_MS = 120_000;
+
+export const DEFAULT_SESSION_OPTIONS: SessionOptions = { minSpanMs: 10_000, idleMergeMaxMs: 15 * 60_000, idleBackdateMs: IDLE_THRESHOLD_MS };
 
 interface Focus {
   key: string;
@@ -66,7 +75,7 @@ function byTime(a: OffloadEvent, b: OffloadEvent): number {
 }
 
 /** Pass 1: events -> raw segments. A segment ends at the next focus, idle_start, pause, or the last event. */
-function toSegments(events: readonly OffloadEvent[]): Segment[] {
+function toSegments(events: readonly OffloadEvent[], idleBackdateMs: number): Segment[] {
   const sorted = [...events].sort(byTime);
   const out: Segment[] = [];
   let cur = null as Segment | null;
@@ -91,9 +100,20 @@ function toSegments(events: readonly OffloadEvent[]): Segment[] {
         if (!paused) open(last, e.ts, [e.id]);
         break;
       }
-      case "idle_start":
-        close(e.ts);
+      case "idle_start": {
+        // Input stopped idleBackdateMs before the observer noticed. Nothing after that moment is active, including
+        // segments opened by a focus change without input inside the window: trim them back to the cutoff.
+        const cutoff = e.ts - idleBackdateMs;
+        // A segment re-opened by idle_end that is idle again before any input is not activity: drop it.
+        if (cur !== null && cutoff <= cur.start && cur.ocr.length === 0 && cur.keys === 0 && cur.clicks === 0) cur = null;
+        close(cutoff);
+        for (let i = out.length - 1; i >= 0; i--) {
+          const seg = out[i];
+          if (seg === undefined || seg.end <= cutoff) break;
+          seg.end = Math.max(seg.start, cutoff);
+        }
         break;
+      }
       case "idle_end":
         if (!paused && cur === null && last !== null) open(last, e.ts, [last.eventId, e.id]);
         break;
@@ -186,7 +206,7 @@ function mergeSegments(segments: readonly Segment[], opts: SessionOptions): Buil
 }
 
 export function sessionize(events: readonly OffloadEvent[], day: DayLabel, opts: SessionOptions = DEFAULT_SESSION_OPTIONS): Span[] {
-  return mergeSegments(toSegments(events), opts).map((b) => {
+  return mergeSegments(toSegments(events, opts.idleBackdateMs), opts).map((b) => {
     const first = b.eventIds[0] ?? b.focus.eventId;
     return {
       id: `sp_${first}`,

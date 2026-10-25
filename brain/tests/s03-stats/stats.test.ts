@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { groupTasks, indexSpans } from "../../src/grouping/group.ts";
-import { sessionize, totalActiveMs } from "../../src/sessionize.ts";
+import { sessionize, totalActiveMs, DEFAULT_SESSION_OPTIONS } from "../../src/sessionize.ts";
 import { computeSameness, computeTaskStats, jaccard, median, percentile } from "../../src/stats.ts";
 import type { Span } from "../../src/types.ts";
 import { EventBuilder } from "../helpers.ts";
+
+// s03 tests use raw idle timestamps (idle_start = the moment input stopped); s05 tests cover the observer backdate.
+const RAW = { ...DEFAULT_SESSION_OPTIONS, idleBackdateMs: 0 };
 
 describe("pure maths", () => {
   test("median of odd and even lists", () => {
@@ -62,7 +65,7 @@ function twoDays(): Span[] {
       t += 60;
     }
     b.at(t, "idle_start");
-    out.push(...sessionize(b.events, day));
+    out.push(...sessionize(b.events, day, RAW));
   }
   return out;
 }

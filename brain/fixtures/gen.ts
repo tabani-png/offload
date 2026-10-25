@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { IDLE_THRESHOLD_MS } from "../src/sessionize.ts";
 import { encryptLine, KEY_BYTES, NONCE_BYTES } from "../src/store/crypto.ts";
 import type { DayLabel, OffloadEvent } from "../src/types.ts";
 
@@ -210,14 +211,21 @@ class DayBuilder {
     this.t += ms;
   }
 
+  /**
+   * No input for `seconds`. Like the observer, idle_start is stamped when idle is DETECTED (IDLE_THRESHOLD_MS after the
+   * last input), and nothing is written for a pause shorter than the threshold (that time stays active).
+   */
   idle(seconds: number): void {
-    this.push(this.t, { kind: "idle_start" });
-    this.t += Math.round(seconds * 1000);
-    this.push(this.t, { kind: "idle_end" });
+    const ms = Math.round(seconds * 1000);
+    if (ms >= IDLE_THRESHOLD_MS) {
+      this.push(this.t + IDLE_THRESHOLD_MS, { kind: "idle_start" });
+      this.push(this.t + ms, { kind: "idle_end" });
+    }
+    this.t += ms;
   }
 
   end(): FixtureDay["events"] {
-    this.push(this.t, { kind: "idle_start" });
+    this.push(this.t + IDLE_THRESHOLD_MS, { kind: "idle_start" });
     // One input event per minute with counts only, at the minute mark (+0.5 s so it never ties a focus change).
     const first = Math.ceil(this.dayStart / 60_000) * 60_000;
     for (let m = first; m <= this.t; m += 60_000) {
