@@ -31,7 +31,7 @@ failed="$(echo "$out" | sed -n 's/^ *\([0-9][0-9]*\) fail$/\1/p' | tail -1)"
 [ $code -eq 0 ] && [ "${failed:-1}" = "0" ] || { echo "$out" | grep -E "\(fail\)|error:" | head -20; fail "s13 suite (${failed:-?} failing)"; }
 [ "${ran:-0}" -ge "$MIN_TESTS" ] || fail "only ${ran:-0} s13 tests ran, need at least $MIN_TESTS"
 echo "s13 suite: ${ran:-0} tests"
-for tag in CHAIN MCP COMPOSIO API COMPUTER GATE FALLBACK ROUTES; do
+for tag in CHAIN MCP COMPOSIO API COMPUTER GATE FALLBACK ROUTES CATALOG; do
   grep -rqE "test\(\"$tag: " "$TESTS" || { fail "no test named \"$tag: ...\""; continue; }
   t="$(cd "$BRAIN" && bun test tests/s13-connector-chain -t "$tag: " 2>&1)"
   n="$(echo "$t" | sed -n 's/^ *\([0-9][0-9]*\) pass$/\1/p' | tail -1)"

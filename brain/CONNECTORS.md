@@ -222,3 +222,12 @@ yourself stops the run before its next action. The app can draw a pointer glyph 
 Not verified on this Mac: a direct Gmail API send (no OAuth access token is set up here), and the real computer-use
 driver (`src/connectors/computer/osa-driver.ts`: `screencapture`, `sips`, JXA with the Accessibility bridge). Both are
 covered by tests with fakes only.
+
+## Capabilities and candidate tools (s13)
+Offload does not have to use the app you used: `GET /catalog/capabilities` (brain/API.md) lists, per capability, the
+tools a workflow can use, MCP / API first and computer use last, each with the vendor's official MCP server (checked
+2026-10-25 on vendor pages: CONFIRMED for Instantly, Smartlead, Gmail (preview), Outlook (Copilot Studio preview),
+Apollo, HubSpot, Attio, Salesforce, Xero, QuickBooks (local, preview), Greenhouse, Intercom, Google Sheets (preview),
+Airtable, Notion, Slack, Calendly; UNKNOWN for Lever and Zendesk), its Composio toolkit (all 19 listed read-only on
+this Mac), the API docs and which Composio calls are reads and which are commits. A listed commit is still denied until
+`allowlist.ts` has its full argument schema; nothing in the catalog was executed against a real account.

@@ -36,6 +36,14 @@ fields are additive and ignored by Codable until a UI slice renders them).
   hardcode a model in the executor: the planner takes an injected `pickModel(route, ctx)` (route `computer.step`),
   default Sonnet 5.5 (`DEFAULT_COMPUTER_MODEL`), wired to the router at merge. s13 does not create router.ts.
 
+- Capability catalog (operator clarification, 2026-10-25): workflows are MCP / API first, computer use last, and may
+  use a better tool than the app the person used. `connectors/capabilities.ts` (bridged from catalog.ts): capability
+  -> candidate tools (Instantly, Smartlead, Gmail, Outlook, Apollo, HubSpot, Attio, Salesforce, Xero, QuickBooks,
+  Greenhouse, Lever, Zendesk, Intercom, Google Sheets, Airtable, Notion, Slack, Calendly) with the official MCP server
+  (CONFIRMED / UNKNOWN, URL, check date, from vendor pages), the Composio toolkit (listed read-only), API docs, reads vs
+  commits per Composio tool (slugs and readOnlyHint tags checked against the live CLI listing) and a why / cost note.
+  Commits stay denied until the allowlist has their schema. `GET /catalog/capabilities[/:id]`. Tag CATALOG.
+
 ## Design
 ### 1. Resolution chain (`connectors/chain.ts`)
 - A **target** is what the chain resolves: a catalog connector, or an app a task profile touches that the catalog

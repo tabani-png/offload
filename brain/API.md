@@ -308,3 +308,16 @@ pointer yourself, stops it the same way. `GET /computer/session`: `{ running, wo
 stopReason }`; `pointer` is the last pointer event `{ x, y, label, action, at }` (screen points, the control's
 Accessibility title) for a Clicky-style overlay glyph. Other methods 405. Every action of a run passed the gate first
 (brain/CONNECTORS.md "The gate for every method").
+
+## GET /catalog/capabilities, GET /catalog/capabilities/:id → `CapabilitiesResponse`, `CapabilityDTO` (s13)
+Read-only data for the workflow builder: what a workflow can use for a capability, not only the app the person used
+(`src/connectors/capabilities.ts`). Capabilities: `send-outreach-sequence`, `send-email`, `enrich-contact`,
+`log-to-crm`, `create-bill`, `update-ats-stage`, `reply-ticket`, `write-sheet-row`, `post-message`,
+`schedule-meeting`. Each `CapabilityDTO { id, name, description, checkedAt, candidates[] }` lists candidates in the
+order Offload recommends them (for outreach: Instantly, Smartlead and Apollo before sending one by one from Gmail).
+`CapabilityToolDTO`: `toolId`, `name`, `why`, `cost`, `mcp { status: CONFIRMED | UNKNOWN, url, kind, checkedAt,
+evidence }` (the vendor's own MCP server; community servers do not count), `composio { toolkit, status, tools,
+checkedAt }` (listed read-only with the Composio CLI), `apiDocs`, `catalogId`, `reads[] { slug, gateTool }` and
+`commits[] { slug, verb: send | launch | create | update | delete, gateTool, allowedByGate }`. `gateTool` is the name the
+gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allowlist has that tool's argument schema
+(today only `GMAIL_SEND_EMAIL` and the sheet append): the catalog recommends, the gate allows. Unknown id 404; GET only.

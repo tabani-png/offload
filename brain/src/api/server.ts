@@ -22,7 +22,8 @@ import { anthropicMessages, ClaudePlanner, type MessagesApi, type PickModel, typ
 import type { ComputerDriver } from "../connectors/computer/driver.ts";
 import { OsaDriver } from "../connectors/computer/osa-driver.ts";
 import { ComputerSessions, STOP_REASONS } from "../connectors/computer/session.ts";
-import type { ConnectLinkDTO } from "./types.ts";
+import { API_VERSION, type CapabilitiesResponse, type ConnectLinkDTO } from "./types.ts";
+import { CAPABILITIES, capabilityById, capabilityDTO, CATALOG_CHECKED_AT } from "../connectors/capabilities.ts";
 import { existsSync } from "node:fs";
 
 export interface BrainOptions {
@@ -280,6 +281,13 @@ export function createBrain(opts: BrainOptions): Brain {
     }
     if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed");
 
+    // s13: the capability -> candidate tools catalog (read-only data) for the workflow builder.
+    if (path === "/catalog/capabilities") return json(200, { version: API_VERSION, checkedAt: CATALOG_CHECKED_AT, capabilities: CAPABILITIES.map(capabilityDTO) } satisfies CapabilitiesResponse);
+    const capM = /^\/catalog\/capabilities\/([a-z0-9-]{1,64})$/.exec(path);
+    if (capM !== null) {
+      const cap = capabilityById(capM[1]!);
+      return cap === undefined ? error(404, "not_found", "unknown capability id") : json(200, capabilityDTO(cap));
+    }
     if (path === "/status") return json(200, toStatus(await analysis(undefined), now()));
     // s10b: plus the user files kept until the user deletes them, for the app's "Observing" section.
     if (path === "/observer") return json(200, { ...(await observerStatus(opts.home, observerEnv, now())), keptFiles: keptFiles(opts.home) });

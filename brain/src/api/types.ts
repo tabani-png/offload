@@ -685,3 +685,39 @@ export interface ErrorResponse {
   error: ErrorCode;
   message?: string;
 }
+
+// ---------- s13: capability catalog (GET /catalog/capabilities) ----------
+
+/** One candidate tool for a capability, with how Offload would reach it and which calls the gate treats as commits. */
+export interface CapabilityToolDTO {
+  toolId: string;
+  name: string;
+  why: string;
+  cost: string;
+  /** The vendor's official MCP server: CONFIRMED (url, date) or UNKNOWN. */
+  mcp: { status: "CONFIRMED" | "UNKNOWN"; url: string | null; kind: "remote" | "local" | null; checkedAt: string; evidence: string };
+  /** Composio toolkit checked read-only on this Mac (status CONFIRMED with its tool count). */
+  composio: { toolkit: string; status: "CONFIRMED" | "UNKNOWN"; tools: number; checkedAt: string };
+  apiDocs: string;
+  /** The catalog connector id when Offload maps an app to it (gmail, google-sheets, ...), else null. */
+  catalogId: string | null;
+  reads: Array<{ slug: string; gateTool: string; note?: string }>;
+  /** Commits (send, launch, create, update, delete). `allowedByGate` false = denied until the allowlist has its schema. */
+  commits: Array<{ slug: string; verb: "send" | "launch" | "create" | "update" | "delete"; gateTool: string; allowedByGate: boolean; note?: string }>;
+  note: string;
+}
+
+export interface CapabilityDTO {
+  id: string;
+  name: string;
+  description: string;
+  checkedAt: string;
+  /** In the order Offload recommends them. */
+  candidates: CapabilityToolDTO[];
+}
+
+export interface CapabilitiesResponse {
+  version: ApiVersion;
+  checkedAt: string;
+  capabilities: CapabilityDTO[];
+}
