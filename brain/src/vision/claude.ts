@@ -11,6 +11,7 @@
 //   stop_reason is checked before any content is read (refusal, max_tokens). Usage is counted per frame.
 // - Not the default: selection is `serve --captioner claude`, or `auto` once CLAUDE_IN_AUTO is turned on (cli.ts).
 import Anthropic from "@anthropic-ai/sdk";
+import { TIER_MODELS } from "../models/router.ts";
 import { spawnSync } from "node:child_process";
 import { captionJsonSchema, CaptionShapeError, coerceFields } from "./schema.ts";
 import { CaptionerFatalError } from "./ollama.ts";
@@ -20,8 +21,8 @@ import type { Captioner, CaptionerHealth, CaptionFields, CaptionInput, CaptionUs
 export const ANTHROPIC_ORIGIN = "https://api.anthropic.com";
 export const ANTHROPIC_HOST = "api.anthropic.com";
 /** Cheapest current model that reads screenshots well; `--claude-vision-model claude-sonnet-5-5` for more care. */
-export const DEFAULT_CLAUDE_VISION_MODEL = "claude-haiku-5-5";
-export const CLAUDE_VISION_MODELS = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"] as const;
+export const DEFAULT_CLAUDE_VISION_MODEL = TIER_MODELS.haiku;
+export const CLAUDE_VISION_MODELS = [TIER_MODELS.haiku, TIER_MODELS.sonnet, TIER_MODELS.opus] as const;
 
 export class NonAnthropicHostError extends Error {}
 /** Claude declined this frame (stop_reason "refusal"): retrying the same frame will not help. */

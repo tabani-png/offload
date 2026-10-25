@@ -6,6 +6,7 @@
 //   meta / shell / forward / reply / draft tool, nested tool call in the input -> deny
 //   not on the allowlist (allowlist.ts) for a connected server -> deny (unknown = deny)
 //   allowlisted read                                        -> allow
+//   (s13) input: a local UI edit, approved batch + declared send through its connector -> allow, consumes nothing
 //   side effect for a dry-run batch                         -> deny
 //   batch items do not match the batch hash                 -> deny
 //   no approval token for this exact batch hash (and auto-run off) -> deny
@@ -20,7 +21,7 @@
 import type { CanUseTool, HookCallback, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { appendLogLine, scrubLogText } from "../log.ts";
-import { canonicalArgs, DEFAULT_SERVERS, expectedHash, policyFor, splitMcpName, type CrmSheet, type Role } from "./allowlist.ts";
+import { canonicalArgs, DEFAULT_SERVERS, expectedHash, policyFor, splitMcpName, type CrmSheet, type Role, type ToolPolicy } from "./allowlist.ts";
 import { batchHash, shortHash, type Batch, type ItemState } from "./batch.ts";
 
 export { splitMcpName };
@@ -32,9 +33,9 @@ export type ToolClass = "read" | "side_effect" | "builtin";
 export type ServerMap = Readonly<Record<string, readonly string[]>>;
 
 /** read only for an allowlisted read tool on a server that covers its connector; everything else is a side effect. */
-export function classifyTool(name: string, servers: ServerMap = DEFAULT_SERVERS): ToolClass {
+export function classifyTool(name: string, servers: ServerMap = DEFAULT_SERVERS, extra?: readonly ToolPolicy[]): ToolClass {
   if (splitMcpName(name) === null) return "builtin";
-  const p = policyFor(name, servers);
+  const p = policyFor(name, servers, undefined, extra);
   return !("reason" in p) && p.role === "read" ? "read" : "side_effect";
 }
 
@@ -69,7 +70,7 @@ export interface GateDecisionLog {
 
 /** A side-effect action the workflow's steps declare, per item. */
 export interface GateAction {
-  role: Exclude<Role, "read">;
+  role: Exclude<Role, "read" | "input">;
   connector: string;
 }
 
@@ -85,6 +86,8 @@ export interface GateContext {
   approvals: (hash: string) => ApprovalRecord | undefined;
   /** Server name -> catalog ids (from connectors.json). Default DEFAULT_SERVERS. */
   servers?: ServerMap;
+  /** s13: dynamic policies (api operations, computer use), each bound to its server name. */
+  policies?: readonly ToolPolicy[];
   /** Side-effect actions the steps declare. Default: send through gmail only. */
   actions?: readonly GateAction[];
   /** Where the CRM log tool may append. Without it the log tool is denied. */
@@ -162,7 +165,7 @@ export function createGate(ctx: GateContext): Gate {
 
   function decide(toolName: string, input: Record<string, unknown>, consume: boolean): Decision {
     if (splitMcpName(toolName) === null) return { allow: false, reason: "built-in tools are disabled in workflow runs", toolClass: "builtin" };
-    const p = policyFor(toolName, servers, input);
+    const p = policyFor(toolName, servers, input, ctx.policies);
     const isRead = !("reason" in p) && p.role === "read";
     const toolClass: ToolClass = isRead ? "read" : "side_effect";
     const deny = (reason: string, itemKey?: string): Decision => ({ allow: false, reason, toolClass, ...(itemKey === undefined ? {} : { itemKey }) });
@@ -177,6 +180,12 @@ export function createGate(ctx: GateContext): Gate {
     const approval = ctx.approvals(ctx.batch.hash);
     const approved = ctx.runToken !== null && approval !== undefined && tokenEq(approval.token, ctx.runToken);
     if (!approved && !ctx.autoRun) return deny(`no approval for batch ${shortHash(ctx.batch.hash)}`);
+    // s13: a local UI edit (computer use) needs the approved batch and a declared commit through this connector, and
+    // never uses up an item. What it typed is checked again, in full, by the commit's hash.
+    if (p.role === "input") {
+      if (!actions.some((a) => a.role === "send" && a.connector === p.connector)) return deny(`this workflow declares no send step through ${p.connector}`);
+      return { allow: true, reason: `input for approved batch ${shortHash(ctx.batch.hash)}`, toolClass, role: "input" };
+    }
     const role = p.role;
     if (!actions.some((a) => a.role === role && a.connector === p.connector)) return deny(`this workflow declares no ${role} step through ${p.connector}`);
 

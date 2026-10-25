@@ -19,6 +19,14 @@ import { workflowRoute } from "./workflow-routes.ts";
 import { s14Route } from "./s14-routes.ts";
 import { contextStamp, readUserContext } from "../context/store.ts";
 import { isMethod, Linker, LinkNotFound, METHODS, simPath, type LinkRunner, type Method } from "../connectors/link.ts";
+import { chainDeps, ChainResolver, knownTarget, toChainDTO, type ChainDeps, type MethodProbe } from "../connectors/chain.ts";
+import { chainLinkRegistry } from "../connectors/methods.ts";
+import { anthropicMessages, ClaudePlanner, type MessagesApi, type PickModel, type Planner } from "../connectors/computer/claude.ts";
+import type { ComputerDriver } from "../connectors/computer/driver.ts";
+import { OsaDriver } from "../connectors/computer/osa-driver.ts";
+import { ComputerSessions, STOP_REASONS } from "../connectors/computer/session.ts";
+import { API_VERSION, type CapabilitiesResponse, type ConnectLinkDTO } from "./types.ts";
+import { CAPABILITIES, capabilityById, capabilityDTO, CATALOG_CHECKED_AT } from "../connectors/capabilities.ts";
 import { existsSync } from "node:fs";
 
 export interface BrainOptions {
@@ -35,6 +43,18 @@ export interface BrainOptions {
   log?: (line: string) => void;
   /** s10e connect-link routes: the demo sign-in time (stub) and the command runner (real). Tests inject both. */
   link?: { linkMs?: number; runner?: LinkRunner };
+  /** s13 connector chain: probe dependencies (runner, MCP lister, fetch, secrets, computer probe), probes, per-method
+   * executors, the computer-use driver and planner. Tests inject fakes; nothing real runs unless the real model is on. */
+  chain?: {
+    deps?: Partial<Omit<ChainDeps, "home" | "env" | "now" | "simulated">>;
+    probes?: Map<Method, MethodProbe>;
+    executors?: Partial<Record<Method, Executor>>;
+    computer?: { driver: ComputerDriver; planner: Planner };
+    /** Model per route for computer-use steps (s14's router at merge); default Sonnet 5.5. */
+    pickModel?: PickModel;
+    /** Send through the chain with the stub model too (tests). */
+    always?: boolean;
+  };
   /** s11: the caption worker (vision/worker.ts). Its status is `captioner` in GET /status; startBrainServer starts
    * and stops it. Absent = `serve --captioner off`. */
   vision?: VisionHandle;
@@ -56,6 +76,9 @@ export interface Brain {
   readonly modelLabel: ModelLabel;
   /** s10e: resolves when background sign-in commands have ended (tests). */
   linkIdle(): Promise<void>;
+  /** s13: the connector chain and the computer-use sessions (tests). */
+  readonly chain: ChainResolver;
+  readonly computer: ComputerSessions;
 }
 
 async function linkBody(req: Request): Promise<{ restart: boolean; method?: Method } | string> {
@@ -160,7 +183,48 @@ export function createBrain(opts: BrainOptions): Brain {
   const observerEnv = opts.observerEnv ?? process.env;
   const simulated = modelLabel === "stub";
   if (!simulated && existsSync(simPath(opts.home))) (opts.log ?? ((l: string) => console.error(l)))("brain: connect-sim.json is ignored: demo sign-ins count only with --model stub");
-  const linker = new Linker({ home: opts.home, env, modelLabel, now, ...(opts.link?.linkMs === undefined ? {} : { linkMs: opts.link.linkMs }), ...(opts.link?.runner === undefined ? {} : { runner: opts.link.runner }), ...(opts.log === undefined ? {} : { log: opts.log }) });
+  // s13: the connector chain. Stub model: deterministic probes. The chain shares the link runner (tests inject one).
+  const resolver = new ChainResolver(
+    chainDeps({ home: opts.home, env, now, simulated, ...(opts.link?.runner === undefined ? {} : { runner: opts.link.runner }), ...(opts.log === undefined ? {} : { log: opts.log }), ...(opts.chain?.deps ?? {}) }),
+    opts.chain?.probes,
+  );
+  const sessions = new ComputerSessions();
+  // Computer use: injected (tests), or the real driver and Claude planner only when the person turned it on.
+  let computer: { driver: ComputerDriver; planner: Planner; sessions: ComputerSessions } | undefined;
+  if (opts.chain?.computer !== undefined) computer = { ...opts.chain.computer, sessions };
+  else if (!simulated && env.OFFLOAD_COMPUTER_REAL === "1") {
+    let api: MessagesApi | null = null;
+    computer = { driver: new OsaDriver(resolver.deps.runner, env), planner: new ClaudePlanner({ create: async (p) => (api ??= await anthropicMessages()).create(p) }, opts.chain?.pickModel ?? (router === undefined ? undefined : (route, ctx) => router.pickModel(route, ctx))), sessions };
+  }
+  const targetOf = (id: string) => knownTarget(opts.home, id, now());
+  const linker = new Linker({
+    home: opts.home,
+    env,
+    modelLabel,
+    now,
+    registry: chainLinkRegistry(resolver, targetOf),
+    // After a Composio sign-in, the CLI path counts once a fresh probe can commit through it (no server needed).
+    reachable: async (id, method) => {
+      const t = targetOf(id);
+      if (t === null) return false;
+      const s = (await resolver.resolve(t, { refresh: true })).methods.find((m) => m.method === method);
+      return s?.health === "ok" && t.sends.some((c) => s.writes.includes(c));
+    },
+    resolveConnector: (id) => {
+      const t = targetOf(id);
+      return t === null || t.catalog ? undefined : { id: t.id, name: t.name, how: `composio:${t.toolkit}`, reach: 0, hosts: t.hosts, apps: t.bundleIds };
+    },
+    ...(opts.link?.linkMs === undefined ? {} : { linkMs: opts.link.linkMs }),
+    ...(opts.link?.runner === undefined ? {} : { runner: opts.link.runner }),
+    ...(opts.log === undefined ? {} : { log: opts.log }),
+  });
+  /** The chain of a connector for the link/status DTO. peek: the cache only; resolve: probe when expired. */
+  const withChain = async (dto: ConnectLinkDTO, mode: "peek" | "resolve" | "refresh"): Promise<ConnectLinkDTO> => {
+    const t = targetOf(dto.connectorId);
+    if (t === null) return dto;
+    const d = mode === "peek" ? resolver.peek(t.id) : await resolver.resolve(t, { refresh: mode === "refresh" });
+    return d === null ? dto : { ...dto, chain: toChainDTO(t, d, simulated) };
+  };
   const wctx = {
     home: opts.home,
     env,
@@ -172,6 +236,13 @@ export function createBrain(opts: BrainOptions): Brain {
     background: (p: Promise<unknown>) => {
       const tracked = p.catch((err: unknown) => console.error("brain: background run failed", err)).finally(() => background.delete(tracked));
       background.add(tracked);
+    },
+    chain: {
+      resolver,
+      ...(opts.chain?.executors === undefined ? {} : { executors: opts.chain.executors }),
+      ...(computer === undefined ? {} : { computer }),
+      ...(opts.chain?.always === true ? { always: true } : {}),
+      ...(opts.log === undefined ? {} : { log: opts.log }),
     },
   };
 
@@ -198,18 +269,30 @@ export function createBrain(opts: BrainOptions): Brain {
     }
     // s10e: start (POST) or poll (GET) a sign-in for one catalog id. Connecting never sends anything.
     // GET /connectors/:id/status is the generic name of the same poll (GET and HEAD only).
+    // s13: the computer-use kill switch (the app maps Esc and its menu item here) and the overlay's session state.
+    if (path === "/computer/stop") {
+      if (req.method !== "POST") return error(405, "method_not_allowed", "use POST");
+      return json(200, { stopped: sessions.stop(STOP_REASONS.user), session: sessions.dto() });
+    }
+    if (path === "/computer/session") {
+      if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed", "use GET");
+      return json(200, sessions.dto());
+    }
     const link = /^\/connectors\/([^/]+)\/(link|status)$/.exec(path);
     if (link !== null) {
       const id = link[1]!;
       const allowed = link[2] === "link" ? ["POST", "GET", "HEAD"] : ["GET", "HEAD"];
       if (!allowed.includes(req.method)) return error(405, "method_not_allowed", link[2] === "link" ? "use GET or POST" : "use GET");
       try {
+        // s13: the chain rides along. Stub: always probed (deterministic). Real: /status probes when the cached
+        // decision expired (?refresh=1 now); /link answers from the cache so a sign-in poll never spawns a probe.
+        const mode = url.searchParams.get("refresh") === "1" ? "refresh" : simulated || link[2] === "status" ? "resolve" : "peek";
         if (req.method === "POST") {
           const b = await linkBody(req);
           if (typeof b === "string") return error(400, "bad_request", b);
-          return json(200, await linker.start(id, b));
+          return json(200, await withChain(await linker.start(id, b), mode));
         }
-        return json(200, await linker.poll(id));
+        return json(200, await withChain(await linker.poll(id), mode));
       } catch (err) {
         if (err instanceof LinkNotFound) return error(404, "not_found", "unknown connector id");
         throw err;
@@ -217,6 +300,13 @@ export function createBrain(opts: BrainOptions): Brain {
     }
     if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed");
 
+    // s13: the capability -> candidate tools catalog (read-only data) for the workflow builder.
+    if (path === "/catalog/capabilities") return json(200, { version: API_VERSION, checkedAt: CATALOG_CHECKED_AT, capabilities: CAPABILITIES.map(capabilityDTO) } satisfies CapabilitiesResponse);
+    const capM = /^\/catalog\/capabilities\/([a-z0-9-]{1,64})$/.exec(path);
+    if (capM !== null) {
+      const cap = capabilityById(capM[1]!);
+      return cap === undefined ? error(404, "not_found", "unknown capability id") : json(200, capabilityDTO(cap));
+    }
     if (path === "/status") return json(200, { ...toStatus(await analysis(undefined), now(), opts.vision?.status() ?? CAPTIONER_OFF), ...(router === undefined ? {} : { models: router.summary() }) });
     // s10b: plus the user files kept until the user deletes them, for the app's "Observing" section.
     if (path === "/observer") return json(200, { ...(await observerStatus(opts.home, observerEnv, now())), keptFiles: keptFiles(opts.home) });
@@ -245,6 +335,8 @@ export function createBrain(opts: BrainOptions): Brain {
   let ticking: Promise<SchedulerTick> | null = null;
   return {
     modelLabel,
+    chain: resolver,
+    computer: sessions,
     linkIdle: () => linker.idle(),
     async idle(): Promise<void> {
       while (background.size > 0) await Promise.all([...background]);

@@ -4,6 +4,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
+import { parseApis, type ApisConfig } from "./api-config.ts";
 import { CONNECTORS, connectorById } from "./catalog.ts";
 
 export type Env = Readonly<Record<string, string | undefined>>;
@@ -39,6 +40,8 @@ export interface ConnectorsConfig {
   servers: Record<string, ServerEntry>;
   /** Which server and read tool the tone pack reads Sent mail from. */
   mail?: MailSourceConfig;
+  /** s13: direct HTTP access per target id (api-config.ts). Names env vars / Keychain items, never a value. */
+  apis?: ApisConfig;
 }
 
 export type ConnectorStatus = "connected" | "missing_env" | "missing";
@@ -145,8 +148,9 @@ export function parseConnectorsConfig(raw: unknown): { config: ConnectorsConfig 
       mail = { server: m.server, listTool: m.listTool, args, ...(typeof m.limitArg === "string" ? { limitArg: m.limitArg } : {}) };
     }
   }
+  const apis = parseApis(raw.apis, errors);
   if (errors.length > 0) return { config: null, errors };
-  return { config: { version: 1, servers, ...(mail === undefined ? {} : { mail }) }, errors };
+  return { config: { version: 1, servers, ...(mail === undefined ? {} : { mail }), ...(Object.keys(apis).length === 0 ? {} : { apis }) }, errors };
 }
 
 export function loadConnectorsConfig(home: string): { config: ConnectorsConfig | null; errors: string[]; path: string } {

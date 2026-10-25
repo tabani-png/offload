@@ -45,6 +45,8 @@ describe("s14 router: routes and the ladder", () => {
       ["refine", "claude-haiku-5-5", "low", false],
     ]);
     expect(r.modelFor("caption")).toBe("claude-haiku-5-5");
+    // s13 seam: computer-use steps are execution.
+    expect(r.pickModel("computer.step", { targetId: "web-x", turn: 0 })).toBe("claude-sonnet-5-5");
   });
 
   test("ROUTER: Haiku -> Sonnet -> Opus on refusal, a cut-off reply or a failed check, with the reasons kept", async () => {

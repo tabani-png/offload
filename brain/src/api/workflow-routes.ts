@@ -4,7 +4,14 @@
 // Writes are POST/PUT/DELETE with a JSON body of at most 64 KB. The approval gate itself lives in workflows/gate.ts.
 import type { Analysis } from "../analyze.ts";
 import { loadConnectorsConfig, toMcpServers, type Env } from "../connectors/config.ts";
-import { DEMO_SEND_REFUSED, simulatedOnly } from "../connectors/link.ts";
+import { DEMO_SEND_REFUSED, simulatedOnly, type Method } from "../connectors/link.ts";
+import { knownTargets, rememberTargets, toChainDTO, type ChainResolver } from "../connectors/chain.ts";
+import type { Planner } from "../connectors/computer/claude.ts";
+import type { ComputerDriver } from "../connectors/computer/driver.ts";
+import type { ComputerSessions } from "../connectors/computer/session.ts";
+import { targetForProfile } from "../connectors/targets.ts";
+import { buildChain } from "../workflows/chain-executor.ts";
+import { declaredActions } from "../workflows/runner.ts";
 import type { Model } from "../models/model.ts";
 import { draftWorkflow, NotFoundError } from "../workflows/drafter.ts";
 import { dryRun, DryRunError, readLastDryRun } from "../workflows/dryrun.ts";
@@ -19,7 +26,7 @@ import { loadTonePack, MAX_TONE_CARD_BYTES, readStyleCard, writeStyleCard, type 
 import { toneMeasured } from "../tone/style.ts";
 import type { WorkflowJson } from "../workflows/types.ts";
 import { error, json } from "./http.ts";
-import { API_VERSION, type ApproveResponse, type ModelLabel, type RunResponse, type ToneCardDTO, type WorkflowsResponse } from "./types.ts";
+import { API_VERSION, type ApproveResponse, type ConnectorChainDTO, type ModelLabel, type RunResponse, type ToneCardDTO, type WorkflowsResponse } from "./types.ts";
 
 export const MAX_BODY_BYTES = 64 * 1024;
 
@@ -34,6 +41,38 @@ export interface WorkflowContext {
   analysis: () => Promise<Analysis>;
   /** Background work (sending an approved batch). The server keeps the promise so tests can wait. */
   background: (p: Promise<unknown>) => void;
+  /** s13: the connector chain (resolver, per-method executors, computer use). Absent = the s10e single-executor path. */
+  chain?: ChainContext;
+}
+
+export interface ChainContext {
+  resolver: ChainResolver;
+  /** Replace a method's executor (tests). */
+  executors?: Partial<Record<Method, Executor>>;
+  computer?: { driver: ComputerDriver; planner: Planner; sessions: ComputerSessions };
+  /** Send through the chain even with the stub model (tests). Default: real model only. */
+  always?: boolean;
+  log?: (line: string) => void;
+}
+
+/** s13: chains for GET /connectors: every catalog id and every app target of the current insights. Stub: probed
+ * (deterministic). Real: from the cache, expired ones refreshed in the background; `refresh` probes now. */
+export async function connectorChains(ctx: WorkflowContext, a: Analysis, refresh: boolean): Promise<ConnectorChainDTO[] | undefined> {
+  const chain = ctx.chain;
+  if (chain === undefined) return undefined;
+  const apps = a.insights.map((i) => targetForProfile(i.profile)).filter((t) => !t.catalog);
+  rememberTargets(ctx.home, apps, ctx.now());
+  const targets = [...knownTargets(ctx.home, ctx.now()).filter((t) => t.catalog), ...apps.filter((t, i) => apps.findIndex((x) => x.id === t.id) === i)];
+  const simulated = ctx.modelLabel === "stub";
+  const out: ConnectorChainDTO[] = [];
+  for (const t of targets) {
+    let d = chain.resolver.peek(t.id);
+    const expired = d === null || d.expiresAt <= ctx.now();
+    if (simulated || refresh) d = await chain.resolver.resolve(t, { refresh });
+    else if (expired) ctx.background(chain.resolver.resolve(t));
+    if (d !== null) out.push(toChainDTO(t, d, simulated));
+  }
+  return out;
 }
 
 class HttpError extends Error {
@@ -88,11 +127,13 @@ export async function workflowRoute(req: Request, path: string, ctx: WorkflowCon
 }
 
 async function route(req: Request, path: string, ctx: WorkflowContext): Promise<Response> {
-  const status = () => connectorStatus(ctx.home, ctx.env, ctx.modelLabel === "stub");
+  const status = () => connectorStatus(ctx.home, ctx.env, ctx.modelLabel === "stub", ctx.now());
 
   if (path === "/connectors") {
     methods(req, "GET");
-    return json(200, connectorsResponse(await ctx.analysis(), ctx.home, ctx.env, ctx.modelLabel === "stub"));
+    const a = await ctx.analysis();
+    const refresh = new URL(req.url).searchParams.get("refresh") === "1";
+    return json(200, connectorsResponse(a, ctx.home, ctx.env, ctx.modelLabel === "stub", await connectorChains(ctx, a, refresh), ctx.now()));
   }
   if (path === "/workflows") {
     methods(req, "GET");
@@ -255,7 +296,7 @@ export interface AutoDispatch {
 export function dispatchAuto(ctx: WorkflowContext, id: string, batch: Batch, now: number, log: (line: string) => void): AutoDispatch {
   const wf = readWorkflow(ctx.home, id);
   if (wf === null || wf.status !== "active" || !wf.autoRun || batch.state !== "pending" || batch.kind !== "live") return { sending: null, held: batch };
-  const missing = summaryOf(ctx.home, wf, connectorStatus(ctx.home, ctx.env, ctx.modelLabel === "stub"), now).connectors.filter((c) => c.required && c.status !== "connected");
+  const missing = summaryOf(ctx.home, wf, connectorStatus(ctx.home, ctx.env, ctx.modelLabel === "stub", now), now).connectors.filter((c) => c.required && c.status !== "connected");
   if (missing.length > 0) {
     log(`brain: ${id}: auto-run batch waits: connect ${missing.map((c) => c.name).join(", ")}`);
     return { sending: null, held: batch };
@@ -309,6 +350,33 @@ export async function sendBatch(ctx: WorkflowContext, id: string, hash: string, 
     return;
   }
   const { config } = loadConnectorsConfig(ctx.home);
+  // s13: the connector chain (real model, or a test that asks for it): MCP -> Composio -> API -> computer use, one
+  // gate and one item journal for every method, auto-fallback only for items never attempted.
+  const chain = ctx.chain;
+  if (chain !== undefined && (ctx.modelLabel === "real" || chain.always === true)) {
+    const wf = readWorkflow(ctx.home, id);
+    const build =
+      wf === null
+        ? null
+        : await buildChain({
+            home: ctx.home,
+            env: ctx.env,
+            resolver: chain.resolver,
+            config,
+            actions: declaredActions(wf),
+            mcpExecutor: ctx.executor,
+            ...(chain.executors === undefined ? {} : { executors: chain.executors }),
+            ...(chain.computer === undefined ? {} : { computer: chain.computer }),
+            ...(chain.log === undefined ? {} : { log: chain.log }),
+          }).catch((err: unknown) => {
+            console.error("brain: cannot build the connector chain for", id, err instanceof Error ? err.message : err);
+            return null;
+          });
+    if (build !== null && build.methods.length > 0) {
+      await executeBatch({ home: ctx.home, workflowId: id, hash, token, executor: build.executor, mcpServers: build.mcpServers, servers: build.servers, policies: build.policies, now: ctx.now });
+      return;
+    }
+  }
   let mcpServers;
   try {
     mcpServers = config === null ? {} : toMcpServers(config, ctx.env, connectors.filter((c) => c.required).map((c) => c.id));

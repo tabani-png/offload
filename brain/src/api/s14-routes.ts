@@ -9,7 +9,7 @@ import type { Analysis } from "../analyze.ts";
 import { ContextError, contextResponse, parseContextBody, readUserContext, writeUserContext } from "../context/store.ts";
 import type { Model, ModelConfig } from "../models/model.ts";
 import type { ModelRouter } from "../models/router.ts";
-import { loadModelConfig } from "../models/model.ts";
+import { DEFAULT_MODELS, loadModelConfig } from "../models/model.ts";
 import type { CapabilityResolver } from "../plan/capabilities.ts";
 import { chooseVariant, draftGeneralWorkflow, isGeneralInsight, NotFoundError } from "../workflows/drafter.ts";
 import { connectorStatus, detailOf } from "../workflows/service.ts";
@@ -53,7 +53,7 @@ function modelsOf(ctx: S14Context): ModelConfig {
     return ctx.models ?? loadModelConfig(ctx.home);
   } catch {
     // A broken models.json: the defaults (claude-opus-5-5 / claude-sonnet-5-5) are used.
-    return { draft: "claude-opus-5-5", cheap: "claude-sonnet-5-5" };
+    return { ...DEFAULT_MODELS };
   }
 }
 

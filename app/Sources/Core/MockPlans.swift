@@ -147,7 +147,8 @@ extension MockBrainClient {
     StepTools(stepId: "s6", capability: "email.send_bulk", need: "Send from Gmail", options: [
       ToolOption(id: "instantly", name: "Instantly", via: "composio",
                  why: "Built for sending 100+ a day: campaigns, sequences, warmed sending domains, bounce and reply tracking.",
-                 setup: "about an hour", cost: "paid plan, priced per sending volume", connected: false, connectorId: nil),
+                 setup: "about an hour", cost: "paid plan, priced per sending volume", connected: false, connectorId: nil,
+                 needsYou: "Offload can read through Instantly, but its create and launch actions are not approved for use yet."),
       ToolOption(id: "gmail", name: "Gmail", via: "mcp", why: "Already connected. Fine for a few dozen a day from your own address.",
                  setup: "none", cost: "no extra cost", connected: true, connectorId: "gmail"),
     ], chosen: "instantly", chosenBy: "default", runsWith: "gmail",

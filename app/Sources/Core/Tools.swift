@@ -15,6 +15,8 @@ struct ToolOption: Codable, Equatable, Identifiable, Sendable {
   var cost: String
   var connected: Bool
   var connectorId: String?
+  /// s14 (s13 catalog): a plain sentence when this option cannot do the whole step yet (reads only, not approved).
+  var needsYou: String? = nil
 }
 
 /// StepToolsDTO.
@@ -91,6 +93,8 @@ struct ToolsCopy: Equatable, Sendable {
   var options: [Option]
   /// "Sends through Gmail until Instantly is connected." when the runner still uses something else.
   var runsWithLine: String?
+  /// The chosen option's needs-you sentence (e.g. a Composio account that only reads), shown in amber.
+  var needsYouLine: String?
 
   static let hint = "T to choose a tool, then ← → and ↩"
   static let connectedChip = "Connected"
@@ -104,6 +108,7 @@ struct ToolsCopy: Equatable, Sendable {
       Option(id: $0.id, name: $0.name, why: PlainWords.clean($0.why), detail: "\(Self.setup($0.setup)) · \($0.cost)",
              connected: $0.connected, chosen: $0.id == t.chosen)
     }
+    needsYouLine = t.chosenOption?.needsYou.flatMap { $0.isEmpty ? nil : PlainWords.clean($0) }
     if t.runsWith != t.chosen, let chosen = t.chosenOption {
       runsWithLine = "Sends through \(Self.name(t.runsWith, tools: t, connectors: connectors)) until \(chosen.name) is connected."
     } else {

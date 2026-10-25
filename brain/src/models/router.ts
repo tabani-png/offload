@@ -260,6 +260,13 @@ export class ModelRouter {
     return b !== null && this.spentUsd() >= b;
   }
 
+  /** s13 seam (connectors/computer/claude.ts PickModel): computer-use steps are execution, Sonnet 5.5 unless the tier
+   * table says otherwise. Escalation for computer use is the planner's; this only names the model. */
+  pickModel(route: "computer.step", _ctx: { targetId: string; turn: number }): string {
+    void route;
+    return this.modelFor("execute");
+  }
+
   modelFor(route: Route, stepKey?: string): string {
     return this.tierModels[this.startTier(route, stepKey)];
   }

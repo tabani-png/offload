@@ -305,6 +305,12 @@ struct ToolSuggestionView: View {
         }
       }
       .fixedSize(horizontal: false, vertical: true)
+      if let line = copy.needsYouLine {
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+          Circle().fill(p.status(.needsYou)).frame(width: Tokens.Space.s8, height: Tokens.Space.s8)
+          Text(line).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink2).fixedSize(horizontal: false, vertical: true)
+        }
+      }
       if let line = copy.runsWithLine {
         Text(line).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
       }

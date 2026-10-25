@@ -1,6 +1,7 @@
 // Every model call in the brain goes through `Model` so tests run offline and deterministic (StubModel).
 // ADR 0005: models name things and write drafts; they never produce a time or saving figure.
 import { executorEnv } from "../workflows/executor.ts";
+import { TIER_MODELS } from "./router.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -33,7 +34,8 @@ export interface ModelConfig {
   cheap: string;
 }
 
-export const DEFAULT_MODELS: Readonly<ModelConfig> = { draft: "claude-opus-5-5", cheap: "claude-sonnet-5-5" };
+/** s14: the router's tier table is the one place model ids live (models/router.ts TIER_MODELS). */
+export const DEFAULT_MODELS: Readonly<ModelConfig> = { draft: TIER_MODELS.opus, cheap: TIER_MODELS.sonnet };
 
 export function modelFor(role: ModelRole, cfg: ModelConfig): string {
   return role === "draft" || role === "workflow_design" ? cfg.draft : cfg.cheap;

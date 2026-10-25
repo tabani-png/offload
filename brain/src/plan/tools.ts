@@ -9,6 +9,9 @@
 // once s13's chain probes them, `connected` comes from the chain instead of connectorStatus.
 import type { OutputType, PlanVariantDTO } from "../api/s14-types.ts";
 import { CONNECTORS, connectorById } from "../connectors/catalog.ts";
+import { capabilityById, candidateDTO } from "../connectors/capabilities.ts";
+import { chainPath } from "../connectors/chain.ts";
+import { existsSync, readFileSync } from "node:fs";
 import { modelFor, type Model, type ModelConfig } from "../models/model.ts";
 
 export type Via = "mcp" | "composio" | "api" | "computer" | "local";
@@ -23,12 +26,20 @@ export interface ToolOptionDTO {
   connected: boolean;
   /** Catalog connector id when the catalog knows it. */
   connectorId: string | null;
+  /** s13 capability catalog: the vendor's own MCP server is confirmed. */
+  mcpConfirmed?: boolean;
+  /** s13 catalog: every commit of this tool has a gate policy (allowlist.ts); false = reads only until one is added. */
+  commitsAllowed?: boolean | null;
+  /** A plain sentence when this option cannot do the whole step yet; null otherwise. */
+  needsYou?: string | null;
 }
 
 export interface StepToolsDTO {
   stepId: string;
   /** Capability family ("email.send_bulk", "enrich.person", "crm.log", ...). */
   capability: string;
+  /** The s13 capability catalog id it maps to (GET /catalog/capabilities/:id), null when the catalog has none. */
+  catalogCapability: string | null;
   need: string;
   options: ToolOptionDTO[];
   chosen: string;
@@ -112,6 +123,7 @@ export function legacyFamily(step: { type: string; connector: string | null }, k
 }
 
 function viaWords(o: ToolOptionDTO): string {
+  if (o.needsYou != null) return o.connected ? "Connected, reads only for now." : "Reads only for now.";
   if (o.connected) return "Already connected.";
   if (o.via === "composio") return "Connect via Composio.";
   if (o.via === "mcp") return "Connect its MCP server.";
@@ -124,17 +136,75 @@ export function suggestionFor(verb: string, o: ToolOptionDTO): string {
   return `Use ${o.name} for ${verb}: ${o.why.replace(/\.$/, "")}. ${viaWords(o)}`;
 }
 
+/** My family -> s13 capability catalog id (connectors/capabilities.ts, read only). */
+export const CATALOG_CAPABILITY: Readonly<Record<string, string>> = {
+  "email.send_bulk": "send-outreach-sequence",
+  "email.send": "send-email",
+  "enrich.person": "enrich-contact",
+  "crm.log": "log-to-crm",
+  "accounting.bill": "create-bill",
+  "ats.stage": "update-ats-stage",
+  "ticket.reply": "reply-ticket",
+  "sheet.update": "write-sheet-row",
+  "chat.message": "post-message",
+};
+
+/** Above this many a day a mailbox is not good enough as the sender (provider daily limits, deliverability). */
+const MAILBOX_PER_DAY = 50;
+const SLOW_SETUP = new Set(["instantly", "smartlead"]);
+/** s13 tool ids whose catalog connector id differs. */
+const CATALOG_ID: Readonly<Record<string, string>> = { googlesheets: "google-sheets" };
+
+/** Plain words for a Composio account that may only read (s13 chain code "reads_only", connector-chain.json). */
+export const READS_ONLY_WORDS = "Composio asks before every action on this account, so Offload only reads through it. Allow actions for this account in Composio, or connect the tool directly.";
+
+/** From the s13 catalog: up to 3 candidates (the tool the person uses today kept in), each with how it connects, its
+ * gate status and a needs-you sentence when it cannot commit yet. */
+function catalogOptions(capId: string, current: string | null, connected: ReadonlySet<string>, readsOnly: ReadonlyMap<string, string>): ToolOptionDTO[] | null {
+  const cap = capabilityById(capId);
+  if (cap === undefined) return null;
+  const all = cap.candidates.map((cand) => {
+    const d = candidateDTO(cand);
+    const connectorId = d.catalogId ?? CATALOG_ID[d.toolId] ?? (connectorById(d.toolId) !== undefined ? d.toolId : null);
+    const via: Via = d.mcp.status === "CONFIRMED" ? "mcp" : d.composio.status === "CONFIRMED" ? "composio" : "api";
+    const commitsAllowed = d.commits.length === 0 ? null : d.commits.every((c) => c.allowedByGate);
+    const isConnected = connectorId !== null && connected.has(connectorId);
+    const ro = connectorId === null ? undefined : readsOnly.get(connectorId);
+    const needsYou =
+      ro !== undefined
+        ? ro
+        : commitsAllowed === false
+          ? `Offload can read through ${d.name}, but its ${d.commits.map((c) => c.verb).filter((v, i, a) => a.indexOf(v) === i).join(" and ")} actions are not approved for use yet.`
+          : null;
+    const o: ToolOptionDTO = { id: d.toolId, name: d.name, via, why: d.why, setup: SLOW_SETUP.has(d.toolId) ? "about an hour" : via === "api" ? "about an hour" : "minutes", cost: d.cost, connected: isConnected, connectorId, mcpConfirmed: d.mcp.status === "CONFIRMED", commitsAllowed, needsYou };
+    return o;
+  });
+  let top = all.slice(0, 3);
+  // Keep the tool the person uses today, else one already connected, among the three shown.
+  const mine = (current === null ? undefined : all.find((o) => o.connectorId === current || o.id === current)) ?? all.find((o) => o.connected);
+  if (mine !== undefined && !top.includes(mine)) top = [...top.slice(0, 2), mine];
+  return top;
+}
+
 /** Options for one family (+ the on-screen last resort), default chosen: connected and good enough, else the first. */
-export function optionsFor(family: string, appName: string, connected: ReadonlySet<string>, perDay: number): { options: ToolOptionDTO[]; chosen: string } {
-  const cands = [...(OPTIONS[family] ?? [])];
-  const mk = (c: Candidate): ToolOptionDTO => {
-    const { maxPerDay: _m, ...rest } = c;
-    return { ...rest, connected: c.via === "local" || (c.connectorId !== null && connected.has(c.connectorId)) };
-  };
-  const all = cands.map(mk);
-  const options = all.slice(0, 3);
-  if (options.length < 3 && family !== "doc.read") options.push(mk(ONSCREEN(appName)));
-  const good = cands.find((c) => c.connectorId !== null && connected.has(c.connectorId) && (c.maxPerDay === undefined || perDay <= c.maxPerDay));
+export function optionsFor(family: string, appName: string, connected: ReadonlySet<string>, perDay: number, o: { current?: string | null; readsOnly?: ReadonlyMap<string, string> } = {}): { options: ToolOptionDTO[]; chosen: string } {
+  const capId = CATALOG_CAPABILITY[family];
+  const fromCatalog = capId === undefined ? null : catalogOptions(capId, o.current ?? null, connected, o.readsOnly ?? new Map());
+  let options: ToolOptionDTO[];
+  if (fromCatalog !== null) options = fromCatalog;
+  else {
+    const mk = (c: Candidate): ToolOptionDTO => {
+      const { maxPerDay: _m, ...rest } = c;
+      return { ...rest, connected: c.via === "local" || (c.connectorId !== null && connected.has(c.connectorId)) };
+    };
+    options = (OPTIONS[family] ?? []).map(mk).slice(0, 3);
+  }
+  if (options.length < 3 && family !== "doc.read") {
+    const s = ONSCREEN(appName);
+    options.push({ ...s, connected: false });
+  }
+  const mailbox = (x: ToolOptionDTO) => x.id === "gmail" || x.id === "outlook";
+  const good = options.find((x) => x.connected && x.needsYou == null && !(family === "email.send_bulk" && mailbox(x) && perDay > MAILBOX_PER_DAY));
   return { options, chosen: good?.id ?? options[0]!.id };
 }
 
@@ -145,26 +215,28 @@ export interface ToolInputs {
   legacy?: { kind: string; steps: ReadonlyArray<{ id: string; type: string; title: string; connector: string | null }> };
   perDay: number;
   connected: ReadonlySet<string>;
+  /** Catalog ids whose Composio account may only read (s13 chain), with the plain reason. */
+  readsOnly?: ReadonlyMap<string, string>;
 }
 
 /** Rules recommendations for every step that needs a tool. */
 export function recommendTools(i: ToolInputs): StepToolsDTO[] {
   const out: StepToolsDTO[] = [];
-  const add = (stepId: string, family: string, need: string, appName: string, runsWith?: string) => {
-    const { options, chosen } = optionsFor(family, appName, i.connected, i.perDay);
+  const add = (stepId: string, family: string, need: string, appName: string, runsWith?: string, current?: string | null) => {
+    const { options, chosen } = optionsFor(family, appName, i.connected, i.perDay, { current: current ?? null, ...(i.readsOnly === undefined ? {} : { readsOnly: i.readsOnly }) });
     const pick = options.find((o) => o.id === chosen)!;
-    out.push({ stepId, capability: family, need, options, chosen, chosenBy: "default", runsWith: runsWith ?? chosen, suggestion: suggestionFor(VERBS[family] ?? "this step", pick) });
+    out.push({ stepId, capability: family, catalogCapability: CATALOG_CAPABILITY[family] ?? null, need, options, chosen, chosenBy: "default", runsWith: runsWith ?? chosen, suggestion: suggestionFor(VERBS[family] ?? "this step", pick) });
   };
   if (i.plan !== undefined) {
     for (const s of i.plan.variant.steps) {
       const f = capabilityFamily(s, i.plan.outputType, i.perDay);
-      if (f !== null && s.capability !== null) add(s.id, f, s.capability.need, s.capability.targetName);
+      if (f !== null && s.capability !== null) add(s.id, f, s.capability.need, s.capability.targetName, undefined, s.capability.via === "catalog" ? s.capability.target : null);
     }
   }
   if (i.legacy !== undefined) {
     for (const s of i.legacy.steps) {
       const f = legacyFamily(s, i.legacy.kind, i.perDay);
-      if (f !== null) add(s.id, f, s.title, s.connector === null ? "the app" : (connectorById(s.connector)?.name ?? s.connector), s.connector ?? "local");
+      if (f !== null) add(s.id, f, s.title, s.connector === null ? "the app" : (connectorById(s.connector)?.name ?? s.connector), s.connector ?? "local", s.connector);
     }
   }
   return out;
@@ -237,4 +309,19 @@ export function carryChoices(next: StepToolsDTO[], prev: readonly StepToolsDTO[]
     const p = prev?.find((x) => x.stepId === t.stepId && x.capability === t.capability && x.chosenBy === "user");
     return p === undefined || !t.options.some((o) => o.id === p.chosen) ? t : { ...t, chosen: p.chosen, chosenBy: "user", runsWith: p.runsWith };
   });
+}
+
+/** Catalog ids whose cached s13 chain decision says Composio may only read (code "reads_only"), with the reason.
+ * Read-only use of connector-chain.json; a missing or broken file means none. */
+export function chainReadsOnly(home: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const p = chainPath(home);
+  if (!existsSync(p)) return out;
+  try {
+    const f = JSON.parse(readFileSync(p, "utf8")) as { decisions?: Record<string, { methods?: Array<{ method?: string; code?: string }> }> };
+    for (const [id, d] of Object.entries(f.decisions ?? {})) if ((d.methods ?? []).some((m) => m.method === "composio" && m.code === "reads_only")) out.set(id, READS_ONLY_WORDS);
+  } catch {
+    // Unreadable cache: nothing is known to be read-only.
+  }
+  return out;
 }

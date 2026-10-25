@@ -22,7 +22,8 @@ import { buildPlan, chosenVariant, legacySteps, PLAN_DESCRIPTIONS, PLAN_TITLES, 
 import type { CapabilityResolver } from "../plan/capabilities.ts";
 import type { Model } from "../models/model.ts";
 import type { UserContext } from "../types.ts";
-import { carryChoices, recommendTools, refineTools } from "../plan/tools.ts";
+import { carryChoices, chainReadsOnly, recommendTools, refineTools } from "../plan/tools.ts";
+import { chainConnected } from "../connectors/chain.ts";
 import { connectorStatus } from "./service.ts";
 import { userContextBlock, profileSummary } from "../understanding/context.ts";
 
@@ -247,7 +248,7 @@ export function draftWorkflow(o: DraftWorkflowOptions): { workflow: WorkflowJson
   };
   // s14: tool options for the send and log steps (an outreach platform for 100 a day, the CRM for the log).
   wf.volumePerDay = insight.stats.instancesPerDay.value;
-  wf.tools = recommendTools({ legacy: { kind: wf.kind, steps: wf.steps }, perDay: insight.stats.instancesPerDay.value, connected: connectedIds(o.home) });
+  wf.tools = recommendTools({ legacy: { kind: wf.kind, steps: wf.steps }, perDay: insight.stats.instancesPerDay.value, connected: connectedIds(o.home), readsOnly: chainReadsOnly(o.home) });
   // "drafting" is on disk while the folder is being written, so a crash leaves a visible half-draft.
   writeWorkflow(o.home, wf);
   const dir = workflowDir(o.home, id);
@@ -325,7 +326,7 @@ export async function draftGeneralWorkflow(o: DraftGeneralOptions): Promise<{ wo
   };
   const ctx = [userContextBlock(o.user), "<task_profile>", profileSummary(insight.profile), "</task_profile>"].filter((l) => l !== "").join("\n");
   wf.volumePerDay = insight.stats.instancesPerDay.value;
-  wf.tools = await refineTools(recommendTools({ plan: { outputType: plan.outputType, variant: v }, perDay: insight.stats.instancesPerDay.value, connected: connectedIds(o.home) }), { model: o.model, models, context: ctx });
+  wf.tools = await refineTools(recommendTools({ plan: { outputType: plan.outputType, variant: v }, perDay: insight.stats.instancesPerDay.value, connected: connectedIds(o.home), readsOnly: chainReadsOnly(o.home) }), { model: o.model, models, context: ctx });
   writeWorkflow(o.home, wf);
   const dir = workflowDir(o.home, id);
   if (!existsSync(join(dir, "facts.md"))) writePrivate(join(dir, "facts.md"), GENERAL_FACTS);
@@ -352,7 +353,7 @@ export function chooseVariant(home: string, id: string, variant: "a" | "b", now:
   const v = chosenVariant(plan);
   const next: WorkflowJson = { ...wf, plan, steps: legacySteps(v), connectors: planConnectors(v), updatedAt: now };
   // Tool options follow the steps of the new variant; picks for steps that stay are kept.
-  next.tools = carryChoices(recommendTools({ plan: { outputType: plan.outputType, variant: v }, perDay: perDayOf(wf), connected: connectedIds(home) }), wf.tools);
+  next.tools = carryChoices(recommendTools({ plan: { outputType: plan.outputType, variant: v }, perDay: perDayOf(wf), connected: connectedIds(home), readsOnly: chainReadsOnly(home) }), wf.tools);
   // A different plan is a different workflow to review: the last dry run no longer stands for it.
   if (next.status === "active") next.status = "ready_for_review";
   next.lastDryRunHash = null;
@@ -364,7 +365,8 @@ export function chooseVariant(home: string, id: string, variant: "a" | "b", now:
 /** Catalog ids that are connected now (connectors.json + env), for "already connected" and the default pick. */
 export function connectedIds(home: string): Set<string> {
   try {
-    return new Set(Object.entries(connectorStatus(home, process.env)).filter(([, st]) => st === "connected").map(([id]) => id));
+    // connectors.json + env, plus anything a cached s13 chain decision can commit through.
+    return new Set([...Object.entries(connectorStatus(home, process.env)).filter(([, st]) => st === "connected").map(([id]) => id), ...chainConnected(home, Date.now())]);
   } catch {
     // An unreadable connectors.json: nothing counts as connected.
     return new Set();

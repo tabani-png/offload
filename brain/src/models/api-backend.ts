@@ -5,10 +5,10 @@
 // The key comes from ANTHROPIC_API_KEY or the Keychain reference (vision/claude.ts resolveAnthropicKey); never logged.
 import Anthropic from "@anthropic-ai/sdk";
 import { ANTHROPIC_ORIGIN, anthropicOrigin, guardedFetch, resolveAnthropicKey, type KeyRunner } from "../vision/claude.ts";
-import type { Backend, BackendReply, BackendRequest } from "./router.ts";
+import { TIER_MODELS, type Backend, type BackendReply, type BackendRequest } from "./router.ts";
 
 /** Models that accept the server-side `fallbacks: "default"` form on the Claude API (claude-api skill). */
-export const FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-sonnet-5-5"]);
+export const FALLBACK_MODELS = new Set([TIER_MODELS.opus, TIER_MODELS.sonnet]);
 export const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
 export class ApiBackendError extends Error {
