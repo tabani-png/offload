@@ -53,7 +53,8 @@ export interface StatusResponse {
 /** s11 (ADR 0007). Health of the local captioner. Never carries note text or image data. */
 export interface CaptionerStatusDTO {
   enabled: boolean;
-  captioner: "off" | "stub" | "ollama";
+  /** s14 adds "claude" (the user's own Anthropic account; images masked by the engine first). */
+  captioner: "off" | "stub" | "ollama" | "claude";
   /** Model tag in use ("stub" for the stub; for `auto`, the pulled model it picked, "auto" before the first check). */
   model: string | null;
   /** Last health check: true ready, false down (see lastError), null not checked yet. */
@@ -71,6 +72,10 @@ export interface CaptionerStatusDTO {
   lastLatencyMs: number | null;
   /** Short reason of the last problem ("ollama unreachable at http://127.0.0.1:11434: ..."), null when none. */
   lastError: string | null;
+  /** s14: token use of a paid captioner (counts only). */
+  usage?: { frames: number; inputTokens: number; outputTokens: number; lastFrame: { inputTokens: number; outputTokens: number } | null; refusals: number; costUsd?: number };
+  /** s14: a plain sentence when the captioner needs the user (no key, budget spent, local model down); else null. */
+  needsYou?: string | null;
 }
 
 export const CAPTIONER_OFF: CaptionerStatusDTO = {

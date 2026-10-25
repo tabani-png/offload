@@ -11,6 +11,20 @@ final class OnboardingModel: ObservableObject {
   @Published private(set) var note: String?
 
   var onFinish: (() -> Void)?
+  /// s14: Continue on "What do you do?" with a value: PUT /context (the app delegate queues it until the brain is up).
+  var onContext: ((UserContext) -> Void)?
+  /// s14: GET /context, for the brain's suggestion chips and a context saved earlier. nil = keep the built-in chips.
+  var loadContext: (() async -> ContextResponse?)?
+  /// s14: the Claude captioner opt-in (off by default); the app delegate saves it and restarts the brain.
+  @Published private(set) var claudeVision = false
+  var onClaudeVision: ((Bool) -> Void)?
+
+  func setClaudeVision(initial: Bool) { claudeVision = initial }
+
+  func toggleClaudeVision() {
+    claudeVision.toggle()
+    onClaudeVision?(claudeVision)
+  }
   /// Seeds the demo week and points the brain at it. Returns a calm error sentence, or nil when it worked.
   var onDemoWeek: (() async -> String?)?
 
@@ -23,13 +37,39 @@ final class OnboardingModel: ObservableObject {
 
   func next() {
     if flow.isLast { finish(); return }
-    flow.next()
-    if flow.step == .permissions { startPolling() } else { stopPolling() }
+    if flow.step == .context {
+      if let c = flow.continueContext() { onContext?(c) }
+    } else {
+      flow.next()
+    }
+    stepChanged()
   }
 
   func back() {
     flow.back()
+    stepChanged()
+  }
+
+  /// s14: Skip (⌘↩) on the context step: nothing is sent.
+  func skipContext() {
+    guard flow.step == .context else { return }
+    flow.skipContext()
+    stepChanged()
+  }
+
+  func setContext(_ f: ContextStepState.Field, _ text: String) { flow.context.set(f, text) }
+  func chooseContext(_ f: ContextStepState.Field, _ chip: String) { flow.context.choose(f, chip) }
+
+  private var contextLoaded = false
+
+  private func stepChanged() {
     if flow.step == .permissions { startPolling() } else { stopPolling() }
+    if flow.step == .context, !contextLoaded, let load = loadContext {
+      contextLoaded = true
+      Task {
+        if let r = await load() { flow.context.adopt(r) }
+      }
+    }
   }
 
   func finish() {
@@ -72,11 +112,14 @@ final class OnboardingModel: ObservableObject {
 
   // MARK: snapshot support
 
-  func preview(step: OnboardingStep, permissions: [PermissionState]? = nil, granted: [PermissionState]? = nil) {
+  func preview(step: OnboardingStep, permissions: [PermissionState]? = nil, granted: [PermissionState]? = nil,
+               context: ContextStepState? = nil, claudeVision: Bool = false) {
+    self.claudeVision = claudeVision
     var f = OnboardingFlow()
     while f.step != step { f.next() }
     if let permissions { f.update(permissions) }
     if let granted { f.update(granted) }
+    if let context { f.context = context }
     flow = f
   }
 }
@@ -105,6 +148,7 @@ struct OnboardingView: View {
         switch model.flow.step {
         case .watches: WatchesStep()
         case .permissions: PermissionsStep(flow: model.flow)
+        case .context: ContextStep(model: model)
         case .comeBack: ComeBackStep(model: model)
         }
       }
@@ -120,6 +164,10 @@ struct OnboardingView: View {
         if model.flow.isLast {
           SecondaryButton(title: model.seeding ? "Preparing demo week…" : "Use demo week") { model.useDemoWeek() }
             .disabled(model.seeding)
+        }
+        if model.flow.step == .context {
+          // s14: the question is optional; Skip sends nothing.
+          SecondaryButton(title: "Skip", key: "⌘↩") { model.skipContext() }
         }
         if case .openSettings = model.flow.primary {
           SecondaryButton(title: model.flow.primaryTitle, key: "⌘↩") { model.next() }
@@ -225,6 +273,91 @@ private struct PermissionsStep: View {
   }
 }
 
+/// s14: "What do you do?" Two one-line fields with suggestion chips. Tab moves between the fields, ↩ continues,
+/// ⌘↩ skips. In snapshots the fields are drawn as text (offscreen rendering cannot draw a live text field).
+private struct ContextStep: View {
+  @ObservedObject var model: OnboardingModel
+  @FocusState private var focus: ContextStepState.Field?
+  @Environment(\.colorScheme) private var scheme
+  @Environment(\.isSnapshot) private var isSnapshot
+
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    VStack(alignment: .leading, spacing: Tokens.Space.s20) {
+      Text(ContextStepState.intro).paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
+        .fixedSize(horizontal: false, vertical: true)
+      ForEach(ContextStepState.Field.allCases, id: \.self) { f in field(f, p) }
+      // s14: the Claude captioner opt-in: off by default, Space (outside the fields) or a click toggles it.
+      OptInRow(title: ClaudeVisionSetting.label, isOn: model.claudeVision, key: focus == nil ? "Space" : nil) {
+        model.toggleClaudeVision()
+      }
+      HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+        Image(systemName: "lock").symbolStyle(Tokens.TypeScale.Symbol.small).foregroundStyle(p.ink3)
+          .frame(width: Tokens.Space.s12)
+        Text(ContextStepState.helper).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+  }
+
+  private func field(_ f: ContextStepState.Field, _ p: Palette) -> some View {
+    let value = model.flow.context.value(f)
+    let shape = RoundedRectangle(cornerRadius: Tokens.Radius.row, style: .continuous)
+    return VStack(alignment: .leading, spacing: Tokens.Space.s8) {
+      Text(f.label).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink2)
+      Group {
+        if isSnapshot {
+          Text(value.isEmpty ? f.placeholder : value).textStyle(Tokens.TypeScale.body)
+            .foregroundStyle(value.isEmpty ? p.ink3 : p.ink1)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+          TextField(f.placeholder, text: Binding(get: { model.flow.context.value(f) }, set: { model.setContext(f, $0) }))
+            .textFieldStyle(.plain)
+            .textStyle(Tokens.TypeScale.body)
+            .foregroundStyle(p.ink1)
+            .focused($focus, equals: f)
+            .accessibilityLabel(f.label)
+        }
+      }
+      .padding(.horizontal, Tokens.Space.s12)
+      .frame(height: Tokens.Size.row)
+      .background(shape.fill(p.fill))
+      .overlay(shape.strokeBorder(focus == f ? p.ringStrong : p.ring, lineWidth: Tokens.Layout.hairline))
+      .animation(Motion.outExpo(Tokens.Duration.fast), value: focus)
+      FlowLayout(spacing: Tokens.Space.s8) {
+        ForEach(model.flow.context.suggestions(f), id: \.self) { chip in
+          SuggestionChip(text: chip, chosen: model.flow.context.isChosen(f, chip)) { model.chooseContext(f, chip) }
+        }
+      }
+    }
+  }
+}
+
+/// A suggestion: neutral, with a stronger ring while it is what the field holds (no colour: it is not a state).
+private struct SuggestionChip: View {
+  var text: String
+  var chosen: Bool
+  var action: () -> Void
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    Button(action: action) {
+      Text(text).textStyle(Tokens.TypeScale.calloutEmphasis)
+        .foregroundStyle(chosen ? p.ink1 : p.ink2)
+        .padding(.horizontal, Tokens.Space.s12)
+        .frame(height: Tokens.Size.chip)
+        .background(Capsule().fill(chosen ? p.fillStrong : p.fill))
+        .overlay(Capsule().strokeBorder(chosen ? p.ringStrong : p.ring, lineWidth: Tokens.Layout.hairline))
+        .contentShape(Capsule())
+        .animation(Motion.outExpo(Tokens.Duration.fast), value: chosen)
+    }
+    .buttonStyle(PressStyle())
+    .accessibilityLabel(chosen ? "\(text), chosen" : text)
+  }
+}
+
 private struct ComeBackStep: View {
   @ObservedObject var model: OnboardingModel
   @Environment(\.colorScheme) private var scheme
@@ -299,7 +432,19 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     guard keyMonitor == nil else { return }
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
       guard let self, e.window === self.window else { return e }
+      // s14: on "What do you do?", ⌘↩ skips (nothing is sent).
+      if self.model.flow.step == .context, ReviewKey.returnKeyCodes.contains(e.keyCode),
+         e.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) {
+        self.model.skipContext()
+        return nil
+      }
       if e.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) { return e }
+      // s14: Space toggles the Claude opt-in on the context step, unless a text field is being typed in.
+      if self.model.flow.step == .context, e.keyCode == 49,
+         (self.window.firstResponder as? NSTextView)?.isEditable != true {
+        self.model.toggleClaudeVision()
+        return nil
+      }
       if ReviewKey.returnKeyCodes.contains(e.keyCode) {
         // s10e (M8): while Screen Recording is off, ↩ opens its Settings pane (the white primary); ⌘↩ continues.
         if case .openSettings(let k) = self.model.flow.primary, !e.modifierFlags.contains(.command) {

@@ -67,8 +67,16 @@ demos and tests. The worker polls every 15 s for keyframes of the last 8 local d
 (`offload-observer list-frames` / `export-frame`; in-process under `OFFLOAD_KEYS=file`), keeps at most 32 queued,
 captions one at a time, masks every text field with `grouping/normalize.ts maskText` (a bare person name in
 `counterpart` becomes `<name>`), and writes `frame-notes/YYYY-MM-DD.jsonl.enc` sealed with the brain key of the
-frame's capture day (purged with it). Readers: `vision/notes.ts readFrameNotes(home, day)`. Images never leave the
-Mac and never reach Claude; no route serves images or frame notes yet.
+frame's capture day (purged with it). Readers: `vision/notes.ts readFrameNotes(home, day)`. Images are masked by the
+engine first; with `ollama`/`stub` they stay on the Mac. No route serves images or frame notes.
+s14 adds `--captioner claude|auto` and `--claude-vision-model claude-haiku-5-5|claude-sonnet-5-5|claude-opus-5-5`:
+`claude` reads each masked frame with Claude on the user's own Anthropic account (only https://api.anthropic.com,
+structured output against the frame-note schema, stop_reason checked, a refused frame skipped at once), falling back
+to the local model when the router's budget says so or the account does not work; `auto` tries
+`AUTO_CAPTIONERS` in order (Claude when a key is configured, then a healthy Ollama), else captions are off and
+`captioner.needsYou` says what is missing. The default stays `off` for the bare CLI; the app passes `auto`.
+`captioner` in GET /status gains `usage {frames, inputTokens, outputTokens, lastFrame, refusals, costUsd}` and
+`needsYou`.
 
 ## GET /insights[?reviewSeconds=S] → `InsightsResponse`
 Ranked insights, best first. `reviewSeconds` (0 < S <= 600, default 20) changes only the saving estimate.
@@ -368,3 +376,32 @@ checkedAt }` (listed read-only with the Composio CLI), `apiDocs`, `catalogId`, `
 `commits[] { slug, verb: send | launch | create | update | delete, gateTool, allowedByGate }`. `gateTool` is the name the
 gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allowlist has that tool's argument schema
 (today only `GMAIL_SEND_EMAIL` and the sheet append): the catalog recommends, the gate allows. Unknown id 404; GET only.
+
+
+## s14: general workflows, context and the model router (additive)
+- `GET /context` -> `{version, context: {role?, industry?}, updatedAt, suggestions: {roles, industries}}`.
+  `PUT /context {role?, industry?}`: each a one-line string of at most 80 characters, or null / "" to clear; other keys
+  400. Stored in `$OFFLOAD_HOME/user-context.json` (0600). Context only: it reaches label, design and step prompts
+  inside `<user_context>` and changes no number.
+- `POST /workflows/draft {insightId}`: for any insight that is not an s05 email template (`email.outreach`,
+  `email.scheduling`) the brain builds a general plan: workflow.json `plan` (`WorkflowPlanDTO`, api/s14-types.ts) with
+  typed steps read / transform / decide / draft / commit, two variants probed on last week's instances, the chosen
+  one, the probe arithmetic, and capability needs per step (`{need, target, targetName, capability, role, via}`, target
+  = catalog id or `app-<slug>` / `web-<slug>`). The legacy `steps` follow the chosen variant, with the approval step
+  before the first commit. The detail gains `plan` and `tools`.
+- `POST /workflows/:id/plan {variant: "a"|"b"}` keeps the other variant (detail back; the dry run must be re-run).
+- `tools` (both plan and template workflows): per step that needs an outside tool, 1-3 options for its capability
+  family (`email.send_bulk`, `enrich.person`, `crm.log`, `sheet.update`, `ticket.reply`, `accounting.bill`,
+  `ats.stage`, `order.lookup`, `doc.read`, `chat.message`), each `{id, name, via, why, setup, cost, connected,
+  connectorId}`, plus `chosen`, `chosenBy`, `runsWith` and a one-line `suggestion`. Default: a connected option that
+  is good enough for the daily volume, else the first. `POST /workflows/:id/tools {stepId, toolId}` records a pick.
+- `POST /workflows/:id/dry-run` on a plan workflow adds `general` (`GeneralDryRunDTO`): per instance `ours` vs
+  `theirs` (`{kind, summary, fields[{label, value|null}], text, actions}`), a match figure with arithmetic, the steps,
+  evidence ids, the time estimate and the `commit` the chain would make: `{tool, verb, fields: [label, value][],
+  missing}` in the labelled form of the chosen tool's s16 schema (brain/CONNECTORS.md "Commit schemas (s16)"). Values are copied by code; text steps are
+  drafted from masked text. `tools` lists the chosen tool per step. `instances` stays `[]` for plan workflows.
+- `GET /status` gains `understanding {version, embedder, framesRead}` and `models` (router summary: backend, metered,
+  month, spentUsd, budgetUsd, captionsLocal, blocked, needsYou, routes). `GET /models/usage`: the month's ledger per
+  route and model, prices, the last 100 routing decisions (route, tiers tried, escalation reasons, tokens, cost).
+- CLI: `draft` and `dry-run` take `--understanding v1|v2` (and the embedder flags); `draft` of a general insight uses
+  the stub design model unless `--model real` is given.

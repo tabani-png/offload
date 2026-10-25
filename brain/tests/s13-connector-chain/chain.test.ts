@@ -35,7 +35,8 @@ describe("s13 chain: targets", () => {
     expect(gmail().reads).toEqual(["mail.labels", "mail.read", "mail.search"]);
     expect(catalogTarget("google-sheets")).toMatchObject({ toolkit: "googlesheets", sends: [], logs: ["sheet.append"] });
     // A catalog app with no allowlisted commit can still be driven on screen.
-    expect(catalogTarget("slack")!.sends).toEqual(["ui.commit"]);
+    // (s14: Slack has a commit policy since s16, so Notion is the example now.)
+    expect(catalogTarget("notion")!.sends).toEqual(["ui.commit"]);
   });
 
   test("CHAIN: a task profile in an app the catalog does not know becomes an app target (Mac app or web host)", () => {

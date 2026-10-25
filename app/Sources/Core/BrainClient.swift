@@ -35,6 +35,14 @@ protocol BrainClient: Sendable {
   /// `method` nil = the brain's first choice for this connector.
   func startLink(connectorId: String, method: ConnectMethod?) async throws -> ConnectLink
   func linkStatus(connectorId: String) async throws -> ConnectLink
+
+  // s14: your role and industry (GET/PUT /context, context only, never a number) and the plan variant you keep
+  // (POST /workflows/:id/plan {variant}, returns the workflow detail).
+  func getContext() async throws -> ContextResponse
+  func putContext(_ context: UserContext) async throws -> ContextResponse
+  func choosePlan(workflowId: String, variant: String) async throws -> Workflow
+  /// POST /workflows/:id/tools {stepId, toolId}; returns the detail (the dry run is reset).
+  func chooseTool(workflowId: String, stepId: String, toolId: String) async throws -> Workflow
 }
 
 enum BrainError: Error, Equatable {
@@ -126,8 +134,37 @@ struct MockBrainClient: BrainClient {
   static func methods(_ id: String) -> [ConnectMethod] { id == "gmail" ? [.mcp, .composio] : [.composio] }
 
   func workflow(id: String) async throws -> Workflow {
-    guard let w = Self.sampleWorkflows.first(where: { $0.id == id }) else { throw BrainError.notFound(id) }
-    return w
+    // s14: the general (plan) sample workflows are found by id too; they are not in the email demo's list.
+    guard let w = (Self.sampleWorkflows + Self.planWorkflows + [Self.outreachToolsWorkflow]).first(where: { $0.id == id }) else { throw BrainError.notFound(id) }
+    return MockContext.plan(for: w)
+  }
+
+  // MARK: s14
+
+  func getContext() async throws -> ContextResponse { MockContext.response() }
+
+  func putContext(_ context: UserContext) async throws -> ContextResponse {
+    MockContext.store(context)
+    return MockContext.response()
+  }
+
+  /// Keeps the tool you picked for a step (chosenBy "user"), like the brain's POST /workflows/:id/tools.
+  func chooseTool(workflowId: String, stepId: String, toolId: String) async throws -> Workflow {
+    let w = try await workflow(id: workflowId)
+    guard let t = w.tools.first(where: { $0.stepId == stepId }), t.options.contains(where: { $0.id == toolId }) else {
+      throw BrainError.badRequest("unknown step or tool")
+    }
+    MockContext.chooseTool(workflowId, stepId, toolId)
+    return MockContext.plan(for: w)
+  }
+
+  /// Keeps the variant you picked (chosenBy "user"), like the brain's POST /workflows/:id/plan.
+  func choosePlan(workflowId: String, variant: String) async throws -> Workflow {
+    let w = try await workflow(id: workflowId)
+    guard let plan = w.plan else { throw BrainError.conflict("this workflow has no plan") }
+    guard plan.variants.contains(where: { $0.id == variant }) else { throw BrainError.badRequest("variant must be a or b") }
+    MockContext.choose(workflowId, variant)
+    return MockContext.plan(for: w)
   }
 
   /// POST /workflows/draft {insightId}. The mock has drafts for outreach and scheduling.
@@ -139,8 +176,12 @@ struct MockBrainClient: BrainClient {
   }
 
   func dryRun(workflowId: String, limit: Int) async throws -> DryRun {
-    guard var d = Self.sampleDryRuns[workflowId] else { throw BrainError.notFound(workflowId) }
+    guard var d = Self.sampleDryRuns[workflowId] ?? Self.planDryRuns[workflowId] else { throw BrainError.notFound(workflowId) }
     d.items = Array(d.items.prefix(max(0, limit)))
+    if var g = d.general {
+      g.instances = Array(g.instances.prefix(max(0, limit)))
+      d.general = g
+    }
     return d
   }
 
@@ -153,7 +194,7 @@ struct MockBrainClient: BrainClient {
 
   func discard(workflowId: String) async throws { _ = try await workflow(id: workflowId) }
 
-  func latestDryRun(workflowId: String) async throws -> DryRun? { Self.sampleDryRuns[workflowId] }
+  func latestDryRun(workflowId: String) async throws -> DryRun? { Self.sampleDryRuns[workflowId] ?? Self.planDryRuns[workflowId] }
 
   func dashboard() async throws -> DashboardData { Self.sampleDashboard }
 

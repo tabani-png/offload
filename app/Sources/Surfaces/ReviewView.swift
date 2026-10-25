@@ -45,9 +45,19 @@ struct ReviewView: View {
     let copy = model.copy
     return VStack(alignment: .leading, spacing: Tokens.Space.s32) {
       if parts.contains(.header) { ReviewHeader(model: model, copy: copy).id("section.top") }
-      if parts.contains(.steps) { StepsSection(copy: copy) }
-      if parts.contains(.tone) { ToneSection(model: model) }
-      if parts.contains(.dryRun) { DryRunSection(model: model, copy: copy).id(ReviewModel.dryRunSectionId) }
+      // s14: a general workflow shows its typed plan; "Your voice" only when it writes text.
+      let plan = model.planCopy
+      if parts.contains(.steps) {
+        if let plan { PlanSection(model: model, copy: plan, tools: copy.tools) } else { StepsSection(model: model, copy: copy) }
+      }
+      if parts.contains(.tone) && (plan?.writesText ?? true) { ToneSection(model: model) }
+      if parts.contains(.dryRun) {
+        if let g = model.generalCopy {
+          GeneralDryRunSection(copy: copy, general: g).id(ReviewModel.dryRunSectionId)
+        } else {
+          DryRunSection(model: model, copy: copy).id(ReviewModel.dryRunSectionId)
+        }
+      }
     }
     .frame(maxWidth: Self.contentWidth, alignment: .leading)
     .padding(.horizontal, Tokens.Space.s32)
@@ -104,6 +114,7 @@ private struct ReviewHeader: View {
 // MARK: steps
 
 private struct StepsSection: View {
+  @ObservedObject var model: ReviewModel
   var copy: ReviewCopy
 
   var body: some View {
@@ -112,6 +123,8 @@ private struct StepsSection: View {
         ForEach(Array(copy.steps.enumerated()), id: \.element.id) { i, step in
           if i > 0 { RowDivider(inset: Tokens.Space.s40) }
           StepRow(step: step)
+          // s14: the tool suggestion for this step, attached under it.
+          if let t = copy.tools[step.id] { ToolSuggestionView(model: model, copy: t) }
         }
       }
     }

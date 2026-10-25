@@ -285,8 +285,18 @@ export interface PurgeResult {
 const SEALED_SUFFIX = ".enc";
 
 /** Every place a brain artefact with OCR or mail text can live. Plain = written before s05b. */
-function artefacts(home: string): Array<{ path: string; plain: boolean; dryRunBatch?: boolean }> {
-  const out: Array<{ path: string; plain: boolean; dryRunBatch?: boolean }> = [];
+interface Artefact {
+  path: string;
+  plain: boolean;
+  dryRunBatch?: boolean;
+  /** s14: the day in the file name (frame notes, sidecars). */
+  nameDay?: string;
+  /** s14: not a sealed brain file (a fixture sidecar): expiry by its name day only. */
+  byNameOnly?: boolean;
+}
+
+function artefacts(home: string): Artefact[] {
+  const out: Artefact[] = [];
   const ls = (dir: string) => (existsSync(dir) ? readdirSync(dir) : []);
   const wfRoot = join(home, "workflows");
   for (const id of ls(wfRoot)) {
@@ -316,7 +326,17 @@ function artefacts(home: string): Array<{ path: string; plain: boolean; dryRunBa
     for (const n of ls(join(tone, "blind-test", run))) if (/^(pairs\.md|key\.json)(\.enc)?$/.test(n)) out.push({ path: join(tone, "blind-test", run, n), plain: !n.endsWith(SEALED_SUFFIX) });
   }
   // s11: Frame notes (what the local vision model saw), sealed under the frame's capture day (vision/notes.ts).
-  for (const n of ls(join(home, "frame-notes"))) if (/^\d{4}-\d{2}-\d{2}\.jsonl\.enc$/.test(n)) out.push({ path: join(home, "frame-notes", n), plain: false });
+  // s14: the file-name day counts too: a note file goes when its name OR its seal day is past 7 days, or when the two
+  // disagree (a note is never kept longer than the frame it describes).
+  for (const n of ls(join(home, "frame-notes"))) {
+    const m = /^(\d{4}-\d{2}-\d{2})\.jsonl\.enc$/.exec(n);
+    if (m !== null) out.push({ path: join(home, "frame-notes", n), plain: false, nameDay: m[1]! });
+  }
+  // s14: fixture sidecars of frame notes (frames/DAY.jsonl[.enc], s12 fixtures and demos): deleted after 7 days by name.
+  for (const n of ls(join(home, "frames"))) {
+    const m = /^(\d{4}-\d{2}-\d{2})\.jsonl(\.enc)?$/.exec(n);
+    if (m !== null) out.push({ path: join(home, "frames", n), plain: false, nameDay: m[1]!, byNameOnly: true });
+  }
   return out;
 }
 
@@ -353,7 +373,21 @@ export function purgeExpired(home: string, now: number, opts: PurgeOptions = {})
       }
       continue;
     }
+    if (a.byNameOnly === true) {
+      if (a.nameDay !== undefined && isExpired(a.nameDay, now)) {
+        rmSync(a.path, { force: true });
+        res.files += 1;
+        gone(a.nameDay);
+      }
+      continue;
+    }
     const day = sealedDay(a.path);
+    if (a.nameDay !== undefined && (isExpired(a.nameDay, now) || day !== a.nameDay)) {
+      rmSync(a.path, { force: true });
+      res.files += 1;
+      gone(a.nameDay);
+      continue;
+    }
     if (day === null || isExpired(day, now) || !keyExists(home, day)) {
       rmSync(a.path, { force: true });
       res.files += 1;

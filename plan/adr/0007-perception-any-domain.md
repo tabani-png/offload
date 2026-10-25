@@ -14,12 +14,15 @@ landed in "browse"/"other" and could not be named or automated.
    encrypted in the day store, deleted with the 7-day purge. Exclusions and masking apply before anything is kept.
 2. A local vision model describes each keyframe (Ollama on the Mac; model chosen by s11 research, swappable).
    Output is a structured Frame note: activity, app surface, object, counterpart, step, inputs seen, outputs made,
-   confidence. Raw images never leave the Mac.
+   confidence. Images are masked by the engine before anything reads them. With the local captioner they stay on
+   the Mac; with the Claude captioner (opt-in, or `auto` when the user's own Anthropic key is configured, ADR 0008)
+   the masked frame goes only to the user's own Anthropic account at api.anthropic.com, never to another host.
 3. The brain turns frame notes + focus/input events into span descriptions, embeds them locally
    (qwen3-embedding / bge-m3 via Ollama), and groups them into task profiles across any domain (Task Model
    Induction style: profiles with identifiers, embedding + shared identifiers, daily merge). The app/host rules
    stay as features, not as the only signal.
-4. Claude (Sonnet for cheap steps, Opus for workflow design) sees only masked text profiles, never images, to name,
+4. Claude names, scores and designs from masked text profiles through the model router (ADR 0008); the only images it
+   may see are masked keyframes sent to the user's own account by the Claude captioner (point 2). To name,
    score and design workflows. Numbers stay deterministic (ADR 0005).
 5. Onboarding adds one optional step: role + industry (free text + suggestions). It is stored as user context and
    passed to labeling, scoring and workflow prompts. Nothing else is asked.
@@ -30,3 +33,8 @@ landed in "browse"/"other" and could not be named or automated.
 - Stub Captioner and stub embeddings keep tests deterministic and offline.
 - New fixtures: several domains (e.g. recruiting, bookkeeping, sales ops, support), not just outreach.
 - Cost: local inference on Apple Silicon; frames are throttled and deduped.
+
+## Revision 2026-10-25 (s14, operator)
+Screens may be read by Claude on the user's own Anthropic account (Haiku 5.5 by default, router route `caption`),
+after the engine's masking, only to api.anthropic.com, with token use and cost shown in GET /status. Ollama stays the
+offline and no-key fallback, and the router moves captions back to it when the monthly budget is nearly spent.

@@ -1,5 +1,7 @@
 // workflow.json, the typed half of a Workflow folder ($OFFLOAD_HOME/workflows/<id>/). SKILL.md is the plain-words
 // half; facts.md holds the only facts drafts may state; scripts/ holds the deterministic parts.
+import type { WorkflowPlanDTO } from "../api/s14-types.ts";
+import type { StepToolsDTO } from "../plan/tools.ts";
 import type { ConnectorDTO } from "../api/types.ts";
 import type { ModelConfig } from "../models/model.ts";
 import type { Bucket } from "../tone/types.ts";
@@ -76,4 +78,12 @@ export interface WorkflowJson {
   autoRunPin?: AutoRunPin | null;
   /** s10b N2: the last scheduled run that did not finish, with a content-free reason; cleared by the next good run. */
   lastRunError?: { at: number; reason: string } | null;
+  /** s14: the general plan (typed steps read/transform/decide/draft/commit, two probed variants, capability needs).
+   * Present for workflows built from any task profile; `steps` above is derived from its chosen variant. */
+  plan?: WorkflowPlanDTO;
+  /** s14: tool options per step that needs an outside tool (best tool for the capability, connected first when good
+   * enough), with the user's pick. Template workflows get them too; their sends still run through Gmail today. */
+  tools?: StepToolsDTO[];
+  /** s14: instances a day the tools were picked for (from the insight; code arithmetic). */
+  volumePerDay?: number;
 }

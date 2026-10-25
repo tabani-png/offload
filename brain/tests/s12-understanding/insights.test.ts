@@ -14,7 +14,8 @@ describe("INSIGHTS reach (domain-neutral)", () => {
     const r = estimateReach([
       { app: "com.google.Chrome", host: "docs.google.com", urlPattern: "/spreadsheets/d/<id>/edit", activeMs: 2 },
       { app: "com.apple.Preview", host: "", urlPattern: "", activeMs: 1 },
-      { app: "com.google.Chrome", host: "go.xero.com", urlPattern: "/AccountsPayable/Edit.aspx", activeMs: 1 },
+      // s14 scope change: Xero is a catalog connector now (s16 commit schemas); a site no catalog entry knows stands in.
+      { app: "com.google.Chrome", host: "portal.example-erp.test", urlPattern: "/AccountsPayable/Edit.aspx", activeMs: 1 },
     ]);
     expect(r.perSurface.map((s) => [s.via, s.connectorId, s.reach])).toEqual([
       ["catalog", "google-sheets", 0.9],

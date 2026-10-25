@@ -107,9 +107,10 @@ enum BrainLaunch {
   }
 
   /// `model`: "stub" or "real" for `serve --model` (s09b); nil leaves the brain's default (real).
+  /// `understanding`: s14 flags from `UnderstandingDefaults.decide` (empty = the brain's defaults).
   static func spec(bun: URL, repo: URL, home: URL, token: String, baseEnvironment: [String: String],
                    observer: URL? = nil, userHome: String = NSHomeDirectory(), model: String? = nil,
-                   logFile: URL? = nil) -> BrainLaunchSpec {
+                   logFile: URL? = nil, understanding: [String] = []) -> BrainLaunchSpec {
     var env = baseEnvironment
     env["OFFLOAD_TOKEN"] = token
     env["OFFLOAD_HOME"] = home.path
@@ -120,7 +121,8 @@ enum BrainLaunch {
       arguments: ["run", repo.appendingPathComponent("brain/src/cli.ts").path, "serve", "--home", home.path, "--port", "0"]
         + (model.map { ["--model", $0] } ?? [])
         // s10d (brain s10b): the brain's own log lines, scrubbed and rotated by the brain, in ~/Library/Logs/Offload.
-        + (logFile.map { ["--log-file", $0.path] } ?? []),
+        + (logFile.map { ["--log-file", $0.path] } ?? [])
+        + understanding,
       environment: env, workingDirectory: repo, home: home)
   }
 

@@ -10,11 +10,12 @@ import { readStore, type ReaderEnv, type StoreRead } from "./store/reader.ts";
 import type { DayLabel, OffloadEvent, Span, Task, TaskLabel, TaskProfile, TaskStats, UserContext } from "./types.ts";
 import type { SpanDescription } from "./understanding/describe.ts";
 import { StubEmbedder, type Embedder } from "./understanding/embed.ts";
-import { framesFromEvents, mergeFrames, readFrameSidecars, type FrameNote } from "./understanding/frames.ts";
+import { framesFromEvents, mergeFrames, type FrameNote } from "./understanding/frames.ts";
 import { understandingJudge } from "./understanding/labeler.ts";
 import { understandSpans } from "./understanding/pipeline.ts";
 import { connectorsForReach } from "./understanding/reach.ts";
 import { sanitizeUserContext } from "./understanding/context.ts";
+import { windowFrameNotes } from "./understanding/notes-source.ts";
 
 export interface AnalyzeOptions {
   windowDays?: number;
@@ -40,6 +41,9 @@ export interface AnalyzeOptions {
   frames?: readonly FrameNote[];
   /** Optional onboarding context {role, industry}: passed to the labeler and judge as context only. */
   userContext?: UserContext;
+  /** s14 (set by analyzeHome): notes per source and invalid notes found by the readers. */
+  framesBySource?: { events: number; sidecar: number; store: number };
+  invalidFrames?: number;
 }
 
 export interface UnderstandingInfo {
@@ -49,6 +53,11 @@ export interface UnderstandingInfo {
   framesUsed: number;
   invalidFrames: number;
   descriptions: SpanDescription[];
+  /** s14: the notes used (masked text only) and the span -> induced step map, for the workflow builder and dry run. */
+  frames: FrameNote[];
+  stepOf: Map<string, string>;
+  /** s14: where the notes came from (analyzeHome; zeros when the caller passed frames). */
+  framesBySource: { events: number; sidecar: number; store: number };
 }
 
 export interface Insight {
@@ -100,7 +109,7 @@ export async function analyzeStore(store: StoreRead, opts: AnalyzeOptions = {}):
     const embedder = opts.embedder ?? new StubEmbedder();
     const u = await understandSpans(spans, { frames, embedder, ...(opts.labeler === undefined ? {} : { labeler: opts.labeler }), ...(user === undefined ? {} : { user }) });
     tasks = u.tasks;
-    understanding = { version: "v2", embedder: u.embedder, framesRead: frames.length, framesUsed: u.framesUsed, invalidFrames: fromEvents.invalid, descriptions: u.descriptions };
+    understanding = { version: "v2", embedder: u.embedder, framesRead: frames.length, framesUsed: u.framesUsed, invalidFrames: fromEvents.invalid + (opts.invalidFrames ?? 0), descriptions: u.descriptions, frames, stepOf: u.induction.stepOf, framesBySource: opts.framesBySource ?? { events: fromEvents.frames.length, sidecar: 0, store: 0 } };
   } else {
     tasks = await groupTasks(spans, { ...(opts.labeler === undefined ? {} : { labeler: opts.labeler }), ...(user === undefined ? {} : { user }) });
   }
@@ -158,8 +167,9 @@ export async function analyzeHome(home: string, opts: AnalyzeOptions = {}): Prom
   const now = (opts.now ?? Date.now)();
   const store = readStore(home, { windowDays: opts.windowDays ?? 7, now, ...(opts.env === undefined ? {} : { env: opts.env }) });
   if (opts.understanding !== "v2" || opts.frames !== undefined) return analyzeStore(store, opts);
-  // v2: until s11 stores frame notes as events, a fixture sidecar (frames/<day>.jsonl[.enc]) carries them.
-  const side = readFrameSidecars(home, store.days.map((d) => d.day), { now });
-  for (const e of side.errors) console.error(`brain: ${e}`);
-  return analyzeStore(store, { ...opts, frames: side.frames });
+  // v2 (s14): notes from store events, the fixture sidecar (frames/<day>.jsonl[.enc]) and the s11 caption worker's
+  // sealed notes store (frame-notes/<day>.jsonl.enc), merged by id.
+  const notes = windowFrameNotes(home, store.days, now, opts.env ?? process.env);
+  for (const e of notes.errors) console.error(`brain: ${e}`);
+  return analyzeStore(store, { ...opts, frames: notes.frames, framesBySource: notes.bySource, invalidFrames: notes.invalid });
 }

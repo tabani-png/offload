@@ -23,14 +23,20 @@ import { analyzeHome, type Analysis, type AnalyzeOptions } from "./analyze.ts";
 import { OLLAMA_EMBED_MODELS, OllamaEmbedder, StubEmbedder } from "./understanding/embed.ts";
 import { formatReadyLine, startBrainServer, resolveToken } from "./api/server.ts";
 import { toInsights } from "./api/dto.ts";
-import type { DryRunResponse } from "./api/types.ts";
+import { CAPTIONER_OFF, type DryRunResponse } from "./api/types.ts";
+import type { DryRunResult } from "./workflows/dryrun.ts";
 import { loadConnectorsConfig, toMcpServers } from "./connectors/config.ts";
 import { connectMcp } from "./connectors/mcp-client.ts";
-import { AgentSdkModel, loadModelConfig, StubModel, type Model } from "./models/model.ts";
+import { loadModelConfig, StubModel, type Model } from "./models/model.ts";
+import { createRoutedModel } from "./models/factory.ts";
+import { RoutedModel } from "./models/router.ts";
+import { ClaudeCaptioner, claudeKeyConfigured, CLAUDE_VISION_MODELS, DEFAULT_CLAUDE_VISION_MODEL } from "./vision/claude.ts";
+import { RoutedCaptioner } from "./vision/routed.ts";
 import { latestBlindRun, readBlindFile, runBlindTest } from "./tone/blind.ts";
 import { FixtureMailSource, McpMailSource, type MailSource } from "./tone/mail-source.ts";
 import { buildTonePack } from "./tone/pack.ts";
-import { draftWorkflow, NotFoundError } from "./workflows/drafter.ts";
+import { draftGeneralWorkflow, draftWorkflow, isGeneralInsight, NotFoundError } from "./workflows/drafter.ts";
+import { readUserContext } from "./context/store.ts";
 import { dryRun } from "./workflows/dryrun.ts";
 import { readWorkflow } from "./workflows/store.ts";
 import { ObserverFrameSource } from "./vision/frames.ts";
@@ -41,14 +47,14 @@ import { CaptionWorker } from "./vision/worker.ts";
 const USAGE = `usage:
   bun run brain/src/cli.ts analyze --home DIR [--top N] [--review-seconds S] [--json]
   bun run brain/src/cli.ts serve --home DIR [--port P] [--model stub|real]
-  analyze and serve also take --understanding v1|v2 [--embedder stub|ollama] [--embed-model M] [--role R] [--industry I]
+  analyze, serve, draft and dry-run also take --understanding v1|v2 [--embedder stub|ollama] [--embed-model M] [--role R] [--industry I]
   bun run brain/src/cli.ts tone build --home DIR [--source fixture|mcp] [--model stub|claude] [--force]
   bun run brain/src/cli.ts tone test --home DIR --hold-back N [--source fixture|mcp] [--model stub|claude]
   bun run brain/src/cli.ts tone pairs --home DIR [--answers]
   bun run brain/src/cli.ts draft --insight N|ins_ID --home DIR [--facts FILE] [--json]
   bun run brain/src/cli.ts dry-run (--workflow ID | --insight N|ins_ID) --home DIR [--limit N] [--model stub|claude] [--json]
   bun run brain/src/cli.ts purge --home DIR [--json]
-  serve also takes --log-file FILE, --captioner off|stub|ollama, --vision-model TAG|auto, --ollama-url URL`;
+  serve also takes --log-file FILE, --captioner off|stub|ollama|claude|auto, --vision-model TAG|auto, --claude-vision-model M, --ollama-url URL`;
 
 class UsageError extends Error {}
 
@@ -66,6 +72,8 @@ interface Args {
   facts: string;
   limit: number | undefined;
   model: "stub" | "real";
+  /** s14: --model was given (draft uses the stub design model unless asked for the real one). */
+  modelGiven: boolean;
   source: "fixture" | "mcp";
   force: boolean;
   holdBack: number;
@@ -78,8 +86,10 @@ interface Args {
   industry: string;
   /** Which s12 flags were given (they are only valid on analyze and serve). */
   s12Flags: string[];
-  captioner: "off" | "stub" | "ollama";
+  captioner: "off" | "stub" | "ollama" | "claude" | "auto";
   visionModel: string;
+  /** s14: --claude-vision-model (default: the router's caption model, claude-haiku-5-5). */
+  claudeVisionModel: string;
   ollamaUrl: string;
 }
 
@@ -93,7 +103,7 @@ function parse(argv: readonly string[]): Args {
     rest = rest.slice(1);
   } else if (first === "analyze" || first === "serve" || first === "draft" || first === "dry-run" || first === "purge") command = first;
   else throw new UsageError(`unknown command ${first ?? "(none)"}`);
-  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "real", source: "fixture", force: false, holdBack: 0, answers: false, logFile: "", understanding: "v1", embedder: "stub", embedModel: "qwen3-embedding:0.6b", role: "", industry: "", s12Flags: [], captioner: "off", visionModel: DEFAULT_VISION_MODEL, ollamaUrl: DEFAULT_OLLAMA_URL };
+  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "real", modelGiven: false, source: "fixture", force: false, holdBack: 0, answers: false, logFile: "", understanding: "v1", embedder: "stub", embedModel: "qwen3-embedding:0.6b", role: "", industry: "", s12Flags: [], captioner: "off", visionModel: DEFAULT_VISION_MODEL, claudeVisionModel: "", ollamaUrl: DEFAULT_OLLAMA_URL };
   const num = (flag: string, v: string | undefined, min: number, max: number): number => {
     const n = Number(v);
     if (v === undefined || !Number.isFinite(n) || n < min || n > max) throw new UsageError(`${flag} must be a number in [${min}, ${max}]`);
@@ -141,9 +151,14 @@ function parse(argv: readonly string[]): Args {
       args.s12Flags.push(a);
     } else if (a === "--captioner") {
       const v = rest[++i];
-      if (v !== "off" && v !== "stub" && v !== "ollama") throw new UsageError("--captioner must be off, stub or ollama");
+      if (v !== "off" && v !== "stub" && v !== "ollama" && v !== "claude" && v !== "auto") throw new UsageError("--captioner must be off, stub, ollama, claude or auto");
       args.captioner = v;
     } else if (a === "--vision-model") args.visionModel = str(a, rest[++i]);
+    else if (a === "--claude-vision-model") {
+      const v = str(a, rest[++i]);
+      if (!(CLAUDE_VISION_MODELS as readonly string[]).includes(v)) throw new UsageError(`--claude-vision-model must be one of ${CLAUDE_VISION_MODELS.join(", ")}`);
+      args.claudeVisionModel = v;
+    }
     else if (a === "--ollama-url") {
       args.ollamaUrl = str(a, rest[++i]);
       try {
@@ -156,6 +171,7 @@ function parse(argv: readonly string[]): Args {
       const v = rest[++i];
       if (v !== "stub" && v !== "real" && v !== "claude") throw new UsageError("--model must be stub or real (claude is an alias for real)");
       args.model = v === "stub" ? "stub" : "real";
+      args.modelGiven = true;
     } else if (a === "--source") {
       const v = rest[++i];
       if (v !== "fixture" && v !== "mcp") throw new UsageError("--source must be fixture or mcp");
@@ -163,7 +179,8 @@ function parse(argv: readonly string[]): Args {
     } else throw new UsageError(`unknown argument ${a}`);
   }
   if (args.home === "") throw new UsageError("--home DIR is required");
-  if (args.s12Flags.length > 0 && command !== "analyze" && command !== "serve") throw new UsageError(`${args.s12Flags[0]} is only for analyze and serve`);
+  // s14: draft and dry-run analyse the store too, so they take the same flags.
+  if (args.s12Flags.length > 0 && command !== "analyze" && command !== "serve" && command !== "draft" && command !== "dry-run") throw new UsageError(`${args.s12Flags[0]} is only for analyze, serve, draft and dry-run`);
   if (args.understanding === "v1" && (args.s12Flags.includes("--embedder") || args.s12Flags.includes("--embed-model"))) throw new UsageError("--embedder needs --understanding v2");
   if (command === "draft" && args.insight === "") throw new UsageError("draft needs --insight N|ins_ID");
   if (command === "dry-run" && args.insight === "" && args.workflow === "") throw new UsageError("dry-run needs --workflow ID or --insight N");
@@ -206,7 +223,7 @@ export function formatReport(a: Analysis, top: number): string {
 }
 
 export function formatDryRun(r: DryRunResponse): string {
-  const lines = [`Dry run ${r.workflowId}: ${r.instances.length} real instances from the store, side effects ${r.sideEffects.denied}/${r.sideEffects.attempted} denied by the gate`, `batch ${r.batchHash}`];
+  const lines = [`Dry run ${r.workflowId}: ${r.totals.instances} real instances from the store, side effects ${r.sideEffects.denied}/${r.sideEffects.attempted} denied by the gate`, `batch ${r.batchHash}`];
   for (const w of r.warnings) lines.push(`  warning: ${w}`);
   r.instances.forEach((i, n) => {
     lines.push(
@@ -220,6 +237,13 @@ export function formatDryRun(r: DryRunResponse): string {
       ...i.warnings.map((w) => `  warning: ${w}`),
     );
   });
+  const g = (r as DryRunResult).general;
+  if (g !== undefined) {
+    lines.push("", `general dry run (${g.outputType}, variant ${g.variant}): ${g.totals.arithmetic}`);
+    g.instances.forEach((i, n) => {
+      lines.push("", `[${n + 1}] ${i.day} · ${i.ours.summary}`, `  ours:   ${i.ours.fields.map((f) => `${f.label}=${f.value ?? "?"}`).join(", ")}${i.ours.text === null ? "" : `\n  | ${i.ours.text.split("\n").join("\n  | ")}`}`, `  theirs: ${i.theirs.summary}${i.theirs.fields.length === 0 ? "" : ` (${i.theirs.fields.map((f) => `${f.label}=${f.value ?? "?"}`).join(", ")})`}`, `  match:  ${i.match.arithmetic}`, ...i.warnings.map((w) => `  warning: ${w}`));
+    });
+  }
   lines.push("", `total: ${r.totals.arithmetic}`);
   return lines.join("\n");
 }
@@ -232,16 +256,53 @@ function understandingOptions(a: Args): Pick<AnalyzeOptions, "understanding" | "
   return { understanding: "v2", embedder: a.embedder === "ollama" ? new OllamaEmbedder({ model: a.embedModel }) : new StubEmbedder(), ...ctx };
 }
 
-/** s11: the caption worker for `serve --captioner`, or undefined when off. Exported for tests. */
+/** s14: what `--captioner auto` tries, in order. Claude first (operator decision 2026-10-25, ADR 0008); a one-line
+ * change puts the local model first. */
+export const AUTO_CAPTIONERS: readonly ("claude" | "ollama")[] = ["claude", "ollama"];
+
+export interface VisionChoice {
+  worker: CaptionWorker | undefined;
+  /** Why captions are off under auto (shown as a needs-you line in GET /status). */
+  needsYou: string | null;
+  label: string;
+}
+
+/** s11/s14: the caption worker for `serve --captioner`, or none. `auto` = the first of AUTO_CAPTIONERS that can work:
+ * Claude when a key is configured (falling back to the local model when the budget or the key says no), else Ollama
+ * when it is healthy, else off with a needs-you line. Exported for tests. */
+export async function chooseVision(a: Pick<Args, "home" | "captioner" | "visionModel" | "ollamaUrl" | "claudeVisionModel">, o: { env?: Readonly<Record<string, string | undefined>>; router?: RoutedModel["router"]; ollama?: OllamaCaptioner } = {}): Promise<VisionChoice> {
+  const env = o.env ?? process.env;
+  const source = new ObserverFrameSource(a.home);
+  const worker = (captioner: ConstructorParameters<typeof CaptionWorker>[0]["captioner"]) => new CaptionWorker({ home: a.home, source, captioner });
+  const ollama = () => o.ollama ?? new OllamaCaptioner({ url: a.ollamaUrl, model: a.visionModel });
+  const claude = () => new ClaudeCaptioner({ env, ...(a.claudeVisionModel === "" ? {} : { model: a.claudeVisionModel }), ...(o.router === undefined ? {} : { router: o.router }) });
+  if (a.captioner === "off") return { worker: undefined, needsYou: null, label: "off" };
+  if (a.captioner === "stub") return { worker: worker(new StubCaptioner()), needsYou: null, label: "stub (deterministic)" };
+  if (a.captioner === "ollama") return { worker: worker(ollama()), needsYou: null, label: `ollama ${a.visionModel} on ${a.ollamaUrl}` };
+  const allowed = () => o.router?.captionOnClaude() ?? true;
+  if (a.captioner === "claude") return { worker: worker(new RoutedCaptioner(claude(), ollama(), allowed)), needsYou: null, label: `claude ${a.claudeVisionModel || DEFAULT_CLAUDE_VISION_MODEL}, local model when the budget or the account says no` };
+  for (const c of AUTO_CAPTIONERS) {
+    if (c === "claude" && claudeKeyConfigured(env)) return { worker: worker(new RoutedCaptioner(claude(), ollama(), allowed)), needsYou: null, label: "auto: claude (local model as fallback)" };
+    if (c === "ollama") {
+      const oc = ollama();
+      if ((await oc.health()).ok) return { worker: worker(oc), needsYou: null, label: `auto: ollama ${oc.model}` };
+    }
+  }
+  return { worker: undefined, needsYou: "Offload cannot read screens yet: add a Claude key in Settings or start Ollama on this Mac.", label: "auto: off" };
+}
+
+/** s11 (kept for tests): the worker for an explicit off|stub|ollama choice. */
 export function visionWorker(a: Pick<Args, "home" | "captioner" | "visionModel" | "ollamaUrl">): CaptionWorker | undefined {
-  if (a.captioner === "off") return undefined;
+  if (a.captioner === "off" || a.captioner === "auto" || a.captioner === "claude") return undefined;
   const captioner = a.captioner === "stub" ? new StubCaptioner() : new OllamaCaptioner({ url: a.ollamaUrl, model: a.visionModel });
   return new CaptionWorker({ home: a.home, source: new ObserverFrameSource(a.home), captioner });
 }
 
 export { parse as parseArgs };
 
-const modelOf = (a: Args): Model => (a.model === "stub" ? new StubModel() : new AgentSdkModel());
+// s14: every model call goes through the router (models/router.ts): the stub backend for --model stub, else the
+// Claude API (with a key) or the Claude Code login.
+const modelOf = (a: Args): Model => createRoutedModel({ home: a.home, stub: a.model === "stub" });
 
 function resolveInsight(a: Analysis, ref: string): string {
   if (/^\d+$/.test(ref)) {
@@ -323,17 +384,30 @@ async function runCommand(args: Args): Promise<number> {
     return 0;
   }
   if (args.command === "draft" || args.command === "dry-run") {
-    const a = await analyzeHome(args.home);
+    const stored = readUserContext(args.home).context;
+    const u = understandingOptions(args);
+    const opts = { ...u, ...(u.userContext === undefined && stored !== undefined ? { userContext: stored } : {}) };
+    const a = await analyzeHome(args.home, opts);
     let workflowId = args.workflow;
     if (workflowId === "" || args.command === "draft") {
       const facts = args.facts === "" ? undefined : readFileSync(args.facts, "utf8");
-      const { workflow, created } = draftWorkflow({ home: args.home, analysis: a, insightId: resolveInsight(a, args.insight), models: loadModelConfig(args.home), ...(facts === undefined ? {} : { facts }) });
+      const insightId = resolveInsight(a, args.insight);
+      const common = { home: args.home, analysis: a, insightId, models: loadModelConfig(args.home), ...(facts === undefined ? {} : { facts }) };
+      // s14: any task that is not one of the s05 email templates gets a general plan (stub model unless --model real).
+      const { workflow, created } = isGeneralInsight(a, insightId)
+        ? await draftGeneralWorkflow({ ...common, model: args.modelGiven ? modelOf(args) : new StubModel(), ...(opts.userContext === undefined ? {} : { user: opts.userContext }) })
+        : draftWorkflow(common);
       workflowId = workflow.id;
       if (args.command === "draft") {
         if (args.json) console.log(JSON.stringify(workflow, null, 2));
         else {
           console.log(`${created ? "drafted" : "exists"} ${workflow.id}: ${workflow.name} [${workflow.status}, auto-run ${workflow.autoRun ? "on" : "off"}]`);
           console.log(`  folder: ${args.home.replace(/\/$/, "")}/workflows/${workflow.id}`);
+          if (workflow.plan !== undefined) {
+            const p = workflow.plan;
+            console.log(`  plan: ${p.outputType}, kept "${p.variants.find((v) => v.id === p.chosen)?.label}" (${p.reason})`);
+            for (const sc of p.probe) console.log(`    ${sc.variant}: ${sc.arithmetic}`);
+          }
           workflow.steps.forEach((s, i) => console.log(`  ${i + 1}. ${s.type.padEnd(13)} ${s.title}${s.connector === null ? "" : ` (${s.connector})`}`));
           console.log(`  estimate: ${workflow.estimate.arithmetic}`);
         }
@@ -353,8 +427,9 @@ async function runCommand(args: Args): Promise<number> {
   if (args.model === "stub") console.error("brain: --model stub: drafts come from the deterministic test model (labelled model: \"stub\")");
   const u = understandingOptions(args);
   if (u.understanding === "v2") console.error(`brain: --understanding v2 (${u.embedder?.id ?? "stub"})`);
-  const vision = visionWorker(args);
-  if (vision !== undefined) console.error(`brain: captioner ${args.captioner} (${args.captioner === "ollama" ? `${args.visionModel} on ${args.ollamaUrl}` : "deterministic"}); images stay on this Mac`);
+  const choice = await chooseVision(args, model instanceof RoutedModel ? { router: model.router } : {});
+  if (args.captioner !== "off") console.error(`brain: captioner ${choice.label}; images are masked by the observer first${choice.label.includes("claude") ? " and go only to your Anthropic account" : " and stay on this Mac"}`);
+  const vision = choice.worker ?? (choice.needsYou === null ? undefined : { status: () => ({ ...CAPTIONER_OFF, needsYou: choice.needsYou }) });
   const srv = await startBrainServer({ home: args.home, token, port: args.port, workflows: { model, modelLabel: args.model }, ...(Object.keys(u).length === 0 ? {} : { analyze: u }), ...(vision === undefined ? {} : { vision }) });
   // The first stdout line, machine-readable; startup logs went to stderr (brain/API.md "Connection").
   process.stdout.write(formatReadyLine(srv.port, token) + "\n");

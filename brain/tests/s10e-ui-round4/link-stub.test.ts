@@ -137,8 +137,8 @@ describe("s10e connect link: stub simulation", () => {
 describe("s10e connect link: routes", () => {
   test("unknown catalog id is 404 not_found (GET and POST)", async () => {
     x = await linkWorld();
-    expect((await link(x, "outlook")).status).toBe(404);
-    const p = await link(x, "outlook", "POST");
+    expect((await link(x, "not-a-tool")).status).toBe(404);
+    const p = await link(x, "not-a-tool", "POST");
     expect(p.status).toBe(404);
     expect(p.body.error).toBe("not_found");
     expect((await link(x, "..%2Fetc")).status).toBe(404);

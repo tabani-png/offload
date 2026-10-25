@@ -10,7 +10,8 @@ export interface Connector {
   name: string;
   how: ConnectorHow;
   reach: number;
-  /** Matching rules: any host, or any bundle id; `pathPrefix` narrows a shared host (docs.google.com). */
+  /** Matching rules: any host, or any bundle id; `pathPrefix` narrows a shared host (docs.google.com). s14: a host
+   * that starts with "." matches every subdomain (".zendesk.com" matches acme.zendesk.com). */
   hosts: readonly string[];
   apps: readonly string[];
   pathPrefix?: string;
@@ -34,6 +35,17 @@ export const CONNECTORS: readonly Connector[] = [
   { id: "notion", name: "Notion", how: "composio:notion", reach: 0.9, hosts: ["www.notion.so", "notion.so"], apps: ["notion.id"] },
   { id: "hubspot", name: "HubSpot", how: "composio:hubspot", reach: 0.9, hosts: ["app.hubspot.com"], apps: [] },
   { id: "attio", name: "Attio", how: "composio:attio", reach: 0.9, hosts: ["app.attio.com"], apps: [] },
+  // s14 (after s16 commit schemas): tools the builder can route to; their commits have gate policies (allowlist.ts).
+  { id: "outlook", name: "Outlook", how: "composio:outlook", reach: 0.9, hosts: ["outlook.office.com", "outlook.office365.com", "outlook.live.com"], apps: ["com.microsoft.Outlook"] },
+  { id: "instantly", name: "Instantly", how: "composio:instantly", reach: 0.9, hosts: ["app.instantly.ai"], apps: [], limits: "Adds approved leads to a campaign; you start the campaign yourself in Instantly." },
+  { id: "smartlead", name: "Smartlead", how: "composio:smartlead", reach: 0.9, hosts: ["app.smartlead.ai"], apps: [], limits: "Sends one approved email or resumes one lead; you start campaigns yourself." },
+  { id: "salesforce", name: "Salesforce", how: "composio:salesforce", reach: 0.9, hosts: [".lightning.force.com", ".my.salesforce.com"], apps: [] },
+  { id: "xero", name: "Xero", how: "composio:xero", reach: 0.9, hosts: ["go.xero.com"], apps: [], limits: "Bills are created as drafts; you approve them in Xero." },
+  { id: "quickbooks", name: "QuickBooks", how: "composio:quickbooks", reach: 0.9, hosts: ["app.qbo.intuit.com", "qbo.intuit.com"], apps: [] },
+  { id: "zendesk", name: "Zendesk", how: "composio:zendesk", reach: 0.9, hosts: [".zendesk.com"], apps: [] },
+  { id: "intercom", name: "Intercom", how: "composio:intercom", reach: 0.9, hosts: ["app.intercom.com"], apps: [] },
+  { id: "airtable", name: "Airtable", how: "composio:airtable", reach: 0.9, hosts: ["airtable.com"], apps: [] },
+  { id: "greenhouse", name: "Greenhouse", how: "composio:greenhouse", reach: 0.9, hosts: ["app.greenhouse.io"], apps: [] },
   {
     id: "zoom",
     name: "Zoom",
@@ -50,7 +62,7 @@ export function connectorById(id: string): Connector | undefined {
 }
 
 function matches(c: Connector, p: TaskProfile): boolean {
-  const onHost = p.host !== "" && c.hosts.includes(p.host);
+  const onHost = p.host !== "" && c.hosts.some((h) => (h.startsWith(".") ? p.host.endsWith(h) : h === p.host));
   const onApp = c.apps.includes(p.app);
   if (!onHost && !onApp) return false;
   return c.pathPrefix === undefined || p.urlPattern.startsWith(c.pathPrefix);

@@ -18,6 +18,14 @@ import { RECIPIENTS_HEADER } from "./scripts/recipients.ts";
 import { CRM_HEADER } from "./scripts/crm-log.ts";
 import { ensureDir, readWorkflow, workflowDir, writePrivate, writeWorkflow } from "./store.ts";
 import type { TemplateId, WorkflowJson, WorkflowStep } from "./types.ts";
+import { buildPlan, chosenVariant, legacySteps, PLAN_DESCRIPTIONS, PLAN_TITLES, planConnectors, renderPlanSkillMd, wantsGeneralPlan } from "../plan/build.ts";
+import type { CapabilityResolver } from "../plan/capabilities.ts";
+import type { Model } from "../models/model.ts";
+import type { UserContext } from "../types.ts";
+import { carryChoices, chainReadsOnly, recommendTools, refineTools } from "../plan/tools.ts";
+import { chainConnected } from "../connectors/chain.ts";
+import { connectorStatus } from "./service.ts";
+import { userContextBlock, profileSummary } from "../understanding/context.ts";
 
 export class NotFoundError extends Error {}
 
@@ -144,6 +152,7 @@ const SKILL_TITLES: Record<TemplateId, string> = {
 /** SKILL.md from fixed template text, catalog names, code-computed numbers and text the user edited through
  * PUT /workflows/:id/skill (workflows/skill.ts). Never observed labels. */
 export function renderSkillMd(wf: WorkflowJson): string {
+  if (wf.plan !== undefined) return renderPlanSkillMd(wf);
   const gates = wf.steps.filter((s) => s.type === "approval_gate").map((s) => s.id);
   const conn = wf.connectors.map((c) => `${c.id}${c.required ? "" : " (optional)"}`);
   const title = SKILL_TITLES[wf.template];
@@ -237,6 +246,9 @@ export function draftWorkflow(o: DraftWorkflowOptions): { workflow: WorkflowJson
     lastDryRunAt: null,
     lastDryRunHash: null,
   };
+  // s14: tool options for the send and log steps (an outreach platform for 100 a day, the CRM for the log).
+  wf.volumePerDay = insight.stats.instancesPerDay.value;
+  wf.tools = recommendTools({ legacy: { kind: wf.kind, steps: wf.steps }, perDay: insight.stats.instancesPerDay.value, connected: connectedIds(o.home), readsOnly: chainReadsOnly(o.home) });
   // "drafting" is on disk while the folder is being written, so a crash leaves a visible half-draft.
   writeWorkflow(o.home, wf);
   const dir = workflowDir(o.home, id);
@@ -252,3 +264,113 @@ export function draftWorkflow(o: DraftWorkflowOptions): { workflow: WorkflowJson
   writeWorkflow(o.home, wf);
   return { workflow: wf, created: true };
 }
+
+// ---------- s14: general workflows from any task profile ----------
+
+export interface DraftGeneralOptions extends DraftWorkflowOptions {
+  model: Model;
+  user?: UserContext;
+  resolver?: CapabilityResolver;
+}
+
+/** True when POST /workflows/draft for this insight builds a general plan (not an s05 email template). */
+export function isGeneralInsight(analysis: Analysis, insightId: string): boolean {
+  const insight = analysis.insights.find((i) => i.id === insightId);
+  return insight !== undefined && wantsGeneralPlan(insight);
+}
+
+/**
+ * Builds and writes a general workflow folder (SKILL.md, workflow.json with the plan, facts.md). Idempotent like
+ * draftWorkflow. The plan's two variants are probed on last week's instances here; the dry run shows the result.
+ */
+export async function draftGeneralWorkflow(o: DraftGeneralOptions): Promise<{ workflow: WorkflowJson; created: boolean }> {
+  const insight = o.analysis.insights.find((i) => i.id === o.insightId);
+  if (insight === undefined) throw new NotFoundError(`no insight ${o.insightId}`);
+  const id = workflowIdFor(insight.id);
+  const existing = readWorkflow(o.home, id);
+  if (existing !== null) return { workflow: existing, created: false };
+  const now = (o.now ?? Date.now)();
+  const models = o.models ?? { ...DEFAULT_MODELS };
+  const { plan } = await buildPlan({ analysis: o.analysis, insight, model: o.model, models, ...(o.user === undefined ? {} : { user: o.user }), ...(o.resolver === undefined ? {} : { resolver: o.resolver }) });
+  const v = chosenVariant(plan);
+  const s = insight.saving;
+  const wf: WorkflowJson = {
+    version: 1,
+    id,
+    insightId: insight.id,
+    taskId: insight.taskId,
+    kind: insight.label.kind,
+    template: "generic",
+    name: PLAN_TITLES[plan.outputType],
+    description: PLAN_DESCRIPTIONS[plan.outputType],
+    bucket: "other",
+    createdAt: now,
+    updatedAt: now,
+    status: "drafting",
+    activatedAt: null,
+    pausedAt: null,
+    autoRun: false,
+    schedule: { type: "manual" },
+    trigger: { type: "manual", detail: "When you ask for the next batch." },
+    batchSize: 20,
+    reviewSecondsPerItem: s.reviewSecondsPerItem,
+    connectors: planConnectors(v),
+    inputs: { list: "items.csv", crmLog: "done-log.csv", subjectTemplate: "" },
+    steps: legacySteps(v),
+    estimate: { weeklyHoursSaved: s.weeklyHoursSaved, savingPct: s.savingPct, arithmetic: s.arithmetic, lowHoursSaved: s.range.low.hoursSaved, highHoursSaved: s.range.high.hoursSaved },
+    models,
+    insight: { name: "", kind: insight.label.kind, connectors: insightConnectors(insight) },
+    lastDryRunAt: null,
+    lastDryRunHash: null,
+    plan,
+  };
+  const ctx = [userContextBlock(o.user), "<task_profile>", profileSummary(insight.profile), "</task_profile>"].filter((l) => l !== "").join("\n");
+  wf.volumePerDay = insight.stats.instancesPerDay.value;
+  wf.tools = await refineTools(recommendTools({ plan: { outputType: plan.outputType, variant: v }, perDay: insight.stats.instancesPerDay.value, connected: connectedIds(o.home), readsOnly: chainReadsOnly(o.home) }), { model: o.model, models, context: ctx });
+  writeWorkflow(o.home, wf);
+  const dir = workflowDir(o.home, id);
+  if (!existsSync(join(dir, "facts.md"))) writePrivate(join(dir, "facts.md"), GENERAL_FACTS);
+  writePrivate(join(dir, "SKILL.md"), renderSkillMd(wf));
+  const days = (o.analysis.tasks.find((t) => t.id === insight.taskId)?.instances ?? []).map((i) => i.day).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+  sealLabels(o.home, id, { name: insight.label.name, insightName: insight.label.name }, days[0] ?? localDay(now), now);
+  wf.status = "ready_for_review";
+  writeWorkflow(o.home, wf);
+  return { workflow: wf, created: true };
+}
+
+export const GENERAL_FACTS = `# Facts for text steps
+Only these facts may appear in drafted text (replies, notes, messages). Values copied from what is read need no entry here.
+
+sign:
+`;
+
+/** Keeps the other variant (POST /workflows/:id/plan): the steps and SKILL.md follow it; edits to step text are reset. */
+export function chooseVariant(home: string, id: string, variant: "a" | "b", now: number): WorkflowJson {
+  const wf = readWorkflow(home, id);
+  if (wf === null) throw new NotFoundError(`no workflow ${id}`);
+  if (wf.plan === undefined) throw new NotFoundError(`workflow ${id} has no plan to choose from`);
+  const plan = { ...wf.plan, chosen: variant, chosenBy: "user" as const };
+  const v = chosenVariant(plan);
+  const next: WorkflowJson = { ...wf, plan, steps: legacySteps(v), connectors: planConnectors(v), updatedAt: now };
+  // Tool options follow the steps of the new variant; picks for steps that stay are kept.
+  next.tools = carryChoices(recommendTools({ plan: { outputType: plan.outputType, variant: v }, perDay: perDayOf(wf), connected: connectedIds(home), readsOnly: chainReadsOnly(home) }), wf.tools);
+  // A different plan is a different workflow to review: the last dry run no longer stands for it.
+  if (next.status === "active") next.status = "ready_for_review";
+  next.lastDryRunHash = null;
+  writeWorkflow(home, next);
+  writePrivate(join(workflowDir(home, id), "SKILL.md"), renderSkillMd(next));
+  return next;
+}
+
+/** Catalog ids that are connected now (connectors.json + env), for "already connected" and the default pick. */
+export function connectedIds(home: string): Set<string> {
+  try {
+    // connectors.json + env, plus anything a cached s13 chain decision can commit through.
+    return new Set([...Object.entries(connectorStatus(home, process.env)).filter(([, st]) => st === "connected").map(([id]) => id), ...chainConnected(home, Date.now())]);
+  } catch {
+    // An unreadable connectors.json: nothing counts as connected.
+    return new Set();
+  }
+}
+
+const perDayOf = (wf: WorkflowJson) => wf.volumePerDay ?? 0;

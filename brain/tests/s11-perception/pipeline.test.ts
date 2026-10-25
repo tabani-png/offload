@@ -238,7 +238,9 @@ describe("s11 serve", () => {
     expect(a.visionModel).toBe("qwen3-vl:2b-instruct");
     expect(parseArgs(["serve", "--home", "/tmp/x"]).captioner).toBe("off");
     expect(parseArgs(["serve", "--home", "/tmp/x"]).visionModel).toBe("auto");
-    expect(() => parseArgs(["serve", "--home", "/tmp/x", "--captioner", "claude"])).toThrow("--captioner must be off, stub or ollama");
+    // s14 scope change: claude and auto are captioners now (ADR 0008); an unknown one is still a usage error.
+    expect(parseArgs(["serve", "--home", "/tmp/x", "--captioner", "claude"]).captioner).toBe("claude");
+    expect(() => parseArgs(["serve", "--home", "/tmp/x", "--captioner", "gpt"])).toThrow("--captioner must be off, stub, ollama, claude or auto");
     expect(() => parseArgs(["serve", "--home", "/tmp/x", "--ollama-url", "http://10.1.1.1:11434"])).toThrow("must be loopback");
     expect(visionWorker({ home: "/tmp/x", captioner: "off", visionModel: "auto", ollamaUrl: "http://127.0.0.1:11434" })).toBeUndefined();
     expect(visionWorker({ home: "/tmp/x", captioner: "stub", visionModel: "auto", ollamaUrl: "http://127.0.0.1:11434" })!.status().captioner).toBe("stub");
