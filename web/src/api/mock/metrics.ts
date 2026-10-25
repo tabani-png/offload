@@ -52,6 +52,31 @@ function holdersOf(jobRoleId: string): number {
   return jobRoles.find((j) => j.id === jobRoleId)?.holderPersonIds.length ?? 0;
 }
 
+/** Distinct people in a job role with data in the given months: its busiest workflow's users, at most its holders. */
+function roleWithData(jobRoleId: string, months: number[]): number {
+  const users = WORKFLOW_SPECS
+    .filter((s) => counted(s) && s.jobRoleId === jobRoleId && months.some((m) => (s.monthly[m] ?? 0) > 0))
+    .reduce((a, s) => Math.max(a, s.users), 0);
+  return Math.min(holdersOf(jobRoleId), users);
+}
+
+function deptWithData(departmentId: string, months: number[]): number {
+  const n = jobRoles.filter((j) => j.departmentId === departmentId).reduce((a, j) => a + roleWithData(j.id, months), 0);
+  return Math.min(headcount(departmentId), n);
+}
+
+/**
+ * What the group floor counts (ADR 0103 §5, ADR 0111 §5): distinct people with data in the period, not headcount. A
+ * department of 14 where nobody ran a workflow in the period is under the floor.
+ */
+export function peopleWithData(scope: Scope, from: string, toExclusive: string): number {
+  const months = monthIndexes(from, toExclusive);
+  if (scope.type === "company") return departments.reduce((a, d) => a + deptWithData(d.id, months), 0);
+  if (scope.type === "department") return deptWithData(scope.id ?? "", months);
+  if (scope.type === "job_role") return roleWithData(scope.id ?? "", months);
+  return 1;
+}
+
 function value(specs: WorkflowSpec[], months: number[], peopleCount: number, share = 1): HoursValue {
   const v: HoursValue = {
     seconds: 0, hours: 0, byGrade: { A: 0, B: 0, C: 0 }, bySource: { observed: 0, user_estimate: 0 },
@@ -131,14 +156,13 @@ export function hoursSavedReport(scope: Scope, from: string, toExclusive: string
   if (scope.type === "company") {
     const specs = WORKFLOW_SPECS.filter(counted);
     const cells = complementary(departments.map((d) => {
-      const n = headcount(d.id);
+      const n = deptWithData(d.id, months);
       const ds = specs.filter((s) => s.departmentId === d.id);
-      const val: HoursValue | Suppressed = n < FLOOR() ? suppressed() : value(ds, months, Math.min(n, ds.reduce((a, s) => a + s.users, 0)));
+      const val: HoursValue | Suppressed = n < FLOOR() ? suppressed() : value(ds, months, n);
       return { scope: { type: "department" as const, id: d.id }, label: d.name, value: val, size: n };
     }));
     const visibleDepts = new Set(cells.filter((c) => !("suppressed" in c.value)).map((c) => c.scope.id));
-    const total = value(specs, months, cells.reduce((a, c) => a + ("suppressed" in c.value ? 0 : c.value.people), 0) + 0);
-    total.people = Math.min(people.length, specs.filter((s) => s.state === "role").reduce((a, s) => a + s.users, 0));
+    const total = value(specs, months, peopleWithData(scope, from, toExclusive));
     return {
       ...base, total,
       children: cells.map(({ scope: sc, label, value: v }) => ({ scope: sc, label, value: v })),
@@ -148,19 +172,19 @@ export function hoursSavedReport(scope: Scope, from: string, toExclusive: string
   }
 
   if (scope.type === "department") {
-    const n = headcount(scope.id ?? "");
+    const n = deptWithData(scope.id ?? "", months);
     const specs = WORKFLOW_SPECS.filter((s) => counted(s) && s.departmentId === scope.id);
     if (n < FLOOR()) return { ...base, total: suppressed(), children: [], topWorkflows: [], anomalies: [] };
     const cells = complementary(jobRoles.filter((j) => j.departmentId === scope.id).map((j) => {
-      const size = holdersOf(j.id);
+      const size = roleWithData(j.id, months);
       const js = specs.filter((s) => s.jobRoleId === j.id);
-      const val: HoursValue | Suppressed = size < FLOOR() ? suppressed() : value(js, months, Math.min(size, js.reduce((a, s) => a + s.users, 0)));
+      const val: HoursValue | Suppressed = size < FLOOR() ? suppressed() : value(js, months, size);
       return { scope: { type: "job_role" as const, id: j.id }, label: j.name, value: val, size };
     }));
     const visibleRoles = new Set(cells.filter((c) => !("suppressed" in c.value)).map((c) => c.scope.id));
     return {
       ...base,
-      total: value(specs, months, Math.min(n, specs.reduce((a, s) => a + s.users, 0))),
+      total: value(specs, months, n),
       children: cells.map(({ scope: sc, label, value: v }) => ({ scope: sc, label, value: v })),
       topWorkflows: top(specs.filter((s) => s.jobRoleId !== null && visibleRoles.has(s.jobRoleId))),
       anomalies: anomaliesFor(specs),
@@ -168,7 +192,7 @@ export function hoursSavedReport(scope: Scope, from: string, toExclusive: string
   }
 
   if (scope.type === "job_role") {
-    const size = holdersOf(scope.id ?? "");
+    const size = roleWithData(scope.id ?? "", months);
     const specs = WORKFLOW_SPECS.filter((s) => counted(s) && s.jobRoleId === scope.id);
     if (size < FLOOR()) return { ...base, total: suppressed(), children: [], topWorkflows: [], anomalies: [] };
     return { ...base, total: value(specs, months, size), children: [], topWorkflows: top(specs), anomalies: anomaliesFor(specs) };
@@ -198,14 +222,14 @@ export function hoursSavedReport(scope: Scope, from: string, toExclusive: string
 }
 
 /**
- * People behind a workflow's evidence: the smaller of its job role's holders and its department's headcount. A
+ * People behind a workflow's evidence: the people using it, at most its job role's holders and its department's headcount. A
  * proposal belongs to one person. Evidence for a group under the floor is refused with group_floor (decided
  * 2026-10-25: the floor applies to evidence like every other aggregate; self-view is S2-11's concern).
  */
 export function evidenceGroupSize(workflowId: string): number {
   const s = WORKFLOW_SPECS.find((x) => uuid(x.n) === workflowId);
   if (!s || s.jobRoleId === null || s.departmentId === null) return 1;
-  return Math.min(holdersOf(s.jobRoleId), headcount(s.departmentId));
+  return Math.min(s.users, holdersOf(s.jobRoleId), headcount(s.departmentId));
 }
 
 export function evidence(workflowId: string, version: number): HoursSavedEvidence | undefined {
@@ -255,11 +279,12 @@ function scopeSize(scope: Scope): number {
 
 export function adoption(scope: Scope, from: string, toExclusive: string): AdoptionReport {
   const n = scopeSize(scope);
+  const withData = peopleWithData(scope, from, toExclusive);
   const period = { from, toExclusive };
-  if (scope.type !== "company" && n < FLOOR()) return { scope, period, value: suppressed() };
+  if (scope.type !== "company" && withData < FLOOR()) return { scope, period, value: suppressed() };
   const specs = WORKFLOW_SPECS.filter((s) => s.state === "role" && (scope.type === "company"
     || (scope.type === "department" && s.departmentId === scope.id) || (scope.type === "job_role" && s.jobRoleId === scope.id)));
-  const users = Math.min(n, specs.reduce((a, s) => a + s.users, 0));
+  const users = Math.min(n, withData);
   const fail = specs.length ? specs.reduce((a, s) => a + s.failRate, 0) / specs.length : 0;
   return {
     scope, period,
@@ -273,7 +298,7 @@ export function adoption(scope: Scope, from: string, toExclusive: string): Adopt
 }
 
 export function workingTime(scope: Scope, from: string, toExclusive: string): WorkingTimeReport {
-  const n = scopeSize(scope);
+  const n = scope.type === "person" ? 1 : peopleWithData(scope, from, toExclusive);
   const period = { from, toExclusive };
   if (scope.type !== "person" && n < FLOOR()) return { scope, period, value: suppressed() };
   const seed = (scope.id ?? "company").charCodeAt(scope.id ? scope.id.length - 1 : 0) % 7;

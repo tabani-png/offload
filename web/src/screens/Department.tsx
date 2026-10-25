@@ -5,7 +5,7 @@ import { Card, FeatureOffPanel, GradeSplit, Row, Section, StatHero, SuppressedCe
 import { hoursText, minutesText, pct } from "../lib/format.ts";
 import { Load, useFeature, useGet, useList } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
-import { GradeCell, HoursCell, PERIOD, confidenceChip, finalChip } from "./Overview.tsx";
+import { ChildHoursCell, GradeCell, PERIOD, confidenceChip, finalChip } from "./Overview.tsx";
 
 export function DepartmentScreen() {
   const { id = "" } = useParams({ strict: false }) as { id?: string };
@@ -31,7 +31,7 @@ export function DepartmentScreen() {
                 <div className="stack">
                   <SuppressedCell reason={r.total.reason} />
                   <p className="t-body ink2">
-                    Fewer than 5 people work in {dept?.name ?? "this department"}, so its numbers are not shown on their own.
+                    Fewer than 5 people in {dept?.name ?? "this department"} have data for this period, so its numbers are not shown on their own.
                     Its hours still count in the company total.
                   </p>
                 </div>
@@ -56,7 +56,7 @@ export function DepartmentScreen() {
               rowKey={(c) => c.scope.id ?? c.label}
               columns={[
                 { key: "role", header: "Job role", cell: (c) => <span className="t-label ink1">{c.label}</span> },
-                { key: "hours", header: "Hours saved", align: "end", cell: (c) => <HoursCell value={c.value} /> },
+                { key: "hours", header: "Hours saved", align: "end", cell: (c) => <ChildHoursCell child={c} period={report.data!.period} /> },
                 { key: "grade", header: "Confidence A · B · C", cell: (c) => <GradeCell value={c.value} /> },
                 { key: "runs", header: "Successful runs", align: "end", cell: (c) => (isSuppressed(c.value) ? <span className="ink3">—</span> : c.value.runs.success) },
               ]}

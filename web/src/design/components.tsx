@@ -90,16 +90,20 @@ export function Button(props: {
   disabled?: boolean;
   title?: string;
   form?: string;
+  /** Low-emphasis, for actions inside table rows. */
+  quiet?: boolean;
+  "aria-label"?: string;
   "aria-describedby"?: string;
 }) {
   return (
     <button
       type={props.type ?? "button"}
-      className={cx("btn", props.primary && "btn-primary")}
+      className={cx("btn", props.primary && "btn-primary", props.quiet && "btn-quiet")}
       onClick={props.onClick}
       disabled={props.disabled}
       title={props.title}
       form={props.form}
+      aria-label={props["aria-label"]}
       aria-describedby={props["aria-describedby"]}
     >
       <span>{props.children}</span>
@@ -206,12 +210,19 @@ export function GradeSplit(props: { byGrade: Record<Grade, number>; size?: numbe
 export const SUPPRESSED_WORDS: Record<Suppressed["reason"], string> = {
   group_floor: "Fewer than 5 people",
   feature_disabled: "Feature off",
-  jurisdiction: "Not shown in this region",
+  jurisdiction: "Off in this person's region",
 };
 
+/** A cell of 5 or more hidden only so a smaller sibling cannot be worked out from the total (complementary suppression). */
+export const COMPLEMENTARY_WORDS = "Hidden to protect a small group";
+
 /** In place of a number that may not be shown. Never renders the number. */
-export function SuppressedCell(props: { reason: Suppressed["reason"] }) {
-  return <span className="suppressed t-callout ink3" data-suppressed={props.reason}>{SUPPRESSED_WORDS[props.reason]}</span>;
+export function SuppressedCell(props: { reason: Suppressed["reason"]; complementary?: boolean }) {
+  return (
+    <span className="suppressed t-callout ink3" data-suppressed={props.complementary ? "complementary" : props.reason}>
+      {props.complementary ? COMPLEMENTARY_WORDS : SUPPRESSED_WORDS[props.reason]}
+    </span>
+  );
 }
 
 const FEATURE_TITLE = { per_person_views: "Per-person views are off", working_time: "Working time is off" } as const;

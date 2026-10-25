@@ -11,6 +11,9 @@ bun test tests                  # happy-dom + @testing-library/react
 bash ../slices/S2-04-web-shell/verify.sh
 ```
 
+The mock API and its invented fixtures exist only in dev and tests, and in the review build `bunx vite build --mode mock`
+(used for `scripts/screenshots.cjs`). The production `vite build` has no mock and talks to the control plane.
+
 Mock switches for review: `?features=per_person_views,working_time` turns the sensitive features on (they are off by
 default), `?theme=light` shows the light palette.
 

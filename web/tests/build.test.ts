@@ -50,6 +50,9 @@ describe("production bundle", () => {
     const js = walk(out).filter((f) => f.endsWith(".js")).map((f) => readFileSync(f, "utf8")).join("\n");
     const leaked = ["happy-dom", "ajv/dist", "@testing-library", "jsxDEV"].filter((x) => js.includes(x));
     expect(leaked).toEqual([]);
+    // The mock API and its invented fixtures are for dev and tests only; the shipped bundle talks to the control plane.
+    const mock = ["northwind.example", "Harbor Logistics", "mock-csrf", "Thanks for asking about a demo"].filter((x) => js.includes(x));
+    expect(mock).toEqual([]);
     rmSync(out, { recursive: true, force: true });
   });
 

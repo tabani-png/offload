@@ -1,11 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { useQueries } from "@tanstack/react-query";
+import { useState } from "react";
+import { errorWords } from "../api/client.ts";
 import type { Department, HoursSavedReport, Person } from "../api/types.ts";
 import { isSuppressed } from "../api/types.ts";
-import { Card, FeatureOffPanel, StateTag, SuppressedCell, Table, type Column } from "../design/components.tsx";
+import { Button, Card, FeatureOffPanel, StateTag, SuppressedCell, Table, type Column } from "../design/components.tsx";
 import type { StateRole } from "../design/tokens.ts";
 import { hoursText, timeText } from "../lib/format.ts";
-import { Load, useDeps, useFeature, useList } from "../app/data.tsx";
+import { Load, useFeature, useGet, useList } from "../app/data.tsx";
 import { Page, ROLE_WORDS } from "../app/page.tsx";
 import { PERIOD } from "./Overview.tsx";
 
@@ -16,23 +17,28 @@ export const PERSON_STATE: Record<Person["state"], { role: StateRole; words: str
   departed: { role: "neutral", words: "Departed" },
 };
 
+/** One person's own hours, read only once someone asks for them: each read is an audit event the person can see. */
+function PersonHours(props: { person: Person }) {
+  const [open, setOpen] = useState(false);
+  const r = useGet<HoursSavedReport>(open ? `/v1/metrics/hours-saved?scope=person:${props.person.id}&from=${PERIOD.from}&to=${PERIOD.to}` : null);
+  if (!open) {
+    return <Button quiet onClick={() => setOpen(true)} aria-label={`Show hours for ${props.person.displayName}`}>Show hours</Button>;
+  }
+  if (r.isError) return <span className="t-callout ink2" role="alert">{errorWords(r.error)}</span>;
+  if (!r.data) return <span className="t-callout ink3">Loading</span>;
+  return isSuppressed(r.data.total) ? <SuppressedCell reason={r.data.total.reason} /> : <>{hoursText(r.data.total.seconds)}</>;
+}
+
 /**
  * The directory: name, department, access role, state. A metrics column exists only while per_person_views is on and
- * effective; the rows stay in directory order either way (no ranking, ADR 0108 §6).
+ * effective, and a person's numbers are read only on an explicit open, only where the feature covers their
+ * jurisdiction (ADR 0111 §5). The rows stay in directory order either way (no ranking, ADR 0108 §6).
  */
 export function PeopleScreen() {
-  const { api } = useDeps();
   const q = useList<Person>("/v1/people");
   const depts = useList<Department>("/v1/departments");
   const ppv = useFeature("per_person_views");
   const deptName = (id: string | null) => depts.data?.find((d) => d.id === id)?.name ?? "—";
-  const metrics = useQueries({
-    queries: (ppv.on ? q.data ?? [] : []).map((p) => {
-      const path = `/v1/metrics/hours-saved?scope=person:${p.id}&from=${PERIOD.from}&to=${PERIOD.to}`;
-      return { queryKey: [path], queryFn: () => api.get<HoursSavedReport>(path) };
-    }),
-  });
-  const byPerson = new Map((ppv.on ? q.data ?? [] : []).map((p, i) => [p.id, metrics[i]?.data]));
 
   const columns: Column<Person>[] = [
     { key: "name", header: "Name", cell: (p) => <span className="t-label">{p.displayName}</span> },
@@ -43,11 +49,9 @@ export function PeopleScreen() {
   if (ppv.on) {
     columns.push({
       key: "hours", header: `Own hours saved, ${PERIOD.label.toLowerCase()}`, align: "end",
-      cell: (p) => {
-        const r = byPerson.get(p.id);
-        if (!r) return <span className="ink3">…</span>;
-        return isSuppressed(r.total) ? <SuppressedCell reason={r.total.reason} /> : hoursText(r.total.seconds);
-      },
+      cell: (p) => ppv.rec?.jurisdictions.includes(p.jurisdiction)
+        ? <PersonHours person={p} />
+        : <span className="suppressed t-callout ink3" data-suppressed="jurisdiction">Off in {p.jurisdiction}</span>,
     });
   }
 
@@ -61,7 +65,7 @@ export function PeopleScreen() {
           <StateTag role="working">Per-person views are on</StateTag>
           <span className="t-callout ink2">
             Since {timeText(ppv.rec.effectiveAt)} for {ppv.rec.jurisdictions.join(", ")}. For process improvement only. Each person can see
-            every time someone opens their numbers. Rows stay in directory order.
+            every time someone opens their numbers, so numbers load only when you open one person. Rows stay in directory order.
           </span>
         </div>
       )}

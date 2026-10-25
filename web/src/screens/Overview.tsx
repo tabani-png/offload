@@ -34,6 +34,19 @@ export function HoursCell(props: { value: HoursValue | Suppressed }) {
   return isSuppressed(props.value) ? <SuppressedCell reason={props.value.reason} /> : <span className="t-label ink1">{hoursText(props.value.seconds)}</span>;
 }
 
+/**
+ * One child row's hours. A group_floor cell whose own report is visible had 5 or more people with data and was hidden
+ * only so a smaller sibling cannot be worked out from the total; it says so instead of "Fewer than 5 people".
+ */
+export function ChildHoursCell(props: { child: HoursSavedReport["children"][number]; period: HoursSavedReport["period"] }) {
+  const { scope, value } = props.child;
+  const own = useGet<HoursSavedReport>(isSuppressed(value) && value.reason === "group_floor" && scope.id
+    ? `/v1/metrics/hours-saved?scope=${scope.type}:${scope.id}&from=${props.period.from}&to=${props.period.toExclusive}`
+    : null);
+  if (!isSuppressed(value)) return <HoursCell value={value} />;
+  return <SuppressedCell reason={value.reason} complementary={own.data !== undefined && !isSuppressed(own.data.total)} />;
+}
+
 export function GradeCell(props: { value: HoursValue | Suppressed }) {
   return isSuppressed(props.value) ? <span className="ink3">—</span> : <GradeSplit compact byGrade={props.value.byGrade} />;
 }
@@ -128,7 +141,7 @@ export function OverviewScreen() {
                     onOpen={(c) => void navigate({ to: "/departments/$id", params: { id: c.scope.id! } })}
                     columns={[
                       { key: "name", header: "Department", cell: (c) => <span className="t-label ink1">{c.label}</span> },
-                      { key: "hours", header: "Hours saved", align: "end", cell: (c) => <HoursCell value={c.value} /> },
+                      { key: "hours", header: "Hours saved", align: "end", cell: (c) => <ChildHoursCell child={c} period={r.period} /> },
                       { key: "grade", header: "Confidence A · B · C", cell: (c) => <GradeCell value={c.value} /> },
                       { key: "people", header: "People using", align: "end", cell: (c) => (isSuppressed(c.value) ? <span className="ink3">—</span> : c.value.people) },
                       { key: "overnight", header: "Overnight", align: "end", cell: (c) => (isSuppressed(c.value) ? <span className="ink3">—</span> : pct(share(c.value.overnightSeconds, c.value.seconds))) },
@@ -136,8 +149,9 @@ export function OverviewScreen() {
                   />
                   {r.children.some((c) => isSuppressed(c.value)) && (
                     <p className="t-callout ink3">
-                      Departments with fewer than 5 people are hidden, and so is one more when only one would be, so no
-                      small group can be worked out from the total. Their hours still count in the company total.
+                      Departments where fewer than 5 people have data in this period are hidden, and so is one more when
+                      only one would be, so no small group can be worked out from the total. Their hours still count in
+                      the company total.
                     </p>
                   )}
                 </Card>

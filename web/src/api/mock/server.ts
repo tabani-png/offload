@@ -1,9 +1,10 @@
 // In-memory mock of the control plane API (plan/stage-2/API.md), built only from schemas/stage2 shapes.
 // Every GET in API.md has a route here (tests/schema.test.ts checks that and validates each response).
 
+import { canApprove } from "../approvers.ts";
 import { ApiError, type ApiClient, type ErrorCode } from "../client.ts";
 import type {
-  AccessRole, ApprovalRequest, AuditEvent, FeatureEnableRequest, FeatureEnablement, Handover, Person, PromoteRequest,
+  AccessRole, ApprovalRequest, AuditEvent, Batch, FeatureEnableRequest, FeatureEnablement, Handover, Person, PromoteRequest,
   Scope, SelfView, SensitiveFeature,
 } from "../types.ts";
 import * as fx from "./fixtures.ts";
@@ -24,8 +25,10 @@ export interface MockOptions {
   features?: SensitiveFeature[];
   /** Force an error for a route key such as "GET /v1/people". */
   failures?: Record<string, ErrorCode>;
-  /** Access role of the signed-in person. Default owner. */
+  /** Access role of the signed-in person. Default: that person's own (the fixture owner's is owner). */
   role?: AccessRole;
+  /** Who signs in. Default the fixture owner (Operations). */
+  personId?: string;
 }
 
 interface Req {
@@ -77,6 +80,21 @@ function enablement(feature: SensitiveFeature, me: string): FeatureEnablement {
 
 const featureOn = (s: State, f: SensitiveFeature) =>
   s.features.some((e) => e.feature === f && e.disabledAt === null && e.effectiveAt <= fx.NOW);
+
+/** API.md F:x: a sensitive feature applies to a person only when it is on for the subject's jurisdiction. */
+const featureOnFor = (s: State, f: SensitiveFeature, personId: string | null) => {
+  const p = s.people.find((x) => x.id === personId);
+  return !!p && s.features.some((e) => e.feature === f && e.disabledAt === null && e.effectiveAt <= fx.NOW && e.jurisdictions.includes(p.jurisdiction));
+};
+
+function approver(s: State, b: Batch): boolean {
+  const wf = s.workflows.find((w) => w.id === b.workflowId);
+  return canApprove(b, s.me, wf, wf?.jobRoleId ? fx.rolePolicyFor(wf.jobRoleId) : undefined);
+}
+
+/** Item fields (recipients, bodies) go only to the runner and the approvers (ADR 0111 §6). */
+const visibleBatch = (s: State, b: Batch): Batch =>
+  approver(s, b) ? b : { ...b, items: b.items.map((i) => ({ ...i, fields: [] })) };
 
 function parseScope(raw: string | null): Scope {
   if (!raw || raw === "company") return { type: "company", id: null };
@@ -276,20 +294,21 @@ export const ROUTES: Route[] = [
   // Broker
   {
     method: "GET", path: "/v1/batches", response: list("batch.schema.json"),
-    handle: (r, s) => s.batches.filter((b) => !r.query.get("state") || b.state === r.query.get("state")),
+    handle: (r, s) => s.batches.filter((b) => !r.query.get("state") || b.state === r.query.get("state")).map((b) => visibleBatch(s, b)),
   },
   {
     method: "GET", path: "/v1/batches/:hash", response: schema("batch.schema.json"),
     handle: (r, s) => {
       const b = s.batches.find((x) => x.batchHash === r.params.hash) ?? notFound();
       audit(s, "batch.view", { type: "batch", id: b.batchHash.slice(0, 16) }, null);
-      return b;
+      return visibleBatch(s, b);
     },
   },
   {
     method: "POST", path: "/v1/batches/:hash/approve", request: schema("approval.schema.json#/$defs/request"), response: schema("approval.schema.json#/$defs/response"),
     handle: (r, s) => {
       const b = s.batches.find((x) => x.batchHash === r.params.hash) ?? notFound();
+      if (!approver(s, b)) fail("forbidden", 403);
       const body = r.body as ApprovalRequest;
       if (body.batchHash !== b.batchHash) fail("hash_mismatch", 409);
       if (b.state !== "pending") fail("token_used", 409);
@@ -303,6 +322,7 @@ export const ROUTES: Route[] = [
     method: "POST", path: "/v1/batches/:hash/reject", response: schema("batch.schema.json"),
     handle: (r, s) => {
       const b = s.batches.find((x) => x.batchHash === r.params.hash) ?? notFound();
+      if (!approver(s, b)) fail("forbidden", 403);
       b.state = "rejected";
       for (const i of b.items) i.state = "rejected";
       audit(s, "batch.reject", { type: "batch", id: b.batchHash.slice(0, 16) }, null);
@@ -334,11 +354,15 @@ export const ROUTES: Route[] = [
     method: "GET", path: "/v1/metrics/hours-saved", response: schema("hours-saved-report.schema.json"),
     handle: (r, s) => {
       const scope = parseScope(r.query.get("scope"));
+      const { from, to } = period(r.query);
       if (scope.type === "person" && scope.id !== s.me.id) {
         if (!featureOn(s, "per_person_views")) fail("feature_disabled", 403);
+        // Off for the subject's jurisdiction: the cell is suppressed, no number is read, nothing to audit.
+        if (!featureOnFor(s, "per_person_views", scope.id)) {
+          return { ...hoursSavedReport(scope, from, to), total: { suppressed: true, reason: "jurisdiction" }, children: [], topWorkflows: [], anomalies: [] };
+        }
         audit(s, "person.read", { type: "hours_saved", id: scope.id }, scope.id);
       }
-      const { from, to } = period(r.query);
       return hoursSavedReport(scope, from, to);
     },
   },
@@ -363,8 +387,14 @@ export const ROUTES: Route[] = [
     handle: (r, s) => {
       if (!featureOn(s, "working_time")) fail("feature_disabled", 403);
       const scope = parseScope(r.query.get("scope"));
-      if (scope.type === "person" && scope.id !== s.me.id && !featureOn(s, "per_person_views")) fail("feature_disabled", 403);
       const { from, to } = period(r.query);
+      if (scope.type === "person" && scope.id !== s.me.id) {
+        if (!featureOn(s, "per_person_views")) fail("feature_disabled", 403);
+        if (!featureOnFor(s, "working_time", scope.id) || !featureOnFor(s, "per_person_views", scope.id)) {
+          return { scope, period: { from, toExclusive: to }, value: { suppressed: true, reason: "jurisdiction" } };
+        }
+        audit(s, "person.read", { type: "working_time", id: scope.id }, scope.id);
+      }
       return workingTime(scope, from, to);
     },
   },
@@ -492,10 +522,10 @@ export interface MockClient extends ApiClient {
 
 /** A fresh mock with its own state; mutations never leak between clients. */
 export function createMockClient(options: MockOptions = {}): MockClient {
-  const o: Required<MockOptions> = { features: options.features ?? [], failures: options.failures ?? {}, role: options.role ?? "owner" };
   const people = structuredClone(fx.people);
-  const me = people.find((p) => p.id === fx.ME.id)!;
-  me.accessRole = o.role;
+  const me = people.find((p) => p.id === (options.personId ?? fx.ME.id)) ?? notFound();
+  if (options.role) me.accessRole = options.role;
+  const o: Required<MockOptions> = { features: options.features ?? [], failures: options.failures ?? {}, role: me.accessRole, personId: me.id };
   const s: State = {
     workflows: structuredClone(fx.workflows), batches: structuredClone(fx.batches), handovers: structuredClone(fx.handovers),
     notices: structuredClone(fx.notices), killSwitches: structuredClone(fx.killSwitches), auditLog: structuredClone(fx.auditLog),

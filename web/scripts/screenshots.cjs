@@ -1,5 +1,6 @@
 // Captures every view of the admin web on the mock API (dark, 1440x900) into web/screenshots/.
-// Usage: bun run build && bunx vite preview --port 4173 & node scripts/screenshots.cjs [baseUrl]
+// Usage: bunx vite build --mode mock && bunx vite preview --port 4173 & node scripts/screenshots.cjs [baseUrl]
+// (the plain production build has no mock API, so it needs the control plane)
 // Uses the Playwright that is installed on the machine; it is not a dependency of this package.
 const { chromium } = require("playwright");
 const path = require("node:path");
@@ -30,6 +31,9 @@ const shots = [
   ["20-enable-sheet", "/compliance", async (p) => { await p.getByRole("button", { name: /Turn on/ }).first().click(); }],
   ["21-me", "/me"],
   ["22-overview-light", "/?theme=light"],
+  ["23-batch-sheet-not-approver", "/approvals", async (p) => { await p.getByRole("button", { name: "Open" }).first().click(); }],
+  ["24-people-one-person-opened", "/people?features=per_person_views", async (p) => { await p.getByRole("button", { name: /Show hours for/ }).first().click(); }],
+  ["25-department-finance-complementary", `/departments/${id(102)}`],
 ];
 
 (async () => {
