@@ -8,12 +8,13 @@ SwiftPM does not work on this machine (Command Line Tools PackageDescription mis
 
 ```bash
 engine/build.sh                    # .build/libOffloadCore.dylib, .build/offload-observer
-engine/build.sh test               # + Swift Testing suite (S01*, S02*, S02B*, S02C*)
+engine/build.sh test               # + Swift Testing suite (S01*, S02*, S02B*, S02C*, S10C*)
 engine/build.sh test --filter S02  # one slice
 OFFLOAD_BUILD_DIR=/tmp/x engine/build.sh   # separate build dir for parallel agents
 bash slices/s02-observer/verify.sh # slice done-signal
 bash slices/s02b-observer-hardening/verify.sh   # full suite, min 70 tests, no-network grep
 bash slices/s02c-engine-review-fixes/verify.sh  # full suite, min 100 tests, no-network + no-spawn greps
+bash slices/s10c-review2-engine/verify.sh       # full suite, min 135 tests, same greps (REVIEW-2 N4, N7, logs)
 OFFLOAD_LIVE_KEYCHAIN=1 .build/offload-tests --filter liveKeychainRoundTrip  # opt-in real Keychain test
 ```
 
@@ -25,29 +26,45 @@ recognizer, perceptual hash, exclusion policy and window plan (finance preset re
 ```bash
 engine/.build/offload-observer run [--home DIR]       # foreground; Ctrl-C or SIGTERM stops it
 engine/.build/offload-observer status [--json]        # JSON (schemaVersion 1): permissions, paused, days+event counts,
-                                                      #   nextPurgeAt, nextExpiry, keysMode, keyFiles, heartbeat
+                                                      #   nextPurgeAt, nextExpiry, keysMode, keyFiles, heartbeat,
+                                                      #   otherBrainKeys (brain keys whose name is not a date)
 engine/.build/offload-observer exclude list | add|remove --app ID | --host H | --title S
 engine/.build/offload-observer install-agent [--home DIR]   # writes the LaunchAgent plist; does NOT load it
 engine/.build/offload-observer uninstall-agent
 engine/.build/offload-observer pause | resume         # running observer notices within 1 s
 engine/.build/offload-observer purge-now
 engine/.build/offload-observer export-day 2026-10-24  # decrypted JSON lines on stdout (for the brain and tests)
-engine/.build/offload-observer wrap-key --name NAME   # brain key: base64 on stdin, or no stdin = new random key
+engine/.build/offload-observer wrap-key --name NAME   # brain key: new random key, or the one already stored
+engine/.build/offload-observer wrap-key --name NAME --import  # store the key given as base64 on stdin (migration)
 engine/.build/offload-observer unwrap-key --name NAME # prints the stored brain key
 ```
-Exit codes: 0 ok, 1 failure (message on stderr), 2 usage error, 3 `export-day` of a day older than 7 local days.
+Exit codes: 0 ok, 1 failure (message on stderr), 2 usage error (also: a key on stdin without `--import`), 3
+`export-day`, `wrap-key` or `unwrap-key` of a day older than 7 local days.
 An expired `export-day` is refused even when the observer is not running, and it runs the retention purge first, so
 the day file and key are gone afterwards (and logged in `purge-log.jsonl`).
 
 Brain keys (`wrap-key` / `unwrap-key`, keychain mode only; `OFFLOAD_KEYS=file` refuses): a 32-byte key for the
 brain's own sealed files, kept in `keys/brain-NAME.key` in the day-key OKW1 format (64 bytes) under the same
 Keychain master key, with `ai.offload.observer/brain-key/v1/NAME` as associated data, so a file copied to another
-name does not open. NAME is 1-32 of `a-z 0-9 -`, not starting with `-`. `wrap-key` reads one base64 line of exactly
-32 bytes from stdin (a terminal or empty stdin = generate one), stores it 0600 without ever overwriting (two racing
-callers end with one key), and prints the stored key as one base64 line. If a key is already stored it prints that
-key, or exits 1 when stdin held a different one. `unwrap-key` prints the key; it never creates a master key. stdout
-carries only the base64 key; stderr carries file names and status codes, never key bytes. Retention, migration and
-`status` ignore brain keys (they are not day keys); they live until the brain deletes them.
+name does not open. NAME is 1-32 of `a-z 0-9 -`, not starting with `-`. A stored key is never overwritten (0600,
+`link()`, two racing callers end with one key). `wrap-key` makes a new random key, or prints the stored one; a key on
+stdin is refused (exit 2) unless `--import` is passed. `wrap-key --import` reads one base64 line of exactly 32 bytes
+(for migrating the brain's raw key files) and stores it, prints it when the same key is already stored, and exits 1
+when a different one is. `unwrap-key` prints the key; it never creates a master key. stdout carries only the base64
+key; stderr carries file names and status codes, never key bytes.
+
+Brain key retention (REVIEW-2 N4): when NAME is a local date (`brain-YYYY-MM-DD.key`) older than 7 local days, the
+observer's retention (at start, hourly, `purge-now`, an expired `export-day`) deletes it, so the brain's sealed files
+for that day cannot be opened even if the brain never runs again. Deletions are logged on stderr; they get no
+`purge-log.jsonl` line, which counts day-file events. `wrap-key` and `unwrap-key` of such a name exit 3 after running
+the purge. Names that are not real dates (`vault`, `2026-02-30`) are never deleted by the observer; `status --json`
+lists them in `otherBrainKeys`, and they live until the brain deletes them.
+
+Same-user trust boundary (REVIEW-2 N7): `export-day` and `unwrap-key` decrypt for ANY process running as the same
+macOS user; there is no caller check. The Keychain wrap protects copies of the home (backups, another account,
+another Mac), not a live process of this user, which can also read the Keychain item the observer reads. Treat
+everything the observer stores as readable by any program you run. `--import` only stops a key from being supplied
+by accident; a same-user process that wants a chosen key can still pass it.
 
 Home: `--home`, else `$OFFLOAD_HOME`, else `~/Library/Application Support/Offload`. `OFFLOAD_PLAIN=1` writes plain
 `days/DAY.jsonl` instead of encrypted `days/DAY.jsonl.enc` + `keys/DAY.key`.
@@ -68,6 +85,12 @@ Files in home: `days/`, `keys/` (0700 dirs, 0600 files), `purge-log.jsonl` (`{"d
 `exclusions.json` (`{"bundleIds":[],"hosts":[],"titleContains":[]}`, 0600, merged with the built-ins, re-read every
 2 s so edits apply within 5 s; a broken file keeps the last good list), `logs/` (LaunchAgent output).
 
+Logs: `logs/observer.{out,err}.log` rotate at 5 MB and keep 2 old files (`.1`, `.2`, 0600; at most 15 MB each). The
+running observer checks at start and every minute; it copies the file to `.1` and empties it in place, because
+launchd holds it open with O_APPEND (a rename would leave launchd writing to the old copy). Lines written during the
+copy can be lost. Log lines carry contexts, file names, day labels, counts and error codes; system errors are reduced
+to domain and code (`Log.describe`) so a message cannot quote a title or URL.
+
 ## Permissions (System Settings > Privacy & Security)
 When run from a terminal, macOS attributes the permission to the terminal app (Terminal, iTerm, Ghostty), so grant
 it there. A signed app bundle will get its own entry later.
@@ -87,7 +110,8 @@ it there. A signed app bundle will get its own entry later.
   windows) are never OCR'd, their title becomes the app name, and the URL is dropped. List: `ExclusionPolicy.standard`
   plus your `exclusions.json` (apps, hosts and their subdomains, title substrings, case-insensitive).
 - OCR skipped while Secure Event Input is on and while idle. Key values are never read, only counted.
-- Logs (stderr) carry context and error codes, never titles, URLs, text or keys.
+- Logs (stderr) carry context and error codes, never titles, URLs, text or keys (S10CLogTests runs the observer
+  and the key commands with sensitive fixtures and forced failures and checks every captured line).
 
 Midnight: at the first tick of a new local day, a focused, unpaused, non-idle observer writes the current focus
 again (app, title, URL, after exclusions and masking; the last snapshot if nothing is frontmost), so every day file

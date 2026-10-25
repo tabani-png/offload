@@ -21,8 +21,12 @@ guard parsed.command == .run else {
                                       permissions: parsed.command == .status ? Permissions.state : nil,
                                       executable: executablePath,
                                       input: {
-                                          // wrap-key only: a key may be piped in; a terminal means "make a new one".
-                                          guard case .wrapKey = parsed.command, isatty(STDIN_FILENO) == 0 else { return Data() }
+                                          // wrap-key only: a piped key is refused without --import; a terminal means "none".
+                                          switch parsed.command {
+                                          case .wrapKey, .importKey: break
+                                          default: return Data()
+                                          }
+                                          guard isatty(STDIN_FILENO) == 0 else { return Data() }
                                           return FileHandle.standardInput.readDataToEndOfFile()
                                       },
                                       out: { print($0) },
@@ -32,7 +36,7 @@ guard parsed.command == .run else {
 
 let layout = StoreLayout(home: StoreLayout.resolveHome(flag: parsed.home, environment: env))
 do { try layout.ensureDirectories() } catch {
-    Log.error("run", "cannot create \(layout.home.path): \(error)")
+    Log.error("run", "cannot create \(layout.home.path): \(Log.describe(error))")
     exit(1)
 }
 let plain = DayStore.plainFromEnvironment(env)
@@ -43,7 +47,7 @@ if keysMode == .keychain {
         let migrated = try vault.migrateRawKeys()
         if !migrated.isEmpty { Log.info("keys", "wrapped \(migrated.count) raw day key file(s) with the Keychain master key") }
     } catch {
-        Log.error("keys", "Keychain master key unavailable (\(error)); not recording. OFFLOAD_KEYS=file uses raw key files")
+        Log.error("keys", "Keychain master key unavailable (\(Log.describe(error))); not recording. OFFLOAD_KEYS=file uses raw key files")
         exit(1)
     }
 }
@@ -56,7 +60,8 @@ let ocr = QueuedOCRExecutor(source: LiveScreenText(policy: .standard))
 let observer = Observer(clock: clock, workspace: LiveWorkspace(), idle: LiveIdle(), input: input,
                         screenText: nil, pauseState: FilePauseControl(layout: layout),
                         sink: DayStore(layout: layout, plain: plain, keys: vault), retention: Retention(layout: layout),
-                        exclusions: exclusions, ocr: ocr, days: DayCalendar())
+                        exclusions: exclusions, ocr: ocr, days: DayCalendar(),
+                        logRotation: LogRotation(layout: layout))  // 5 MB, 2 old files, checked every minute
 let startedAt = Date()
 let pid = ProcessInfo.processInfo.processIdentifier
 

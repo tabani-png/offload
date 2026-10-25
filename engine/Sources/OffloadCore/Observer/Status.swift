@@ -81,6 +81,8 @@ public struct StatusReport: Codable, Equatable, Sendable {
     public var nextPurgeAt: Int64?
     /// When the oldest stored day expires; nil when nothing is stored.
     public var nextExpiry: DayExpiry?
+    /// Brain keys (`keys/brain-NAME.key`) whose NAME is not a date: retention never deletes them (REVIEW-2 N4).
+    public var otherBrainKeys: [String]
 
     public static func build(layout: StoreLayout, now: Date, days: DayCalendar = DayCalendar(),
                              pidAlive: (Int32) -> Bool = { kill($0, 0) == 0 }, keysMode: KeyMode = .keychain,
@@ -90,7 +92,7 @@ public struct StatusReport: Codable, Equatable, Sendable {
             do {
                 beat = try JSONDecoder().decode(ObserverHeartbeat.self, from: Data(contentsOf: layout.statusFile))
             } catch {
-                Log.error("status", "unreadable observer-status.json: \(error)")
+                Log.error("status", "unreadable observer-status.json: \(Log.describe(error))")
             }
         }
         let fresh = beat.map { epochMillis(now) - $0.lastTick <= 15_000 && pidAlive($0.pid) } ?? false
@@ -117,7 +119,8 @@ public struct StatusReport: Codable, Equatable, Sendable {
                             keysMode: keysMode.rawValue, keyFiles: KeyFileCounts(raw: counts.raw, wrapped: counts.wrapped),
                             permissions: liveBeat?.permissions ?? probe,
                             permissionsSource: liveBeat != nil ? "heartbeat" : (probe != nil ? "probe" : "unknown"),
-                            days: infos, nextPurgeAt: liveBeat?.nextPurgeAt, nextExpiry: expiry)
+                            days: infos, nextPurgeAt: liveBeat?.nextPurgeAt, nextExpiry: expiry,
+                            otherBrainKeys: retention.otherBrainKeys())
     }
 }
 
@@ -139,6 +142,6 @@ public func writeHeartbeat(_ beat: ObserverHeartbeat, layout: StoreLayout) {
         try layout.ensureDirectories()
         try encoder.encode(beat).write(to: layout.statusFile, options: .atomic)
     } catch {
-        Log.error("status", "write observer-status.json: \(error)")
+        Log.error("status", "write observer-status.json: \(Log.describe(error))")
     }
 }

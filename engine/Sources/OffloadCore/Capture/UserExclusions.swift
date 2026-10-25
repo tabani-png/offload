@@ -184,7 +184,7 @@ public final class ExclusionReloader {
         lastCheck = now
         let data: Data?
         do { data = try file.data() } catch {
-            logBroken("\(error)")
+            logBroken(Log.describe(error))
             return currentPolicy
         }
         if let lastData, lastData == data { return currentPolicy }
@@ -198,7 +198,7 @@ public final class ExclusionReloader {
             currentPolicy = base.merging(try ExclusionFile.decode(data))
             loggedBroken = false
         } catch {
-            logBroken("\(error); keeping the previous exclusions")
+            logBroken("\(Log.describe(error)); keeping the previous exclusions")
         }
         return currentPolicy
     }

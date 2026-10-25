@@ -11,8 +11,10 @@ public enum ObserverCommand: Equatable, Sendable {
     case exclude(ExcludeAction)
     case installAgent
     case uninstallAgent
-    /// `wrap-key --name NAME`: store (or return) a Keychain-wrapped brain key.
+    /// `wrap-key --name NAME`: store a new random Keychain-wrapped brain key, or return the stored one.
     case wrapKey(String)
+    /// `wrap-key --name NAME --import`: store the caller's key from stdin (raw-file migration only, REVIEW-2 N7).
+    case importKey(String)
     /// `unwrap-key --name NAME`: print a stored brain key.
     case unwrapKey(String)
     case help
@@ -53,9 +55,10 @@ public enum ObserverCLI {
       pause | resume       stop / restart recording (the running observer notices within 1 s)
       purge-now            delete days older than 7 local days now
       export-day YYYY-MM-DD  print that day's decrypted events as JSON lines (exit 3 + purge if older than 7 days)
-      wrap-key --name NAME   store a 32-byte brain key (base64 on stdin, or none = new random key) wrapped with
-                           the Keychain master key in keys/brain-NAME.key; prints the key as base64
-      unwrap-key --name NAME print the stored brain key as base64
+      wrap-key --name NAME   store a new random 32-byte brain key wrapped with the Keychain master key in
+                           keys/brain-NAME.key (or keep the stored one); prints the key as base64
+      wrap-key --name NAME --import  store the 32-byte key given as one base64 line on stdin instead (migration)
+      unwrap-key --name NAME print the stored brain key as base64 (exit 3 if NAME is a day older than 7 days)
       exclude list         print exclusions.json (your entries; built-ins always apply too)
       exclude add|remove --app BUNDLE_ID | --host HOST | --title TEXT
       install-agent        write ~/Library/LaunchAgents/ai.offload.observer.plist (does not load it)
@@ -106,7 +109,12 @@ public enum ObserverCLI {
             guard let day = extra.first else { throw ArgumentError.missingValue("export-day") }
             if extra.count > 1 { throw ArgumentError.unexpected(extra[extra.startIndex + 1]) }
             return ParsedArguments(command: .exportDay(day), home: home)
-        case "wrap-key": return ParsedArguments(command: .wrapKey(try parseName(Array(extra))), home: home)
+        case "wrap-key":
+            var args = Array(extra)
+            let importing = args.contains("--import")
+            args.removeAll { $0 == "--import" }
+            let name = try parseName(args)
+            return ParsedArguments(command: importing ? .importKey(name) : .wrapKey(name), home: home)
         case "unwrap-key": return ParsedArguments(command: .unwrapKey(try parseName(Array(extra))), home: home)
         default: throw ArgumentError.unknownCommand(first)
         }
@@ -211,8 +219,13 @@ public enum ObserverCLI {
                 return 1
             }
         case .purgeNow:
-            let records = Retention(layout: layout, days: days).purge(now: now)
-            out("purged \(records.count) day(s)" + (records.isEmpty ? "" : ": " + records.map(\.day).joined(separator: ", ")))
+            let outcome = Retention(layout: layout, days: days).purgeAll(now: now)
+            let records = outcome.days
+            var line = "purged \(records.count) day(s)" + (records.isEmpty ? "" : ": " + records.map(\.day).joined(separator: ", "))
+            if !outcome.brainKeys.isEmpty {
+                line += "; deleted \(outcome.brainKeys.count) expired brain key(s): " + outcome.brainKeys.joined(separator: ", ")
+            }
+            out(line)
             return 0
         case .exportDay(let day):
             // REVIEW-1 M4: never serve a day past retention, even when the observer is not running to purge it.
@@ -253,21 +266,34 @@ public enum ObserverCLI {
                 err("exclude: \(error)")
                 return 1
             }
-        case .wrapKey(let name):
+        case .wrapKey(let name), .importKey(let name):
+            let importing = parsed.command == .importKey(name)
             guard keysMode == .keychain else {
                 err("wrap-key: brain keys need the Keychain; unset OFFLOAD_KEYS=file")
                 return 1
             }
-            let provided: Data?
             let text = String(decoding: input(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            if text.isEmpty {
-                provided = nil
-            } else {
+            // REVIEW-2 N7: a caller-chosen key is taken only when asked for explicitly, so a stray or planted key
+            // cannot become a day's brain key by accident.
+            if !importing && !text.isEmpty {
+                err("wrap-key: a key on stdin is accepted only with --import (raw key migration); without it wrap-key"
+                    + " makes a new random key")
+                return 2
+            }
+            if importing && text.isEmpty {
+                err("wrap-key --import: stdin must hold one base64 line of exactly \(StoreCrypto.keySize) bytes")
+                return 2
+            }
+            var provided: Data?
+            if importing {
                 guard let raw = Data(base64Encoded: text), raw.count == StoreCrypto.keySize else {
                     err("wrap-key: stdin must be one base64 line holding exactly \(StoreCrypto.keySize) bytes")
                     return 1
                 }
                 provided = raw
+            }
+            if let code = refuseExpiredBrainKey("wrap-key", name, layout: layout, days: days, now: now, err: err) {
+                return code
             }
             do {
                 let raw = try BrainKeys(layout: layout, secrets: secrets).wrap(name: name, key: provided)
@@ -281,6 +307,9 @@ public enum ObserverCLI {
             guard keysMode == .keychain else {
                 err("unwrap-key: brain keys need the Keychain; unset OFFLOAD_KEYS=file")
                 return 1
+            }
+            if let code = refuseExpiredBrainKey("unwrap-key", name, layout: layout, days: days, now: now, err: err) {
+                return code
             }
             do {
                 out(try BrainKeys(layout: layout, secrets: secrets).unwrap(name: name).base64EncodedString())
@@ -318,5 +347,17 @@ public enum ObserverCLI {
                 return 1
             }
         }
+    }
+
+    /// REVIEW-2 N4: a brain key named for a day past the window is never served or created. Runs the retention
+    /// purge (which deletes it) and returns exit code 3; nil when `name` is not an expired date.
+    static func refuseExpiredBrainKey(_ verb: String, _ name: String, layout: StoreLayout, days: DayCalendar, now: Date,
+                                      err: (String) -> Void) -> Int32? {
+        let retention = Retention(layout: layout, days: days)
+        guard retention.isExpired(name, now: now) else { return nil }
+        let outcome = retention.purgeAll(now: now)
+        err("\(verb) \(name): day is older than \(retention.keepDays) days; its brain key is not served"
+            + " (retention deleted \(outcome.brainKeys.count) expired brain key(s))")
+        return 3
     }
 }

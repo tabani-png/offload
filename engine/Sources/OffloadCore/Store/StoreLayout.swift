@@ -34,8 +34,8 @@ public struct StoreLayout: Sendable {
     public func encryptedDayFile(_ day: String) -> URL { daysDir.appendingPathComponent("\(day).jsonl.enc") }
     public func plainDayFile(_ day: String) -> URL { daysDir.appendingPathComponent("\(day).jsonl") }
     public func keyFile(_ day: String) -> URL { keysDir.appendingPathComponent("\(day).key") }
-    /// Keychain-wrapped brain key `keys/brain-NAME.key` (`offload-observer wrap-key`). Not a day key: retention,
-    /// migration and status ignore it.
+    /// Keychain-wrapped brain key `keys/brain-NAME.key` (`offload-observer wrap-key`). Not a day key: migration and
+    /// the day counts ignore it. Retention deletes it when NAME is a date past the 7-day window (REVIEW-2 N4).
     public func brainKeyFile(_ name: String) -> URL { keysDir.appendingPathComponent("brain-\(name).key") }
 
     /// Creates home, days and keys with mode 0700.

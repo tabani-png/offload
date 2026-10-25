@@ -14,6 +14,8 @@ public struct ObserverConfig: Equatable, Sendable {
     public var purgeInterval: TimeInterval = 3600
     /// OCR text longer than this is cut (characters), to keep day files small.
     public var maxOCRCharacters: Int = 8000
+    /// The log files are checked for rotation at start and then this often.
+    public var logRotateInterval: TimeInterval = 60
 
     public init() {}
 }
@@ -30,6 +32,8 @@ public struct ObserverCounters: Equatable, Sendable {
     /// OCR results thrown away: asked before a pause/resume, or the window was excluded meanwhile.
     public var ocrDiscarded = 0
     public var purgedDays = 0
+    /// Brain keys deleted because their day passed the window (REVIEW-2 N4).
+    public var purgedBrainKeys = 0
 
     public var totalWritten: Int { written.values.reduce(0, +) }
 }
@@ -47,6 +51,8 @@ public final class Observer {
     private let pauseState: PauseState
     private let sink: EventSink
     private let retention: Retention?
+    private let logRotation: LogRotation?
+    private var lastLogRotation: Date?
     /// The exclusion policy in force (reloaded from `exclusions.json` when an ExclusionReloader is given).
     public private(set) var policy: ExclusionPolicy
     private let masker: Masker
@@ -82,7 +88,7 @@ public final class Observer {
                 input: InputCountSource, screenText: ScreenTextSource?, pauseState: PauseState, sink: EventSink,
                 retention: Retention?, policy: ExclusionPolicy = .standard, masker: Masker = Masker(),
                 ids: ULIDGenerator = ULIDGenerator(), exclusions: ExclusionReloader? = nil, ocr: OCRExecutor? = nil,
-                days: DayCalendar = DayCalendar()) {
+                days: DayCalendar = DayCalendar(), logRotation: LogRotation? = nil) {
         self.config = config
         self.clock = clock
         self.workspace = workspace
@@ -93,6 +99,7 @@ public final class Observer {
         self.pauseState = pauseState
         self.sink = sink
         self.retention = retention
+        self.logRotation = logRotation
         self.policy = exclusions?.policy(now: clock.now) ?? policy
         self.masker = masker
         self.ids = ids
@@ -101,6 +108,7 @@ public final class Observer {
 
     /// Runs retention once and opens the first input window.
     public func start() {
+        rotateLogs()
         runRetention()
         inputWindowStart = clock.now
         if !input.isAvailable && !warnedInputUnavailable {
@@ -112,6 +120,7 @@ public final class Observer {
     public func tick() {
         let now = clock.now
         if let last = lastPurge, now.timeIntervalSince(last) >= config.purgeInterval { runRetention() }
+        if lastLogRotation.map({ now.timeIntervalSince($0) >= config.logRotateInterval }) ?? true { rotateLogs() }
         if inputWindowStart == nil { inputWindowStart = now }
         if let exclusions { policy = exclusions.policy(now: now) }
 
@@ -144,9 +153,15 @@ public final class Observer {
     private func runRetention() {
         lastPurge = clock.now
         guard let retention else { return }
-        let purged = retention.purge(now: clock.now)
-        counters.purgedDays += purged.count
-        if !purged.isEmpty, let store = sink as? DayStore { store.forgetKeys() }
+        let outcome = retention.purgeAll(now: clock.now)
+        counters.purgedDays += outcome.days.count
+        counters.purgedBrainKeys += outcome.brainKeys.count
+        if !outcome.days.isEmpty, let store = sink as? DayStore { store.forgetKeys() }
+    }
+
+    private func rotateLogs() {
+        lastLogRotation = clock.now
+        logRotation?.rotateIfNeeded()
     }
 
     /// When the next scheduled retention run is due.
@@ -237,7 +252,7 @@ public final class Observer {
         case .success(let text): raw = text
         case .failure(let error):
             counters.ocrErrors += 1
-            logOnce("ocr", "screen text failed: \(error)")
+            logOnce("ocr", "screen text failed: \(Log.describe(error))")
             return
         }
         guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -279,7 +294,7 @@ public final class Observer {
             counters.written[event.kind, default: 0] += 1
         } catch {
             counters.writeErrors += 1
-            Log.error("store", "append \(event.kind.rawValue) event failed: \(error)")
+            Log.error("store", "append \(event.kind.rawValue) event failed: \(Log.describe(error))")
         }
     }
 

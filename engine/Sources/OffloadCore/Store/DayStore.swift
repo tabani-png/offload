@@ -100,7 +100,7 @@ public final class DayStore: EventSink {
                 try handle.seekToEnd()
                 try handle.write(contentsOf: line + Data("\n".utf8))
             } catch {
-                do { try handle.close() } catch { Log.error("store", "close after failed append: \(error)") }
+                do { try handle.close() } catch { Log.error("store", "close after failed append: \(Log.describe(error))") }
                 throw error
             }
             try handle.close()

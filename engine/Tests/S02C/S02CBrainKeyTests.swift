@@ -42,7 +42,7 @@ import Testing
         let home = tempHome()
         let layout = StoreLayout(home: home)
         let secrets = MemorySecretStore()
-        let r = try cli(["wrap-key", "--name", "vault"], home: home, secrets: secrets, stdin: keyB64 + "\n")
+        let r = try cli(["wrap-key", "--name", "vault", "--import"], home: home, secrets: secrets, stdin: keyB64 + "\n")
         #expect(r.code == 0, "\(r.err)")
         #expect(r.out == [keyB64])
         #expect(r.err.isEmpty)
@@ -60,7 +60,7 @@ import Testing
     @Test func unwrapReturnsTheSameKey() throws {
         let home = tempHome()
         let secrets = MemorySecretStore()
-        #expect(try cli(["wrap-key", "--name", "vault"], home: home, secrets: secrets, stdin: keyB64).code == 0)
+        #expect(try cli(["wrap-key", "--name", "vault", "--import"], home: home, secrets: secrets, stdin: keyB64).code == 0)
         let r = try cli(["unwrap-key", "--name", "vault"], home: home, secrets: secrets)
         #expect(r.code == 0)
         #expect(r.out == [keyB64])
@@ -83,15 +83,15 @@ import Testing
         let home = tempHome()
         let layout = StoreLayout(home: home)
         let secrets = MemorySecretStore()
-        #expect(try cli(["wrap-key", "--name", "vault"], home: home, secrets: secrets, stdin: keyB64).code == 0)
+        #expect(try cli(["wrap-key", "--name", "vault", "--import"], home: home, secrets: secrets, stdin: keyB64).code == 0)
         let before = try Data(contentsOf: layout.brainKeyFile("vault"))
         // Same key: idempotent.
-        #expect(try cli(["wrap-key", "--name", "vault"], home: home, secrets: secrets, stdin: keyB64).out == [keyB64])
+        #expect(try cli(["wrap-key", "--name", "vault", "--import"], home: home, secrets: secrets, stdin: keyB64).out == [keyB64])
         // No stdin: returns the stored key, does not make a new one.
         #expect(try cli(["wrap-key", "--name", "vault"], home: home, secrets: secrets).out == [keyB64])
         // A different key: refused, file untouched, nothing on stdout.
         let other = Data(repeating: 9, count: 32).base64EncodedString()
-        let r = try cli(["wrap-key", "--name", "vault"], home: home, secrets: secrets, stdin: other)
+        let r = try cli(["wrap-key", "--name", "vault", "--import"], home: home, secrets: secrets, stdin: other)
         #expect(r.code == 1)
         #expect(r.out.isEmpty)
         #expect(r.err.first?.contains("different key") == true)
@@ -101,7 +101,7 @@ import Testing
     @Test func badStdinIsRefusedWithoutEchoingIt() throws {
         let home = tempHome()
         for input in ["not base64 !!", Data(repeating: 1, count: 16).base64EncodedString(), keyB64 + "\n" + keyB64] {
-            let r = try cli(["wrap-key", "--name", "vault"], home: home, secrets: MemorySecretStore(), stdin: input)
+            let r = try cli(["wrap-key", "--name", "vault", "--import"], home: home, secrets: MemorySecretStore(), stdin: input)
             #expect(r.code == 1)
             #expect(r.out.isEmpty)
             #expect(!r.err.joined().contains(input.prefix(12)))
@@ -113,7 +113,7 @@ import Testing
         let home = tempHome()
         let layout = StoreLayout(home: home)
         let secrets = MemorySecretStore()
-        #expect(try cli(["wrap-key", "--name", "a"], home: home, secrets: secrets, stdin: keyB64).code == 0)
+        #expect(try cli(["wrap-key", "--name", "a", "--import"], home: home, secrets: secrets, stdin: keyB64).code == 0)
         try FileManager.default.copyItem(at: layout.brainKeyFile("a"), to: layout.brainKeyFile("b"))
         let r = try cli(["unwrap-key", "--name", "b"], home: home, secrets: secrets)
         #expect(r.code == 1)
@@ -122,7 +122,7 @@ import Testing
 
     @Test func anotherMasterKeyCannotUnwrapIt() throws {
         let home = tempHome()
-        #expect(try cli(["wrap-key", "--name", "a"], home: home, secrets: MemorySecretStore(), stdin: keyB64).code == 0)
+        #expect(try cli(["wrap-key", "--name", "a", "--import"], home: home, secrets: MemorySecretStore(), stdin: keyB64).code == 0)
         let r = try cli(["unwrap-key", "--name", "a"], home: home, secrets: MemorySecretStore())
         #expect(r.code == 1)
         #expect(r.out.isEmpty)
@@ -139,7 +139,7 @@ import Testing
 
     @Test func fileKeyModeRefusesAndNeverTouchesTheKeychain() throws {
         let secrets = MemorySecretStore()
-        let r = try cli(["wrap-key", "--name", "a"], home: tempHome(), secrets: secrets, stdin: keyB64,
+        let r = try cli(["wrap-key", "--name", "a", "--import"], home: tempHome(), secrets: secrets, stdin: keyB64,
                         env: ["OFFLOAD_KEYS": "file"])
         #expect(r.code == 1)
         #expect(r.err.first?.contains("OFFLOAD_KEYS=file") == true)
@@ -149,7 +149,7 @@ import Testing
     @Test func aFailingKeychainFailsWithoutLeakingTheKey() throws {
         let secrets = MemorySecretStore()
         secrets.failure = StoreError.keychain(-25308)
-        let r = try cli(["wrap-key", "--name", "a"], home: tempHome(), secrets: secrets, stdin: keyB64)
+        let r = try cli(["wrap-key", "--name", "a", "--import"], home: tempHome(), secrets: secrets, stdin: keyB64)
         #expect(r.code == 1)
         #expect(r.out.isEmpty)
         #expect(!r.err.joined().contains(keyB64))
@@ -159,7 +159,7 @@ import Testing
         let home = tempHome()
         let layout = StoreLayout(home: home)
         let secrets = MemorySecretStore()
-        #expect(try cli(["wrap-key", "--name", "vault"], home: home, secrets: secrets, stdin: keyB64).code == 0)
+        #expect(try cli(["wrap-key", "--name", "vault", "--import"], home: home, secrets: secrets, stdin: keyB64).code == 0)
         let far = ISO8601DateFormatter().date(from: "2030-01-01T00:00:00Z")!
         #expect(Retention(layout: layout).purge(now: far).isEmpty)
         #expect(Retention(layout: layout).storedDays().isEmpty)
