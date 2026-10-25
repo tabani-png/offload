@@ -19,6 +19,7 @@ import { catalogStatus, loadConnectorsConfig, missingEnv, type ConnectorStatus, 
 import { roleOfTool } from "./allowlist.ts";
 import { shortHash, type Batch } from "./batch.ts";
 import { pendingLiveBatch } from "./runner.ts";
+import { nextCronRun } from "./schedule.ts";
 import { listBatches, listWorkflows, readText, workflowDir } from "./store.ts";
 import type { WorkflowJson } from "./types.ts";
 
@@ -45,6 +46,15 @@ export function stateOf(wf: WorkflowJson, connectors: readonly WorkflowConnector
   return { state: needsYou.length > 0 ? "needs_you" : "active", needsYou };
 }
 
+/** lastRunAt: createdAt of the newest live batch. nextRunAt: next due time of the cron schedule while the workflow is
+ * active (needs_you included); null when manual, paused or not yet approved. */
+export function runTimes(home: string, wf: WorkflowJson, now: number): { lastRunAt: number | null; nextRunAt: number | null } {
+  const live = listBatches(home, wf.id, now).filter((b) => b.kind === "live");
+  const lastRunAt = live.length === 0 ? null : Math.max(...live.map((b) => b.createdAt));
+  const nextRunAt = wf.status === "active" && wf.schedule.type === "cron" ? nextCronRun(wf.schedule.cron, now) : null;
+  return { lastRunAt, nextRunAt };
+}
+
 export function summaryOf(home: string, wf: WorkflowJson, status: Record<string, ConnectorStatus>, now: number = Date.now()): WorkflowSummaryDTO {
   const connectors = workflowConnectors(wf, status);
   const pending = pendingLiveBatch(home, wf.id, now);
@@ -66,6 +76,7 @@ export function summaryOf(home: string, wf: WorkflowJson, status: Record<string,
     arithmetic: wf.estimate.arithmetic,
     pendingBatch: pending === null ? null : batchSummary(pending),
     lastDryRunAt: wf.lastDryRunAt,
+    ...runTimes(home, wf, now),
   };
 }
 
@@ -159,6 +170,8 @@ export function dashboard(a: Analysis, home: string, env: Env, now: number = Dat
       arithmetic: wf.estimate.arithmetic,
       measured,
       pendingBatch: s.pendingBatch,
+      lastRunAt: s.lastRunAt,
+      nextRunAt: s.nextRunAt,
     };
   });
   const running = automations.filter((x) => x.state === "active" || x.state === "needs_you");

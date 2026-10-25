@@ -3,7 +3,7 @@
 // purged after 7 days like every other copy of mail text: store/vault.ts, REVIEW-1 H4). After the purge the pack has
 // no corpus and drafting warns "no tone pack yet" until `tone build` runs again.
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openText, sealText } from "../store/vault.ts";
 import { modelFor, type Model, type ModelConfig } from "../models/model.ts";
@@ -133,4 +133,49 @@ export function retrieveExamples(pack: TonePack, query: string, opts: { bucket: 
     if (!out.includes(e)) out.push(e);
   }
   return out;
+}
+
+// ---------- style cards edited from the app (s05c, GET/PUT /workflows/:id/tone) ----------
+
+/** Largest style card a PUT accepts, in UTF-8 bytes. Cards are 4-8 bullets plus measured lines; 16 KB is generous. */
+export const MAX_TONE_CARD_BYTES = 16 * 1024;
+/** Index hash of a card written by hand before any build: never equal to a real sha256, so a build keeps it. */
+const USER_CARD = "user-written";
+
+export const styleCardPath = (home: string, bucket: Bucket) => join(toneDir(home), `${bucket}.md`);
+
+export interface StyleCard {
+  bucket: Bucket;
+  path: string;
+  text: string | null;
+  /** The card differs from the one the brain last built (or was written by hand). */
+  edited: boolean;
+  updatedAt: number | null;
+}
+
+export function readStyleCard(home: string, bucket: Bucket): StyleCard {
+  const path = styleCardPath(home, bucket);
+  if (!existsSync(path)) return { bucket, path, text: null, edited: false, updatedAt: null };
+  const text = readFileSync(path, "utf8");
+  const recorded = readIndex(home)?.buckets[bucket]?.sha256;
+  return { bucket, path, text, edited: recorded === undefined || recorded !== sha(text), updatedAt: Math.round(statSync(path).mtimeMs) };
+}
+
+/** Stores a card the user wrote (0600, atomic). The index keeps the hash of the brain's version, so a rebuild keeps
+ * the user's card unless forced. Size and content are validated by the caller (api/workflow-routes.ts). */
+export function writeStyleCard(home: string, bucket: Bucket, text: string): StyleCard {
+  const dir = toneDir(home);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  const path = styleCardPath(home, bucket);
+  const tmp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  writeFileSync(tmp, text, { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, path);
+  const index = readIndex(home) ?? { version: 1, builtAt: 0, cheapModel: "", corpus: 0, buckets: {} };
+  if (index.buckets[bucket] === undefined) {
+    index.buckets[bucket] = { file: path, sha256: USER_CARD, emails: 0 };
+    writePrivate(join(dir, "index.json"), JSON.stringify(index, null, 2) + "\n");
+  }
+  return readStyleCard(home, bucket);
 }

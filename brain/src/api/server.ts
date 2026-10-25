@@ -1,5 +1,7 @@
 // The brain's local API: Bun.serve on 127.0.0.1, bearer token, read-only GET routes (brain/API.md).
-import { localDay, startPurgeSchedule } from "../store/vault.ts";
+import { localDay, migrateBrainKeys, startPurgeSchedule } from "../store/vault.ts";
+import type { ObserverEnv } from "../store/observer.ts";
+import { observerStatus } from "./observer-route.ts";
 import { randomBytes } from "node:crypto";
 import { analyzeHome, type Analysis, type AnalyzeOptions } from "../analyze.ts";
 import { DAY_RE, storeFingerprint } from "../store/reader.ts";
@@ -8,6 +10,7 @@ import { AgentSdkModel, type Model } from "../models/model.ts";
 import { AgentSdkExecutor, type Executor } from "../workflows/executor.ts";
 import { dashboard } from "../workflows/service.ts";
 import { toEvidence, toInsights, toStatus, toTimeline } from "./dto.ts";
+import { BRAIN_READY_PREFIX, type BrainReadyDTO } from "./types.ts";
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
 import { workflowRoute } from "./workflow-routes.ts";
 
@@ -19,6 +22,10 @@ export interface BrainOptions {
   /** s05: model for drafts and cards (default: Agent SDK), executor for approved batches (default: Agent SDK),
    * env for connector secrets (default process.env). Tests pass StubModel and ScriptedExecutor. */
   workflows?: { model?: Model; executor?: Executor; env?: Env };
+  /** OFFLOAD_OBSERVER_BIN for GET /observer (default process.env). */
+  observerEnv?: ObserverEnv;
+  /** Startup and purge log lines (default stderr, so nothing precedes the ready line on stdout). */
+  log?: (line: string) => void;
 }
 
 export interface Brain {
@@ -28,6 +35,26 @@ export interface Brain {
 }
 
 export const MIN_TOKEN_LENGTH = 32;
+
+/** `OFFLOAD_BRAIN_READY {"port":N,"token":"..."}`: the first stdout line of `serve` (brain/API.md "Connection"). */
+export function formatReadyLine(port: number, token: string): string {
+  const body: BrainReadyDTO = { port, token };
+  return `${BRAIN_READY_PREFIX} ${JSON.stringify(body)}`;
+}
+
+/** The ready line's port and token, or null when the line is anything else. */
+export function parseReadyLine(line: string): BrainReadyDTO | null {
+  if (!line.startsWith(`${BRAIN_READY_PREFIX} `)) return null;
+  try {
+    const v = JSON.parse(line.slice(BRAIN_READY_PREFIX.length + 1)) as Record<string, unknown>;
+    const { port, token } = v;
+    if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+    if (typeof token !== "string" || token.length < MIN_TOKEN_LENGTH) return null;
+    return { port, token };
+  } catch {
+    return null;
+  }
+}
 
 /** OFFLOAD_TOKEN when set (at least 32 chars), otherwise a fresh 256-bit token the caller prints once. */
 export function resolveToken(env: Readonly<Record<string, string | undefined>>): { token: string; generated: boolean } {
@@ -90,6 +117,7 @@ export function createBrain(opts: BrainOptions): Brain {
     if (req.method !== "GET" && req.method !== "HEAD") return error(405, "method_not_allowed");
 
     if (path === "/status") return json(200, toStatus(await analysis(undefined), now()));
+    if (path === "/observer") return json(200, await observerStatus(opts.home, opts.observerEnv ?? process.env, now()));
     if (path === "/dashboard") return json(200, dashboard(await analysis(undefined), opts.home, env, now()));
     if (path === "/insights") {
       const review = parseReviewSeconds(url.searchParams.get("reviewSeconds"));
@@ -136,8 +164,18 @@ export interface RunningBrain {
 
 export async function startBrainServer(opts: BrainOptions & { port?: number }): Promise<RunningBrain> {
   const brain = createBrain(opts);
+  const log = opts.log ?? ((l: string) => console.error(l));
+  const now = opts.now ?? Date.now;
+  // H4 close-out: raw brain key files from s05b become Keychain-wrapped keys (no-op under OFFLOAD_KEYS=file).
+  try {
+    const m = migrateBrainKeys(opts.home, now());
+    if (m.migrated > 0) log(`brain: wrapped ${m.migrated} raw brain key file(s) with the observer's Keychain key`);
+    for (const e of m.errors) log(`brain: key migration: ${e}`);
+  } catch (err) {
+    log(`brain: key migration failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   // Brain artefacts with OCR or mail text: purged at startup and every hour (store/vault.ts, REVIEW-1 H4).
-  const stopPurge = startPurgeSchedule(opts.home, opts.now ?? Date.now);
+  const stopPurge = startPurgeSchedule(opts.home, now, { log });
   const listener = Bun.serve({
     hostname: LOOPBACK,
     port: opts.port ?? 0,

@@ -127,7 +127,8 @@ const SKILL_TITLES: Record<TemplateId, string> = {
   generic: "Repeated task",
 };
 
-/** SKILL.md from fixed template text, catalog names and code-computed numbers only. */
+/** SKILL.md from fixed template text, catalog names, code-computed numbers and text the user edited through
+ * PUT /workflows/:id/skill (workflows/skill.ts). Never observed labels. */
 export function renderSkillMd(wf: WorkflowJson): string {
   const gates = wf.steps.filter((s) => s.type === "approval_gate").map((s) => s.id);
   const conn = wf.connectors.map((c) => `${c.id}${c.required ? "" : " (optional)"}`);
@@ -136,7 +137,7 @@ export function renderSkillMd(wf: WorkflowJson): string {
   return [
     "---",
     `name: ${slug}`,
-    `description: ${yamlStr(TEMPLATES[wf.template].description())}`,
+    `description: ${yamlStr(wf.description)}`,
     `connectors: [${wf.connectors.map((c) => c.id).join(", ")}]`,
     `gates: [${gates.join(", ")}]`,
     `auto_run: ${wf.autoRun ? "on" : "off"}`,
@@ -146,7 +147,7 @@ export function renderSkillMd(wf: WorkflowJson): string {
     `# ${title}`,
     "",
     "## What this does",
-    TEMPLATES[wf.template].description(),
+    wf.description,
     "",
     `Estimated saving: ${wf.estimate.arithmetic} (range ${wf.estimate.lowHoursSaved.toFixed(1)}-${wf.estimate.highHoursSaved.toFixed(1)} h/wk). Measured time replaces this estimate after the first week.`,
     "",

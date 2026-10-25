@@ -1,6 +1,6 @@
 // brain CLI.
 //   bun run brain/src/cli.ts analyze --home DIR [--top N] [--review-seconds S] [--json]
-//   bun run brain/src/cli.ts serve   --home DIR [--port P]        (token: OFFLOAD_TOKEN, or generated and printed once)
+//   bun run brain/src/cli.ts serve   --home DIR [--port P]        (first stdout line: OFFLOAD_BRAIN_READY {"port":N,"token":"..."})
 //   bun run brain/src/cli.ts tone build --home DIR [--source fixture|mcp] [--model stub|claude] [--force]
 //   bun run brain/src/cli.ts tone test  --home DIR --hold-back N [--source fixture|mcp] [--model stub|claude]
 //   bun run brain/src/cli.ts tone pairs --home DIR [--answers]       (prints the latest sealed blind-test pairs)
@@ -8,7 +8,7 @@
 //   bun run brain/src/cli.ts dry-run (--workflow ID | --insight N|ins_…) --home DIR [--limit N] [--model stub|claude] [--json]
 import { readFileSync } from "node:fs";
 import { analyzeHome, type Analysis } from "./analyze.ts";
-import { startBrainServer, resolveToken } from "./api/server.ts";
+import { formatReadyLine, startBrainServer, resolveToken } from "./api/server.ts";
 import { toInsights } from "./api/dto.ts";
 import type { DryRunResponse } from "./api/types.ts";
 import { loadConnectorsConfig, toMcpServers } from "./connectors/config.ts";
@@ -249,9 +249,11 @@ async function runCommand(args: Args): Promise<number> {
     return 0;
   }
   const { token, generated } = resolveToken(process.env);
+  if (generated) console.error("brain: no OFFLOAD_TOKEN set; generated one (it is in the ready line)");
   const srv = await startBrainServer({ home: args.home, token, port: args.port });
+  // The first stdout line, machine-readable; startup logs went to stderr (brain/API.md "Connection").
+  process.stdout.write(formatReadyLine(srv.port, token) + "\n");
   console.log(`brain listening on ${srv.url}`);
-  if (generated) console.log(`OFFLOAD_TOKEN=${token}`);
   return await new Promise<number>(() => {
     // Runs until the process is stopped.
   });

@@ -5,11 +5,17 @@ Changes inside v1 are additive only.
 
 ## Connection
 - Base URL `http://127.0.0.1:<port>/`. The listener binds 127.0.0.1 only.
-- Start: `bun run brain/src/cli.ts serve --home "$OFFLOAD_HOME" [--port P]`. It prints `brain listening on <url>`.
+- Start: `bun run brain/src/cli.ts serve --home "$OFFLOAD_HOME" [--port P]` (`--port 0` or none = a free port).
+- Ready line (s05c): the FIRST line on stdout is exactly
+  `OFFLOAD_BRAIN_READY {"port":N,"token":"..."}` (`BRAIN_READY_PREFIX`, one space, then `BrainReadyDTO` as JSON).
+  Nothing is printed on stdout before it; startup, migration and purge logs go to stderr. Read stdout up to the first
+  newline, check the prefix, parse the JSON. The listener is accepting connections when the line is printed. The
+  token is printed only there (no `OFFLOAD_TOKEN=` line any more). A second line `brain listening on <url>` follows
+  for older clients; do not rely on it.
 - Auth: every request needs `Authorization: Bearer <token>`. The token is `OFFLOAD_TOKEN` (at least 32 chars) or, when
-  unset, a fresh 256-bit token printed once as `OFFLOAD_TOKEN=<token>`. The app passes its per-launch token in the env.
+  unset, a fresh 256-bit token (it is in the ready line). The app passes its per-launch token in the env.
 - Host must be `127.0.0.1` or `localhost` (any port). An `Origin` header, if sent, must equal `http://<host>`.
-- GET (and HEAD) everywhere; POST and DELETE only on `/workflows…` (s05). POST bodies are `application/json`,
+- GET (and HEAD) everywhere; POST, PUT and DELETE only on `/workflows…` (s05, s05c). Bodies are `application/json`,
   at most 64 KB. No CORS. Every response is `cache-control: no-store`, `x-content-type-options: nosniff`.
 
 | status | body `error` | when |
@@ -20,7 +26,7 @@ Changes inside v1 are additive only.
 | 404 | `not_found` | unknown path, insight id, workflow id, batch hash, or a day not in the store |
 | 405 | `method_not_allowed` | a method the path does not take, OPTIONS preflight |
 | 409 | `conflict` | not allowed in the current state (run before activation, paused, batch not pending, connector missing) |
-| 413 | `payload_too_large` | body over 64 KB |
+| 413 | `payload_too_large` | body over 64 KB, or a style card over `maxBytes` (16 KB) |
 | 500 | `internal` | bug; logged on the brain's stderr |
 
 Conventions: times are unix epoch ms; ratios and percentages are 0..1 (`share`, `savingPct`, `reach`); durations are
@@ -86,10 +92,17 @@ its arithmetic; null until both sides have a day. `measuredHoursSavedPerWeek` = 
 A workflow is a folder `$OFFLOAD_HOME/workflows/<id>/`: `SKILL.md`, `workflow.json`, `facts.md` (the only facts drafts
 may state), `recipients.csv`, `crm-log.csv`, `scripts/`, `batches/<hash>.json` (live) or `<hash>.json.enc` (dry run,
 sealed), `approvals.json`, `gate-log.jsonl`, `dry-run.json.enc`, `dry-runs/<ts>.json.enc`. Files holding OCR or mail
-text (dry runs, dry-run batches, `tone/corpus.jsonl.enc`, blind-test pairs) are sealed with a per-day brain key in
-`$OFFLOAD_HOME/brain-keys/` and purged after 7 local days, at `serve` startup and hourly, with a
+text (dry runs, dry-run batches, `tone/corpus.jsonl.enc`, blind-test pairs) are sealed with a per-day brain key and
+purged after 7 local days, at `serve` startup and hourly, with a
 `purge-log.jsonl` line `{day, deletedAt, events: 0, files, by: "brain"}` (s05b). Days older than 7 local days are
 never read, even when their files exist; the brain asks `offload-observer purge-now` to delete them.
+Brain keys (s05c, closes REVIEW-1 H4): by default the observer holds them, Keychain-wrapped, in
+`$OFFLOAD_HOME/keys/brain-YYYY-MM-DD.key`; the brain gets a day's key with `offload-observer wrap-key --name DAY`
+(creates it) or `unwrap-key --name DAY` (binary: `OFFLOAD_OBSERVER_BIN`, else `engine/.build/offload-observer`) and
+keeps it in memory only. A missing or failing observer is an error (sealing fails, a sealed file reads as missing and
+is NOT purged); there is no fallback to raw keys. `OFFLOAD_KEYS=file` (tests, fixtures only) keeps the s05b raw
+32-byte files in `$OFFLOAD_HOME/brain-keys/`. Raw key files left from s05b are wrapped with the same bytes and deleted
+when `serve` starts (and when a day with only a raw key is next used); a conflict is logged and the raw file kept.
 States: `drafting` → `ready_for_review` → (approve the dry-run batch) → `active` ⇄ `paused`; `needs_you` is shown on
 top of `active` when a batch waits or a connector is missing. Auto-run is off by default.
 
@@ -105,6 +118,26 @@ top of `active` when a batch waits or a connector is missing. Auto-run is off by
 | `POST /workflows/:id/release` | `{ batchHash, keys[] }` | `{ batch }`: you confirm these `unknown` sends did not go out; they can be drafted again (s05b) |
 | `POST /workflows/:id/auto-run` | `{ enabled }` | `WorkflowSummaryDTO` |
 | `DELETE /workflows/:id` | | `{ deleted }`. Stops a running batch first |
+| `GET /workflows/:id/tone` | | `ToneCardDTO`: the style card of the workflow's tone bucket (`text` null when none) (s05c) |
+| `PUT /workflows/:id/tone` | `ToneCardUpdate { text }` | `ToneCardDTO`. Stored 0600 in `tone/<bucket>.md`; kept by later `tone build` unless `--force` |
+| `GET /workflows/:id/skill` | | `SkillDTO`: SKILL.md, the editable text, the steps, gate ids, limits (s05c) |
+| `PUT /workflows/:id/skill` | `SkillUpdate { description?, steps?: [{ id, title?, detail? }] }` | `SkillDTO`, SKILL.md re-rendered |
+
+Tone PUT: only `text`, a non-blank string without control characters (tab and newlines are fine), at most
+`maxBytes` = 16384 UTF-8 bytes (413 above). The card is the user's own style description; it goes into the drafting
+prompt as before.
+
+Skill PUT edits text only. Allowed keys: `description` (1-1000 chars, may span lines) and per existing step id `title`
+(1-120 chars) and `detail` (1-600 chars), both one line. No line may start with `#`, `---` or a code fence (SKILL.md
+structure stays the template's). Any other key (`type`, `tool`, `connector`, `sideEffect`, `script`, `gates`,
+`autoRun`, `skillMd`, ...), an unknown or repeated step id, or invalid text is a 400 and nothing is written. Steps
+cannot be added, removed or reordered; omitted steps keep their text. The gate and runner never read SKILL.md: they
+read the typed steps in workflow.json and the allowlist (`src/workflows/allowlist.ts`), which this route cannot touch.
+
+Run times on `WorkflowSummaryDTO` and `AutomationDTO` (s05c): `lastRunAt` = `createdAt` of the newest live batch
+(null before the first `run`); `nextRunAt` = the next due minute of the workflow's cron schedule in local time, only
+while the workflow is active (or needs_you); null when the schedule is manual, paused or not yet approved. The brain
+computes when a schedule is due; nothing fires it on its own yet (a batch is made by `POST /workflows/:id/run`).
 
 Dry run: the task's newest real instances from the store (recipient and subject from OCR), our draft next to the OCR
 excerpt of what you wrote, and per instance `estimate { observedMinutes, reviewSeconds, savedMinutes }`, computed in
@@ -122,6 +155,13 @@ One run per workflow at a time (409 `conflict` while another prepare or send hol
 Item states (`BatchSummaryDTO.sent`, `.unknown`): every item is `pending → sending → sent | failed_before_send |
 unknown`, written before the send. `unknown` (a throw, crash or no result after the call) counts as contacted and is
 never sent again until you release it. `failed_before_send` (never called or denied) is drafted again next batch.
+
+## GET /observer → `ObserverResponse` (s05c)
+Runs `offload-observer status --json --home HOME` (5 s timeout) and returns its schemaVersion-1 report as `status`
+(`ObserverStatusDTO`: running, paused, days, keysMode, keyFiles, heartbeat, nextPurgeAt, nextExpiry) with the
+macOS permissions (`screenRecording`, `accessibility`, `inputMonitoring`; `permissionsSource` heartbeat, probe or
+unknown) also at the top level. Always 200: a missing binary, non-zero exit, timeout, non-JSON output or another
+schemaVersion gives `available: false`, `status: null` and the reason in `error`.
 
 ## GET /connectors → `ConnectorsResponse`
 Servers from `$OFFLOAD_HOME/connectors.json` (`configErrors` when it is invalid), every catalog id with

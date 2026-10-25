@@ -48,7 +48,7 @@ echo "finding tests present and passing for $n_ids ids: $(echo $ids | tr '\n' ' 
 # 4. The real CLI on a fresh encrypted fixture (stub model: offline, deterministic).
 FX="$(mktemp -d "${TMPDIR:-/tmp}/offload-s05b-XXXXXX")"
 trap 'rm -rf "$FX"' EXIT
-cli() { (cd "$ROOT" && OFFLOAD_TOKEN= OFFLOAD_OBSERVER_BIN="$FX/no-observer" bun run brain/src/cli.ts "$@" 2>&1); }
+cli() { (cd "$ROOT" && OFFLOAD_TOKEN= OFFLOAD_KEYS=file OFFLOAD_OBSERVER_BIN="$FX/no-observer" bun run brain/src/cli.ts "$@" 2>&1); }
 if (cd "$ROOT" && bun run brain/fixtures/gen.ts --out "$FX/home" --seed 42 --encrypted >/dev/null) && \
    (cd "$ROOT" && bun -e "import { FIXTURE_FACTS } from './brain/fixtures/sent-mail.ts'; await Bun.write('$FX/facts.md', FIXTURE_FACTS)"); then
   cli tone build --home "$FX/home" --source fixture --model stub >/dev/null || fail "tone build exited non-zero"

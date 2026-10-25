@@ -5,10 +5,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { DayLabel, OffloadEvent } from "../types.ts";
 import { decryptLine, KEY_BYTES, LineCryptoError } from "./crypto.ts";
 import { isExpired, KEEP_DAYS } from "./vault.ts";
+import { observerBin } from "./observer.ts";
 import { validateEvent } from "./schema.ts";
 
 export type BadLineReason = "invalid_base64" | "decrypt_failed" | "invalid_json" | "schema_invalid" | "duplicate_id";
@@ -47,12 +47,7 @@ export interface ReadOptions {
   now?: number;
 }
 
-/** engine/.build/offload-observer next to this repo's brain/, unless OFFLOAD_OBSERVER_BIN says otherwise. */
-export function observerBin(env: ReaderEnv): string {
-  const given = env.OFFLOAD_OBSERVER_BIN;
-  if (given !== undefined && given !== "") return given;
-  return fileURLToPath(new URL("../../../engine/.build/offload-observer", import.meta.url));
-}
+export { observerBin } from "./observer.ts";
 
 const EXPORT_TIMEOUT_MS = 60_000;
 

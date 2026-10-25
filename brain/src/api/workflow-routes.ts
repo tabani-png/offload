@@ -1,5 +1,6 @@
 // s05 routes: workflows, dry run, approval, run, pause/resume, delete, connectors (brain/API.md).
-// Writes are POST/DELETE with a JSON body of at most 64 KB. The approval gate itself lives in workflows/gate.ts.
+// s05c: GET/PUT /workflows/:id/tone (the style card) and /workflows/:id/skill (SKILL.md text only).
+// Writes are POST/PUT/DELETE with a JSON body of at most 64 KB. The approval gate itself lives in workflows/gate.ts.
 import type { Analysis } from "../analyze.ts";
 import { loadConnectorsConfig, toMcpServers, type Env } from "../connectors/config.ts";
 import type { Model } from "../models/model.ts";
@@ -9,8 +10,11 @@ import type { Executor } from "../workflows/executor.ts";
 import { approveBatch, executeBatch, prepareLiveBatch, releaseUnknown, requestCancel, RunError } from "../workflows/runner.ts";
 import { batchSummary, connectorStatus, connectorsResponse, detailOf, summaryOf } from "../workflows/service.ts";
 import { deleteWorkflow, listWorkflows, readBatch, readWorkflow, updateWorkflow, WORKFLOW_ID_RE } from "../workflows/store.ts";
+import { applySkillUpdate, SkillEditError, skillDTO } from "../workflows/skill.ts";
+import { MAX_TONE_CARD_BYTES, readStyleCard, writeStyleCard, type StyleCard } from "../tone/pack.ts";
+import type { WorkflowJson } from "../workflows/types.ts";
 import { error, json } from "./http.ts";
-import { API_VERSION, type ApproveResponse, type RunResponse, type WorkflowsResponse } from "./types.ts";
+import { API_VERSION, type ApproveResponse, type RunResponse, type ToneCardDTO, type WorkflowsResponse } from "./types.ts";
 
 export const MAX_BODY_BYTES = 64 * 1024;
 
@@ -71,6 +75,7 @@ export async function workflowRoute(req: Request, path: string, ctx: WorkflowCon
     if (err instanceof HttpError) return error(err.status, err.code, err.message);
     if (err instanceof NotFoundError || err instanceof DryRunError) return error(404, "not_found", err.message);
     if (err instanceof RunError) return error(err.code === "not_found" ? 404 : err.code === "conflict" ? 409 : 400, err.code, err.message);
+    if (err instanceof SkillEditError) return error(400, "bad_request", err.message);
     throw err;
   }
 }
@@ -111,6 +116,14 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
       return json(200, { version: API_VERSION, deleted: wf.id });
     }
     return json(200, detailOf(ctx.home, wf, status(), ctx.now()));
+  }
+
+  if (action === "tone" || action === "skill") {
+    methods(req, "GET", "PUT");
+    const wf = mustWorkflow(ctx.home, id);
+    if (action === "skill") return json(200, req.method === "PUT" ? applySkillUpdate(ctx.home, wf.id, await body(req), ctx.now()) : skillDTO(ctx.home, wf));
+    if (req.method === "PUT") return json(200, toneDTO(wf, writeStyleCard(ctx.home, wf.bucket, toneText(await body(req)))));
+    return json(200, toneDTO(wf, readStyleCard(ctx.home, wf.bucket)));
   }
 
   methods(req, "POST");
@@ -174,6 +187,23 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
     default:
       throw new HttpError(404, "not_found", "unknown workflow action");
   }
+}
+
+// Control characters other than tab, newline and carriage return.
+const CARD_CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+
+/** The card text of a PUT body, validated: only `text`, a non-blank string of at most MAX_TONE_CARD_BYTES. */
+function toneText(b: Record<string, unknown>): string {
+  for (const k of Object.keys(b)) if (k !== "text") throw new HttpError(400, "bad_request", `${k} is not a tone card field (send { text })`);
+  if (typeof b.text !== "string") throw new HttpError(400, "bad_request", "text (the style card markdown) is required");
+  if (b.text.trim() === "") throw new HttpError(400, "bad_request", "text must not be blank");
+  if (Buffer.byteLength(b.text, "utf8") > MAX_TONE_CARD_BYTES) throw new HttpError(413, "payload_too_large", `a style card is at most ${MAX_TONE_CARD_BYTES} bytes`);
+  if (CARD_CONTROL_RE.test(b.text)) throw new HttpError(400, "bad_request", "text has control characters");
+  return b.text;
+}
+
+function toneDTO(wf: WorkflowJson, card: StyleCard): ToneCardDTO {
+  return { version: API_VERSION, workflowId: wf.id, bucket: card.bucket, text: card.text, edited: card.edited, path: card.path, updatedAt: card.updatedAt, maxBytes: MAX_TONE_CARD_BYTES };
 }
 
 async function sendBatch(ctx: WorkflowContext, id: string, hash: string, token: string | null, connectors: ReadonlyArray<{ id: string; required: boolean }>): Promise<void> {

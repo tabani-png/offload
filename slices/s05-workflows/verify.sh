@@ -39,7 +39,7 @@ if [ $? -ne 0 ]; then echo "$tsc_out" | head -20; fail "typecheck (bunx tsc --no
 # End to end on the real CLI (stub model: offline, deterministic).
 FX="$(mktemp -d "${TMPDIR:-/tmp}/offload-s05-XXXXXX")"
 trap 'rm -rf "$FX"' EXIT
-cli() { (cd "$ROOT" && OFFLOAD_TOKEN= bun run brain/src/cli.ts "$@" 2>&1); }
+cli() { (cd "$ROOT" && OFFLOAD_TOKEN= OFFLOAD_KEYS=file bun run brain/src/cli.ts "$@" 2>&1); }
 if (cd "$ROOT" && bun run brain/fixtures/gen.ts --out "$FX/home" --seed 42 --encrypted >/dev/null) && \
    (cd "$ROOT" && bun -e "import { FIXTURE_FACTS } from './brain/fixtures/sent-mail.ts'; await Bun.write('$FX/facts.md', FIXTURE_FACTS)"); then
   tone="$(cli tone build --home "$FX/home" --source fixture --model stub)" || fail "tone build exited non-zero"

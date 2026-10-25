@@ -1,0 +1,3 @@
+[test]
+# Tests and fixtures use raw brain key files (OFFLOAD_KEYS=file); s05c tests switch to keychain mode with a fake observer.
+preload = ["./tests/preload.ts"]

@@ -210,6 +210,11 @@ export interface AutomationDTO {
   arithmetic: string;
   measured: MeasuredSavingDTO | null;
   pendingBatch: BatchSummaryDTO | null;
+  // ---- added in s05c (additive) ----
+  /** createdAt of the newest live batch (POST /workflows/:id/run), null before the first run. */
+  lastRunAt: number | null;
+  /** Next time the workflow's cron schedule is due (local time); null when manual, not active, or paused. */
+  nextRunAt: number | null;
 }
 
 /** Observed time on the task in the store, full local days before vs after activation (activation day excluded). */
@@ -304,6 +309,11 @@ export interface WorkflowSummaryDTO {
   arithmetic: string;
   pendingBatch: BatchSummaryDTO | null;
   lastDryRunAt: number | null;
+  // ---- added in s05c (additive) ----
+  /** Same as AutomationDTO.lastRunAt. */
+  lastRunAt: number | null;
+  /** Same as AutomationDTO.nextRunAt. */
+  nextRunAt: number | null;
 }
 
 export interface WorkflowDetailDTO extends WorkflowSummaryDTO {
@@ -389,6 +399,108 @@ export interface ConnectorsResponse {
   servers: Array<{ name: string; transport: "stdio" | "http"; catalog: string[]; status: "connected" | "missing_env"; missingEnv: string[] }>;
   catalog: Array<{ id: string; name: string; how: ConnectorHow; status: ConnectorStatus; servers: string[] }>;
   insights: Array<{ insightId: string; name: string; ready: boolean; connectors: Array<{ id: string; name: string; role: "primary" | "also"; status: ConnectorStatus }> }>;
+}
+
+// ---------- s05c: serve handshake, tone card, SKILL.md text, observer ----------
+
+/** First stdout line of `serve`: `OFFLOAD_BRAIN_READY {"port":N,"token":"..."}`. Nothing is printed before it. */
+export const BRAIN_READY_PREFIX = "OFFLOAD_BRAIN_READY";
+
+/** The JSON after BRAIN_READY_PREFIX and one space. */
+export interface BrainReadyDTO {
+  port: number;
+  token: string;
+}
+
+/** GET /workflows/:id/tone and the PUT reply: the style card of the workflow's tone bucket. */
+export interface ToneCardDTO {
+  version: ApiVersion;
+  workflowId: string;
+  /** Tone bucket the workflow drafts with (investor_outreach | scheduling | follow_up | other). */
+  bucket: string;
+  /** The card's markdown; null when no card exists yet (run `tone build`, or PUT one). */
+  text: string | null;
+  /** True when the card differs from the one the brain last built (a rebuild keeps it unless forced). */
+  edited: boolean;
+  /** File on this Mac. */
+  path: string;
+  /** mtime of the card file, null when there is none. */
+  updatedAt: number | null;
+  /** Largest card a PUT accepts, in UTF-8 bytes. */
+  maxBytes: number;
+}
+
+/** PUT /workflows/:id/tone body. */
+export interface ToneCardUpdate {
+  text: string;
+}
+
+/** One step as GET /workflows/:id/skill shows it. Only `title` and `detail` are editable. */
+export interface SkillStepDTO {
+  id: string;
+  type: WorkflowStepType;
+  title: string;
+  detail: string;
+  connector: string | null;
+  sideEffect: boolean;
+}
+
+/** GET /workflows/:id/skill and the PUT reply. */
+export interface SkillDTO {
+  version: ApiVersion;
+  workflowId: string;
+  /** SKILL.md as rendered from workflow.json (the gate never reads it). */
+  skillMd: string;
+  description: string;
+  steps: SkillStepDTO[];
+  /** Ids of the approval-gate steps. Not editable. */
+  gates: string[];
+  limits: { descriptionChars: number; titleChars: number; detailChars: number };
+}
+
+/** PUT /workflows/:id/skill body. Any other key, step key or unknown step id is a 400; types, tools, connectors,
+ * the gate and the step list cannot change through it. */
+export interface SkillUpdate {
+  description?: string;
+  steps?: Array<{ id: string; title?: string; detail?: string }>;
+}
+
+export interface ObserverPermissionsDTO {
+  screenRecording: boolean;
+  accessibility: boolean;
+  inputMonitoring: boolean;
+}
+
+/** `offload-observer status --json` (schemaVersion 1), passed through. */
+export interface ObserverStatusDTO {
+  schemaVersion: number;
+  home: string;
+  running: boolean;
+  paused: boolean;
+  daysStored: string[];
+  keepDays: number;
+  keysMode: string;
+  keyFiles: { raw: number; wrapped: number };
+  permissions: ObserverPermissionsDTO | null;
+  /** "heartbeat", "probe" or "unknown". */
+  permissionsSource: string;
+  days: Array<{ day: string; events: number; encrypted: boolean; plain: boolean }>;
+  nextPurgeAt: number | null;
+  nextExpiry: { day: string; at: number } | null;
+  heartbeat: Record<string, unknown> | null;
+}
+
+/** GET /observer. Always 200: a missing or failing observer is `available: false` with `error`. */
+export interface ObserverResponse {
+  version: ApiVersion;
+  available: boolean;
+  /** The observer binary that was asked. */
+  bin: string;
+  checkedAt: number;
+  error: string | null;
+  /** Same as status.permissions; null when unknown or unavailable. */
+  permissions: ObserverPermissionsDTO | null;
+  status: ObserverStatusDTO | null;
 }
 
 // ---------- errors ----------
