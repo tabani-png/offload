@@ -15,6 +15,7 @@ bash slices/s02-observer/verify.sh # slice done-signal
 bash slices/s02b-observer-hardening/verify.sh   # full suite, min 70 tests, no-network grep
 bash slices/s02c-engine-review-fixes/verify.sh  # full suite, min 100 tests, no-network + no-spawn greps
 bash slices/s10c-review2-engine/verify.sh       # full suite, min 135 tests, same greps (REVIEW-2 N4, N7, logs)
+bash slices/s11-perception/verify.sh            # s11 keyframes (S11*) + brain captioner + cross-language frame check
 OFFLOAD_LIVE_KEYCHAIN=1 .build/offload-tests --filter liveKeychainRoundTrip  # opt-in real Keychain test
 ```
 
@@ -28,6 +29,8 @@ engine/.build/offload-observer run [--home DIR]       # foreground; Ctrl-C or SI
 engine/.build/offload-observer status [--json]        # JSON (schemaVersion 1): permissions, paused, days+event counts,
                                                       #   nextPurgeAt, nextExpiry, keysMode, keyFiles, heartbeat,
                                                       #   otherBrainKeys (brain keys whose name is not a date)
+engine/.build/offload-observer list-frames 2026-10-24 # s11: that day's keyframe index, decrypted JSON lines
+engine/.build/offload-observer export-frame FRAMEID   # s11: one keyframe's decrypted JPEG bytes on stdout
 engine/.build/offload-observer exclude list | add|remove --app ID | --host H | --title S
 engine/.build/offload-observer install-agent [--home DIR]   # writes the LaunchAgent plist; does NOT load it
 engine/.build/offload-observer uninstall-agent
@@ -102,6 +105,18 @@ it there. A signed app bundle will get its own entry later.
 | Input Monitoring | Key and click COUNTS (NSEvent global monitors; only the event type is read) | No `input` events at all. Counts are omitted, never estimated. The observer asks once at start. |
 
 `status` prints which of the three are granted (`heartbeat.permissions`).
+
+## Keyframes (s11, ADR 0007)
+On the OCR trigger the observer also keeps a masked keyframe of the focused window when `KeyframeThrottle` allows
+(20 s apart, 60 per rolling hour, not within 40 of 1024 dHash bits of the last 16 kept). Pixels are requested only
+then (`OCRJob.wantsFrame`), never for an excluded window, under Secure Event Input, idle or paused, and a result is
+re-checked against the policy when it arrives. `KeyframeRenderer` fills every OCR line the Masker flags (and lines a
+value spans in the joined text) and every `AXSecureTextField` rectangle black, downscales to a 1280 px long edge and
+encodes JPEG 0.6 in memory. `FrameStore` seals it with the DAY key (associated data `offload/frame/v1/<frameId>`)
+into `frames/DAY/<frameId>.enc` plus an encrypted `frames/DAY/index.jsonl.enc`; retention deletes `frames/DAY/` with
+the day and logs `frames` in the purge line. `OFFLOAD_KEYFRAMES=0` turns it off. Counters: `framesKept`,
+`framesSkippedThrottle`, `framesSkippedDuplicate`, `framesSkippedPrivacy`, `frameErrors`; heartbeat `framesKept`.
+Format: `docs/store-contract.md` "Keyframes". The brain captions them locally (`brain/src/vision`).
 
 ## Privacy rules in code
 - Titles and OCR text are masked before write (cards, CVV/expiry, SSN, SIN, routing, account, IBAN, CUSIP, ISIN,

@@ -4,6 +4,8 @@ import type { Connector } from "../connectors/catalog.ts";
 import type { DayLabel, Figure, Span, TaskStats, TaskUnderstanding } from "../types.ts";
 import {
   API_VERSION,
+  CAPTIONER_OFF,
+  type CaptionerStatusDTO,
   type ConnectorDTO,
   type DashboardResponse,
   type EvidenceResponse,
@@ -215,7 +217,7 @@ function localMidnightAfter(day: DayLabel, addDays: number): number {
   return new Date(y ?? 1970, (m ?? 1) - 1, (d ?? 1) + addDays).getTime();
 }
 
-export function toStatus(a: Analysis, now: number): StatusResponse {
+export function toStatus(a: Analysis, now: number, captioner: CaptionerStatusDTO = CAPTIONER_OFF): StatusResponse {
   let last: { ts: number; kind: string } | null = null;
   for (const e of a.events) if (last === null || e.ts >= last.ts) last = { ts: e.ts, kind: e.kind };
   let state: ObserverState = "no_data";
@@ -231,5 +233,6 @@ export function toStatus(a: Analysis, now: number): StatusResponse {
     },
     retention: { keepDays: KEEP_DAYS, nextPurgeDay: oldest, nextPurgeAt: oldest === null ? null : localMidnightAfter(oldest, KEEP_DAYS + 1) },
     analysis: { generatedAt: a.generatedAt, windowDays: [...a.windowDays], tasks: a.tasks.length, insights: a.insights.length },
+    captioner: { ...captioner },
   };
 }

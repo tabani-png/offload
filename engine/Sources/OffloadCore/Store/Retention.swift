@@ -6,6 +6,8 @@ public struct PurgeRecord: Codable, Equatable, Sendable {
     public var deletedAt: Int64
     /// Lines (events) the deleted day files held.
     public var events: Int
+    /// Keyframe blobs deleted with the day (s11). Absent when the day had none, so older lines are unchanged.
+    public var frames: Int? = nil
 }
 
 /// Deletes days older than `keepDays` local days: the day file(s), the day key AND the brain key of that day
@@ -42,6 +44,10 @@ public struct Retention {
                     break
                 }
             }
+        }
+        // s11: a day that only has keyframes is a stored day too.
+        if let entries = try? FileManager.default.contentsOfDirectory(atPath: layout.framesDir.path) {
+            for entry in entries where StoreLayout.isDayName(entry) { names.insert(entry) }
         }
         return names.sorted()
     }
@@ -110,8 +116,20 @@ public struct Retention {
                     Log.error("retention", "delete \(file.lastPathComponent): \(error.localizedDescription)")
                 }
             }
+            // s11: the day's keyframes go with it (blobs and index) before the record is written.
+            var frames: Int?
+            let frameDir = layout.frameDir(day)
+            if FileManager.default.fileExists(atPath: frameDir.path) {
+                let entries = (try? FileManager.default.contentsOfDirectory(atPath: frameDir.path)) ?? []
+                frames = entries.filter { $0.hasSuffix(".enc") && $0 != "index.jsonl.enc" }.count
+                do { try FileManager.default.removeItem(at: frameDir) } catch {
+                    ok = false
+                    Log.error("retention", "delete frames/\(day): \(Log.describe(error))")
+                }
+            }
             guard ok else { continue }
-            let record = PurgeRecord(day: day, deletedAt: epochMillis(now), events: events)
+            var record = PurgeRecord(day: day, deletedAt: epochMillis(now), events: events)
+            record.frames = frames
             records.append(record)
             appendLog(record)
         }

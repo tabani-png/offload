@@ -46,7 +46,47 @@ export interface StatusResponse {
     tasks: number;
     insights: number;
   };
+  /** s11: the local vision captioner (keyframes -> Frame notes). `enabled: false` under `serve --captioner off`. */
+  captioner: CaptionerStatusDTO;
 }
+
+/** s11 (ADR 0007). Health of the local captioner. Never carries note text or image data. */
+export interface CaptionerStatusDTO {
+  enabled: boolean;
+  captioner: "off" | "stub" | "ollama";
+  /** Model tag in use ("stub" for the stub; for `auto`, the pulled model it picked, "auto" before the first check). */
+  model: string | null;
+  /** Last health check: true ready, false down (see lastError), null not checked yet. */
+  healthy: boolean | null;
+  /** Keyframes waiting to be captioned (capped; the rest are picked up on later polls). */
+  queueDepth: number;
+  /** Frame notes written since the brain started. */
+  processed: number;
+  /** Keyframes given up after repeated failures (this process). */
+  failed: number;
+  /** Keyframes gone (purged or expired) before they were captioned. */
+  skipped: number;
+  lastPollAt: number | null;
+  lastCaptionAt: number | null;
+  lastLatencyMs: number | null;
+  /** Short reason of the last problem ("ollama unreachable at http://127.0.0.1:11434: ..."), null when none. */
+  lastError: string | null;
+}
+
+export const CAPTIONER_OFF: CaptionerStatusDTO = {
+  enabled: false,
+  captioner: "off",
+  model: null,
+  healthy: null,
+  queueDepth: 0,
+  processed: 0,
+  failed: 0,
+  skipped: 0,
+  lastPollAt: null,
+  lastCaptionAt: null,
+  lastLatencyMs: null,
+  lastError: null,
+};
 
 // ---------- GET /insights ----------
 

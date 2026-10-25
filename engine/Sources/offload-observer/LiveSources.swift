@@ -161,29 +161,86 @@ final class LiveInputCounter: InputCountSource {
 
 /// OCR of the frontmost app's top normal window only (ExclusionPolicy.windowToRead). A perceptual hash of the
 /// pixels skips Vision when the window looks the same as last time.
-final class LiveScreenText: ScreenTextSource {
+final class LiveScreenText: ScreenFrameSource {
     private let policy: ExclusionPolicy
     private let recognizer = VisionTextRecognizer()
-    private var lastFrame: (window: UInt32, hash: PerceptualHash, text: String)?
+    private var lastFrame: (window: UInt32, hash: PerceptualHash, lines: [OCRLine])?
 
     init(policy: ExclusionPolicy) {
         self.policy = policy
     }
 
     func visibleText(of snapshot: FocusSnapshot) throws -> String? {
+        try captureFrame(of: snapshot)?.text
+    }
+
+    /// s11: the window pixels, their OCR lines (Vision is skipped when the pixels did not change) and the secure text
+    /// field rectangles of the focused window, all in image pixels with a top-left origin.
+    func captureFrame(of snapshot: FocusSnapshot) throws -> ScreenFrame? {
         guard Permissions.screenRecording else { throw CaptureError.permissionDenied("Screen Recording not granted") }
-        let (windowID, image) = try captureWindow(frontmostBundleID: snapshot.bundleID)
-        let hash = PerceptualHash(image: image)
-        if let last = lastFrame, last.window == windowID, last.hash.distance(to: hash) == 0 { return last.text }
-        let text = try recognizer.recognize(image).map(\.text).joined(separator: "\n")
-        lastFrame = (windowID, hash, text)
-        return text
+        let shot = try captureWindow(frontmostBundleID: snapshot.bundleID)
+        let hash = PerceptualHash(image: shot.image)
+        let lines: [OCRLine]
+        if let last = lastFrame, last.window == shot.windowID, last.hash.distance(to: hash) == 0 {
+            lines = last.lines
+        } else {
+            lines = try recognizer.recognize(shot.image)
+            lastFrame = (shot.windowID, hash, lines)
+        }
+        let secure = Self.secureFieldRects(bundleID: snapshot.bundleID, windowFrame: shot.frame, scale: shot.scale)
+        return ScreenFrame(image: shot.image, lines: lines, secureFields: secure)
+    }
+
+    /// AXSecureTextField frames inside the frontmost app's focused window, converted from global points (top-left)
+    /// to window image pixels. Empty without Accessibility (Secure Event Input still stops capture for a focused
+    /// password field, see Observer).
+    static func secureFieldRects(bundleID: String, windowFrame: CGRect, scale: CGFloat) -> [CGRect] {
+        guard Permissions.accessibility, let app = NSWorkspace.shared.frontmostApplication,
+              app.bundleIdentifier == bundleID else { return [] }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        guard let window = LiveWorkspace.element(appElement, kAXFocusedWindowAttribute) else { return [] }
+        var out: [CGRect] = []
+        var queue: [(AXUIElement, Int)] = [(window, 0)]
+        var visited = 0
+        while !queue.isEmpty && visited < 1500 {
+            let (node, depth) = queue.removeFirst()
+            visited += 1
+            let role = LiveWorkspace.string(node, kAXRoleAttribute)
+            let subrole = LiveWorkspace.string(node, kAXSubroleAttribute)
+            if subrole == "AXSecureTextField" || role == "AXSecureTextField", let r = frame(of: node) {
+                out.append(CGRect(x: (r.minX - windowFrame.minX) * scale, y: (r.minY - windowFrame.minY) * scale,
+                                  width: r.width * scale, height: r.height * scale))
+            }
+            guard depth < 25, let children = LiveWorkspace.attribute(node, kAXChildrenAttribute) as? [AXUIElement] else { continue }
+            queue.append(contentsOf: children.map { ($0, depth + 1) })
+        }
+        return out
+    }
+
+    private static func frame(of element: AXUIElement) -> CGRect? {
+        guard let p = LiveWorkspace.attribute(element, kAXPositionAttribute),
+              let s = LiveWorkspace.attribute(element, kAXSizeAttribute),
+              CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(s) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(unsafeBitCast(p, to: AXValue.self), .cgPoint, &point),
+              AXValueGetValue(unsafeBitCast(s, to: AXValue.self), .cgSize, &size) else { return nil }
+        return CGRect(origin: point, size: size)
+    }
+
+    struct Shot {
+        var windowID: UInt32
+        var image: CGImage
+        /// Window frame in global points, top-left origin.
+        var frame: CGRect
+        /// Pixels per point of the capture.
+        var scale: CGFloat
     }
 
     /// Blocks the calling (serial, non-main) queue until ScreenCaptureKit answers. Never call from a Swift Task.
-    private func captureWindow(frontmostBundleID: String) throws -> (UInt32, CGImage) {
+    private func captureWindow(frontmostBundleID: String) throws -> Shot {
         let done = DispatchSemaphore(value: 0)
-        let result = Slot<Result<(UInt32, CGImage), Error>>(.failure(CaptureError.noWindow))
+        let result = Slot<Result<Shot, Error>>(.failure(CaptureError.noWindow))
         let policy = self.policy
         SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { content, error in
             let rank = Self.windowRank()
@@ -205,8 +262,10 @@ final class LiveScreenText: ScreenTextSource {
             config.width = max(1, Int((filter.contentRect.width * scale).rounded()))
             config.height = max(1, Int((filter.contentRect.height * scale).rounded()))
             config.showsCursor = false
+            let frame = window.frame
             SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { image, error in
-                result.value = image.map { .success((planned.windowID, $0)) } ?? .failure(error ?? CaptureError.noWindow)
+                result.value = image.map { .success(Shot(windowID: planned.windowID, image: $0, frame: frame, scale: scale)) }
+                    ?? .failure(error ?? CaptureError.noWindow)
                 done.signal()
             }
         }

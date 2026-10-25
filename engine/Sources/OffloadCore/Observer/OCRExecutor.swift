@@ -5,10 +5,13 @@ import Foundation
 public struct OCRJob: @unchecked Sendable {
     public var snapshot: FocusSnapshot
     public var generation: Int
+    /// s11: also return the pixels (a keyframe could be kept now). Only honoured by a ScreenFrameSource.
+    public var wantsFrame: Bool
 
-    public init(snapshot: FocusSnapshot, generation: Int) {
+    public init(snapshot: FocusSnapshot, generation: Int, wantsFrame: Bool = false) {
         self.snapshot = snapshot
         self.generation = generation
+        self.wantsFrame = wantsFrame
     }
 }
 
@@ -16,6 +19,27 @@ public struct OCRResult: @unchecked Sendable {
     public var job: OCRJob
     /// Text (nil = nothing to read) or the recognizer's error.
     public var outcome: Result<String?, Error>
+    /// s11: the captured frame, when the job asked for one and the source could give it.
+    public var frame: ScreenFrame?
+
+    public init(job: OCRJob, outcome: Result<String?, Error>, frame: ScreenFrame? = nil) {
+        self.job = job
+        self.outcome = outcome
+        self.frame = frame
+    }
+
+    /// Runs one job on `source`: pixels + text from a ScreenFrameSource when asked, else text only.
+    static func run(_ job: OCRJob, source: ScreenTextSource) -> OCRResult {
+        if job.wantsFrame, let frames = source as? ScreenFrameSource {
+            do {
+                let frame = try frames.captureFrame(of: job.snapshot)
+                return OCRResult(job: job, outcome: .success(frame?.text), frame: frame)
+            } catch {
+                return OCRResult(job: job, outcome: .failure(error))
+            }
+        }
+        return OCRResult(job: job, outcome: Result { try source.visibleText(of: job.snapshot) })
+    }
 }
 
 /// Runs OCR jobs. The observer submits on its tick and drains finished results on later ticks, so a slow
@@ -39,7 +63,7 @@ public final class InlineOCRExecutor: OCRExecutor {
     }
 
     public func submit(_ job: OCRJob) {
-        done.append(OCRResult(job: job, outcome: Result { try source.visibleText(of: job.snapshot) }))
+        done.append(OCRResult.run(job, source: source))
     }
 
     public func drain() -> [OCRResult] {
@@ -110,10 +134,10 @@ public final class QueuedOCRExecutor: OCRExecutor, @unchecked Sendable {
                 return pending.removeFirst()
             }
             guard let job = next else { return }
-            let outcome = Result { try source.visibleText(of: job.snapshot) }
+            let result = OCRResult.run(job, source: source)
             lock.withLock {
                 if outbox.count >= outboxCapacity { outbox.removeFirst() }
-                outbox.append(OCRResult(job: job, outcome: outcome))
+                outbox.append(result)
             }
         }
     }
