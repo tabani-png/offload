@@ -9,12 +9,16 @@
 //   bun run brain/src/cli.ts draft   --insight N|ins_… --home DIR [--facts FILE] [--json]
 //   bun run brain/src/cli.ts dry-run (--workflow ID | --insight N|ins_…) --home DIR [--limit N] [--model stub|claude] [--json]
 //   bun run brain/src/cli.ts purge   --home DIR [--json]   (s10b N4: the app runs it at launch; same purge as serve)
+//   analyze/serve --understanding v1|v2 (s12; default v1 until s15): v2 = span descriptions + local embeddings + task
+//     induction. --embedder stub|ollama (v2 only; default stub = deterministic offline; ollama = 127.0.0.1:11434,
+//     --embed-model qwen3-embedding:0.6b|bge-m3). --role R --industry I: optional user context (prompts only).
 //   serve --log-file FILE (s10b): the brain's log lines go to FILE, scrubbed of content, rotated at 5 MB keeping 2.
 //     Without it they go to stderr, scrubbed the same way.
 import { readFileSync } from "node:fs";
 import { installBrainLogging } from "./log.ts";
 import { purgeAll } from "./store/retention.ts";
-import { analyzeHome, type Analysis } from "./analyze.ts";
+import { analyzeHome, type Analysis, type AnalyzeOptions } from "./analyze.ts";
+import { OLLAMA_EMBED_MODELS, OllamaEmbedder, StubEmbedder } from "./understanding/embed.ts";
 import { formatReadyLine, startBrainServer, resolveToken } from "./api/server.ts";
 import { toInsights } from "./api/dto.ts";
 import type { DryRunResponse } from "./api/types.ts";
@@ -31,6 +35,7 @@ import { readWorkflow } from "./workflows/store.ts";
 const USAGE = `usage:
   bun run brain/src/cli.ts analyze --home DIR [--top N] [--review-seconds S] [--json]
   bun run brain/src/cli.ts serve --home DIR [--port P] [--model stub|real]
+  analyze and serve also take --understanding v1|v2 [--embedder stub|ollama] [--embed-model M] [--role R] [--industry I]
   bun run brain/src/cli.ts tone build --home DIR [--source fixture|mcp] [--model stub|claude] [--force]
   bun run brain/src/cli.ts tone test --home DIR --hold-back N [--source fixture|mcp] [--model stub|claude]
   bun run brain/src/cli.ts tone pairs --home DIR [--answers]
@@ -60,6 +65,13 @@ interface Args {
   holdBack: number;
   answers: boolean;
   logFile: string;
+  understanding: "v1" | "v2";
+  embedder: "stub" | "ollama";
+  embedModel: string;
+  role: string;
+  industry: string;
+  /** Which s12 flags were given (they are only valid on analyze and serve). */
+  s12Flags: string[];
 }
 
 function parse(argv: readonly string[]): Args {
@@ -72,7 +84,7 @@ function parse(argv: readonly string[]): Args {
     rest = rest.slice(1);
   } else if (first === "analyze" || first === "serve" || first === "draft" || first === "dry-run" || first === "purge") command = first;
   else throw new UsageError(`unknown command ${first ?? "(none)"}`);
-  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "real", source: "fixture", force: false, holdBack: 0, answers: false, logFile: "" };
+  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "real", source: "fixture", force: false, holdBack: 0, answers: false, logFile: "", understanding: "v1", embedder: "stub", embedModel: "qwen3-embedding:0.6b", role: "", industry: "", s12Flags: [] };
   const num = (flag: string, v: string | undefined, min: number, max: number): number => {
     const n = Number(v);
     if (v === undefined || !Number.isFinite(n) || n < min || n > max) throw new UsageError(`${flag} must be a number in [${min}, ${max}]`);
@@ -97,6 +109,28 @@ function parse(argv: readonly string[]): Args {
     else if (a === "--force") args.force = true;
     else if (a === "--answers") args.answers = true;
     else if (a === "--log-file") args.logFile = str(a, rest[++i]);
+    else if (a === "--understanding") {
+      const v = rest[++i];
+      if (v !== "v1" && v !== "v2") throw new UsageError("--understanding must be v1 or v2");
+      args.understanding = v;
+      args.s12Flags.push(a);
+    } else if (a === "--embedder") {
+      const v = rest[++i];
+      if (v !== "stub" && v !== "ollama") throw new UsageError("--embedder must be stub or ollama");
+      args.embedder = v;
+      args.s12Flags.push(a);
+    } else if (a === "--embed-model") {
+      const v = str(a, rest[++i]);
+      if (!(OLLAMA_EMBED_MODELS as readonly string[]).includes(v)) throw new UsageError(`--embed-model must be one of ${OLLAMA_EMBED_MODELS.join(", ")}`);
+      args.embedModel = v;
+      args.s12Flags.push(a);
+    } else if (a === "--role") {
+      args.role = str(a, rest[++i]);
+      args.s12Flags.push(a);
+    } else if (a === "--industry") {
+      args.industry = str(a, rest[++i]);
+      args.s12Flags.push(a);
+    }
     else if (a === "--model") {
       const v = rest[++i];
       if (v !== "stub" && v !== "real" && v !== "claude") throw new UsageError("--model must be stub or real (claude is an alias for real)");
@@ -108,6 +142,8 @@ function parse(argv: readonly string[]): Args {
     } else throw new UsageError(`unknown argument ${a}`);
   }
   if (args.home === "") throw new UsageError("--home DIR is required");
+  if (args.s12Flags.length > 0 && command !== "analyze" && command !== "serve") throw new UsageError(`${args.s12Flags[0]} is only for analyze and serve`);
+  if (args.understanding === "v1" && (args.s12Flags.includes("--embedder") || args.s12Flags.includes("--embed-model"))) throw new UsageError("--embedder needs --understanding v2");
   if (command === "draft" && args.insight === "") throw new UsageError("draft needs --insight N|ins_ID");
   if (command === "dry-run" && args.insight === "" && args.workflow === "") throw new UsageError("dry-run needs --workflow ID or --insight N");
   if (command === "tone test" && args.holdBack === 0) throw new UsageError("tone test needs --hold-back N");
@@ -137,6 +173,13 @@ export function formatReport(a: Analysis, top: number): string {
       `   range: saves ${i.saving.range.low.hoursSaved.toFixed(1)}-${i.saving.range.high.hoursSaved.toFixed(1)} h/wk (${Math.round(i.saving.range.low.pct * 100)}-${Math.round(i.saving.range.high.pct * 100)}%)`,
       `   evidence: ${s.instances.eventIds.length} events in ${s.instances.value} instances`,
     );
+    const u = i.profile.understanding;
+    if (u !== undefined) {
+      lines.push(
+        `   loop: ${u.loop.map((id) => u.steps.find((x) => x.id === id)?.name ?? id).join(" → ") || "(single step)"}`,
+        `   reach ${u.reach.value.toFixed(2)}: ${u.reach.perSurface.slice(0, 4).map((r) => `${r.host || r.app} ${r.via}${r.connectorId === null ? "" : `:${r.connectorId}`}`).join(", ")}`,
+      );
+    }
   }
   return lines.join("\n");
 }
@@ -158,6 +201,14 @@ export function formatDryRun(r: DryRunResponse): string {
   });
   lines.push("", `total: ${r.totals.arithmetic}`);
   return lines.join("\n");
+}
+
+/** s12 options for analyze and serve. Ollama is loopback only; a failed embed call is an error, never a silent stub. */
+function understandingOptions(a: Args): Pick<AnalyzeOptions, "understanding" | "embedder" | "userContext"> {
+  const user = { ...(a.role === "" ? {} : { role: a.role }), ...(a.industry === "" ? {} : { industry: a.industry }) };
+  const ctx = Object.keys(user).length === 0 ? {} : { userContext: user };
+  if (a.understanding === "v1") return ctx;
+  return { understanding: "v2", embedder: a.embedder === "ollama" ? new OllamaEmbedder({ model: a.embedModel }) : new StubEmbedder(), ...ctx };
 }
 
 const modelOf = (a: Args): Model => (a.model === "stub" ? new StubModel() : new AgentSdkModel());
@@ -208,7 +259,7 @@ async function runCommand(args: Args): Promise<number> {
     return 0;
   }
   if (args.command === "analyze") {
-    const a = await analyzeHome(args.home, args.reviewSeconds === undefined ? {} : { reviewSeconds: args.reviewSeconds });
+    const a = await analyzeHome(args.home, { ...understandingOptions(args), ...(args.reviewSeconds === undefined ? {} : { reviewSeconds: args.reviewSeconds }) });
     if (args.json) {
       const body = toInsights(a);
       console.log(JSON.stringify({ ...body, insights: body.insights.slice(0, args.top) }, null, 2));
@@ -270,7 +321,9 @@ async function runCommand(args: Args): Promise<number> {
   if (generated) console.error("brain: no OFFLOAD_TOKEN set; generated one (it is in the ready line)");
   const model = modelOf(args);
   if (args.model === "stub") console.error("brain: --model stub: drafts come from the deterministic test model (labelled model: \"stub\")");
-  const srv = await startBrainServer({ home: args.home, token, port: args.port, workflows: { model, modelLabel: args.model } });
+  const u = understandingOptions(args);
+  if (u.understanding === "v2") console.error(`brain: --understanding v2 (${u.embedder?.id ?? "stub"})`);
+  const srv = await startBrainServer({ home: args.home, token, port: args.port, workflows: { model, modelLabel: args.model }, ...(Object.keys(u).length === 0 ? {} : { analyze: u }) });
   // The first stdout line, machine-readable; startup logs went to stderr (brain/API.md "Connection").
   process.stdout.write(formatReadyLine(srv.port, token) + "\n");
   console.log(`brain listening on ${srv.url}`);

@@ -1,7 +1,7 @@
 // Analysis -> public JSON shapes (src/api/types.ts). Formatting lives here; numbers come from the pipeline untouched.
 import type { Analysis, Insight } from "../analyze.ts";
 import type { Connector } from "../connectors/catalog.ts";
-import type { DayLabel, Figure, Span, TaskStats } from "../types.ts";
+import type { DayLabel, Figure, Span, TaskStats, TaskUnderstanding } from "../types.ts";
 import {
   API_VERSION,
   type ConnectorDTO,
@@ -10,6 +10,7 @@ import {
   type FigureDTO,
   type FigureName,
   type InsightDTO,
+  type InsightUnderstandingDTO,
   type InsightsResponse,
   type ObserverState,
   type SpanDTO,
@@ -107,6 +108,19 @@ function insightDTO(a: Analysis, i: Insight): InsightDTO {
       minutes: inst.activeMs / 60_000,
       title: a.spansById.get(inst.spanIds[0] ?? "")?.title ?? "",
     })),
+    ...(i.profile.understanding === undefined ? {} : { understanding: understandingDTO(i.profile.understanding) }),
+  };
+}
+
+/** s12 (additive): the induced task model, without span lists or identifier values beyond the item count. */
+function understandingDTO(u: TaskUnderstanding): InsightUnderstandingDTO {
+  return {
+    goal: u.goal,
+    steps: u.steps.map((s) => ({ id: s.id, name: s.name, verb: s.verb, object: s.object, surface: s.surface, app: s.app, host: s.host, perInstance: s.perInstance, repeatsPerInstance: s.repeatsPerInstance, core: s.core })),
+    loop: [...u.loop],
+    surfaces: u.surfaces.map((s) => ({ ...s })),
+    reach: { value: u.reach.value, perSurface: u.reach.perSurface.map((s) => ({ app: s.app, host: s.host, via: s.via, connectorId: s.connectorId, reach: s.reach })) },
+    identifiers: { items: u.identifiers.items, containers: [...u.identifiers.containers] },
   };
 }
 

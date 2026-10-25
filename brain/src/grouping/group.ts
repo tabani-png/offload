@@ -2,11 +2,16 @@
 // identifiers) build a task signature; spans with one signature are one Task. A Labeler then names each task from
 // its profile only. The default Labeler is rules; a model-backed one can be swapped in later without changing grouping.
 import { createHash } from "node:crypto";
-import type { Category, Identifiers, Span, Task, TaskInstance, TaskLabel, TaskProfile } from "../types.ts";
+import type { Category, Identifiers, Span, Task, TaskInstance, TaskLabel, TaskProfile, UserContext } from "../types.ts";
 import { clusterTitles, domainOf, extractEmails, maskText, ocrTokens, tokenize, urlPattern } from "./normalize.ts";
 
+/** What a labeler may use besides the profile (s12). Context only: it never changes grouping or numbers. */
+export interface LabelContext {
+  user?: UserContext;
+}
+
 export interface Labeler {
-  label(profile: TaskProfile): TaskLabel | Promise<TaskLabel>;
+  label(profile: TaskProfile, context?: LabelContext): TaskLabel | Promise<TaskLabel>;
 }
 
 export interface GroupOptions {
@@ -17,6 +22,8 @@ export interface GroupOptions {
   clusterThreshold?: number;
   /** Spans of one task with the same title and identifiers, at most this far apart, are one instance. */
   instanceMergeGapMs?: number;
+  /** s12: optional onboarding context, handed to the labeler as its second argument. */
+  user?: UserContext;
 }
 
 export const WRITING_KEYS_PER_MINUTE = 40;
@@ -254,7 +261,7 @@ export async function groupTasks(spans: readonly Span[], opts: GroupOptions = {}
       keysPerMinute: activeMin > 0 ? keys / activeMin : 0,
       schedulingShare: instances.length === 0 ? 0 : instances.filter((i) => looksLikeScheduling(instanceText(i, spansById))).length / instances.length,
     };
-    tasks.push({ id, profile, label: await labeler.label(profile), instances, spanIds: d.spans.map((s) => s.id) });
+    tasks.push({ id, profile, label: await (opts.user === undefined ? labeler.label(profile) : labeler.label(profile, { user: opts.user })), instances, spanIds: d.spans.map((s) => s.id) });
   }
   // Stable order: earliest first appearance.
   return tasks.sort((a, b) => (spansById.get(a.spanIds[0] ?? "")?.start ?? 0) - (spansById.get(b.spanIds[0] ?? "")?.start ?? 0) || (a.id < b.id ? -1 : 1));
