@@ -417,3 +417,20 @@ describe("s20 KEYS review 3: a file marker never overrides an observer home", ()
     expect(brainKeyMode({ OFFLOAD_KEYS: "file" }, home)).toBe("file");
   });
 });
+
+describe("s20 SAVING review 3: the judge never calls an action or unknown step reading only", () => {
+  test("SAVING: paying a bill or an unknown step carries risk and no \"reading only\" reason; a call stays reading", async () => {
+    const { understandingJudge } = await import("../../src/understanding/labeler.ts");
+    const judge = (verb: string, object: string) =>
+      understandingJudge.judge({
+        profile: { app: "x", appName: "X", host: "", urlPattern: "", understanding: { steps: [{ verb, object, activeMs: 1000, surface: "X", category: "other" }], counterparts: [], sources: { frames: 3 } } },
+        sameness: 0.5,
+      } as unknown as Parameters<typeof understandingJudge.judge>[0]);
+    for (const v of ["pay", "paying", "delete", "submit", "frobnicate"]) {
+      const j = judge(v, "bill");
+      expect(`${v} risk>0=${j.risk > 0}`).toBe(`${v} risk>0=true`);
+      expect(j.reasons.join(" ")).not.toContain("reading only");
+    }
+    expect(judge("attend", "meeting").reasons.join(" ")).toContain("reading only");
+  });
+});
