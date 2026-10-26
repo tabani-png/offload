@@ -118,6 +118,9 @@ export function writeAfterDays(home: string): FixtureDay[] {
 // ---------- the fake apps: a dashboard (read only) and one sheet row form ----------
 
 export interface Dash {
+  /** The report and period the dashboard shows (default: what the person looked at). */
+  report?: string;
+  period?: string;
   week: string;
   signups: string;
   active: string;
@@ -130,7 +133,8 @@ const sheetElements = (): StubElement[] => [
 ];
 
 const dashElements = (d: Dash): StubElement[] => [
-  { id: "d-title", role: "AXStaticText", title: "Weekly metrics", editable: false, x: 10, y: 10, w: 200, h: 20 },
+  { id: "d-title", role: "AXStaticText", title: d.report ?? "Weekly metrics", editable: false, x: 10, y: 10, w: 200, h: 20 },
+  { id: "d-period", role: "AXPopUpButton", title: `${d.period ?? "Last 7 days"} · updated hourly`, editable: false, x: 220, y: 10, w: 200, h: 20 },
   { id: "d-week", role: "AXStaticText", title: `Week ${d.week}`, editable: false, x: 10, y: 40, w: 200, h: 20 },
   { id: "d-signups", role: "AXStaticText", title: `Signups ${d.signups}`, editable: false, x: 10, y: 70, w: 200, h: 20 },
   { id: "d-active", role: "AXStaticText", title: `Active users ${d.active}`, editable: false, x: 10, y: 100, w: 200, h: 20 },
