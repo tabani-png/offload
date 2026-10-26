@@ -64,7 +64,7 @@ describe("s14 tools: the best tool for each capability", () => {
       expect(send.chosen).toBe("instantly");
       expect(send.runsWith).toBe("gmail");
       expect(send.catalogCapability).toBe("send-outreach-sequence");
-      expect(send.suggestion).toBe("Use Instantly for sending: Made for bulk cold email: sending accounts, warm-up, follow-ups and reply detection. Offload adds each approved lead; you start the campaign in Instantly. Connect its MCP server.");
+      expect(send.suggestion).toBe("Use Instantly for sending: Made for bulk cold email: sending accounts, warm-up, follow-ups and reply detection. Offload adds each approved lead; you start the campaign in Instantly. Connect Instantly.");
       expect(workflow.tools!.find((t) => t.stepId === "log")!.capability).toBe("crm.log");
       // The template's send step itself is unchanged (the email demo).
       expect(workflow.steps.find((s) => s.id === "send")!.tool).toBe("mcp__gmail__send_email");

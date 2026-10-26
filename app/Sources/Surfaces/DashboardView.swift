@@ -36,6 +36,25 @@ struct DashboardSidebar: View {
         .help("\(s.title) \(s.shortcut)")
         .accessibilityAddTraits(selected ? .isSelected : [])
       }
+      // s10f (M4): Connections is its own window; the sidebar reaches it (⌘K, as in the menu).
+      Rectangle().fill(p.ring).frame(height: Tokens.Layout.hairline)
+        .padding(.vertical, Tokens.Space.s8).padding(.horizontal, Tokens.Space.s8)
+      ForEach(DashboardSidebarLink.allCases) { l in
+        Button { model.onOpenConnections?() } label: {
+          HStack(spacing: Tokens.Space.s8) {
+            Image(systemName: l.symbol).symbolStyle(Tokens.TypeScale.Symbol.large).foregroundStyle(p.ink2)
+              .frame(width: Tokens.Space.s20)
+            Text(l.title).textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink1)
+            Spacer(minLength: Tokens.Space.s4)
+            Text(l.shortcut).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
+          }
+          .padding(.horizontal, Tokens.Space.s8)
+          .frame(height: Tokens.Size.control - Tokens.Space.nudge)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(PressStyle())
+        .help("\(l.title) \(l.shortcut)")
+      }
     }
     .padding(.horizontal, Tokens.Space.s12)
     .padding(.top, Tokens.Space.s8)
@@ -261,7 +280,7 @@ private struct NeedsYouSection: View {
               else { SecondaryButton(title: title + "…") { model.openConnect(c) } }
             } else if let wf = a.workflowId {
               if primary { PrimaryButton(title: "Review", key: "↩") { model.onOpenWorkflow?(wf) } }
-              else { SecondaryButton(title: "Review…") { model.onOpenWorkflow?(wf) } }
+              else { SecondaryButton(title: "Review") { model.onOpenWorkflow?(wf) } }
             }
           }
           .padding(.horizontal, Tokens.Space.s16)
@@ -431,6 +450,8 @@ private struct AutomationRow: View {
     }
     .padding(.horizontal, Tokens.Space.s12)
     .padding(.vertical, Tokens.Space.s12)
+    // s10f (P9): the whole row, so the pointer's label goes below it instead of over its columns.
+    .pointerTarget("rowband.\(a.id)")
     .background {
       // Selection is neutral (s10a): amber stays on the dot and the chip, where it means "needs you".
       if selected {

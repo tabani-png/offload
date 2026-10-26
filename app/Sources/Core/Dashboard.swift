@@ -425,6 +425,17 @@ enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
   }
 }
 
+/// s10f (DESIGN-REVIEW-4 M4): a link under the sidebar's places. Connections is its own window; the sidebar reaches it.
+enum DashboardSidebarLink: String, CaseIterable, Identifiable, Sendable {
+  case connections
+
+  var id: String { rawValue }
+  var title: String { "Connections" }
+  var symbol: String { "link" }
+  /// The same chord as the menu's "Connections…".
+  var shortcut: String { "⌘K" }
+}
+
 /// What the observer row offers, from its state and the permissions (s10d: never "Pause" when it is not recording).
 enum ObserverAction: Equatable, Sendable {
   case pause, resume, openSettings(URL)

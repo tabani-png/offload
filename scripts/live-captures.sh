@@ -132,21 +132,28 @@ n="$(wait_for dashboard 60)" || fail "dashboard (auto-send) never opened"
 sleep 3
 shot dashboard-autosend "$n"
 
-# 3. Glass: the same demo card over our own backdrop, both appearances, white and near-black.
+# 3. Glass: the same demo card over our own backdrop, both appearances, white, near-black and a coloured wallpaper.
+# s10f (DESIGN-REVIEW-4 M7): capture the COMPOSITED screen rect (screencapture -R), not the card window alone: a
+# window capture leaves the behind-window blur out, which is why over-white and over-dark came out byte-identical.
+# The rect lies entirely on our own backdrop window (the app reports it), so no other app's pixels are captured.
 for appearance in dark light; do
-  for bg in white dark; do
+  for bg in white dark color; do
     demo -- --qa-glass "$bg" --qa-appearance "$appearance"
-    for _ in $(seq 1 120); do grep -q 'card=' "$QA" 2>/dev/null && break; sleep 0.25; done
-    c="$(sed -n 's/.* card=\([0-9]*\).*/\1/p' "$QA")"
-    [ -n "$c" ] || fail "no card window"
+    for _ in $(seq 1 120); do grep -q 'rect=' "$QA" 2>/dev/null && break; sleep 0.25; done
+    rect="$(sed -n 's/.*rect=\([0-9.,-]*\) .*/\1/p' "$QA")"
+    [ -n "$rect" ] || fail "no glass capture rect"
     sleep 2.5
     for i in 1 2 3 4 5; do
-      screencapture -x -o -l "$c" "$LIVE/glass-$appearance-over-$bg.png" 2>/dev/null && break
+      screencapture -x -R "$rect" "$LIVE/glass-$appearance-over-$bg.png" 2>/dev/null && break
       [ "$i" = 5 ] && fail "glass capture"
       sleep 1
     done
     echo "captured app/snapshots/live/glass-$appearance-over-$bg.png"
   done
+done
+for appearance in dark light; do
+  a="$(md5 -q "$LIVE/glass-$appearance-over-white.png")"; b="$(md5 -q "$LIVE/glass-$appearance-over-dark.png")"
+  [ "$a" != "$b" ] || fail "glass ($appearance) is identical over white and dark: the material shows no backdrop"
 done
 
 # 4. Onboarding, the permissions step, with the real permission reads (no data shown).
