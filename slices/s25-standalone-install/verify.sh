@@ -15,7 +15,7 @@ trap cleanup EXIT
 STRIPPED_PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
 echo "== ADR"
-ls "$ROOT"/plan/adr/0013-*.md >/dev/null 2>&1 && echo "ADR 0013 present" || fail "no plan/adr/0013-*.md"
+ls "$ROOT"/plan/adr/0014-standalone-brain-bundle.md >/dev/null 2>&1 && echo "ADR 0014 present" || fail "no plan/adr/0014-standalone-brain-bundle.md"
 
 echo "== Swift suite (app/build.sh test)"
 st="$(OFFLOAD_BUILD_DIR="$T/testbuild" "$ROOT/app/build.sh" test 2>&1)"; scode=$?
@@ -118,7 +118,7 @@ grep -q "notarytool submit" "$ROOT/app/build.sh" && grep -q -- "--keychain-profi
   && echo "notarytool + stapler step present" || fail "build.sh has no notarytool submit --keychain-profile / stapler staple step"
 OFFLOAD_SIGN_IDENTITY=- OFFLOAD_NOTARY_PROFILE=s25-verify "$ROOT/app/build.sh" sign "$C" >/dev/null 2>&1 \
   && fail "build.sh notarized (or tried to) an ad hoc build" || echo "ad hoc + notary refused"
-if grep -nE "sk-ant-[A-Za-z0-9]|BEGIN [A-Z ]*PRIVATE KEY|--password[= ]+[^\"$ ]" "$ROOT/app/build.sh" "$ROOT"/plan/adr/0013-*.md 2>/dev/null; then
+if grep -nE "sk-ant-[A-Za-z0-9]|BEGIN [A-Z ]*PRIVATE KEY|--password[= ]+[^\"$ ]" "$ROOT/app/build.sh" "$ROOT"/plan/adr/0014-standalone-brain-bundle.md 2>/dev/null; then
   fail "a secret-looking value is in build.sh or the ADR"
 fi
 

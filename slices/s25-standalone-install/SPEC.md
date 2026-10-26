@@ -5,7 +5,7 @@ depends_on: [s09a (BrainSupervisor), s24-brief-runner (builder runs bun subproce
 parallel_safe: true
 human_gated: false (Developer ID signing and notarization run only when the operator sets the env vars)
 verify: bash slices/s25-standalone-install/verify.sh
-paths_in_scope: [app/build.sh, app/brain.entitlements, app/Sources/Core/BrainSupervisor.swift, app/Sources/Core/BrainCheck.swift, app/Sources/Core/Onboarding.swift (DemoWeek.home), app/Sources/App/OffloadApp.swift, app/README.md, slices/s25-standalone-install/**, plan/adr/0013-*.md, LAUNCH.md]
+paths_in_scope: [app/build.sh, app/brain.entitlements, app/Sources/Core/BrainSupervisor.swift, app/Sources/Core/BrainCheck.swift, app/Sources/Core/Onboarding.swift (DemoWeek.home), app/Sources/App/OffloadApp.swift, app/README.md, slices/s25-standalone-install/**, plan/adr/0014-standalone-brain-bundle.md, LAUNCH.md]
 paths_out_of_scope: [brain/**, engine/**, control/**, web/**, schemas/**, packages/**]
 ---
 
@@ -14,7 +14,7 @@ paths_out_of_scope: [brain/**, engine/**, control/**, web/**, schemas/**, packag
 ## Summary
 LAUNCH.md §6: the app finds the brain through the repo folder (`OFFLOAD_REPO` or up to six folders above the
 bundle) and needs bun installed. A real install has neither. This slice puts the brain inside the bundle and makes
-the app use it first. ADR 0013 records the choice: a pinned bun runtime plus the brain's JS, not `bun build
+the app use it first. ADR 0014 records the choice: a pinned bun runtime plus the brain's JS, not `bun build
 --compile` (the brain reads its own files at run time and the s24 builder runs `bun` subprocesses).
 
 ## Bundle layout

@@ -7,7 +7,7 @@
 #   app/build.sh snapshot DIR    build, then render every component and surface to PNGs in DIR
 #   app/build.sh sign APP        (re)sign an existing Offload.app with the env below (s25)
 #
-# s25 (plan ADR 0013): the app carries its brain. Contents/Helpers/bun is the pinned bun (PINNED_BUN), the brain's
+# s25 (plan ADR 0014): the app carries its brain. Contents/Helpers/bun is the pinned bun (PINNED_BUN), the brain's
 # JS sits in Contents/Resources/offload laid out like the repo (brain/src, brain/node_modules production only,
 # schemas), and the Agent SDK's native claude binary is Contents/Helpers/claude. No repo and no bun are needed on the
 # Mac. OFFLOAD_BUNDLE_BRAIN=0 skips the brain (quick UI builds; the app then falls back to the repo, dev only).
@@ -31,7 +31,7 @@ FW="$CLT/Library/Developer/Frameworks"
 DEVLIB="$CLT/Library/Developer/usr/lib"
 TARGET="$(uname -m)-apple-macos14.0"
 APP="$OUT/Offload.app"
-PINNED_BUN=1.3.12   # the bun the bundled brain runs on (s25, ADR 0013). Bump on purpose, after the brain suite passes on it.
+PINNED_BUN=1.3.12   # the bun the bundled brain runs on (s25, ADR 0014). Bump on purpose, after the brain suite passes on it.
 mkdir -p "$OUT"
 
 swift_files() { find "$@" -name '*.swift' -type f 2>/dev/null | sort; }
@@ -57,7 +57,7 @@ build_app() {
 clone() { cp -c "$1" "$2" 2>/dev/null || cp "$1" "$2"; }
 clone_dir() { cp -cR "$1" "$2" 2>/dev/null || cp -R "$1" "$2"; }
 
-# s25: the brain inside the bundle. See the header and plan ADR 0013.
+# s25: the brain inside the bundle. See the header and plan ADR 0014.
 bundle_brain() {
   local H="$APP/Contents/Helpers" R="$APP/Contents/Resources/offload"
   rm -rf "$H" "$R"

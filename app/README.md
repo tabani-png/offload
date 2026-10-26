@@ -10,7 +10,7 @@ scripts/verify-all.sh           # every slices/*/verify.sh, as a table
 app/build.sh                    # build app/.build/Offload.app (bundles engine/.build/offload-observer when built)
 app/build.sh test [--filter S08]  # Swift Testing suites from slices/s06, s07 and s08 tests
 app/build.sh snapshot DIR       # build, then render every component and surface to PNGs (light + dark)
-app/build.sh sign PATH.app      # (re)sign with OFFLOAD_SIGN_IDENTITY / OFFLOAD_NOTARY_PROFILE (s25, ADR 0013)
+app/build.sh sign PATH.app      # (re)sign with OFFLOAD_SIGN_IDENTITY / OFFLOAD_NOTARY_PROFILE (s25, ADR 0014)
 open app/.build/Offload.app     # run it
 ```
 
@@ -36,7 +36,7 @@ Pointer,MockWorkflows}.swift`, `Design/{WindowKit,PointerOverlay}.swift` and `Su
 DIR --port 0`, a fresh per-launch `OFFLOAD_TOKEN` in its env, the port from its first stdout line), restarts it with
 backoff (1 → 30 s) and stops it on quit; a shell guard stops it if the app dies. `--mock` runs on the sample week;
 `--brain-url URL` (token in `OFFLOAD_TOKEN`) attaches to a running brain; `--home DIR` or `OFFLOAD_HOME` picks the
-store; `OFFLOAD_DRYRUN_LIMIT` caps dry-run instances (each one is a model call). s25 (plan ADR 0013): the build
+store; `OFFLOAD_DRYRUN_LIMIT` caps dry-run instances (each one is a model call). s25 (plan ADR 0014): the build
 bundles the brain (a pinned bun in `Contents/Helpers`, the brain JS in `Contents/Resources/offload`) and the app runs
 that copy first, so an installed app needs no repo and no bun; the repo with an installed bun is a dev-only fallback
 (`OFFLOAD_BRAIN_SOURCE=repo` forces it, `OFFLOAD_BUNDLE_BRAIN=0` builds without the brain). `Offload --brain-check

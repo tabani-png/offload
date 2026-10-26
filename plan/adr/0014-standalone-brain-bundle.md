@@ -1,4 +1,4 @@
-# 0013 Standalone install: the brain ships inside Offload.app (pinned bun + brain JS)
+# 0014 Standalone install: the brain ships inside Offload.app (pinned bun + brain JS)
 
 Date: 2026-10-26. Status: accepted (slices/s25-standalone-install). Closes LAUNCH.md §6 "Install without the repo";
 adds the signing and notarization step that §6 "Code signing" and "Notarization" need once a Developer ID exists.
