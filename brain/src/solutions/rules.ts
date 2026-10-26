@@ -1,21 +1,36 @@
 // s22 rules: the five solution kinds for one task, with every number computed here (ADR 0005). A model may later
 // reword `what`, `why` and the brief text (design.ts); it never sees or changes a figure, the order or the evidence.
 //   observed  = activeMinutes / 60 x 7 / window days                       (h/wk the person actually spent)
-//   saving    = min(observed, observed x share x factor)                   (tool, setup, remove_step)
+//   saving    = min(observed, observed x share x factor)                   (tool, setup)
+//   remove    = min(observed, observed x share x removed), removed = the s04 review model's low case on the
+//               measured minutes per item of the removed parts (insights/saving.ts: each item still approved)
 //   workflow  = min(observed, s04 saving estimate) x share                 (the review model of insights/saving.ts)
 //   confidence = fit x (0.6 + 0.4 x evidence), evidence = min(1, sqrt(instances / 8))
 //   rank       = saving x confidence, ties -> fewer setup hours -> kind order; leave_alone first when nothing clears
 //                LEAVE_ALONE_FLOOR or the task is one-off reading.
+import { estimateSaving } from "../insights/saving.ts";
 import type { Task } from "../types.ts";
 import { partsOf } from "./signals.ts";
 import { SOLUTION_KINDS, type BriefSpec, type ConfidenceLevel, type Effort, type PartTag, type SolutionKind, type SolutionOption, type SolutionSet, type SolutionSubject, type TaskPart } from "./types.ts";
 
-/** Share of the addressed time each kind removes, per part tag (the largest applicable tag of a part counts). */
-export const SOLUTION_FACTORS: Readonly<Record<Exclude<SolutionKind, "workflow" | "leave_alone">, Partial<Record<PartTag, number>>>> = {
-  tool: { code_manual: 0.6, copy_between: 0.7, data_entry: 0.5, agent_watch: 0.35, agent_prompt: 0.3, reading: 0.4 },
-  setup: { approval_prompt: 0.8, agent_watch: 0.5, agent_prompt: 0.4, code_manual: 0.3, messaging: 0.2, data_entry: 0.15 },
-  remove_step: { media_make: 0.85 },
+/** The most of a part's measured time a flat assumption may claim. These shares are not measured (screen time does not
+ * show how many approvals are routine or how many commands a script would cover), so none claims the larger half of
+ * the time it addresses; the arithmetic prints the share, and measured runs replace it after the first week. */
+export const MAX_FLAT_FACTOR = 0.5;
+/** Share of the addressed time each kind removes, per part tag (the largest applicable tag of a part counts).
+ *  Assumptions, each at most MAX_FLAT_FACTOR: what a fix leaves behind is the person's review of its output.
+ *  tool: a script runs the commands / moves the data / fills the records, you check the result (0.5); a supervisor
+ *    still needs you to read its summary (0.35); a prompt kit still needs the task-specific part typed (0.3); a digest
+ *    still gets read (0.4).
+ *  setup: an allowlist removes the routine approvals, the risky ones still ask (0.5); rules and a notification hook
+ *    cut the watching, not the review (0.5); standing rules cut the repeated part of prompts (0.4); aliases, snippets
+ *    and templates cut keystrokes, not the thinking (0.3, 0.2, 0.15). */
+export const SOLUTION_FACTORS: Readonly<Record<"tool" | "setup", Partial<Record<PartTag, number>>>> = {
+  tool: { code_manual: 0.5, copy_between: 0.5, data_entry: 0.5, agent_watch: 0.35, agent_prompt: 0.3, reading: 0.4 },
+  setup: { approval_prompt: 0.5, agent_watch: 0.5, agent_prompt: 0.4, code_manual: 0.3, messaging: 0.2, data_entry: 0.15 },
 };
+/** Parts a pipeline can remove. Its share comes from the s04 review model on the measured time, not from a constant. */
+const REMOVE_STEP_TAGS: Partial<Record<PartTag, number>> = { media_make: 1 };
 /** How well each kind fits a part with this tag (0..1). */
 const FIT: Readonly<Record<Exclude<SolutionKind, "workflow" | "leave_alone">, Partial<Record<PartTag, number>>>> = {
   tool: { code_manual: 0.75, copy_between: 0.75, data_entry: 0.55, agent_watch: 0.6, agent_prompt: 0.5, reading: 0.45 },
@@ -232,12 +247,25 @@ function briefOption(kind: "tool" | "setup" | "remove_step", i: RulesInput, part
   const s = i.subject;
   const sameness = s.stats.sameness.value;
   const allow = kind === "tool" ? (t: PartTag) => t !== "reading" || sameness >= DIGEST_MIN_SAMENESS : () => true;
-  const a = addressed(parts, SOLUTION_FACTORS[kind], FIT[kind], allow);
+  const a = addressed(parts, kind === "remove_step" ? REMOVE_STEP_TAGS : SOLUTION_FACTORS[kind], FIT[kind], allow);
   if (a.dominant === null) {
     const label = kind === "tool" ? "Not a tool job: no part of it is mechanical enough to script" : kind === "setup" ? "No setup change stands out for this task" : "No step here can be removed by a pipeline";
     return notFit(kind, label, "none of its parts match what this kind of fix removes");
   }
-  const saved = capped(observed, observed * a.share * a.factor);
+  // remove_step: the pipeline makes each item and the person still approves it. The removed share is the s04 review
+  // model's low case on the measured minutes per item of the removed parts: long making steps lose most of their
+  // time, quick ones much less (an approval costs nearly as much as the step).
+  let factor = a.factor;
+  let factorNote = `${pct(a.factor)} removed`;
+  if (kind === "remove_step") {
+    const items = s.stats.instances.value;
+    const perItem = items > 0 ? a.parts.reduce((n, p) => n + p.activeMs, 0) / 60_000 / items : 0;
+    if (perItem <= 0) return notFit(kind, "No step here can be removed by a pipeline", "no measured time per item for the making step");
+    const est = estimateSaving({ instances: items, daysActive: Math.max(1, s.stats.daysActive.value), windowDays: Math.max(1, i.windowDays), medianMinutes: perItem, eventIds: [] });
+    factor = est.range.low.pct;
+    factorNote = `${pct(factor)} removed (s04 review model on ${est.medianMinutes.toFixed(1)} min per item; ${est.assumptions[1]!.replace(/\.$/, "")})`;
+  }
+  const saved = capped(observed, observed * a.share * factor);
   let text: { what: string; why: string; spec: Omit<BriefSpec, "builderPrompt"> };
   if (kind === "remove_step") {
     const publishing = parts.some((p) => p.tags.includes("publish"));
@@ -263,7 +291,7 @@ function briefOption(kind: "tool" | "setup" | "remove_step", i: RulesInput, part
     why: text.why,
     weeklyHoursSaved: saved,
     share: round2(a.share),
-    arithmetic: `observed ${h1(observed)} × ${pct(a.share)} of the time (${partList(a.parts)}) × ${pct(a.factor)} removed = ${h1(saved)}`,
+    arithmetic: `observed ${h1(observed)} × ${pct(a.share)} of the time (${partList(a.parts)}) × ${factorNote} = ${h1(saved)}`,
     effort: effortOf(kind, saved),
     confidence: confidence(fitAdj, s, [`addresses ${pct(a.share)} of the time`]),
     evidence: evidenceOf(a.parts, i.task),

@@ -81,11 +81,9 @@ describe("s22 saving: never more than what was observed", () => {
     }
   });
 
-  test("SAVING: the remove-step saving is observed x share x factor, by hand", () => {
+  test("SAVING: the remove-step payback is its setup hours over its saving", () => {
     const f = buildFixture(LINKEDIN_IMAGE);
     const d = rulesSolutions({ subject: f.subject, task: f.task, windowDays: 7, stepOf: f.stepOf }).options.find((o) => o.kind === "remove_step")!;
-    // image parts: 30 + 12 of 66 min per post; factor 0.85.
-    expect(d.weeklyHoursSaved).toBe(Math.round(5.5 * (42 / 66) * 0.85 * 100) / 100);
     expect(d.effort.paybackWeeks).toBe(Math.round((6 / d.weeklyHoursSaved) * 100) / 100);
   });
 

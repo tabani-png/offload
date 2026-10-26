@@ -413,7 +413,8 @@ agent), the brain ranks five kinds of fix (`brain/src/solutions/`):
 script), `setup` (change the setup: IDE, coding-agent rules and permissions, shortcuts, templates), `remove_step`
 (replace a manual sub-process with a pipeline, e.g. post images generated from the post text), `leave_alone`.
 Numbers are code (ADR 0005): observed h/wk = `activeMinutes` / 60 × 7 / window days; each option saves
-min(observed, observed × share × factor) (workflow: min(observed, the s04 estimate) × share), never more than
+min(observed, observed × share × factor) (factor ≤ 0.5; remove_step: the s04 review model's low case on the measured
+minutes per item; workflow: min(observed, the s04 estimate) × share), never more than
 observed; confidence = fit × (0.6 + 0.4 × min(1, √(instances/8))); rank = saving × confidence (ties: fewer setup
 hours), `leave_alone` first when nothing clears 0.5 h/wk × confidence or the task is one-off reading. Opus 5.5 (role
 `solution_design`, router route `design`) may reword only `what`, `why` and the brief text; a reply that changes a
@@ -433,8 +434,11 @@ kind, the order, a figure or holds a digit is ignored (`designedBy: "rules"`).
   new), a draft in `$OFFLOAD_HOME/solutions/<sol_id>/{brief.json, BRIEF.md}` (0600). `leave_alone` or an option that
   is not a fit -> 409.
 - `GET /solutions/:id` -> the brief (`status` draft | approved | handed_off, `hash` = sha256 of its canonical content).
-  `POST /solutions/:id/approve {briefHash}` -> `{brief, token}`: only the exact current hash of a draft (409
-  otherwise, also when the file changed on disk); the token is single use and only its sha256 is stored.
+  `POST /solutions/:id/approve {briefHash}` -> `{brief, token}`: only the exact current hash of a draft, or of an
+  approved brief not yet handed off (a new token replaces a lost one; the old one stops working); 409 otherwise, also
+  when the file changed on disk. The token is single use and only its sha256 is stored. Choosing the solution again
+  redrafts a brief that was edited on disk or lost its approval, and a handed-off brief whose content changed (its
+  files move to `history/`).
   `POST /solutions/:id/handoff {token}` -> `{brief, builderPrompt, briefMd}` once (403 wrong token, 409 reused or not
   approved). Nothing is executed: a brief is text for a builder (e.g. a Claude Code session).
 - CLI: `solutions (--insight N|ins_ID | --held N) --home DIR [--choose KIND] [--json] [--model stub|real]` (stub design
