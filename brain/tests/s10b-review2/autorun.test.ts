@@ -13,6 +13,10 @@ import { readWorkflow, updateWorkflow } from "../../src/workflows/store.ts";
 import { writeRecipients } from "../s05-workflows/setup.ts";
 import { SEND, TOKEN, type S09bWorld } from "../s09b-brain/setup.ts";
 import { activeWorld, BASE_ROWS, live, MON_0800, MON_0900, tick, TUE_0900 } from "./setup.ts";
+import { pinClock } from "../helpers.ts";
+
+// s30: these tests read batches sealed on the fixture day; pin the clock so they do not expire with the real date.
+pinClock();
 
 let w: S09bWorld | null = null;
 afterEach(() => {

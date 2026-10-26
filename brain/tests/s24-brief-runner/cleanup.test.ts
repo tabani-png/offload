@@ -5,14 +5,15 @@
 // Also: a large JUnit report must not block bun (the harness reads it while bun runs, capped).
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approveBuild } from "../../src/builder/approval.ts";
 import { checksDir, checkSha, writeChecks } from "../../src/builder/checks.ts";
 import { readRunRecord } from "../../src/builder/record.ts";
 import { runBuild, type CheckRunner } from "../../src/builder/runner.ts";
 import { DEFAULT_MODELS } from "../../src/models/model.ts";
-import { briefHome, cleanSpawnEnv, fakeQuery, fakeRouted, NOW, prepared, tmp, writeSlug, type FakeTry, releaseTemps } from "./setup.ts";
+import { oflPrefix } from "../../src/builder/supervisor.ts";
+import { briefHome, cleanSpawnEnv, fakeQuery, fakeRouted, NOW, oflDirs, prepared, runSocketDir, tmp, writeSlug, type FakeTry, releaseTemps } from "./setup.ts";
 
 // Remove every temp folder this file created (and fail if one is left).
 afterAll(releaseTemps);
@@ -20,19 +21,24 @@ afterAll(releaseTemps);
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 const KEY = "sk-ant-api03-S24CLEANUPKEYs24cleanup0123456789abcdef";
 const ENV = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: "en_US.UTF-8", ANTHROPIC_API_KEY: KEY };
-const oflDirs = () => new Set(readdirSync("/tmp").filter((n) => n.startsWith("ofl-")));
 const supervisors = (ws: string) =>
   spawnSync("/bin/ps", ["-axww", "-o", "pid=,command="], { encoding: "utf8" })
     .stdout.split("\n")
     .filter((l) => l.includes("harness.py") && l.includes(" serve ") && l.includes(ws));
 
-/** Asserts nothing of the run remains: no cred/, no supervisor, no new /tmp/ofl-* folder, and a record exists. */
-async function assertReleased(home: string, runId: string | null, ws: string, before: Set<string>) {
+/** Asserts nothing of the run remains: no cred/, no supervisor, no new /tmp/ofl-* folder of the process that ran it
+ * (`pid`: this test process, or the spawned CLI), the socket folder the run's sandbox profile names is gone, and a
+ * record exists. s30: only that process's folders are checked; another test run alive at the same time has its own. */
+async function assertReleased(home: string, runId: string | null, ws: string, before: Set<string>, pid: number = process.pid) {
   await Bun.sleep(300);
   const runDir = join(ws, "..");
   expect(existsSync(join(runDir, "cred"))).toBe(false);
   expect(supervisors(ws)).toEqual([]);
-  expect([...oflDirs()].filter((d) => !before.has(d))).toEqual([]);
+  expect([...oflDirs(pid)].filter((d) => !before.has(d))).toEqual([]);
+  // Not vacuous: the run made its socket folder under this process's prefix, and that exact folder is gone.
+  const own = runSocketDir(runDir);
+  expect(own?.startsWith(oflPrefix(pid))).toBe(true);
+  expect(existsSync(join("/tmp", own!))).toBe(false);
   if (runId !== null) expect(readRunRecord(home, runId)).not.toBeNull();
 }
 
@@ -101,7 +107,6 @@ describe("s24 every exit path releases everything", () => {
   }, 30_000);
 
   test("RECORD: SIGTERM to the runner (CLI) releases the supervisor, socket folder and cred/", async () => {
-    const before = oflDirs();
     const p = await prepared();
     const { token } = approveBuild(p.home, p.briefId, p.briefHash, p.checkHash, NOW);
     const dir = tmp("offload-s24-fake-");
@@ -116,9 +121,11 @@ describe("s24 every exit path releases everything", () => {
     const ws = require("node:fs").readFileSync(join(dir, "ws.txt"), "utf8") as string;
     expect(existsSync(join(ws, "..", "cred"))).toBe(true);
     expect(supervisors(ws).length).toBe(1);
+    // The CLI's own socket folder exists while it runs (a fresh pid: nothing of it existed before).
+    expect(oflDirs(child.pid!).size).toBe(1);
     child.kill("SIGTERM");
     await new Promise((r) => child.on("exit", r));
-    await assertReleased(p.home, null, ws, before);
+    await assertReleased(p.home, null, ws, new Set(), child.pid!);
   }, 40_000);
 });
 

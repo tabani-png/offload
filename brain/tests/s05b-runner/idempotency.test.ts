@@ -15,6 +15,10 @@ import { ScriptedExecutor, sendEachItem, type ExecJob, type ExecResult, type Exe
 import { acquireLock, approveBatch, executeBatch, prepareLiveBatch, releaseUnknown, requestCancel, RunError } from "../../src/workflows/runner.ts";
 import { deleteWorkflow, readApprovals, readBatch, saveBatch, updateWorkflow, workflowDir } from "../../src/workflows/store.ts";
 import { NOW, world, writeRecipients, type World } from "../s05-workflows/setup.ts";
+import { pinClock } from "../helpers.ts";
+
+// s30: these tests read batches sealed on the fixture day; pin the clock so they do not expire with the real date.
+pinClock();
 
 const SEND = "mcp__gmail__send_email";
 const SIG = { signal: new AbortController().signal };
