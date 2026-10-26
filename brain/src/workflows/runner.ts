@@ -25,6 +25,7 @@ import { DEFAULT_SERVERS, type ToolPolicy } from "./allowlist.ts";
 import { makeBatch, type Batch, type BatchItem, type ItemState } from "./batch.ts";
 import { crmLines, contactedFrom, type CrmEntry } from "./scripts/crm-log.ts";
 import { pickNext, readRecipients } from "./scripts/recipients.ts";
+import { isPlanWorkflow, planLiveItems, PlanLiveError } from "./plan-live.ts";
 import type { Executor, ToolCallRecord } from "./executor.ts";
 import { parseFacts, renderSubject } from "./facts.ts";
 import { createGate, type GateAction, type ServerMap } from "./gate.ts";
@@ -213,6 +214,19 @@ export async function prepareLiveBatch(o: PrepareOptions): Promise<Batch> {
     recoverStale(o.home, wf.id, now);
     const pending = pendingLiveBatch(o.home, wf.id, now);
     if (pending !== null) return pending;
+    // s26: a general plan workflow takes its items from the person's own list; no drafting, no model call.
+    if (isPlanWorkflow(wf)) {
+      let items: BatchItem[];
+      try {
+        items = planLiveItems({ home: o.home, wf, done: contactedKeys(o.home, wf.id, wf.inputs.crmLog, now), ledger: ledgerContacted(o.home, wf.id) });
+      } catch (err) {
+        if (err instanceof PlanLiveError) throw new RunError(err.message, err.code);
+        throw err;
+      }
+      const batch = makeBatch(wf.id, "live", items, now);
+      saveBatch(o.home, batch);
+      return batch;
+    }
     if (wf.template !== "investor_outreach") throw new RunError(`live batches for ${wf.template} workflows are not built yet`, "bad_request");
     // A reservation left by a crashed prepare sent nothing (prepare has no side effects): drop it.
     if (existsSync(preparingPath(o.home, wf.id))) rmSync(preparingPath(o.home, wf.id), { force: true });

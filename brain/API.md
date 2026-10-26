@@ -480,6 +480,20 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   evidence ids, the time estimate and the `commit` the chain would make: `{tool, verb, fields: [label, value][],
   missing}` in the labelled form of the chosen tool's s16 schema (brain/CONNECTORS.md "Commit schemas (s16)"). Values are copied by code; text steps are
   drafted from masked text. `tools` lists the chosen tool per step. `instances` stays `[]` for plan workflows.
+  s26: an instance of a `rows` / `form_fields` plan where no field could be filled and there is no text saves 0 min
+  and carries the warning "nothing to fill from what was on screen: this one stays with you"; the totals then count
+  only the instances the workflow can do (`you spent X min on these N → K of N can be done from what was on screen
+  (Y min) → review K × S s = R min → saves Z min`). When every instance can be done the totals are as before.
+- s26: `POST /workflows/:id/run` on an active plan workflow (output `rows`, `form_fields`, `record` or `stage_change`,
+  commit done on screen) makes the next live batch from the workflow's own list `items.csv` (header = field labels,
+  one row per item; the person fills or exports it): the next `batchSize` rows not done yet (done log, earlier live
+  batches that are not provably unsent, the contacted ledger), no model call. Each item is `{key: "row-<sha>", to: key,
+  subject: "<Verb> <label value, ...>", body: "label: value" lines, commit: {verb, fields: [label, value][]}}`; the
+  commit is part of the batch hash, so the computer-use commit is bound to exactly these values. The verb is the
+  plan's commit verb when a control can carry it (send, save, submit, create, ...), else `save`. 409 with plain words
+  for a missing or empty list, a column named twice, a line with the wrong number of values, or "every row is done";
+  400 for text outputs and for commits through a tool's own fields (not built yet). Approve, release and pause work as
+  for any live batch; `done-log.csv` (with its header) records each item's result.
 - `GET /status` gains `understanding {version, embedder, framesRead}` and `models` (router summary: backend, metered,
   month, spentUsd, budgetUsd, captionsLocal, blocked, needsYou, routes). `GET /models/usage`: the month's ledger per
   route and model, prices, the last 100 routing decisions (route, tiers tried, escalation reasons, tokens, cost).

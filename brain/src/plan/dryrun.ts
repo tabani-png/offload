@@ -42,6 +42,14 @@ export interface GeneralDryRun {
   warnings: string[];
 }
 
+/** s26: the warning on a dry-run instance the workflow could not fill at all. */
+export const NOTHING_TO_FILL = "nothing to fill from what was on screen: this one stays with you";
+
+/** s26: a field output with no value filled and no text: the workflow would do none of this instance's work. */
+export function producesNothing(outputType: string, ours: { fields: ReadonlyArray<{ value: string | null }>; text: string | null }): boolean {
+  return (outputType === "rows" || outputType === "form_fields") && (ours.text ?? "") === "" && ours.fields.every((f) => f.value === null || f.value === "");
+}
+
 /** The gate sees a commit as mcp__<target>__commit until the s13 chain names the real tool. */
 export const commitToolName = (target: string) => `mcp__${slugify(target).replace(/-/g, "_")}__commit`;
 
@@ -113,7 +121,10 @@ export async function generalDryRun(o: GeneralDryRunOptions): Promise<GeneralDry
     built.commit = spec;
     if (spec.missing.length > 0) built.warnings.push(`Set up once before ${toolName ?? "the tool"} can save this: ${missingWords(spec.missing)}.`);
     const observedMinutes = round1(inst.minutes);
-    const savedMinutes = Math.max(0, round1(observedMinutes - o.wf.reviewSecondsPerItem / 60));
+    // s26: an instance the workflow cannot fill at all stays with the person: it saves nothing (honest dry run).
+    const nothing = producesNothing(sh.outputType, built.ours);
+    if (nothing) built.warnings.push(NOTHING_TO_FILL);
+    const savedMinutes = nothing ? 0 : Math.max(0, round1(observedMinutes - o.wf.reviewSecondsPerItem / 60));
     const dto: GeneralDryRunInstanceDTO = {
       instanceId: inst.instance.id,
       day: inst.instance.day,
