@@ -66,3 +66,15 @@ pass the floor in the tree of the cell it is shown in.
 - `final`: below the company, and for a suppressed company, it follows only the inputs behind the cell shown
   (`metric_snapshots.scope_digest`), never tenant-wide pending data. A visible company keeps §4.
 - Baseline samples are workflow reference data (ADR 0109 §7) and stay outside this rule.
+- Workflow-keyed figures (round 6): a department's or job role's top workflows and workflow anomalies depend only on
+  its own subtree: floor people behind the figure in scope, and its listed children leave 0 or at least floor people
+  unaccounted for. The company applies the same over its departments, so it drops a workflow rather than let company
+  minus departments isolate a few people. Anomalies are filtered before the 100-entry cap.
+- Evidence lists raw baseline samples only when at least floor people sent samples for that version; the baseline the
+  formula uses (n, median, quartiles, grade) is always shown, since it is in every run's figures.
+- Adoption's residual median from fewer than floor people is 0 (the schema has no per-field marker); the other fields
+  stay when their own contributor sets pass.
+- Inherent limit: "one more person in a suppressed group changes nothing a reader can see" cannot hold when that person
+  makes hidden groups cross the floor together (two hidden cells summing to floor no longer need a complementary cell,
+  so a visible neighbour reappears). Any floor with complementary suppression has this; it reveals only that a hidden
+  sum crossed the floor, never a value.
