@@ -13,13 +13,16 @@ final class DashboardModel: ObservableObject {
   /// s10d: the sidebar's place, the files kept until you delete them, and the auto-send sheet.
   @Published var section: DashboardSection = DashboardSection.home
   /// s23: where the time goes (GET /time), for the week or one stored day (`timeDay`), and why it could not load.
-  @Published private(set) var time: TimeBreakdown?
-  @Published private(set) var timeDay: String?
-  @Published private(set) var timeProblem: String?
+  /// PR #29 review: one value so a reload keeps the day, a failure clears the numbers and stale answers are dropped.
+  @Published private(set) var timeLoads = TimeLoads()
+  var time: TimeBreakdown? { timeLoads.time }
+  var timeDay: String? { timeLoads.day }
+  var timeProblem: String? { timeLoads.problem }
+  var timeWeekDays: [String] { timeLoads.weekDays }
+  /// A Draft workflow that could not start, in plain words (the numbers on screen stay).
+  @Published private(set) var timeNotice: String?
   /// s23: the breakdown's dimension (task, app, kind of work).
   @Published var timeDimension: TimeDimension = .task
-  /// The stored days of the week, for the day picker (kept while a day is shown).
-  @Published private(set) var timeWeekDays: [String] = []
   @Published private(set) var keptFiles: [KeptFile] = []
   @Published private(set) var autoSend: AutoSendSheet?
   @Published private(set) var autoSendWorking = false
@@ -90,19 +93,18 @@ final class DashboardModel: ObservableObject {
       problem = BrainError.message(for: error)
     }
     keptFiles = (try? await client.keptFiles()) ?? keptFiles
-    await loadTime()
+    // A reload (after approve or connect) keeps the day on screen.
+    await loadTime(day: timeLoads.reloadDay)
   }
 
   /// s23: GET /time for the week (`day` nil) or one stored day. Reading time drafts nothing.
   func loadTime(day: String? = nil) async {
+    let token = timeLoads.start(day: day)
     do {
       let b = try await client.timeBreakdown(day: day)
-      time = b
-      timeDay = day
-      if b.window.kind == .week { timeWeekDays = b.window.days }
-      timeProblem = nil
+      timeLoads.finish(token, breakdown: b, problem: nil)
     } catch {
-      timeProblem = BrainError.message(for: error)
+      timeLoads.finish(token, breakdown: nil, problem: BrainError.message(for: error))
     }
   }
 
@@ -114,9 +116,10 @@ final class DashboardModel: ObservableObject {
     Task {
       do {
         let w = try await client.workflow(forInsight: insightId)
+        timeNotice = nil
         onOpenWorkflow?(w.id)
       } catch {
-        timeProblem = BrainError.message(for: error)
+        timeNotice = BrainError.message(for: error)
       }
     }
   }
@@ -293,11 +296,8 @@ final class DashboardModel: ObservableObject {
 
   /// s23 snapshots: the time screen on a fixed breakdown.
   func previewTime(_ b: TimeBreakdown, weekDays: [String] = NeutralWeek.days, dimension: TimeDimension = .task) {
-    time = b
-    timeDay = b.window.kind == .day ? b.window.days.first : nil
-    timeWeekDays = weekDays
+    timeLoads.preview(b, weekDays: weekDays)
     timeDimension = dimension
-    timeProblem = nil
     section = .time
   }
 

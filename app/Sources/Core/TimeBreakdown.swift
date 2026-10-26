@@ -309,3 +309,59 @@ extension HTTPBrainClient {
     try await call(TimeBreakdown.self, "GET", "time", query: day.map { [URLQueryItem(name: "day", value: $0)] } ?? [])
   }
 }
+
+// MARK: loads (PR #29 review)
+
+/// The time page's loads: the selected day survives a reload, a failed load never leaves old numbers on screen, and
+/// only the newest request's answer is shown (rapid Week / day clicks can answer out of order).
+struct TimeLoads: Equatable {
+  private(set) var time: TimeBreakdown?
+  /// The day on screen (nil = the week).
+  private(set) var day: String?
+  private(set) var problem: String?
+  /// The stored days of the week, for the day picker (kept while a day is shown).
+  private(set) var weekDays: [String] = []
+  private(set) var latest = 0
+  private var requested: [Int: String?] = [:]
+
+  /// What a reload asks for: the day on screen.
+  var reloadDay: String? { day }
+
+  /// A new request; its token is the newest.
+  mutating func start(day: String?) -> Int {
+    latest += 1
+    requested[latest] = .some(day)
+    return latest
+  }
+
+  /// The answer to request `token`: a breakdown, or the problem in plain words. False (and no change) when a newer
+  /// request was made since.
+  @discardableResult
+  mutating func finish(_ token: Int, breakdown: TimeBreakdown?, problem: String?) -> Bool {
+    let asked = requested.removeValue(forKey: token) ?? nil
+    guard token == latest else { return false }
+    if let b = breakdown {
+      time = b
+      day = b.window.kind == .day ? (b.window.days.first ?? asked) : nil
+      if b.window.kind == .week { weekDays = b.window.days }
+      self.problem = nil
+    } else {
+      time = nil
+      self.problem = problem ?? "Your time could not be read."
+    }
+    return true
+  }
+
+  /// Snapshots: a fixed answer on screen.
+  mutating func preview(_ b: TimeBreakdown, weekDays: [String]) {
+    latest += 1
+    time = b
+    day = b.window.kind == .day ? b.window.days.first : nil
+    self.weekDays = weekDays
+    problem = nil
+  }
+
+  static func == (a: TimeLoads, b: TimeLoads) -> Bool {
+    a.time == b.time && a.day == b.day && a.problem == b.problem && a.weekDays == b.weekDays && a.latest == b.latest
+  }
+}

@@ -220,6 +220,10 @@ struct TimeView: View {
       VStack(alignment: .leading, spacing: Tokens.Space.s8) {
         Text(TimeScreen.workflowsNote).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
           .fixedSize(horizontal: false, vertical: true)
+        if let notice = model.timeNotice {
+          Text(notice).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.statusInk(.needsYou))
+            .fixedSize(horizontal: false, vertical: true)
+        }
         RingBox {
           ForEach(Array(s.workflows.enumerated()), id: \.element.id) { i, w in
             if i > 0 { RowDivider() }
