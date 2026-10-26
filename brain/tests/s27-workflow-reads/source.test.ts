@@ -44,6 +44,9 @@ function onlyFirst(days: FixtureDay[], keep: number): FixtureDay[] {
   });
 }
 
+/** Test view of the explicit outcome (round 6): fields of whichever kind it is. */
+const rv = (...a: Parameters<typeof readValues>): any => readValues(...a);
+
 describe("s27 read source", () => {
   test("SOURCE: the plain neutral week has no source: no site before the sheet shows the typed numbers", async () => {
     expect(await sourceOf(neutralDays().slice(0, 3))).toBeNull();
@@ -83,9 +86,9 @@ describe("s27 read source", () => {
       { label: "Week", sourceLabel: "Week", support: 9 },
       { label: "Active", sourceLabel: "Active users", support: 9 },
     ];
-    expect(readValues('{"week": 43, "active_users": "2410", "other": 1}', fields)).toEqual({ rows: [[["Week", "43"], ["Active", "2410"]]], missing: [] });
-    expect(readValues('[{"week": 43, "active_users": 2410}, {"week": 44, "active_users": 2455}]', fields).rows).toHaveLength(2);
-    expect(readValues('AXStaticText "Week 43"\nAXStaticText "Active users 2410"', fields)).toEqual({ rows: [[["Week", "43"], ["Active", "2410"]]], missing: [] });
-    expect(readValues("Week 43", fields)).toEqual({ rows: [], missing: ["Active"] });
+    expect(rv('{"week": 43, "active_users": "2410", "other": 1}', fields)).toEqual({ kind: "ok", rows: [[["Week", "43"], ["Active", "2410"]]], skipped: [] });
+    expect(rv('[{"week": 43, "active_users": 2410}, {"week": 44, "active_users": 2455}]', fields).rows).toHaveLength(2);
+    expect(rv('AXStaticText "Week 43"\nAXStaticText "Active users 2410"', fields)).toEqual({ kind: "ok", rows: [[["Week", "43"], ["Active", "2410"]]], skipped: [] });
+    expect(rv("Week 43", fields)).toEqual({ kind: "unreadable", reason: "did not show Active", missing: ["Active"] });
   });
 });

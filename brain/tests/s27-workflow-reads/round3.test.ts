@@ -18,32 +18,36 @@ const F = [
 ];
 const ONE: Array<Array<[string, string]>> = [[["Signups", "352"], ["Active", "2410"]]];
 
+/** Test view of the explicit outcome (round 6): fields of whichever kind it is. */
+const rv = (...a: Parameters<typeof readValues>): any => readValues(...a);
+
 describe("s27 round 3: reading real answers", () => {
   test("FETCH: nested envelopes are walked to the rows: data.results, items, data.rows, a single object", () => {
-    expect(readValues(JSON.stringify({ data: { results: [{ signups: 352, active_users: 2410 }] } }), F).rows).toEqual(ONE);
-    expect(readValues(JSON.stringify({ items: [{ signups: 352, active_users: 2410 }], total: 1 }), F).rows).toEqual(ONE);
-    expect(readValues(JSON.stringify({ data: { rows: [{ signups: "352", active_users: "2410" }] } }), F).rows).toEqual(ONE);
-    expect(readValues(JSON.stringify({ result: { signups: 352, active_users: 2410 } }), F).rows).toEqual(ONE);
-    expect(readValues(JSON.stringify({ a: { b: { c: { d: [{ signups: 352, active_users: 2410 }] } } } }), F).rows).toEqual(ONE);
+    expect(rv(JSON.stringify({ data: { results: [{ signups: 352, active_users: 2410 }] } }), F).rows).toEqual(ONE);
+    expect(rv(JSON.stringify({ items: [{ signups: 352, active_users: 2410 }], total: 1 }), F).rows).toEqual(ONE);
+    expect(rv(JSON.stringify({ data: { rows: [{ signups: "352", active_users: "2410" }] } }), F).rows).toEqual(ONE);
+    expect(rv(JSON.stringify({ result: { signups: 352, active_users: 2410 } }), F).rows).toEqual(ONE);
+    expect(rv(JSON.stringify({ a: { b: { c: { d: [{ signups: 352, active_users: 2410 }] } } } }), F).rows).toEqual(ONE);
   });
 
   test("FETCH: with several lists the one whose keys match the fields wins, the same way every time", () => {
     const answer = { meta: { tags: [{ name: "x" }, { name: "y" }] }, data: { results: [{ signups: 352, active_users: 2410 }] }, other: [{ signups: 1 }] };
-    expect(readValues(JSON.stringify(answer), F).rows).toEqual(ONE);
-    expect(readValues(JSON.stringify(answer), F)).toEqual(readValues(JSON.stringify(answer), F));
+    expect(rv(JSON.stringify(answer), F).rows).toEqual(ONE);
+    expect(rv(JSON.stringify(answer), F)).toEqual(rv(JSON.stringify(answer), F));
   });
 
   test("FETCH: camelCase keys, numbers as strings, columns + rows tables; a null is missing, never a value", () => {
-    expect(readValues(JSON.stringify([{ signups: "352", activeUsers: 2410 }]), F).rows).toEqual(ONE);
-    expect(readValues(JSON.stringify({ columns: ["signups", "active_users"], rows: [[352, 2410]] }), F).rows).toEqual(ONE);
-    expect(readValues(JSON.stringify({ results: { columns: [{ name: "Signups" }, { name: "Active users" }], data: [["352", "2410"]] } }), F).rows).toEqual(ONE);
-    expect(readValues(JSON.stringify([{ signups: null, active_users: 2410 }]), F)).toEqual({ rows: [], missing: ["Signups"] });
+    expect(rv(JSON.stringify([{ signups: "352", activeUsers: 2410 }]), F).rows).toEqual(ONE);
+    expect(rv(JSON.stringify({ columns: ["signups", "active_users"], rows: [[352, 2410]] }), F).rows).toEqual(ONE);
+    expect(rv(JSON.stringify({ results: { columns: [{ name: "Signups" }, { name: "Active users" }], data: [["352", "2410"]] } }), F).rows).toEqual(ONE);
+    // Round 6: a read whose only row is incomplete is still a successful read: the row is skipped, named.
+    expect(rv(JSON.stringify([{ signups: null, active_users: 2410 }]), F)).toEqual({ kind: "ok", rows: [], skipped: [{ missing: ["Signups"] }] });
   });
 
   test("FETCH: an answer that says there are more pages is flagged, so a run never claims nothing is new from page one alone", () => {
-    expect(readValues(JSON.stringify({ results: [{ signups: 352, active_users: 2410 }], next: "https://us.posthog.com/api/x?page=2" }), F).more).toBe(true);
-    expect(readValues(JSON.stringify({ data: [{ signups: 352, active_users: 2410 }], has_more: true }), F).more).toBe(true);
-    expect(readValues(JSON.stringify({ results: [{ signups: 352, active_users: 2410 }], next: null }), F).more).toBeUndefined();
+    expect(rv(JSON.stringify({ results: [{ signups: 352, active_users: 2410 }], next: "https://us.posthog.com/api/x?page=2" }), F).more).toBe(true);
+    expect(rv(JSON.stringify({ data: [{ signups: 352, active_users: 2410 }], has_more: true }), F).more).toBe(true);
+    expect(rv(JSON.stringify({ results: [{ signups: 352, active_users: 2410 }], next: null }), F).more).toBeUndefined();
   });
 
   test("FETCH: a direct read fills {report} in its path from the learned query and sends only the other arguments as the query string", async () => {

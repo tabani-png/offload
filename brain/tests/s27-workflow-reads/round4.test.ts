@@ -13,6 +13,9 @@ afterEach(() => {
   w = null;
 });
 
+/** Test view of the explicit outcome (round 6): fields of whichever kind it is. */
+const rv = (...a: Parameters<typeof readValues>): any => readValues(...a);
+
 describe("s27 round 4: confirm the context, keep incomplete rows visible", () => {
   test("FETCH: the screen read with everything matching (report, period, labels) is accepted", async () => {
     w = world({ mcp: "none", composio: "none" });
@@ -79,7 +82,7 @@ describe("s27 round 4: confirm the context, keep incomplete rows visible", () =>
       { label: "Signups", sourceLabel: "Signups" },
       { label: "Active", sourceLabel: "Active users" },
     ];
-    const r = readValues(JSON.stringify([{ signups: 352, active_users: 2410 }, { signups: null, active_users: 1 }, { signups: "x".repeat(500), active_users: 2 }]), F);
+    const r = rv(JSON.stringify([{ signups: 352, active_users: 2410 }, { signups: null, active_users: 1 }, { signups: "x".repeat(500), active_users: 2 }]), F);
     expect(r.rows).toHaveLength(1);
     expect(r.skipped).toEqual([{ missing: ["Signups"] }, { missing: ["Signups"] }]);
   });
