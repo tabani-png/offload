@@ -80,6 +80,15 @@ export const minutesOf = (spans: readonly Span[]) => spans.reduce((s, x) => s + 
 export const refTenths = (hours: number) => Math.floor(hours * 10 + 0.5 + 1e-9);
 export const refHours = (hours: number) => `${(refTenths(hours) / 10).toFixed(1)} h`;
 
+/** Honest savings (SPEC amendment, operator 2026-10-26): a fix never frees all of a task. The person keeps the s04
+ * low case's share (review 1.5x slower, 10% of items by hand): freed = min(estimate, observed x lowPct), and the shown
+ * freed figure is always at least one tenth below the shown observed figure. */
+export function refFreed(observed: number, estimate: number, lowPct: number): number {
+  let freed = Math.min(Math.max(0, observed * lowPct), Math.max(0, estimate));
+  if (refTenths(freed) >= refTenths(observed)) freed = Math.max(0, refTenths(observed) - 1) / 10;
+  return freed;
+}
+
 /** Every `{ value, display, eventIds }` object anywhere in a JSON value, with its path. */
 export function metrics(x: unknown, path = "$"): Array<{ path: string; m: { value: number; unit?: string; display?: string; eventIds?: unknown } }> {
   const out: Array<{ path: string; m: any }> = [];

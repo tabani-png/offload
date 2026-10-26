@@ -7,7 +7,7 @@ import { analyzeHome, type Analysis } from "../../src/analyze.ts";
 import { StubModel } from "../../src/models/model.ts";
 import { formatHours } from "../../src/time/format.ts";
 import { timeBreakdown } from "../../src/time/breakdown.ts";
-import { brainOn, call, FIX_KINDS, neutralHome, NOW, OUTREACH_WORDS, S22_PRESENT, strings } from "./setup.ts";
+import { brainOn, call, FIX_KINDS, neutralHome, NOW, OUTREACH_WORDS, refFreed, refTenths, S22_PRESENT, strings } from "./setup.ts";
 
 const fx = neutralHome();
 let analysis: Analysis;
@@ -56,11 +56,11 @@ describe("s23 hours freed", () => {
     }
   });
 
-  test("FREED: without s22, hours freed = min(observed, the s04 estimate), computed in code", () => {
+  test("FREED: without s22, hours freed = the s04 estimate, capped to leave the checking time, computed in code", () => {
     for (const f of absent.findings as any[]) {
       const ins = insights.get(f.insightId);
       expect(ins).toBeDefined();
-      const want = Math.min(f.observedHoursPerWeek.value, ins.saving.weeklyHoursSaved);
+      const want = refFreed(f.observedHoursPerWeek.value, ins.saving.weeklyHoursSaved, ins.saving.range.low.pct);
       expect(Math.abs(f.hoursFreed.value - want)).toBeLessThan(1e-9);
       expect(f.hoursFreed.unit).toBe("hours_per_week");
     }
@@ -74,6 +74,30 @@ describe("s23 hours freed", () => {
       expect(f.hoursFreed.value).toBeLessThanOrEqual(f.observedHoursPerWeek.value + 1e-9);
       expect(f.hoursFreed.value).toBeGreaterThan(0);
     }
+  });
+
+  test("FREED: no finding ever shows hours freed at or above its observed time, whatever the fix source claims", async () => {
+    const greedy = await timeBreakdown(analysis, { fixOf: async () => ({ kind: "workflow", weeklyHoursSaved: 1e9 }) });
+    let n = 0;
+    for (const w of [absent, api, greedy]) {
+      for (const f of w.findings as any[]) {
+        n++;
+        expect(f.hoursFreed.value).toBeLessThan(f.observedHoursPerWeek.value);
+        expect(refTenths(f.hoursFreed.value)).toBeLessThan(refTenths(f.observedHoursPerWeek.value));
+        const ins = insights.get(f.insightId);
+        expect(f.hoursFreed.value).toBeLessThanOrEqual(f.observedHoursPerWeek.value * ins.saving.range.low.pct + 1e-9);
+      }
+    }
+    expect(n).toBeGreaterThan(5);
+  });
+
+  test("FREED: on the real neutral week the Team metrics sheet keeps time for checking, and the line says so in words", () => {
+    const f = (api.findings as any[]).find((x) => /Team metrics/.test(x.name));
+    expect(f).toBeDefined();
+    expect(refTenths(f.hoursFreed.value)).toBeLessThan(refTenths(f.observedHoursPerWeek.value));
+    expect(f.arithmetic).toContain(`${f.observedHoursPerWeek.display} a week now`);
+    expect(f.arithmetic).toMatch(/left for checking/);
+    expect(f.arithmetic).not.toMatch(/min\(/);
   });
 
   test("FREED: the arithmetic line shows the inputs and ends with the hours-freed display", () => {
@@ -142,7 +166,8 @@ describe("s23 fix kind", () => {
     expect(set.fixKinds).toBe("s22");
     for (const f of set.findings as any[]) {
       expect(f.fixKind).toBe("setup");
-      expect(Math.abs(f.hoursFreed.value - Math.min(0.5, f.observedHoursPerWeek.value))).toBeLessThan(1e-9);
+      const ins = insights.get(f.insightId);
+      expect(Math.abs(f.hoursFreed.value - refFreed(f.observedHoursPerWeek.value, 0.5, ins.saving.range.low.pct))).toBeLessThan(1e-9);
     }
   });
 
@@ -161,7 +186,8 @@ describe("s23 fix kind", () => {
       expect(s.status).toBe(200);
       expect(f.fixKind).toBe(s.body.top);
       const top = (s.body.options as any[]).find((o) => o.kind === s.body.top);
-      expect(Math.abs(f.hoursFreed.value - Math.min(top.weeklyHoursSaved, f.observedHoursPerWeek.value))).toBeLessThan(1e-9);
+      const ins = insights.get(f.insightId);
+      expect(Math.abs(f.hoursFreed.value - refFreed(f.observedHoursPerWeek.value, top.weeklyHoursSaved, ins.saving.range.low.pct))).toBeLessThan(1e-9);
     }
   });
 });
