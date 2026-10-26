@@ -83,6 +83,8 @@ export interface SweepResult {
 
 export interface Continuity extends ContinuityPort {
   readonly isContinuity: true;
+  /** Upper bound on one `WorkersPort.pauseFor` call after commit; a timeout leaves the pause pending for the sweep. */
+  pauseTimeoutMs: number;
   /** Freezes with the full request (API and sweep). False when the person is not active or leaving. */
   freezeWith(tx: Tx, personId: string, req: FreezeRequest): Promise<boolean>;
   /** active/leaving → leaving with an end date; opens hand-overs early (everything keeps running). */
@@ -171,6 +173,8 @@ function isForeignKeyViolation(e: unknown): boolean {
 /** Serializes a person's freeze with its after-commit follow-up (the follow-up waits for the freeze to end). */
 const lockKey = (personId: string) => `continuity:${personId}`;
 
+export const PAUSE_TIMEOUT_MS = 30_000;
+
 export function createContinuity(deps: Deps): Continuity {
   const now = () => deps.clock.now();
   const inflight = new Set<Promise<void>>();
@@ -204,27 +208,22 @@ export function createContinuity(deps: Deps): Continuity {
   }
 
   /**
-   * Revokes approvals, pauses policies and workers through the S2-07 broker (its full API when loaded, else the frozen
-   * port). `stopRunsFor` revokes the person's tokens itself, then writes its audit events and so takes the audit-chain
-   * lock before it returns: it is called after every row lock the freeze takes (ADR 0113 §4, broker.ts lock order).
-   *
-   * `stopRunsFor` also calls `WorkersPort.pauseFor`, a remote service. Offboarding is never blocked by it: the call runs
-   * in a savepoint, and when it fails only the tokens are revoked here; policies and workers are paused after commit
-   * from the durable `offboardings.pause_pending` marker (`pausePending`, retried by the sweep until delivered). A
-   * frozen person's policy cannot send meanwhile: the broker refuses a runner who is not active, at every call.
+   * The database half of stopping a leaver's runs, inside the freeze: pauses their active overnight policies (rows
+   * already locked by `lockPolicies`, step 2) and revokes their unspent tokens through the S2-07 broker
+   * (`revokeTokensFor` writes its audit events and so takes the audit-chain lock: it is the freeze's last lock). No
+   * remote call happens here: the workers pause (`WorkersPort.pauseFor`, a remote service) runs only after commit, from
+   * the durable `offboardings.pause_pending` marker, with a timeout, retried by the sweep (`pausePending`). This is
+   * `broker.stopRunsFor` without its workers call; the statement pausing policies is the same as the broker's.
    */
-  async function stopRuns(tx: Tx, personId: string): Promise<{ tokens: number; policies: number; deferred: boolean }> {
+  async function stopRuns(tx: Tx, personId: string): Promise<{ tokens: number; policies: number }> {
     const b = deps.ports.broker as Partial<Broker>;
-    if (b.isFullBroker === true && b.stopRunsFor && b.revokeTokensFor) {
-      try {
-        const s = await tx.savepoint((sp) => b.stopRunsFor!(sp as unknown as Tx, personId));
-        return { tokens: s.tokens, policies: s.policies, deferred: false };
-      } catch (e) {
-        console.warn("continuity: stopping runs failed in the freeze; policies and workers are paused after commit:", e instanceof Error ? e.message : e);
-        return { tokens: await b.revokeTokensFor(tx, personId), policies: 0, deferred: true };
-      }
+    if (b.isFullBroker === true && b.revokeTokensFor) {
+      // A system pause (N3): no person paused it, so only an owner, admin or dept lead resumes it.
+      const pol = await tx`update overnight_policies set state = 'paused', paused_by = null, updated_at = ${new Date(now())}
+        where owner_person_id = ${personId} and state = 'active'`;
+      return { tokens: await b.revokeTokensFor(tx, personId), policies: pol.count };
     }
-    return { tokens: await deps.ports.broker.revokeTokensOf(tx, personId), policies: 0, deferred: false };
+    return { tokens: await deps.ports.broker.revokeTokensOf(tx, personId), policies: 0 };
   }
 
   /** Writes the S2-10 audit events of `fn` after its last row lock (the audit-chain lock stays last). */
@@ -241,7 +240,7 @@ export function createContinuity(deps: Deps): Continuity {
   }
 
   /** Lock order step 2 up front: the person's active policies (by id), before the connection deletes below take a KEY
-   * SHARE on batches that reference them (step 3). `stopRunsFor` re-takes the same locks. */
+   * SHARE on batches that reference them (step 3). The policy pause below updates the same rows. */
   async function lockPolicies(tx: Tx, personId: string): Promise<void> {
     const b = deps.ports.broker as Partial<Broker>;
     if (b.isFullBroker !== true) return;
@@ -345,10 +344,16 @@ export function createContinuity(deps: Deps): Continuity {
   async function pausePending(tx: Tx, personId: string): Promise<boolean> {
     const [o] = await tx`select pause_pending from offboardings where person_id = ${personId} for update`;
     if (!o?.pause_pending) return false;
-    // The full broker pauses policies and workers (and revokes any token left); without it, the workers port alone.
-    const b = deps.ports.broker as Partial<Broker>;
-    const workers =
-      b.isFullBroker === true && b.stopRunsFor ? (await b.stopRunsFor(tx, personId)).workers : await deps.ports.workers.pauseFor(tx, personId);
+    // A remote call: bounded, so a hung workers service cannot hold this transaction (and its locks) open.
+    const call = deps.ports.workers.pauseFor(tx, personId);
+    call.catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const workers = await Promise.race([
+      call,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("workers.pauseFor timed out")), self.pauseTimeoutMs);
+      }),
+    ]).finally(() => clearTimeout(timer));
     await tx`update offboardings set pause_pending = false, paused_at = ${new Date(now())} where person_id = ${personId}`;
     await audit(tx, {
       actor: SYSTEM,
@@ -408,7 +413,7 @@ export function createContinuity(deps: Deps): Continuity {
     await tx`select pg_advisory_xact_lock(hashtext(${lockKey(personId)}))`;
     const at = now();
     // Lock order: person and its advisory lock (S2-10's own, before step 1), the person's policies (2), then S2-10's
-    // rows; the broker's stopRunsFor (2-9, then the audit lock, 10) and the queued audit events come last.
+    // rows; the policy pause and broker.revokeTokensFor (3-4, then the audit lock, 10) and the queued audit events come last.
     await lockPolicies(tx, personId);
     await deferAudits(tx, async () => {
       await tx`update people set state = 'frozen', pending_freeze_at = ${new Date(at)} where id = ${personId}`;
@@ -448,7 +453,6 @@ export function createContinuity(deps: Deps): Continuity {
           ...access,
           tokens: runs.tokens,
           policies: runs.policies,
-          ...(runs.deferred ? { runsStopDeferred: true } : {}),
           connectionsRemoved: removed.length,
           handoversOpened: opened,
         },
@@ -683,8 +687,9 @@ export function createContinuity(deps: Deps): Continuity {
     while (inflight.size > 0) await Promise.allSettled([...inflight]);
   }
 
-  return {
+  const self: Continuity = {
     isContinuity: true,
+    pauseTimeoutMs: PAUSE_TIMEOUT_MS,
     async freeze(tx, personId, reason) {
       await freezeWith(tx, personId, {
         reason: reason.detail === "end_date" ? "end_date" : reason.source === "directory" ? "directory_deactivated" : "admin",
@@ -707,6 +712,7 @@ export function createContinuity(deps: Deps): Continuity {
     sweep,
     idle,
   };
+  return self;
 }
 
 /** Runs `check` on the run's ids only when they are well formed (the broker refuses malformed runs on its own). */
