@@ -80,7 +80,7 @@ describe("s19 per-message read", () => {
   });
 
   test("READ: the rule read labels the shape of a message", () => {
-    const r = ruleRead("You backed [name] early, so you know the problem. {company} is a Mac app that automates the repeat parts. [number] design partners, [number] paying.\n\nWorth [number] minutes next week? Deck attached.", "", { id: "x", threadKey: "k", role: "first_touch", outcome: "unknown", subject: "" });
+    const r = ruleRead("You backed [name] early, so you know the problem. {company} is a Mac app that automates the repeat parts. [number] design partners, [number] paying.\n\nWorth [number] minutes next week? Deck attached.", { id: "x", threadKey: "k", role: "first_touch", outcome: "unknown", subject: "" });
     expect(r).toMatchObject({ opener: "personal_hook", cta: "meeting", ctaTimeBoxed: true, intent: "book_meeting", hooks: ["their_portfolio"], proof: ["traction"], moves: ["hook", "claim", "proof", "ask", "attachment"] });
     expect(r.coreClaim).toBe("{company} is a Mac app that automates the repeat parts.");
     expect(r.positioning).toBe("Mac app");

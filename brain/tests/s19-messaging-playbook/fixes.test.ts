@@ -75,7 +75,7 @@ describe("s19 fix: sentence-initial and non-Latin names", () => {
   });
 
   test("READ: coreClaim never starts with an unmasked capitalised word", () => {
-    const r = ruleRead("Priya is an engineer at a fintech. We help teams hire.", "", { id: "x", threadKey: "x", role: "first_touch", outcome: "unknown", subject: "" });
+    const r = ruleRead("Priya is an engineer at a fintech. We help teams hire.", { id: "x", threadKey: "x", role: "first_touch", outcome: "unknown", subject: "" });
     expect(r.coreClaim).toBe("We help teams hire.");
   });
 

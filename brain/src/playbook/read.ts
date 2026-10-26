@@ -112,14 +112,16 @@ export function sentencesOf(core: string): string[] {
 const words = (s: string) => s.split(/\s+/).filter((w) => w !== "").length;
 const uniq = <T>(xs: readonly T[]) => xs.filter((x, i) => xs.indexOf(x) === i);
 
-export function shapeOf(core: string, raw: string): Shape {
+/** The shape of a masked core. Links are counted once, as the [link] placeholders of the core (never also in the raw
+ * body, where the same link would count twice). */
+export function shapeOf(core: string): Shape {
   const ss = sentencesOf(core);
   return {
     words: words(core),
     sentences: Math.max(1, ss.length),
     paragraphs: core.split(/\n\s*\n/).filter((p) => p.trim() !== "").length,
     questions: (core.match(/\?/g) ?? []).length,
-    links: (raw.match(/\bhttps?:\/\/|\bwww\./gi) ?? []).length + (core.match(/\[link\]/g) ?? []).length,
+    links: (core.match(/\[link\]/g) ?? []).length,
     attachments: ss.filter((s) => ATTACH_RE.test(s)).length,
   };
 }
@@ -147,7 +149,7 @@ function positioningOf(core: string): string | null {
 }
 
 /** The rule read of one masked core. */
-export function ruleRead(core: string, raw: string, ctx: { id: string; threadKey: string; role: Role; outcome: Outcome; subject: string }): MessageRead {
+export function ruleRead(core: string, ctx: { id: string; threadKey: string; role: Role; outcome: Outcome; subject: string }): MessageRead {
   const ss = sentencesOf(core);
   const moves: Move[] = [];
   const hooks: Hook[] = [];
@@ -214,7 +216,7 @@ export function ruleRead(core: string, raw: string, ctx: { id: string; threadKey
     audience: audienceOf(core, ctx.subject),
     coreClaim: claimS === undefined ? null : claimS.slice(0, 160),
     positioning: positioningOf(core),
-    shape: shapeOf(core, raw),
+    shape: shapeOf(core),
     outcome: ctx.outcome,
     labelledBy: "rules",
   };
@@ -303,7 +305,7 @@ export async function readMessages(threaded: readonly Threaded[], id: Identity, 
   let capped = false;
   for (const t of threaded) {
     const { core } = maskedCore(t.message, id);
-    const rule = ruleRead(core, t.message.body, { id: t.message.id, threadKey: t.threadKey, role: t.role, outcome: t.outcome, subject: maskText(t.message.subject, id) });
+    const rule = ruleRead(core, { id: t.message.id, threadKey: t.threadKey, role: t.role, outcome: t.outcome, subject: maskText(t.message.subject, id) });
     if (model === null || core.trim() === "") {
       reads.push(rule);
       continue;
