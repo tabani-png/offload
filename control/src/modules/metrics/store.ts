@@ -72,6 +72,11 @@ const runOutcome: SyncHandler = async (tx, object, { principal }) => {
       overnight_policy_id = excluded.overnight_policy_id, cost_cents = excluded.cost_cents,
       error_code = excluded.error_code, overnight = excluded.overnight, received_at = excluded.received_at
     where run_outcomes.seq <= excluded.seq`;
+  // The first copy of a run id stored in the tenant owns it (migration 0505): a claim, settled by the primary key in
+  // commit order, never by a clock. Later copies, from this device or another, leave it as it is.
+  await tx`insert into run_owners (tenant_id, run_id, device_id, person_id)
+    values (current_setting('app.tenant_id')::uuid, ${o.runId}, ${deviceId}, ${personId})
+    on conflict (tenant_id, run_id) do nothing`;
   await markStale(tx);
 };
 

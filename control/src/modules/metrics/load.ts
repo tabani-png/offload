@@ -98,9 +98,9 @@ function runOf(r: RunRow): RunOutcome {
 
 /**
  * Runs ending in [startMs, endMsExclusive), one per runId as hs-1 requires. Each device's row is its latest report of
- * the run; across devices the first device to report the run id keeps it (migration 0503). That copy is chosen among
- * every copy of the run id in the tenant before the period, person and workflow filters apply, so a later copy with
- * another end date, person or workflow never counts where the kept one does not. Choosing it reads other people's
+ * the run; across devices the device whose claim on the run id committed first keeps it (migration 0505). That copy is
+ * chosen among every copy of the run id in the tenant before the period, person and workflow filters apply, so a later
+ * copy with another end date, person or workflow never counts where the kept one does not. Choosing it reads other people's
  * copies (aggregate read), but only rows of the person asked for are returned.
  */
 export async function loadRuns(tx: Tx, o: LoadOpts): Promise<RunInput[]> {
@@ -114,9 +114,9 @@ export async function loadRuns(tx: Tx, o: LoadOpts): Promise<RunInput[]> {
          and ($3::uuid is null or r.person_id = $3::uuid)
          and ($4::uuid is null or (r.workflow_id = $4::uuid and r.version = $5::int))),
      kept as (
-       select distinct on (r.run_id) r.* from run_outcomes r
-       where r.run_id in (select run_id from candidates)
-       order by r.run_id, r.first_received_at, r.device_id)
+       select r.* from run_outcomes r
+       join run_owners o on o.tenant_id = r.tenant_id and o.run_id = r.run_id and o.device_id = r.device_id
+       where r.run_id in (select run_id from candidates))
      select r.*, p.department_id, ${ATTRIBUTION} as job_role_id
      from kept r join people p on p.tenant_id = r.tenant_id and p.id = r.person_id
      where r.ended_at_ms >= $1 and r.ended_at_ms < $2
