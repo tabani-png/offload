@@ -19,7 +19,9 @@ command -v bun >/dev/null 2>&1 || { echo "FAIL bun not on PATH"; exit 1; }
 
 echo "== dependencies"
 . "$ROOT/scripts/lib/slice-changes.sh"   # this branch's own changes; merges of main are not counted
-if [ -z "$(slice_changes "$BASE" -- brain/package.json brain/bun.lock 2>/dev/null)" ]; then echo "no new dependency"; else fail "brain/package.json or bun.lock changed on this branch since $BASE"; fi
+if ! slice_files "$BASE" -- brain/package.json brain/bun.lock; then fail "dependency check could not run: $SLICE_ERROR"
+elif [ -z "$SLICE_FILES" ]; then echo "no new dependency"
+else fail "brain/package.json or bun.lock changed on this branch since $BASE"; fi
 
 echo "== typecheck"
 tsc_out="$(cd "$BRAIN" && bunx tsc --noEmit 2>&1)" && echo "typecheck ok" || { echo "$tsc_out" | head -20; fail "typecheck (bunx tsc --noEmit)"; }
@@ -62,8 +64,15 @@ grep -q "names.mask" "$BRAIN/src/models/router.ts" 2>/dev/null || fail "the rout
 
 echo "== scope (files touched by s18 commits since $BASE)"
 # s18 commits not on main, plus edits made inside merge commits (scripts/lib/slice-changes.sh)
-touched="$(SLICE_GREP='^s18' slice_changes "$BASE" 2>/dev/null)"
-for f in $touched; do
+SLICE_GREP='^s18' slice_files --allow-skip "$BASE"; scope_rc=$?
+case $scope_rc in
+  0) ;;
+  3) echo "scope: SKIPPED ($SLICE_ERROR)" ;;
+  *) fail "scope check could not run: $SLICE_ERROR" ;;
+esac
+touched="$SLICE_FILES"
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
   case "$f" in
     brain/src/privacy/*|brain/src/grouping/normalize.ts|brain/src/models/router.ts|brain/src/models/model.ts) ;;
     brain/src/vision/notes.ts|brain/src/vision/prompt.ts|brain/src/understanding/describe.ts) ;;
@@ -75,7 +84,7 @@ for f in $touched; do
     brain/tests/s05b-runner/idempotency.test.ts) ;;  # the H3 fix ported from S2-02 (SPEC "Scope changes")
     *) fail "s18 commit touched out-of-scope $f";;
   esac
-done
+done <<< "$touched"
 echo "scope checked ($(echo "$touched" | grep -c . ) files in s18 commits)"
 
 if [ $fails -ne 0 ]; then echo "s18 verify: $fails check(s) failed"; exit 1; fi

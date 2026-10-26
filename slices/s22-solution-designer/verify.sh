@@ -64,17 +64,20 @@ fi
 
 echo "== scope"
 . "$ROOT/scripts/lib/slice-changes.sh"   # this branch's own net changes; merges of main are not counted
-if git -C "$ROOT" cat-file -e "$BASE" 2>/dev/null; then
-  changed="$(slice_changes "$BASE")"
-  for p in $changed; do
-    case "$p" in
-      engine/*|packet/*|schemas/*|app/*|brain/tools/import-screenwatch.ts|brain/src/understanding/induce.ts|brain/src/understanding/embed.ts|brain/src/plan/steps.ts|brain/src/insights/saving.ts|brain/src/store/vault.ts|brain/src/connectors/chain.ts|brain/src/connectors/targets.ts|brain/src/workflows/gate.ts|brain/src/workflows/allowlist.ts|brain/src/workflows/executor.ts|brain/src/workflows/batch.ts|brain/src/workflows/runner.ts|brain/src/workflows/chain-executor.ts)
-        fail "out-of-scope path changed: $p" ;;
-    esac
-  done
-  echo "scope checked ($(echo "$changed" | grep -c . ) files)"
-else
-  echo "scope: BASE $BASE not in history (shallow clone), skipped"
-fi
+slice_files --allow-skip "$BASE"; scope_rc=$?
+case $scope_rc in
+  0) ;;
+  3) echo "scope: SKIPPED ($SLICE_ERROR)" ;;
+  *) fail "scope check could not run: $SLICE_ERROR" ;;
+esac
+changed="$SLICE_FILES"
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  case "$p" in
+    engine/*|packet/*|schemas/*|app/*|brain/tools/import-screenwatch.ts|brain/src/understanding/induce.ts|brain/src/understanding/embed.ts|brain/src/plan/steps.ts|brain/src/insights/saving.ts|brain/src/store/vault.ts|brain/src/connectors/chain.ts|brain/src/connectors/targets.ts|brain/src/workflows/gate.ts|brain/src/workflows/allowlist.ts|brain/src/workflows/executor.ts|brain/src/workflows/batch.ts|brain/src/workflows/runner.ts|brain/src/workflows/chain-executor.ts)
+      fail "out-of-scope path changed: $p" ;;
+  esac
+done <<< "$changed"
+[ $scope_rc -ne 0 ] || echo "scope checked ($(printf '%s' "$changed" | grep -c .) files)"
 
 [ "$fails" -eq 0 ] && echo "s22-solution-designer: PASS" || { echo "s22-solution-designer: $fails failing check(s)"; exit 1; }

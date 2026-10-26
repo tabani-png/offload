@@ -8,9 +8,7 @@ s2_typecheck "$C"
 s2_suite "$C" tests/S2-08 60
 s2_tags "$C" tests/S2-08 FEATURE PERIOD NOTICE CONSENT SELFVIEW ACCESSLOG CHAIN HIDDEN TEMPLATES RETENTION
 # Migrations of this slice stay in its number range.
-for m in $(s2_changed "${S2_BASE:-main}" control/migrations); do
-  case "$(basename "$m")" in 08[0-9][0-9]_*) ;; *) fail "migration outside range 0800-0899: $m";; esac
-done
+s2_migrations_in 08 0800-0899
 s2_forbid "migrations must not bypass RLS" "BYPASSRLS|SECURITY DEFINER" "$C/migrations"
 # Core and earlier slices stay green.
 core="$(cd "$C" && bun test tests/S2-01 2>&1)"; echo "$core" | grep -qE "^ *0 fail$" || fail "S2-01 suite regressed"

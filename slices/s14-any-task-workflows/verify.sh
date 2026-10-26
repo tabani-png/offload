@@ -149,8 +149,15 @@ echo "== scope (files touched by s14 commits since $BASE)"
 # Only this slice's own commits (subject starts with "s14"; merges excluded), so other slices' commits that mention s14
 # (s13's capability catalog) and merges from main cannot fail it.
 . "$ROOT/scripts/lib/slice-changes.sh"   # s14 commits not on main, plus edits made inside merge commits
-touched="$(SLICE_GREP='^s14' slice_changes "$BASE" 2>/dev/null)"
-for f in $touched; do
+SLICE_GREP='^s14' slice_files --allow-skip "$BASE"; scope_rc=$?
+case $scope_rc in
+  0) ;;
+  3) echo "scope: SKIPPED ($SLICE_ERROR)" ;;
+  *) fail "scope check could not run: $SLICE_ERROR" ;;
+esac
+touched="$SLICE_FILES"
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
   case "$f" in
     # vision/{claude,routed,types,worker}.ts are in scope since the Claude captioner scope add (SPEC section 7).
     brain/src/vision/claude.ts|brain/src/vision/routed.ts|brain/src/vision/types.ts|brain/src/vision/worker.ts) ;;
@@ -159,7 +166,7 @@ for f in $touched; do
     engine/*|packet/*|schemas/*|brain/src/connectors/*|brain/src/vision/*|brain/fixtures/gen.ts|brain/fixtures/gen-domains.ts) fail "s14 commit touched out-of-scope $f";;
     brain/src/workflows/gate.ts|brain/src/workflows/allowlist.ts|brain/src/workflows/executor.ts|brain/src/workflows/batch.ts|brain/src/workflows/runner.ts) fail "s14 commit touched s13's $f";;
   esac
-done
+done <<< "$touched"
 echo "scope checked ($(echo "$touched" | grep -c . ) files in s14 commits)"
 
 if [ $fails -ne 0 ]; then echo "s14 verify: $fails check(s) failed"; exit 1; fi

@@ -91,7 +91,7 @@ git clone -q --depth 1 --branch s99 "file://$R" "$TMP/e" 2>/dev/null
 out="$(SLICE_ROOT="$TMP/e" slice_changes "$BASE" 2>"$TMP/e.err")"; rc=$?
 eq "(e) exit 2 (skip)" "2" "$rc"
 eq "(e) prints nothing" "" "$out"
-grep -q "not in history (shallow clone), skipped" "$TMP/e.err" && ok "(e) skip reason on stderr" || bad "(e) skip reason" "shallow message" "$(cat "$TMP/e.err")"
+grep -q "not in history (shallow clone?), skipped" "$TMP/e.err" && ok "(e) skip reason on stderr" || bad "(e) skip reason" "shallow message" "$(cat "$TMP/e.err")"
 
 echo "== (f) origin/main preferred over a stale local main"
 new_repo f-origin
@@ -103,7 +103,7 @@ R="$ORIG"; edit out/x.txt m1; commit "main: on the remote"; R="$TMP/f"
 g fetch -q origin; g merge -q --no-edit origin/main   # local main stays stale
 eq "(f) net uses origin/main" "slice/in.txt" "$(net "$BASE")"
 eq "(f) explicit SLICE_INTEGRATION=main shows the stale-main effect" "out/x.txt slice/in.txt" "$(SLICE_INTEGRATION=main net "$BASE")"
-out="$(SLICE_INTEGRATION=nope SLICE_ROOT="$R" slice_changes "$BASE" 2>/dev/null)"; eq "(f) unknown SLICE_INTEGRATION skips" "2" "$?"
+out="$(SLICE_INTEGRATION=nope SLICE_ROOT="$R" slice_changes "$BASE" 2>/dev/null)"; eq "(f) unknown SLICE_INTEGRATION is an error, not a skip" "1" "$?"
 
 echo "== (g) slice started on an unmerged parent branch (BASE ahead of merge-base)"
 new_repo g
