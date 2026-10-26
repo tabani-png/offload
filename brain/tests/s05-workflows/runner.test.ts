@@ -9,6 +9,10 @@ import { enableAutoRun } from "../../src/workflows/autorun.ts";
 import { approveBatch, executeBatch, prepareLiveBatch, RunError } from "../../src/workflows/runner.ts";
 import { readBatch, readWorkflow, updateWorkflow } from "../../src/workflows/store.ts";
 import { NOW, world, writeRecipients, type World } from "./setup.ts";
+import { pinClock } from "../helpers.ts";
+
+// s30: these tests read batches sealed on the fixture day; pin the clock so they do not expire with the real date.
+pinClock();
 
 const SEND = "mcp__gmail__send_email";
 let w: World;
