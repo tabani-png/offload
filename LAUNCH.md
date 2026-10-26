@@ -1,6 +1,6 @@
 # Launch readiness
 
-Snapshot: 2026-10-25, from `origin/main` at `9f46fdb` and the open PRs on `tabani-png/offload`.
+Snapshot: 2026-10-26, after the wave B/C merges, from `origin/main` and the open PRs on `tabani-png/offload`.
 Status values: **done**, **open**, **blocked**.
 Owner values: **manager** (the build agent that dispatches, reviews and merges) or **operator** (you).
 Where the repo does not say, the item reads "check".
@@ -9,21 +9,15 @@ Where the repo does not say, the item reads "check".
 
 | PR | What | Waits on | Status | Owner |
 |---|---|---|---|---|
-| #7 | s18 name masking (draft) | Second fix round is running. Then re-review and merge. | open | manager |
-| #9 | S2-05 ingest + metrics | Second fix round is running. | open | manager |
-| #10 | S2-08 monitoring compliance | Second fix round is running. Counsel sign-off on the notices (section 2). | open | manager |
-| #11 | s19 messaging playbook | Second fix round is running. | open | manager |
-| #12 | S2-07 policies, commit broker, kill switches | Second fix round is running. | open | manager |
-| #13 | UI round 5 (s10f) | Review verdict is MERGE. Verify run is in progress. Merge when green. | open | manager |
-| #14 | s21 screenwatch importer v2 | Check review status, then merge. | open | manager |
-| #20 | Cindy eval research (draft) | Research only, no product code. Operator reads the USE/BORROW/SKIP verdicts. | open | operator |
-| #22 | S2-13 Mac company surfaces (draft, stacked on #13) | #13 merges first. Wiring gap in section 4. | open | manager |
-| #15 | s20 brain fixes from the blind test (draft) | Draft; check build status. Must fix the saving numbers (section 4). | open | manager |
-| #17 | s22 solution designer (draft) | Draft; check build status, then review. | open | manager |
-| #21 | s24 brief runner (draft) | Draft; check build status, then review. | open | manager |
-| #19 | S2-09 cloud workers (draft, stacked on wave B) | Wave B merges (#9, #10, #12). | blocked | manager |
-| #16 | S2-10 continuity (draft, stacked on wave B) | Wave B merges. | blocked | manager |
-| #18 | S2-11 dashboard wiring (draft, stacked on wave B) | Wave B merges. | blocked | manager |
+| #9 | S2-05 ingest + metrics | Final Codex fixes. | open | manager |
+| #10 | S2-08 monitoring compliance | Ready. Merges after #9. Counsel sign-off on the notices (section 2). | open | manager |
+| #21 | s24 brief runner | Security fix rounds. | open | manager |
+| #16 | S2-10 continuity (stacked on wave B) | Next, after #9 and #10. | open | manager |
+| #18 | S2-11 dashboard wiring (stacked on wave B) | Next, after #9 and #10. | open | manager |
+| #19 | S2-09 cloud workers (stacked on wave B) | Next, after #9 and #10. | open | manager |
+| #20 | Cindy eval research (draft) | Research only. Operator reads the USE/BORROW/SKIP verdicts. | open | operator |
+
+Merged 2026-10-26: #23, #7, #17, #12, #26, #22, #28, #27, #15, #11, #29 (#25 merged with #29).
 
 `main` holds Stage 1 s01 to s17 and Stage 2 S2-01 to S2-04 and S2-06.
 
@@ -37,6 +31,7 @@ Where the repo does not say, the item reads "check".
 | Rotate the Anthropic key | It was pasted into a chat once. Make a new key in the Anthropic console. Store it with `security add-generic-password -U -s offload.anthropic -a api-key -w`. Then revoke the old key. | open | operator |
 | GitHub hardening | See section 3. | open | operator |
 | Secret scan follow-up | See section 5. | open | operator |
+| s24 key source | s24 builds require the Anthropic key in the Keychain (`OFFLOAD_ANTHROPIC_KEYCHAIN`); a brain launched with `ANTHROPIC_API_KEY` in env refuses to build. | open | operator |
 
 ## 3. GitHub hardening
 
@@ -49,14 +44,17 @@ Where the repo does not say, the item reads "check".
 | Secret scanning | Not available here. The repo is private and owned by a user account. GitHub's docs say user-owned repos get secret scanning only on Enterprise Cloud with Enterprise Managed Users. Org-owned private repos need GitHub Secret Protection on Team or Enterprise Cloud. Until then, run gitleaks locally before each release. | blocked | operator |
 | CI | `.github/workflows/ci.yml` exists. GitHub Actions has no minutes, so every PR shows red. Restore billing, or add a self-hosted runner, or keep using local `scripts/verify-all.sh`. | blocked | operator |
 
+CI is still red (no Actions minutes). Local verify is the gate. PR merges this session used Codex review (Claude independent reviewers while Codex was out of credits) plus local verify.
+
 ## 4. Known product gaps before launch
 
 | Gap | Detail | Status | Owner |
 |---|---|---|---|
-| Company window not wired | PR #22 builds the Mac company surfaces, but the running app does not open them yet. | open | manager |
-| Saving numbers are overstated | The brain claims 87 to 90% savings on workflows. That is too high. s20 (PR #15) must fix it. | open | manager |
-| Demo data is outreach-heavy | The demo week is built around 100 outreach emails a day (`plan/plan.md` s09). It should show neutral, mixed work. | open | manager |
-| Time breakdown first screen | s23: the first screen should show where your time goes. Not started. | open | manager |
+| Company window not wired | Wired in PR #22. | done | manager |
+| Saving numbers are overstated | Fixed in PR #15; s23 caps freed hours to leave checking time. | done | manager |
+| Demo data is outreach-heavy | Done for the time screen: PR #29 uses a neutral week. | done | manager |
+| Time breakdown first screen | s23 shipped in PR #29. | done | manager |
+| No disconnect / withdraw-consent control | Needs a brain route and an app control (follow-up #13 in `agent-control/followups-20261026.md`). | open | manager |
 | Product name | "Offload" is a working name. The brief lists "pick a product name" as open. | open | operator |
 
 ## 5. Secret scan result
@@ -96,7 +94,11 @@ The value is not printed here.
 | License | No LICENSE file. Fine for a private repo; decide before sharing code. | open | operator |
 | Control plane hosting | Deploy target is TBD. Needs managed Postgres 17 and a KMS. | open | operator |
 
-## 7. Launch order
+## 7. Open decisions
+
+- Overlapping date ranges in metrics: fixed report periods (manager recommends) vs noise. Operator to decide.
+
+## 8. Launch order
 
 1. Rotate the Anthropic key. Confirm the Linear canary is fake. (operator)
 2. Turn on Dependabot alerts and security fixes. Decide on CI: billing or local verify. (operator)
