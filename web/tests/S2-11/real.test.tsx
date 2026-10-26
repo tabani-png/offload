@@ -67,3 +67,18 @@ describe("REAL screens render the seeded company from the control plane", () => 
     expect(text()).toContain("Off. Nobody at the company can see your own numbers.");
   });
 });
+
+describe("REAL failure paths", () => {
+  test("REAL: a signed-out browser gets plain words on the overview, not an endless spinner", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { createMemoryHistory } = await import("@tanstack/react-router");
+    const { render } = await import("@testing-library/react");
+    const { createHttpClient } = await import("../../src/api/client.ts");
+    const { App, createAppRouter } = await import("../../src/app/router.tsx");
+    const api = createHttpClient(c.state.api, (i, init) => fetch(i, init));
+    render(<App deps={{ api, now: c.now }} router={createAppRouter(createMemoryHistory({ initialEntries: ["/"] }))}
+      queryClient={new QueryClient({ defaultOptions: { queries: { retry: false } } })} />);
+    await until(() => text().includes("You are signed out. Sign in again to continue."), "signed-out words", 8000);
+    expect(main().querySelector("[role=status]")).toBeNull();
+  });
+});

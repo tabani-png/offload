@@ -67,12 +67,14 @@ export function useSession() {
 
 /**
  * The reporting period (this month so far) in the tenant's reporting timezone, from the clock in deps. Null until the
- * tenant is loaded, so screens never ask for a period in the wrong timezone.
+ * tenant is loaded, so screens never ask for a period in the wrong timezone. If the tenant cannot be read (signed out,
+ * server trouble) the period falls back to UTC so the screen's own reads run and show their error in plain words.
  */
 export function usePeriod(): Period | null {
   const { now } = useDeps();
   const tenant = useGet<Tenant>("/v1/tenant");
-  return tenant.data ? periodAt(now(), tenant.data.reportingTimezone) : null;
+  if (tenant.data) return periodAt(now(), tenant.data.reportingTimezone);
+  return tenant.isError ? periodAt(now(), "UTC") : null;
 }
 
 /** A metrics path for the period, or null while the period is unknown. */

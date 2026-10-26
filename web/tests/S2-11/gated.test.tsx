@@ -112,6 +112,11 @@ describe("GATED per-person and working-time views", () => {
   test("GATED: the opened person sees the read in My data, and per-person views shown as on", async () => {
     await renderReal(c, "/me", "member");
     await until(() => text().includes("Opened your record"), "access log row");
+    // A member cannot list people, so the reader is named by role, never as "System"; the Mac's own actions say so.
+    const opened = Array.from(main().querySelectorAll("tbody tr")).find((r) => r.textContent!.includes("Opened your record"))!;
+    expect(opened.querySelectorAll("td")[1]!.textContent).toBe("Owner");
+    expect(text()).not.toContain("System Owner");
+    expect(text()).toContain("Your Mac");
     expect(text()).toContain("On. Each time someone opens your numbers it shows above.");
   });
 
