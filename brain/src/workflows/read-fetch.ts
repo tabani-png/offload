@@ -17,7 +17,7 @@ import { loadConnectorsConfig, toMcpServers, type Env } from "../connectors/conf
 import { linkEnv, type LinkRunner, type Method } from "../connectors/link.ts";
 import type { SecretReader } from "../connectors/secrets.ts";
 import type { ChainTarget } from "../connectors/targets.ts";
-import { confirmOnScreen, contextWords, mentionsContext, parseExact, queryArgs, queryOf, readValues, sourceTarget, type ReadOutcome, type SkippedRow } from "../plan/read-source.ts";
+import { confirmOnScreen, contextWords, mentionsContext, parseExact, readValueParts, type AnswerPart, queryArgs, queryOf, sourceTarget, type ReadOutcome, type SkippedRow } from "../plan/read-source.ts";
 import type { ToolPolicy } from "./allowlist.ts";
 import { makeBatch } from "./batch.ts";
 import { createGate, READ_ONLY_WORDS, splitMcpName } from "./gate.ts";
@@ -28,7 +28,7 @@ import type { WorkflowJson } from "./types.ts";
 export type ReadCall = <T = string>(tool: string, input: Record<string, unknown>, run: () => Promise<T>) => Promise<T>;
 
 /** What a reader returns: the source's text, or the text with a note on how exact it is (MCP structuredContent). */
-export type ReaderAnswer = string | { text: string; note?: string };
+export type ReaderAnswer = string | { text: string; note?: string } | { parts: AnswerPart[]; note?: string };
 
 export interface ReaderJob {
   target: ChainTarget;
@@ -183,10 +183,12 @@ export class ChainSourceFetcher implements SourceFetcher {
         return run();
       };
       let text: string;
+      let parts: AnswerPart[];
       let note: string | undefined;
       try {
         const ans = await reader.read({ target, state, source: src, args, call, ...(f.signal === undefined ? {} : { signal: f.signal }) });
-        text = typeof ans === "string" ? ans : ans.text;
+        parts = typeof ans === "string" ? [{ kind: "text", text: ans }] : "parts" in ans ? ans.parts : [{ kind: "text", text: ans.text }];
+        text = parts.map((x) => (x.kind === "text" ? x.text : JSON.stringify(x.value))).join("\n");
         note = typeof ans === "string" ? undefined : ans.note;
       } catch (err) {
         // Cancelled: the method is not to blame and nothing else is tried.
@@ -214,7 +216,8 @@ export class ChainSourceFetcher implements SourceFetcher {
         continue;
       }
       // One parse with an explicit outcome; what each outcome does to the chain is chainStep (tested).
-      const out = readValues(text, src.fields, query);
+      // ONE answer from every part the reader got (round 14): context of every part first, then rows.
+      const out = readValueParts(parts, src.fields, query);
       const step = chainStep(out.kind);
       if (step === "next") {
         const reason = out.kind === "wrong_context" ? out.reason : out.kind === "unreadable" ? `${src.targetName} ${out.reason}` : "";
@@ -275,25 +278,22 @@ export function readArgs(op: { operationId: string; path: string; map: Record<st
 const NO_ITEM = { key: "", to: "", subject: "", body: "", warnings: [] };
 
 /**
- * s27 round 12: what an MCP tool answered, as text for the shared parser. Text blocks are used as sent (exact). When
- * the tool answers with structuredContent only, or its text does not read as rows, structuredContent is used,
- * re-serialized from what the MCP software already parsed: `note` says its number formatting comes from that software
- * (round 9 honesty rule). Images and other blocks are not read.
+ * s27 round 14: what an MCP tool answered, as the parts of ONE answer for the shared parser: every text block and
+ * every embedded resource with text (exactly as sent), then structuredContent (a value the MCP software already
+ * parsed: `note` says its number formatting comes from that software, round 9 honesty rule). Nothing is dropped or
+ * chosen here: the parser checks the context of every part before it picks rows. Images, audio and blobs are not read.
  */
-export function mcpAnswer(r: { content?: unknown; structuredContent?: unknown }, fields: ReadSourceDTO["fields"] | ReadonlyArray<{ label: string; sourceLabel: string }>): { text: string; note?: string } {
+export function mcpAnswer(r: { content?: unknown; structuredContent?: unknown }): { parts: AnswerPart[]; note?: string } {
   const blocks = Array.isArray(r.content) ? (r.content as Array<{ type?: string; text?: string; resource?: { text?: unknown } }>) : [];
-  // Text blocks, and embedded resources that carry text, are used exactly as sent.
-  const text = blocks
-    .map((c) => (c.type === "text" && typeof c.text === "string" ? c.text : c.type === "resource" && typeof c.resource?.text === "string" ? c.resource.text : null))
-    .filter((x): x is string => x !== null)
-    .join("\n");
-  const structured = r.structuredContent !== undefined && r.structuredContent !== null && typeof r.structuredContent === "object";
-  if (!structured) return { text };
-  if (text.trim() !== "") {
-    const k = readValues(text, fields).kind;
-    if (k === "ok" || k === "empty") return { text };
+  const parts: AnswerPart[] = [];
+  for (const c of blocks) {
+    if (c.type === "text" && typeof c.text === "string") parts.push({ kind: "text", text: c.text });
+    else if (c.type === "resource" && typeof c.resource?.text === "string") parts.push({ kind: "text", text: c.resource.text });
   }
-  return { text: JSON.stringify(r.structuredContent), note: "Its number formatting comes from the connector software (structured answer)." };
+  const structured = r.structuredContent !== undefined && r.structuredContent !== null && typeof r.structuredContent === "object";
+  if (!structured) return { parts };
+  parts.push({ kind: "json", value: r.structuredContent });
+  return { parts, note: "Its structured part's number formatting comes from the connector software." };
 }
 
 /** Computer use, read only: open the app or site, then read the window's accessibility text. No planner, no clicks. */
@@ -342,7 +342,7 @@ export class McpSourceReader implements SourceReader {
         }
         const r = await client.callTool({ name: parts.tool, arguments: job.args }, undefined, job.signal === undefined ? {} : { signal: job.signal });
         if (r.isError === true) throw new Error("the connector answered with an error");
-        return mcpAnswer(r as { content?: unknown; structuredContent?: unknown }, job.source.fields);
+        return mcpAnswer(r as { content?: unknown; structuredContent?: unknown });
       } finally {
         await client.close().catch(() => {});
       }

@@ -705,26 +705,54 @@ export function readValues(
   /** The learned query: an answer declaring another report or filter anywhere is wrong_context. */
   query?: ReadQueryDTO,
 ): ReadOutcome {
-  const allMissing = () => fields.map((f) => f.label);
-  let answer: unknown;
-  let textual = false;
+  return readValueParts([{ kind: "text", text }], fields, query);
+}
+
+/** One part of an answer: text as received (JSON is parsed exactly, else read as text), or a value a connector's
+ * software already parsed (MCP structuredContent). */
+export type AnswerPart = { kind: "text"; text: string } | { kind: "json"; value: unknown };
+
+function partAnswer(p: AnswerPart, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): { answer: unknown; textual: boolean } {
+  if (p.kind === "json") return { answer: p.value, textual: false };
   try {
-    answer = parseExact(text.trim());
-    if (answer === null || typeof answer !== "object") throw new Error("not an object");
+    const a = parseExact(p.text.trim());
+    if (a !== null && typeof a === "object") return { answer: a, textual: false };
   } catch {
-    // Text answers go through the SAME pipeline and invariants as JSON (round 7).
-    answer = textAnswer(text, fields);
-    textual = true;
+    // not JSON: read as text below
   }
-  // 1. context first, over the whole answer (I1, I4).
+  // Text answers go through the SAME pipeline and invariants as JSON (round 7).
+  return { answer: textAnswer(p.text, fields), textual: true };
+}
+
+/**
+ * s27 round 14: an answer in one or more parts (MCP text blocks, resource text, structuredContent) read as ONE answer.
+ * Order, always: (1) collect every context declaration from every part and refuse on any conflict (I1, I4);
+ * (2) collect the candidate collections of every part; (3) pick the collection by field PRESENCE over all its rows
+ * (a key that is there counts even when null), then how many rows reach it, then shallower, then first (text parts
+ * come first); (4) validate each row: complete = row (I2, I6), else skipped with what it lacks or holds twice (I3,
+ * I7). Nothing is discarded before it is checked.
+ */
+export function readValueParts(parts: readonly AnswerPart[], fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[], query?: ReadQueryDTO): ReadOutcome {
+  const allMissing = () => fields.map((f) => f.label);
+  const answers = parts.map((p) => partAnswer(p, fields));
+  // 1. context first, over every part (I1, I4).
   if (query !== undefined) {
-    const conflict = conflictOf(declarations(answer), query);
+    const decl: Array<[string, unknown]> = [];
+    for (const a of answers) declarations(a.answer, decl);
+    const conflict = conflictOf(decl, query);
     if (conflict !== null) return { kind: "wrong_context", reason: conflict };
   }
-  // 2. candidate collections; 3. pick over all rows (best field match, how many rows reach it, shallower, order).
-  const { all, more } = collections(answer);
+  // 2. candidate collections of every part.
+  const all: Collection[] = [];
+  let more = false;
+  for (const a of answers) {
+    const c = collections(a.answer);
+    for (const x of c.all) all.push({ ...x, order: all.length });
+    more = more || c.more;
+  }
+  // 3. pick by presence over all rows; validity is the row pass's job.
   const wanted = fields.map((f) => [normKey(f.sourceLabel), normKey(f.label)] as const);
-  const hits = (f: Map<string, unknown>) => wanted.filter(([a, b]) => f.get(a) != null || f.get(b) != null).length;
+  const hits = (f: Map<string, unknown>) => wanted.filter(([a, b]) => f.has(a) || f.has(b)).length;
   let best: { c: Collection; flats: Array<Map<string, unknown>>; top: number; count: number } | undefined;
   for (const c of all) {
     const flats = c.rows.map((r) => flat(r));
@@ -735,7 +763,8 @@ export function readValues(
   }
   const extra = more ? { more: true as const } : {};
   if (best === undefined) {
-    if (!textual && emptyCollection(answer)) return { kind: "empty", ...extra };
+    if (answers.some((a) => !a.textual && emptyCollection(a.answer))) return { kind: "empty", ...extra };
+    const textual = answers.every((a) => a.textual);
     return { kind: "unreadable", reason: textual ? `did not show ${allMissing().join(", ")}` : `no rows with ${allMissing().join(", ")}`, missing: allMissing() };
   }
   // 4. each row: complete = row (I2), values exactly as shown (I6); else skipped with what it lacks (I3).

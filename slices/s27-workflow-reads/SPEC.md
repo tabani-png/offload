@@ -156,7 +156,12 @@ only saving was the typing.
     secrets in its env by design); its OAuth-as-API-key mix-up is reported, not changed. Scope changes:
     `tests/s10b-review2/child-env.test.ts` and `tests/s05b-privacy/privacy.test.ts` now read the child env from
     agentSdkAuth / baseChildEnv (same assertions: no OFFLOAD_*, no connector secret, no key in the env).
-21. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+21. **Round 14 (PR #35 review).** An answer in several parts (MCP text blocks, resource text, structuredContent) is
+    read as ONE answer (`readValueParts`): every part's context is checked before rows are chosen (I4 for split
+    answers). A collection is chosen by field PRESENCE (a key that is there counts even when null); validity is the
+    row pass's job, so rows of nulls are skipped rows (I3), not unreadable. The order is always: collect every
+    declaration of every part -> check context -> collect and pick the collection -> check each row.
+22. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)

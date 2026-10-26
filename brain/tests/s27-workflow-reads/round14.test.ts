@@ -60,7 +60,7 @@ describe("s27 round 14: choose by presence, validate later (I3, I5)", () => {
   for (const [name, answer, want] of cases) {
     test(`FETCH: ${name} -> ${want.kind}`, () => {
       const r = readValues(JSON.stringify(answer), F, Q);
-      expect(r.kind).toBe(want.kind);
+      expect(r.kind as string).toBe(want.kind);
       if (r.kind === "ok") {
         expect(r.rows).toHaveLength(want.rows!);
         expect(r.skipped).toHaveLength(want.skipped!);

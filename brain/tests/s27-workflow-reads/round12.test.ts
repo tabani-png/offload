@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readValueParts } from "../../src/plan/read-source.ts";
 import { mcpAnswer } from "../../src/workflows/read-fetch.ts";
 import { activeMetricsWorkflow, SOURCE_TARGET, world, type World } from "./setup.ts";
 
@@ -69,27 +70,24 @@ describe("s27 round 12: configured direct reads keep their map", () => {
   });
 });
 
-describe("s27 round 12: MCP structuredContent", () => {
+describe("s27 round 12: MCP structuredContent (round 14: as parts of one answer)", () => {
   const fields = [
     { label: "Signups", sourceLabel: "Signups" },
     { label: "Active", sourceLabel: "Active users" },
   ];
+  const read = (r: { content?: unknown; structuredContent?: unknown }) => readValueParts(mcpAnswer(r).parts, fields);
   test("FETCH: structuredContent alone reaches the parser, with a note that its number formatting comes from the connector software", () => {
-    const a = mcpAnswer({ content: [], structuredContent: { results: [{ signups: 352, active_users: 2410 }] } }, fields);
-    expect(JSON.parse(a.text)).toEqual({ results: [{ signups: 352, active_users: 2410 }] });
+    const a = mcpAnswer({ content: [], structuredContent: { results: [{ signups: 352, active_users: 2410 }] } });
     expect(a.note).toMatch(/number formatting/);
+    expect(read({ content: [], structuredContent: { results: [{ signups: 352, active_users: 2410 }] } })).toEqual({ kind: "ok", rows: [[["Signups", "352"], ["Active", "2410"]]], skipped: [] });
   });
   test("FETCH: with both, text that reads as rows wins (exact), else structuredContent is used", () => {
-    const good = mcpAnswer({ content: [{ type: "text", text: '{"results": [{"signups": 25.50, "active_users": 1}]}' }], structuredContent: { results: [{ signups: 25.5, active_users: 1 }] } }, fields);
-    expect(good.text).toContain("25.50");
-    expect(good.note).toBeUndefined();
-    const prose = mcpAnswer({ content: [{ type: "text", text: "Here are the weekly metrics you asked for." }], structuredContent: { results: [{ signups: 352, active_users: 2410 }] } }, fields);
-    expect(JSON.parse(prose.text)).toEqual({ results: [{ signups: 352, active_users: 2410 }] });
-    expect(prose.note).toMatch(/number formatting/);
+    expect(read({ content: [{ type: "text", text: '{"results": [{"signups": 25.50, "active_users": 1}]}' }], structuredContent: { results: [{ signups: 25.5, active_users: 1 }] } })).toEqual({ kind: "ok", rows: [[["Signups", "25.50"], ["Active", "1"]]], skipped: [] });
+    expect(read({ content: [{ type: "text", text: "Here are the weekly metrics you asked for." }], structuredContent: { results: [{ signups: 352, active_users: 2410 }] } })).toEqual({ kind: "ok", rows: [[["Signups", "352"], ["Active", "2410"]]], skipped: [] });
   });
-  test("FETCH: text only is used as is; nothing at all is empty text", () => {
-    expect(mcpAnswer({ content: [{ type: "text", text: "Signups: 1\nActive users: 2" }] }, fields)).toEqual({ text: "Signups: 1\nActive users: 2" });
-    expect(mcpAnswer({ content: [{ type: "image", data: "x" }] }, fields)).toEqual({ text: "" });
-    expect(mcpAnswer({ content: [{ type: "resource", resource: { uri: "x://r", text: "Signups: 1\nActive users: 2" } }] }, fields)).toEqual({ text: "Signups: 1\nActive users: 2" });
+  test("FETCH: text only is used as is; resource text too; nothing at all reads as nothing", () => {
+    expect(mcpAnswer({ content: [{ type: "text", text: "Signups: 1\nActive users: 2" }] })).toEqual({ parts: [{ kind: "text", text: "Signups: 1\nActive users: 2" }] });
+    expect(mcpAnswer({ content: [{ type: "image", data: "x" }] })).toEqual({ parts: [] });
+    expect(read({ content: [{ type: "resource", resource: { uri: "x://r", text: "Signups: 1\nActive users: 2" } }] })).toEqual({ kind: "ok", rows: [[["Signups", "1"], ["Active", "2"]]], skipped: [] });
   });
 });
