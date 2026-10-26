@@ -52,6 +52,10 @@ export const MAX_RECONNECTS = 5;
 export const FAILURES_TO_PAUSE = 2;
 /** A run whose session id is still unrecorded this long after it started is failed (the session, if any, is idle). */
 export const SESSION_RECORD_TIMEOUT_MS = 10 * 60_000;
+/** A consumer's claim on an event it is acting on expires after this long (a consumer that crashed mid-event). */
+export const EVENT_CLAIM_LEASE_MS = 5 * 60_000;
+/** A claim on reporting a run to its overnight policy expires after this long (a reporter that crashed). */
+export const POLICY_CLAIM_LEASE_MS = 10 * 60_000;
 /** Retry delay of an undelivered interrupt: 30 s doubling per failed attempt, at most 15 minutes. */
 export const interruptBackoffMs = (attempts: number) => Math.min(30_000 * 2 ** Math.max(0, attempts - 1), 15 * 60_000);
 const ERRORS_SESSION_MAY_RUN = new Set(["stream_lost", "stream_unavailable", "orchestrator_error"]);
@@ -477,10 +481,13 @@ export function createWorkers(deps: Deps): Workers {
   }
 
   async function overnightPolicyFor(tx: Tx, w: WorkerRow, runner: string): Promise<string | null> {
-    // The active overnight policy of this workflow version that the run's identity owns (role identities: any).
-    const [p] = await tx`select id from overnight_policies where workflow_id = ${w.workflowId} and version = ${w.version} and state = 'active'
-      and (${w.identityType} = 'role_identity' or owner_person_id = ${runner}) order by id limit 1`;
-    return (p?.id as string | undefined) ?? null;
+    // The active overnight policy of this workflow version that the run's runner owns, for person and role identities
+    // alike (the broker's rule, N1). Exactly one or none: two would leave the choice to sort order, so the run gets
+    // none (nothing is auto-approved and its recipients stay the empty set).
+    const ps = await tx`select id from overnight_policies where workflow_id = ${w.workflowId} and version = ${w.version} and state = 'active'
+      and owner_person_id = ${runner} limit 2`;
+    if (ps.length > 1) console.error(`workers: ${ps.length} active overnight policies of ${runner} for workflow ${w.workflowId} v${w.version}: none applies`);
+    return ps.length === 1 ? (ps[0]!.id as string) : null;
   }
 
   async function insertRun(
@@ -783,7 +790,7 @@ export function createWorkers(deps: Deps): Workers {
    */
   async function catchUp(ctx: Ctx): Promise<boolean> {
     const done = new Set(
-      ((await service(ctx.tenantId, (tx) => tx`select event_id from session_events where session_id = ${ctx.sessionId}`)) as Array<{ event_id: string }>).map((r) => r.event_id),
+      ((await service(ctx.tenantId, (tx) => tx`select event_id from session_events where session_id = ${ctx.sessionId} and handled_at is not null`)) as Array<{ event_id: string }>).map((r) => r.event_id),
     );
     for (const ev of await api.listEvents(ctx.sessionId)) {
       if (typeof ev?.id === "string" && done.has(ev.id)) continue;
@@ -792,15 +799,24 @@ export function createWorkers(deps: Deps): Workers {
     return false;
   }
 
-  async function seen(ctx: Ctx, ev: SessionEvent): Promise<boolean> {
-    const [r] = await service(ctx.tenantId, (tx) => tx`select 1 from session_events where session_id = ${ctx.sessionId} and event_id = ${ev.id}`);
-    return r !== undefined;
+  /**
+   * Claims an event before acting on it: true for exactly one consumer. A handled event is never claimed again; an
+   * unhandled claim older than the lease (its consumer crashed mid-event) can be taken over.
+   */
+  async function claimEvent(ctx: Ctx, ev: SessionEvent): Promise<boolean> {
+    const [c] = await service(ctx.tenantId, (tx) => tx`insert into session_events (tenant_id, session_id, event_id, type, handled_at, claimed_at)
+        values (current_setting('app.tenant_id')::uuid, ${ctx.sessionId}, ${ev.id}, ${ev.type.slice(0, 64)}, null, ${new Date(now())})
+      on conflict (tenant_id, session_id, event_id) do update set claimed_at = excluded.claimed_at
+        where session_events.handled_at is null and session_events.claimed_at < ${new Date(now() - EVENT_CLAIM_LEASE_MS)}
+      returning event_id`);
+    return c !== undefined;
   }
 
   async function mark(ctx: Ctx, ev: SessionEvent): Promise<void> {
     await service(ctx.tenantId, async (tx) => {
       await tx`insert into session_events (tenant_id, session_id, event_id, type, handled_at)
-        values (current_setting('app.tenant_id')::uuid, ${ctx.sessionId}, ${ev.id}, ${ev.type.slice(0, 64)}, ${new Date(now())}) on conflict do nothing`;
+        values (current_setting('app.tenant_id')::uuid, ${ctx.sessionId}, ${ev.id}, ${ev.type.slice(0, 64)}, ${new Date(now())})
+        on conflict (tenant_id, session_id, event_id) do update set handled_at = coalesce(session_events.handled_at, excluded.handled_at)`;
       // last_processed_at is informational only: catch-up never filters by it (see catchUp).
       await tx`update session_cursors set last_event_id = ${ev.id},
           last_processed_at = greatest(coalesce(last_processed_at, ''), ${ev.processed_at ?? ""})
@@ -818,7 +834,8 @@ export function createWorkers(deps: Deps): Workers {
   /** Acts on one event, then records it. True when the run has ended. */
   async function handle(ctx: Ctx, ev: SessionEvent): Promise<boolean> {
     if (typeof ev?.id !== "string" || typeof ev.type !== "string") return false;
-    if (await seen(ctx, ev)) return false;
+    // Claim, act, mark: two consumers of this session (two processes) never act on one event twice.
+    if (!(await claimEvent(ctx, ev))) return false;
     const ended = await act(ctx, ev);
     await mark(ctx, ev);
     return ended;
@@ -1165,28 +1182,44 @@ export function createWorkers(deps: Deps): Workers {
     });
     if (!after) return true;
     const { ended, w, paused } = after;
-    if (ended.overnightPolicyId) await reportPolicy(tenantId, ended.id, ended.overnightPolicyId, ended.state !== "failed", ended.costCents);
+    if (ended.overnightPolicyId) await reportPolicy(tenantId, ended.id);
     if (paused) await syncWorker(tenantId, w.id, false);
     return true;
   }
 
   /**
-   * An ended run's result to its overnight policy, then `policy_reported_at` (act, then mark: a crash in between
-   * reports it twice, which can only trip the breaker early, never hide a failure). Recovery reports what is left.
+   * An ended run's result and cost to its overnight policy, exactly by one reporter. The run is claimed first (an
+   * atomic update; a lease, so a crashed reporter's claim expires and recovery retries); the policy, the state and the
+   * cost come from the claimed row, never from the caller. The result is marked (`policy_result_at`) before the cost
+   * is sent, so a retry after a partial report never counts the result twice; the final mark (`policy_reported_at`,
+   * `policy_cost_cents`) and any cost that grew meanwhile (addPolicyCostDelta) commit together under the run's lock.
+   * Only a crash between a broker call and its own mark can repeat that call (it can only trip a breaker early).
    */
-  async function reportPolicy(tenantId: string, runId: string, policyId: string, ok: boolean, costCents: number): Promise<void> {
+  async function reportPolicy(tenantId: string, runId: string): Promise<void> {
     try {
+      const claimedAt = new Date(now());
+      const [c] = await service(tenantId, (tx) => tx`update worker_runs set policy_claimed_at = ${claimedAt}
+        where id = ${runId} and ended_at is not null and overnight_policy_id is not null and policy_reported_at is null
+          and (policy_claimed_at is null or policy_claimed_at < ${new Date(now() - POLICY_CLAIM_LEASE_MS)})
+        returning overnight_policy_id, state, cost_cents, policy_result_at`);
+      if (!c) return;
+      const policyId = c.overnight_policy_id as string;
+      const cost = Number(c.cost_cents);
       const b = broker();
-      const trip = await b.reportRunResult(tenantId, policyId, ok);
-      if (trip) await recordTrip(tenantId, runId, policyId, trip);
-      if (costCents > 0) {
-        const t2 = await b.reportNightSignals(tenantId, policyId, { costCents });
+      if (c.policy_result_at === null) {
+        const trip = await b.reportRunResult(tenantId, policyId, c.state !== "failed");
+        if (trip) await recordTrip(tenantId, runId, policyId, trip);
+        await service(tenantId, (tx) => tx`update worker_runs set policy_result_at = ${new Date(now())} where id = ${runId} and policy_claimed_at = ${claimedAt}`);
+      }
+      if (cost > 0) {
+        const t2 = await b.reportNightSignals(tenantId, policyId, { costCents: cost });
         if (t2) await recordTrip(tenantId, runId, policyId, t2);
       }
       await service(tenantId, async (tx) => {
-        // The cost this report counted; a cost that grew meanwhile (a settle) is added now, in this transaction.
-        await tx`update worker_runs set policy_reported_at = ${new Date(now())}, policy_cost_cents = ${costCents} where id = ${runId}`;
-        await addPolicyCostDelta(tx, runId);
+        const [m] = await tx`update worker_runs set policy_reported_at = ${new Date(now())}, policy_cost_cents = ${cost}
+          where id = ${runId} and policy_claimed_at = ${claimedAt} and policy_reported_at is null returning id`;
+        // The cost that grew after the claim read it (a settle): added now, in this transaction.
+        if (m) await addPolicyCostDelta(tx, runId);
       });
     } catch (e) {
       console.error(`workers: reporting run ${runId} to its overnight policy: ${(e as Error).message}`);
@@ -1245,6 +1278,9 @@ export function createWorkers(deps: Deps): Workers {
       const runs = (await api.listDeploymentRuns(d.deployment_id, d.last_run_seen_at ?? undefined)).sort((a, b) => a.created_at.localeCompare(b.created_at));
       for (const dr of runs) {
         const started = await service(tenantId, async (tx) => {
+          // Two polls (overlapping ticks, two processes) importing the same deployment run: the second waits here, then
+          // finds the first's run. This lock comes before every other lock of the import.
+          await tx`select pg_advisory_xact_lock(hashtext(${"offload_deployment_run:" + dr.id}))`;
           const [dup] = await tx`select id from worker_runs where deployment_run_ref = ${dr.id}`;
           const failed = Boolean(dr.error) || !dr.session_id;
           const w0 = await loadWorker(tx, d.worker_id);
@@ -1284,7 +1320,7 @@ export function createWorkers(deps: Deps): Workers {
         if (!started) continue;
         if (started.paused) await syncWorker(tenantId, d.worker_id, false);
         if (!started.attach) {
-          if (started.policy) await reportPolicy(tenantId, started.run.id, started.policy, false, 0);
+          if (started.policy) await reportPolicy(tenantId, started.run.id);
           continue;
         }
         if ("refused" in started && started.refused) {
@@ -1422,9 +1458,9 @@ export function createWorkers(deps: Deps): Workers {
     }
     await deliverPending(tenantId);
     await settleLost(tenantId);
-    const unreported =(await service(tenantId, (tx) => tx`select id, overnight_policy_id, state, cost_cents from worker_runs
+    const unreported = (await service(tenantId, (tx) => tx`select id, overnight_policy_id, state, cost_cents from worker_runs
       where ended_at is not null and overnight_policy_id is not null and policy_reported_at is null order by id limit 200`)) as Array<{ id: string; overnight_policy_id: string; state: string; cost_cents: string | number }>;
-    for (const r of unreported) await reportPolicy(tenantId, r.id, r.overnight_policy_id, r.state !== "failed", Number(r.cost_cents));
+    for (const r of unreported) await reportPolicy(tenantId, r.id);
   }
 
   // ---------- retention ----------

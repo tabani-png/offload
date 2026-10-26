@@ -184,3 +184,16 @@ passes it to the broker, and `worker_runs.input_recipients` is `NOT NULL DEFAULT
 skips its recipient check when `ProposeRun.inputRecipients` is undefined (broker.ts, out of S2-09's scope), so a
 missing set would let a worker propose an address it read in fetched content. Broker-side follow-up: make that field
 required, or treat a missing set as empty.
+
+## 20. A run's policy is its runner's; concurrent paths claim before they act
+- `overnightPolicyFor` takes the active policy of the workflow version that the run's runner owns, for person and role
+  identities alike (the broker's rule). Exactly one or none: two active policies of one runner for a version give
+  the run none (nothing auto-approved, recipients stay the empty set), never one chosen by sort order.
+- `reportPolicy` claims the run (atomic update, 10-minute lease) before any broker call and reads the policy, state
+  and cost from the claimed row; `policy_result_at` marks the result before the cost is sent; the final mark and any
+  cost growth (`addPolicyCostDelta`) commit together (migration 0909). Finish, recovery and the poll job never report
+  one run twice.
+- `pollDeployments` takes a per-deployment-run advisory lock before its duplicate check: overlapping polls import a
+  deployment run once and neither fails on the unique key.
+- The event consumer claims each event (`session_events.claimed_at`, 5-minute lease) before acting and marks it
+  handled after: two consumers of one session (two processes) never send a tool confirmation or result twice.
