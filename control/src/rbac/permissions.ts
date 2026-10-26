@@ -169,7 +169,7 @@ export const PERMISSIONS: readonly Permission[] = [
   row("POST", "/v1/handovers/:id/assign", ["T", "T", "Dp", "-", "-", "-"], {
     note: "successor must hold the job role and accept",
   }),
-  row("POST", "/v1/handovers/:id/accept", ["-", "-", "-", "S", "-", "-"], { note: "named successor" }),
+  row("POST", "/v1/handovers/:id/accept", ["S", "S", "S", "S", "-", "-"], { note: "named successor" }),
   row("POST", "/v1/handovers/:id/close", ["T", "T", "Dp", "-", "-", "-"]),
 
   // Compliance
