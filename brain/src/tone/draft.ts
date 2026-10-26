@@ -2,6 +2,7 @@
 // The draft is checked in code: numbers must come from the facts or recipient (ADR 0005), gaps are flagged.
 import { readFileSync } from "node:fs";
 import { modelFor, type Model, type ModelConfig } from "../models/model.ts";
+import { unrestoredPlaceholders, type NameMap } from "../privacy/names.ts";
 import { untrustedBlock } from "../workflows/untrusted.ts";
 import { retrieveExamples, type TonePack } from "./pack.ts";
 import type { Bucket } from "./types.ts";
@@ -23,6 +24,8 @@ export interface DraftRequest {
   facts: string;
   model: Model;
   models: ModelConfig;
+  /** s18: the run's name map; the router masks the request and restores the draft with it. */
+  names?: NameMap;
 }
 
 export interface DraftResult {
@@ -75,7 +78,7 @@ export function draftPrompt(req: Omit<DraftRequest, "model" | "models">, example
 export async function draftInTone(req: DraftRequest): Promise<DraftResult> {
   const query = [req.subject, req.recipient.org ?? "", req.recipient.notes ?? "", req.recipient.email.split("@")[1] ?? ""].join(" ");
   const examples = retrieveExamples(req.pack, query, { bucket: req.bucket, k: 4 });
-  const raw = await req.model.complete({ role: "draft", model: modelFor("draft", req.models), system: draftSystemPrompt(), prompt: draftPrompt(req, examples), maxTokens: 800 });
+  const raw = await req.model.complete({ role: "draft", model: modelFor("draft", req.models), system: draftSystemPrompt(), prompt: draftPrompt(req, examples), maxTokens: 800, ...(req.names === undefined ? {} : { names: req.names }) });
   const body = raw.replace(/^```\w*\n?|\n?```$/g, "").trim();
   const warnings: string[] = [];
   for (const n of numbersNotIn(body, [req.facts, JSON.stringify(req.recipient), req.subject])) warnings.push(`number not in the facts: ${n}`);
@@ -83,6 +86,7 @@ export async function draftInTone(req: DraftRequest): Promise<DraftResult> {
   const signs = examples.map((e) => e.signName).filter((s): s is string => s !== null);
   const usual = signs[0];
   if (usual !== undefined && signs.filter((s) => s === usual).length * 2 > signs.length && !body.trimEnd().endsWith(usual)) warnings.push(`does not sign off as "${usual}"`);
+  if (unrestoredPlaceholders(body).length > 0) warnings.push("a name Offload could not fill in: check the names before you approve");
   if (body === "") warnings.push("empty draft");
   return { body, examplesUsed: examples.map((e) => e.id), warnings };
 }

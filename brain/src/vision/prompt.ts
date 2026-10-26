@@ -1,5 +1,6 @@
 // The captioning prompt (SPEC C5). Domain-agnostic on purpose: no example apps, industries or tasks that would pull
 // every answer toward email. The model describes the WORK on the screen in the user's terms, as one internal note.
+import { maskNamesForStorage } from "../privacy/names.ts";
 import type { FrameRef, UserContext } from "./types.ts";
 
 export const SYSTEM_PROMPT = `You look at one screenshot of a person's computer screen and write a short structured note about the work they are doing in it. The note is private, stays on this computer, and is used later to spot work that repeats.
@@ -32,8 +33,9 @@ export function userPrompt(ref: FrameRef, context: UserContext = {}): string {
   if (app !== "") hints.push(`Frontmost app: ${app}.`);
   const host = clean(ref.host, 120);
   if (host !== "") hints.push(`Web site: ${host}.`);
-  const role = clean(context.role, 80);
-  const industry = clean(context.industry, 80);
+  // s18: the onboarding context is free text; a person's name in it is not sent.
+  const role = maskNamesForStorage(clean(context.role, 80));
+  const industry = maskNamesForStorage(clean(context.industry, 80));
   if (role !== "" || industry !== "") hints.push(`The person describes their work as: ${[role, industry].filter((x) => x !== "").join(", ")}. Use it only to choose words; describe only what is on screen.`);
   return [...hints, "Write the JSON note for this screenshot."].join("\n");
 }

@@ -18,6 +18,8 @@ import { predictedSteps } from "./probe.ts";
 import { draftTextStep } from "./text-step.ts";
 import { commitFor, missingWords } from "./commit-fields.ts";
 import { readSchema, readUniverse } from "../connectors/universe.ts";
+import { NameMap } from "../privacy/names.ts";
+import { readNamePolicy, signNames } from "../privacy/policy.ts";
 
 export interface GeneralDryRunOptions {
   home: string;
@@ -79,6 +81,9 @@ export async function generalDryRun(o: GeneralDryRunOptions): Promise<GeneralDry
   const out: GeneralDryRunInstanceDTO[] = [];
   const items: BatchItem[] = [];
   const universe = readUniverse(o.home);
+  // s18: one name map per dry run, so the same person has the same placeholder in every instance's prompt. The facts
+  // `sign:` line is the user's own name. The map never leaves this function's process.
+  const names = new NameMap(readNamePolicy(o.home, signNames(facts)));
   for (const inst of ev.instances.slice(0, o.limit)) {
     let built;
     if (sh.outputType === "form_fields" || sh.outputType === "rows") built = buildFields(sh, inst);
@@ -87,7 +92,7 @@ export async function generalDryRun(o: GeneralDryRunOptions): Promise<GeneralDry
       const extra: string[] = [];
       if (textStep !== undefined) {
         const what = textStep.title.replace(/^Draft the /, "").replace(/ in your words$/, "");
-        const d = await draftTextStep({ what, source: [sourceText(sh, inst), facts].filter((x) => x !== "").join("\n"), pack, model: o.model, models: o.models, stepKey: `${o.wf.id}/${textStep.id}`, ...(o.user === undefined ? {} : { user: o.user }) });
+        const d = await draftTextStep({ what, source: [sourceText(sh, inst), facts].filter((x) => x !== "").join("\n"), pack, model: o.model, models: o.models, names, stepKey: `${o.wf.id}/${textStep.id}`, ...(o.user === undefined ? {} : { user: o.user }) });
         text = d.text;
         extra.push(...d.warnings);
       }
@@ -145,3 +150,4 @@ export async function generalDryRun(o: GeneralDryRunOptions): Promise<GeneralDry
     warnings,
   };
 }
+
