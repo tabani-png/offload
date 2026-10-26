@@ -26,6 +26,7 @@ final class CompanyModel: ObservableObject {
   @Published private(set) var message: String?
   @Published private(set) var workflows: [Automation] = []
 
+  /// Opens a link in the browser (the self-view). Never the sign-in page: the brain opens that itself.
   var onOpenURL: ((URL) -> Void)?
 
   let service: CompanyService
@@ -47,15 +48,28 @@ final class CompanyModel: ObservableObject {
 
   // MARK: actions
 
+  /// The window's refresh (toolbar, on appear): a failure says so in one calm line.
   func refresh() {
     Task {
       do {
         status = try await service.refresh()
-        if status.isConnected { workflows = await loadWorkflows().filter { $0.status != .draft } }
+        message = nil
+        await reloadWorkflows()
       } catch {
         message = CompanyError.message(for: error)
       }
     }
+  }
+
+  /// The app's background read (launch, the refresh timer, opening the dashboard): never an error. A brain without
+  /// company sync reads as not set up, so the rail shows nothing and the menu offers a calm "Connect your company…".
+  func refreshQuietly() async {
+    let s = await service.statusQuietly()
+    if s != status { status = s }
+  }
+
+  private func reloadWorkflows() async {
+    workflows = status.isConnected ? await loadWorkflows().filter { $0.status != .draft } : []
   }
 
   /// The white button in the window: Connect, Read the notice, or nothing once syncing.
@@ -74,10 +88,10 @@ final class CompanyModel: ObservableObject {
     connectTask = Task { [weak self] in
       guard let self else { return }
       do {
-        let open: (URL) -> Void = { url in Task { @MainActor in self.onOpenURL?(url) } }
-        self.status = try await self.service.connect(open: open)
+        // The brain opened the sign-in page when it started the flow; here we only wait for it to finish.
+        self.status = try await self.service.connect()
         self.connect = .idle
-        if self.status.isConnected { self.workflows = await self.loadWorkflows().filter { $0.status != .draft } }
+        await self.reloadWorkflows()
         if self.status.waitingForNotice { self.sheet = .notice }
       } catch {
         self.connect = .failed(CompanyError.message(for: error))

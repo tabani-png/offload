@@ -3,7 +3,8 @@ import Foundation
 // S2-13: the Mac's company surfaces talk to the local brain's company-sync routes only (brain/API.md "Company sync",
 // S2-02): status, connect (loopback PKCE sign-in in the browser, ADR 0111 §1), the notice ack, the share preview and
 // confirm, pause and resume. The notice itself is the control plane's (S2-08) as the brain relays it in the status.
-// Nothing here talks to the control plane directly except opening its sign-in page and `/me` in the browser.
+// Nothing here talks to the control plane directly except opening `/me` in the browser. The sign-in page is opened
+// by the brain (SyncClient.connect opens it before POST /sync/connect returns): one owner, one tab, one PKCE flow.
 // Foundation only, so every rule below is tested without a window server.
 
 // MARK: status
@@ -372,6 +373,40 @@ enum CompanyGate {
   }
 }
 
+// MARK: entry
+
+/// Where the company shows up outside its own window. The app leads with where your time goes: company sync never
+/// pushes itself. Not connected is one calm menu item and one dashboard row; the rail shows it only once a company
+/// is in play. Nothing here carries per-person data: state only.
+enum CompanyEntry {
+  static let connectTitle = "Connect your company…"
+  static let openTitle = "Company…"
+
+  static func menuTitle(_ s: CompanySyncState) -> String {
+    switch s {
+    case .notSetUp, .notConnected, .revoked: return connectTitle
+    default: return openTitle
+    }
+  }
+
+  /// The rail's company mark, or nil to show nothing.
+  static func railState(_ s: CompanySyncState) -> CompanySyncState? {
+    switch s {
+    case .notSetUp, .notConnected: return nil
+    default: return s
+    }
+  }
+
+  /// The dashboard row: hidden when this Mac has no company to connect to.
+  static func showsOnDashboard(_ s: CompanySyncState) -> Bool { s != .notSetUp }
+}
+
+/// What the dashboard's company row needs: the status (tenant, queue) and the state the Company window shows.
+struct CompanyGlance: Equatable, Sendable {
+  var status: CompanyStatus
+  var state: CompanySyncState
+}
+
 // MARK: errors and copy
 
 enum CompanyError: Error, Equatable {
@@ -382,7 +417,7 @@ enum CompanyError: Error, Equatable {
     case .noticeFirst: return "Read your company's notice first. Nothing is shared before you acknowledge it."
     case .noNotice: return "Your company has no notice for you to acknowledge right now."
     case .notConnected: return "Connect to your company first."
-    case .unsafeURL: return "The sign-in page was not your company's. Offload did not open it."
+    case .unsafeURL: return "That sign-in page is not your company's address. Do not sign in there; Offload stopped waiting."
     case .signInTimedOut: return "Sign-in did not finish. Try again when you are ready."
     case .revoked: return "Your company disconnected this Mac. Connect again to keep sharing."
     case .changedSincePreview: return "This workflow changed since you looked. Review it again before sharing."
@@ -514,19 +549,25 @@ actor CompanyService {
     return s
   }
 
+  /// The background read for the rail, the dashboard and the menu: a brain without company sync (404), or one that
+  /// is not up yet, reads as "not set up" (or the last state seen), never as an error.
+  func statusQuietly() async -> CompanyStatus {
+    do { return try await refresh() } catch { return status ?? .empty }
+  }
+
   private func current() async throws -> CompanyStatus {
     if let status { return status }
     return try await refresh()
   }
 
-  /// Starts the brain's PKCE loopback sign-in, opens the control plane's page once, then polls the status until
-  /// this Mac is connected (or revoked, or the wait times out).
-  func connect(open: (URL) -> Void) async throws -> CompanyStatus {
+  /// Starts the brain's PKCE loopback sign-in, then polls the status until this Mac is connected (or revoked, or the
+  /// wait times out). The brain opens the sign-in page itself (one tab for its one loopback listener); the app never
+  /// opens the URL it gets back, it only checks it is the control plane's `/auth/login` and stops waiting if not.
+  func connect() async throws -> CompanyStatus {
     let s = try await current()
     guard CompanyGate.allows(.connect, status: s) else { return s }
     let url = try await api.connect()
     guard CompanyAuthorize.isSafe(url, control: s.controlURL) else { throw CompanyError.unsafeURL }
-    open(url)
     var waited = 0.0
     while true {
       let now = try await refresh()

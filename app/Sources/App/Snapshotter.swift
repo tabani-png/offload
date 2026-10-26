@@ -128,15 +128,15 @@ enum Snapshotter {
     let status = AnyView(Backdrop(padding: 28) {
       HStack(alignment: .top, spacing: 36) {
         VStack(alignment: .trailing, spacing: Tokens.Space.s12) {
-          ForEach(Array(states.enumerated()), id: \.offset) { _, e in
+          ForEach(Array(states.filter { CompanyEntry.railState($0.1) != nil }.enumerated()), id: \.offset) { _, e in
             HStack(spacing: Tokens.Space.s8) {
-              CompanyRailLine(state: e.1, now: now)
+              Text(e.1.label(now: now)).textStyle(Tokens.TypeScale.label).monospacedDigit()
               CompanyRailMark(state: e.1)
             }
           }
         }
         VStack(alignment: .leading, spacing: Tokens.Space.s8) {
-          ForEach(Array(states.enumerated()), id: \.offset) { _, e in
+          ForEach(Array(states.filter { CompanyEntry.showsOnDashboard($0.1) }.enumerated()), id: \.offset) { _, e in
             CompanySyncRow(status: e.0, state: e.1, now: now)
           }
         }
@@ -152,7 +152,33 @@ enum Snapshotter {
       ("company/share-source", scene(model(connected, sheet: .share(share), source: true), height: 780)),
       ("company/share-queued", scene(model(connected, sheet: .share(queuedShare), queued: true), height: 760)),
       ("company/status", status),
+      ("company/rail", companyRail(lastSync: lastSync)),
+      ("company/dashboard", companyDashboard(CompanySamples.status(.notConnected))),
+      ("company/dashboard-connected", companyDashboard(connected)),
     ]
+  }
+
+  /// S2-13: the live rail with the company mark under the tools (only once a company is in play), waiting for the
+  /// notice and syncing; and with no company, where it shows nothing.
+  static func companyRail(lastSync: Date) -> AnyView {
+    let r = RailModel(status: ObserverStatus(state: .watching, daysStored: 3, windowDays: 7, nextPurge: now, insightsWaiting: 1),
+                      automations: [], micRecording: false)
+    let states: [CompanyStatus] = [CompanySamples.status(.notConnected), CompanySamples.status(.connected, acknowledged: false),
+                                   CompanySamples.status(.connected, lastSync: lastSync)]
+    return AnyView(Backdrop(padding: 28) {
+      HStack(alignment: .top, spacing: 36) {
+        ForEach(Array(states.enumerated()), id: \.offset) { _, s in
+          RailView(rail: r, hoveringStatus: false, company: CompanyEntry.railState(CompanySyncState(s)))
+        }
+      }
+    })
+  }
+
+  /// S2-13: the overview with the company row last, under where your time goes.
+  static func companyDashboard(_ s: CompanyStatus) -> AnyView {
+    let m = dashboardModel()
+    m.updateCompany(CompanyGlance(status: s, state: CompanySyncState(s)))
+    return dashboardScene(m)
   }
 
   // MARK: s14 fixtures

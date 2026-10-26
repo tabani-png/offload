@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// S2-13: company sync state where people already look. The rail gets one more hover line (a building mark with
-/// the state dot); the dashboard gets one ringed row with the label, one quiet sentence and the next step.
+/// S2-13: company sync state where people already look. The rail gets a building mark with the state dot (only once
+/// a company is in play; its tooltip says the state); the dashboard gets one ringed row with the label, one quiet
+/// sentence and the next step.
 /// Colour = state only: the dot is the only hue, the mark and the text stay ink.
 
 /// The building glyph in a 40-pt glass capsule, like the rail's other capsules, with the state dot at its corner.
@@ -27,25 +28,6 @@ struct CompanyRailMark: View {
     }
     .buttonStyle(PressStyle())
     .accessibilityLabel("Company: \(state.short)")
-  }
-}
-
-/// The rail's hover line for company sync, in the same popover glass as the observer's lines.
-struct CompanyRailLine: View {
-  var state: CompanySyncState
-  var now: Date = Date()
-  @Environment(\.colorScheme) private var scheme
-
-  var body: some View {
-    let p = Palette(scheme: scheme)
-    HStack(spacing: Tokens.Space.s8) {
-      StatusDot(role: state.role, size: Tokens.Size.dot)
-      Text(state.label(now: now)).textStyle(Tokens.TypeScale.label).monospacedDigit().foregroundStyle(p.ink1)
-    }
-    .padding(.horizontal, Tokens.Space.s12)
-    .padding(.vertical, Tokens.Space.s8)
-    .glass(cornerRadius: Tokens.Radius.row, material: .popover)
-    .fixedSize()
   }
 }
 
@@ -83,7 +65,7 @@ struct CompanySyncRow: View {
           .background(RoundedRectangle(cornerRadius: Tokens.Radius.control, style: .continuous).fill(p.fill))
         VStack(alignment: .leading, spacing: Tokens.Space.nudge) {
           HStack(spacing: Tokens.Space.s8) {
-            Text(status.isConnected ? status.tenantLabel : "Company").textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
+            Text(status.isConnected ? status.tenantLabel : "Connect your company").textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
               .fixedSize().layoutPriority(1)
             Chip(text: chipText, dot: state.role)
           }

@@ -134,7 +134,7 @@ enum S213 {
 
 @Suite("S2-13 Company connect")
 struct S213ConnectTests {
-  @Test("CONNECT: Connect posts /sync/connect with the bearer token and opens the control plane's sign-in in the browser once")
+  @Test("CONNECT: Connect posts /sync/connect once with the bearer token and waits; the brain opens the sign-in page, not the app")
   func opensBrowser() async throws {
     let t = S213Transport()
     t.on("GET", "/sync/status", S213Contract.status(state: "not_connected"))
@@ -143,9 +143,8 @@ struct S213ConnectTests {
     t.on("GET", "/sync/status", S213Contract.status(state: "connected", notice: S213Contract.notice()))
     let svc = S213.service(t)
     _ = try await svc.refresh()
-    var opened: [URL] = []
-    let s = try await svc.connect { opened.append($0) }
-    #expect(opened == [URL(string: S213Contract.authorizeURL)!])
+    let s = try await svc.connect()
+    #expect(t.log.filter { $0 == "POST /sync/connect" }.count == 1)
     let connect = t.requests.first { $0.url!.path == "/sync/connect" }!
     #expect(connect.httpMethod == "POST")
     #expect(connect.value(forHTTPHeaderField: "Authorization") == "Bearer tok-s213")
@@ -167,16 +166,15 @@ struct S213ConnectTests {
     #expect(s.tenantLabel == "acme.offload.example")
   }
 
-  @Test("CONNECT: a sign-in URL that is not the control plane's /auth/login is never opened")
+  @Test("CONNECT: a sign-in URL that is not the control plane's /auth/login stops the wait with a warning")
   func unsafeURL() async throws {
     let t = S213Transport()
     t.on("GET", "/sync/status", S213Contract.status(state: "not_connected"))
     t.on("POST", "/sync/connect", 202, Data("{\"state\":\"waiting\",\"authorizeUrl\":\"https://evil.example/auth/login?x=1\"}".utf8))
     let svc = S213.service(t)
     _ = try await svc.refresh()
-    var opened: [URL] = []
-    await #expect(throws: CompanyError.unsafeURL) { try await svc.connect { opened.append($0) } }
-    #expect(opened.isEmpty)
+    await #expect(throws: CompanyError.unsafeURL) { try await svc.connect() }
+    #expect(t.log.filter { $0 == "GET /sync/status" }.count == 1, "no polling after a bad URL")
     #expect(CompanyAuthorize.isSafe(URL(string: S213Contract.authorizeURL)!, control: URL(string: S213Contract.control)))
     #expect(!CompanyAuthorize.isSafe(URL(string: "http://acme.offload.example/auth/login")!, control: URL(string: "http://acme.offload.example")))
     #expect(CompanyAuthorize.isSafe(URL(string: "http://127.0.0.1:8787/auth/login?a=1")!, control: URL(string: "http://127.0.0.1:8787")))
@@ -191,7 +189,7 @@ struct S213ConnectTests {
     let svc = S213.service(t)
     _ = try await svc.refresh()
     do {
-      _ = try await svc.connect { _ in }
+      _ = try await svc.connect()
       Issue.record("connect should have failed")
     } catch {
       #expect(CompanyError.message(for: error) == "Already connected.")
@@ -206,7 +204,7 @@ struct S213ConnectTests {
     t.on("GET", "/sync/status", S213Contract.status(state: "connecting"))
     let svc = CompanyService(api: S213.client(t), pollInterval: 1, connectTimeout: 3, sleep: { _ in })
     _ = try await svc.refresh()
-    await #expect(throws: CompanyError.signInTimedOut) { try await svc.connect { _ in } }
+    await #expect(throws: CompanyError.signInTimedOut) { try await svc.connect() }
     let polls = t.log.filter { $0 == "GET /sync/status" }.count
     #expect(polls >= 3 && polls <= 5)
   }
