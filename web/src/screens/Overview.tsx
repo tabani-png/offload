@@ -1,21 +1,14 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueries } from "@tanstack/react-query";
-import type { AdoptionReport, Batch, HoursSavedReport, HoursValue, Suppressed, Tenant } from "../api/types.ts";
+import type { AdoptionReport, Batch, HoursSavedReport, HoursValue, Suppressed, Tenant, Workflow, WorkingTimeReport } from "../api/types.ts";
 import { isSuppressed } from "../api/types.ts";
 import {
   Bars, Button, Card, Chip, GradeSplit, Ring, Row, Section, StatHero, StateTag, SuppressedCell, Table,
 } from "../design/components.tsx";
 import { hoursText, minutesText, monthName, pct, share } from "../lib/format.ts";
-import { Load, useDeps, useGet, useList } from "../app/data.tsx";
+import { Load, periodPath, useDeps, useFeature, useGet, useList, usePeriod } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
-
-export const PERIOD = { from: "2026-10-01", to: "2026-10-26", label: "October so far" };
-export const TREND_MONTHS = ["2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10"];
-
-const nextMonth = (m: string) => {
-  const [y, mo] = m.split("-").map(Number) as [number, number];
-  return mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, "0")}`;
-};
+import type { Period } from "../lib/period.ts";
 
 /** "Measured" when every second is grade A/B; otherwise say how much is estimated. */
 export function confidenceChip(v: HoursValue) {
@@ -34,48 +27,53 @@ export function HoursCell(props: { value: HoursValue | Suppressed }) {
   return isSuppressed(props.value) ? <SuppressedCell reason={props.value.reason} /> : <span className="t-label ink1">{hoursText(props.value.seconds)}</span>;
 }
 
-/**
- * One child row's hours. A group_floor cell whose own report is visible had 5 or more people with data and was hidden
- * only so a smaller sibling cannot be worked out from the total; it says so instead of "Fewer than 5 people".
- */
-export function ChildHoursCell(props: { child: HoursSavedReport["children"][number]; period: HoursSavedReport["period"] }) {
-  const { scope, value } = props.child;
-  const own = useGet<HoursSavedReport>(isSuppressed(value) && value.reason === "group_floor" && scope.id
-    ? `/v1/metrics/hours-saved?scope=${scope.type}:${scope.id}&from=${props.period.from}&to=${props.period.toExclusive}`
-    : null);
-  if (!isSuppressed(value)) return <HoursCell value={value} />;
-  return <SuppressedCell reason={value.reason} complementary={own.data !== undefined && !isSuppressed(own.data.total)} />;
+/** One child row's hours (a department or job role): hidden cells use the words that cover both floor cases. */
+export function ChildHoursCell(props: { child: HoursSavedReport["children"][number] }) {
+  const { value } = props.child;
+  return isSuppressed(value) ? <SuppressedCell reason={value.reason} tree /> : <HoursCell value={value} />;
 }
 
 export function GradeCell(props: { value: HoursValue | Suppressed }) {
   return isSuppressed(props.value) ? <span className="ink3">—</span> : <GradeSplit compact byGrade={props.value.byGrade} />;
 }
 
-function Trend() {
+function Trend(props: { period: Period }) {
   const { api } = useDeps();
   const qs = useQueries({
-    queries: TREND_MONTHS.map((m) => {
-      const path = `/v1/metrics/hours-saved?scope=company&from=${m}-01&to=${m === "2026-10" ? PERIOD.to : `${nextMonth(m)}-01`}`;
+    queries: props.period.trend.map((m) => {
+      const path = `/v1/metrics/hours-saved?scope=company&from=${m.from}&to=${m.to}`;
       return { queryKey: [path], queryFn: () => api.get<HoursSavedReport>(path) };
     }),
   });
+  if (qs.some((q) => q.isError)) return <div className="t-callout ink3" role="note">The monthly trend could not be loaded. Try again shortly.</div>;
   if (qs.some((q) => q.data === undefined)) return <div className="t-callout ink3" role="status">Loading</div>;
   const data = qs.map((q, i) => {
     const t = q.data!.total;
-    return { label: monthName(TREND_MONTHS[i]!, true), value: isSuppressed(t) ? 0 : t.seconds, partial: !q.data!.final };
+    // A suppressed month is hidden, not zero (ADR 0005): the bar shows a dash and the label says why.
+    return { label: monthName(props.period.trend[i]!.month, true), value: isSuppressed(t) ? null : t.seconds, partial: !q.data!.final };
   });
+  const words = (v: number | null) => (v === null ? "hidden, fewer than 5 people" : hoursText(v));
   return (
-    <Bars data={data} label={`Hours saved per month: ${data.map((d) => `${d.label} ${hoursText(d.value)}`).join(", ")}`} />
+    <>
+      <Bars data={data} label={`Hours saved per month: ${data.map((d) => `${d.label} ${words(d.value)}`).join(", ")}`} />
+      {data.some((d) => d.value === null) && (
+        <p className="t-callout ink3">A dashed month had fewer than 5 people with data, so its total is not shown.</p>
+      )}
+    </>
   );
 }
 
 export function OverviewScreen() {
   const navigate = useNavigate();
   const tenant = useGet<Tenant>("/v1/tenant");
-  const report = useGet<HoursSavedReport>(`/v1/metrics/hours-saved?scope=company&from=${PERIOD.from}&to=${PERIOD.to}`);
-  const adoptionQ = useGet<AdoptionReport>(`/v1/metrics/adoption?scope=company&from=${PERIOD.from}&to=${PERIOD.to}`);
+  const period = usePeriod();
+  const report = useGet<HoursSavedReport>(periodPath("/v1/metrics/hours-saved?scope=company", period));
+  const adoptionQ = useGet<AdoptionReport>(periodPath("/v1/metrics/adoption?scope=company", period));
   const pending = useList<Batch>("/v1/batches?state=pending");
   const waiting = pending.data?.length ?? 0;
+  // hs-1 reports carry workflow ids; their names live in the registry.
+  const workflows = useList<Workflow>("/v1/workflows");
+  const wfName = (id: string, fallback: string) => workflows.data?.find((w) => w.id === id)?.name ?? (workflows.isError ? fallback : "…");
 
   return (
     <Page
@@ -92,7 +90,7 @@ export function OverviewScreen() {
           const t = r.total;
           return (
             <>
-              <Section title="Hours saved" aside={`${PERIOD.label}, ${r.period.timezone}`}>
+              <Section title="Hours saved" aside={`${period!.label}, ${r.period.timezone}`}>
                 <Card className="card-hero">
                   {isSuppressed(t) ? (
                     <SuppressedCell reason={t.reason} />
@@ -111,8 +109,8 @@ export function OverviewScreen() {
               </Section>
 
               <div className="grid-2">
-                <Card title="Trend" aside={<span className="t-callout ink3">Last 6 months · October is partial</span>}>
-                  <Trend />
+                <Card title="Trend" aside={<span className="t-callout ink3">Last 6 months · {monthName(period!.month)} is partial</span>}>
+                  <Trend period={period!} />
                 </Card>
                 {!isSuppressed(t) && (
                   <Card title="Overnight and cloud" aside={<span className="t-callout ink3">Share of hours saved</span>}>
@@ -141,7 +139,7 @@ export function OverviewScreen() {
                     onOpen={(c) => void navigate({ to: "/departments/$id", params: { id: c.scope.id! } })}
                     columns={[
                       { key: "name", header: "Department", cell: (c) => <span className="t-label ink1">{c.label}</span> },
-                      { key: "hours", header: "Hours saved", align: "end", cell: (c) => <ChildHoursCell child={c} period={r.period} /> },
+                      { key: "hours", header: "Hours saved", align: "end", cell: (c) => <ChildHoursCell child={c} /> },
                       { key: "grade", header: "Confidence A · B · C", cell: (c) => <GradeCell value={c.value} /> },
                       { key: "people", header: "People using", align: "end", cell: (c) => (isSuppressed(c.value) ? <span className="ink3">—</span> : c.value.people) },
                       { key: "overnight", header: "Overnight", align: "end", cell: (c) => (isSuppressed(c.value) ? <span className="ink3">—</span> : pct(share(c.value.overnightSeconds, c.value.seconds))) },
@@ -150,8 +148,8 @@ export function OverviewScreen() {
                   {r.children.some((c) => isSuppressed(c.value)) && (
                     <p className="t-callout ink3">
                       Departments where fewer than 5 people have data in this period are hidden, and so is one more when
-                      only one would be, so no small group can be worked out from the total. Their hours still count in
-                      the company total.
+                      a small group could otherwise be worked out from the total. Their hours still count in the company
+                      total.
                     </p>
                   )}
                 </Card>
@@ -163,7 +161,7 @@ export function OverviewScreen() {
                     {r.topWorkflows.length === 0 && <p className="t-callout ink3">No workflow has saved time in this period yet.</p>}
                     {r.topWorkflows.map((w) => (
                       <Row key={w.workflowId}
-                        title={<Link to="/workflows/$id" params={{ id: w.workflowId }} className="link">{w.name}</Link>}
+                        title={<Link to="/workflows/$id" params={{ id: w.workflowId }} className="link">{wfName(w.workflowId, w.name)}</Link>}
                         detail={`Grade ${w.grade} · ${w.grade === "C" ? "estimated" : "measured"}`}
                         trailing={<>
                           <span className="t-label ink1">{hoursText(w.seconds)}</span>
@@ -175,6 +173,8 @@ export function OverviewScreen() {
                 </Card>
                 <Quality report={r} adoption={adoptionQ.data} />
               </div>
+
+              <CompanyWorkingTime period={period!} />
             </>
           );
         }}
@@ -183,10 +183,46 @@ export function OverviewScreen() {
   );
 }
 
+/**
+ * Company working time: team medians only, under the group floor like every aggregate, no list of people (ADR 0108 §6).
+ * Absent while the feature is off or still in its notice period; the department page carries the off notice.
+ */
+function CompanyWorkingTime(props: { period: Period }) {
+  const wt = useFeature("working_time");
+  const q = useGet<WorkingTimeReport>(wt.on ? periodPath("/v1/metrics/working-time?scope=company", props.period) : null);
+  if (!wt.on) return null;
+  return (
+    <div data-section="working-time">
+      <Section title="Working time" aside={`${props.period.label} · team medians only`}>
+        <Card>
+          <Load q={q}>
+            {(w) => isSuppressed(w.value) ? <SuppressedCell reason={w.value.reason} /> : (
+              <div className="stack">
+                <div className="grid-3">
+                  <div className="stat"><span className="stat-value">{minutesText(w.value.medianActiveMinutesPerDay * 60)}</span><span className="t-callout ink2">median active time a day</span></div>
+                  <div className="stat"><span className="stat-value">{minutesText(w.value.p25 * 60)} – {minutesText(w.value.p75 * 60)}</span><span className="t-callout ink2">middle half of the company</span></div>
+                  <div className="stat"><span className="stat-value">{w.value.people} people</span><span className="t-callout ink2">in the group</span></div>
+                </div>
+                <p className="t-callout ink3">Nobody is listed or ranked. For process improvement, not for pay or discipline.</p>
+              </div>
+            )}
+          </Load>
+        </Card>
+      </Section>
+    </div>
+  );
+}
+
 function Quality(props: { report: HoursSavedReport; adoption?: AdoptionReport }) {
   const a = props.adoption?.value;
   return (
     <Card title="Quality">
+      {a && isSuppressed(a) && (
+        <p className="t-callout ink3">
+          <SuppressedCell reason={a.reason} tree />. Success, rejection and review-time figures are shown only when each
+          comes from at least 5 people.
+        </p>
+      )}
       {a && !isSuppressed(a) && (
         <div className="grid-2">
           <div className="stat"><span className="stat-value">{pct(a.successRate)}</span><span className="t-callout ink2">of runs succeed</span></div>

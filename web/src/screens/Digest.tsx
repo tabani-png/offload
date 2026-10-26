@@ -1,10 +1,11 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import type { Digest, KillSwitch, OvernightPolicy, Workflow } from "../api/types.ts";
+import type { Digest, KillSwitch, OvernightPolicy, Person, Workflow } from "../api/types.ts";
+import { ApiError } from "../api/client.ts";
 import { Button, Card, Chip, ErrorNote, Field, Row, Section, Sheet, StateTag } from "../design/components.tsx";
 import { dayText, timeText, usd } from "../lib/format.ts";
-import { Load, useDeps, useGet, useList } from "../app/data.tsx";
+import { Load, useDeps, useGet, useList, usePeriod, useSession } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
 
 const OUTCOME = {
@@ -12,9 +13,23 @@ const OUTCOME = {
   rejected: { role: "neutral", words: "Rejected" }, capped: { role: "needsYou", words: "Stopped at budget" },
 } as const;
 
+/** Only an owner or admin may set a tenant-wide stop (API.md, S2-07). */
+export const canStopAll = (me: Person | undefined) => me?.accessRole === "owner" || me?.accessRole === "admin";
+
+/**
+ * Who is offered "Clear the stop" (API.md "Clearing a kill switch"): owners and admins. An admin may not clear a
+ * stop an owner set, but the server decides on the role recorded when the stop was set, which the kill-switch DTO
+ * (frozen schema) does not carry; a person's current role may differ. So admins are offered the action and a
+ * refusal is explained in plain words (CLEAR_REFUSED_WORDS), never guessed from the directory.
+ */
+export const canClearStopAll = (me: Person | undefined) => me?.accessRole === "owner" || me?.accessRole === "admin";
+
+export const CLEAR_REFUSED_WORDS = "An owner set this stop, so only an owner can clear it. Sending stays stopped.";
+
 export function DigestScreen() {
   const navigate = useNavigate();
-  const q = useGet<Digest>("/v1/me/digest?day=2026-10-25");
+  const period = usePeriod();
+  const q = useGet<Digest>(period ? `/v1/me/digest?day=${period.today}` : null);
   const workflows = useList<Workflow>("/v1/workflows");
   const policies = useList<OvernightPolicy>("/v1/overnight-policies");
   const switches = useList<KillSwitch>("/v1/kill-switches");
@@ -23,17 +38,24 @@ export function DigestScreen() {
   const policyName = (id: string) => name(policies.data?.find((p) => p.id === id)?.workflowId ?? "");
   const waiting = q.data?.waiting.length ?? 0;
   const tenantStop = switches.data?.find((k) => k.scope === "tenant" && k.active);
+  const me = useSession().data?.person;
+  const [clearOpen, setClearOpen] = useState(false);
+  const canClear = tenantStop !== undefined && canClearStopAll(me);
 
   return (
     <Page title="Morning digest" subtitle={q.data ? dayText(q.data.day) : undefined}
       actions={<>
-        <Button onClick={() => setStopOpen(true)} disabled={!!tenantStop}>{tenantStop ? "Sending is stopped" : "Stop all sending"}</Button>
+        {canClear && <Button onClick={() => setClearOpen(true)}>Clear the stop</Button>}
+        {canStopAll(me) && !tenantStop && <Button onClick={() => setStopOpen(true)}>Stop all sending</Button>}
         {waiting > 0 && <Button primary keycap="3" onClick={() => void navigate({ to: "/approvals" })}>Review {waiting} waiting</Button>}
       </>}>
-      <Load q={q}>
+      {tenantStop && <StateTag role="needsYou">All sending is stopped since {timeText(tenantStop.setAt)}: {tenantStop.reason}</StateTag>}
+      {q.error instanceof ApiError && q.error.code === "not_found" ? (
+        // No digest for the day (none compiled yet, or the server does not offer it): calm words, not a fault.
+        <Card><p className="t-body ink2" role="note">There is no morning digest for today yet.</p></Card>
+      ) : <Load q={q}>
         {(d) => (
           <>
-            {tenantStop && <StateTag role="needsYou">All sending is stopped since {timeText(tenantStop.setAt)}: {tenantStop.reason}</StateTag>}
             <div className="grid-3">
               <Card><div className="stat"><span className="stat-value">{d.ran.length}</span><span className="t-callout ink2">runs overnight</span></div></Card>
               <Card><div className="stat"><span className="stat-value">{waiting}</span><span className="t-callout ink2">batches waiting for approval</span></div></Card>
@@ -80,8 +102,9 @@ export function DigestScreen() {
             </Section>
           </>
         )}
-      </Load>
+      </Load>}
       <StopSheet open={stopOpen} onClose={() => setStopOpen(false)} />
+      <ClearSheet open={clearOpen} onClose={() => setClearOpen(false)} />
     </Page>
   );
 }
@@ -101,11 +124,37 @@ function StopSheet(props: { open: boolean; onClose: () => void }) {
     <Sheet open={props.open} onClose={props.onClose} title="Stop all sending"
       footer={<Button primary type="submit" form="stop-form" disabled={reason.trim() === "" || m.isPending} keycap="↩">Stop now</Button>}>
       <form id="stop-form" className="stack" onSubmit={(e) => { e.preventDefault(); m.mutate(); }}>
-        <p className="t-body ink2">Every workflow in the company stops before its next send, on Macs and in the cloud. Drafts are kept. You can clear it later.</p>
+        <p className="t-body ink2">
+          Every workflow in the company stops before its next send, on Macs and in the cloud. Drafts are kept. An owner
+          or admin can clear it later; a stop an owner sets is cleared only by an owner.
+        </p>
         <Field label="Reason" hint="Shown to everyone whose workflows stop.">
           <textarea className="input" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={200} />
         </Field>
         {m.isError && <ErrorNote error={m.error} />}
+      </form>
+    </Sheet>
+  );
+}
+
+function ClearSheet(props: { open: boolean; onClose: () => void }) {
+  const { api } = useDeps();
+  const qc = useQueryClient();
+  const m = useMutation({
+    mutationFn: () => api.delete<KillSwitch>("/v1/kill-switches/tenant/null"),
+    onSuccess: () => {
+      void qc.invalidateQueries();
+      props.onClose();
+    },
+  });
+  return (
+    <Sheet open={props.open} onClose={props.onClose} title="Clear the stop"
+      footer={<Button primary type="submit" form="clear-form" disabled={m.isPending} keycap="↩">Clear now</Button>}>
+      <form id="clear-form" className="stack" onSubmit={(e) => { e.preventDefault(); m.mutate(); }}>
+        <p className="t-body ink2">Workflows may send again from their next step. Batches still need their approvals.</p>
+        {m.isError && (m.error instanceof ApiError && m.error.code === "forbidden"
+          ? <div className="error-note" role="alert"><span className="t-body ink1">{CLEAR_REFUSED_WORDS}</span></div>
+          : <ErrorNote error={m.error} />)}
       </form>
     </Sheet>
   );

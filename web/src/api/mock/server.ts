@@ -340,6 +340,21 @@ export const ROUTES: Route[] = [
       return k;
     },
   },
+  {
+    // Clearing rules of API.md (S2-07), for the tenant stop the web offers: owner, or admin unless an owner set it.
+    method: "DELETE", path: "/v1/kill-switches/:scope/:targetId", response: schema("kill-switch.schema.json"),
+    handle: (r, s) => {
+      const target = r.params.targetId === "null" ? null : r.params.targetId;
+      const k = s.killSwitches.find((x) => x.active && x.scope === r.params.scope && x.targetId === target);
+      if (!k) return notFound();
+      const setter = s.people.find((p) => p.id === k.setBy);
+      if (k.scope === "person" && k.targetId === s.me.id) fail("forbidden", 403);
+      if (s.me.accessRole !== "owner" && !(s.me.accessRole === "admin" && setter?.accessRole !== "owner")) fail("forbidden", 403);
+      k.active = false;
+      audit(s, "kill_switch.clear", { type: k.scope, id: k.targetId }, null);
+      return k;
+    },
+  },
 
   // Cloud workers
   { method: "GET", path: "/v1/workers", response: list("worker.schema.json"), handle: () => fx.workers },
