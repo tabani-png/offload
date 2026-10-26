@@ -50,7 +50,7 @@ const GENERIC = new Set(
   (
     "i mac macs macos iphone ipad windows gmail google linkedin zoom slack teams excel sheets outlook monday tuesday wednesday thursday friday saturday " +
     "sunday january february march april may june july august september october november december am pm ok ceo cto cfo coo vp hr pdf csv uk us eu " +
-    "saas ai api crm ats series seed ps"
+    "saas ai api crm ats series seed ps mr mrs ms mx dr prof sir madam"
   ).split(" "),
 );
 /** Words that often start a sentence and name nothing: function words, greetings and the verbs of writing advice.
@@ -83,11 +83,27 @@ const COMMON = new Set(
     "fine nice cool awesome perfect lovely amazing ideal important useful helpful easy hard simple clear true real right wrong " +
     "bring brought build builds call called feel felt find found hear keep kept leave left mean meant move moved pay paid plan planned " +
     "run ran set share shared stop talk talked turn turned wait work worked works working cover covered explain fix fixed resend reset " +
-    "confirm confirmed agree agreed apply applied join joined reach reached schedule scheduled book booked suggest suggested recommend"
+    "confirm confirmed agree agreed apply applied join joined reach reached schedule scheduled book booked suggest suggested recommend " +
+    "folks guys friends friend all everybody"
+  ).split(" "),
+);
+/** Words the playbook generator itself writes (synth.ts phrases and rule text) that are not already common words. They
+ * are ordinary words of every playbook, so no heuristic promotes them into the identity and the leak check never reads
+ * them as a name; a drift test (fixes4.test.ts) fails when synth.ts writes a word missing here. */
+const GENERATOR_WORDS = new Set(
+  (
+    "acknowledgement acknowledges adds alternative apology attach backed backs baseline bracket cadence changed compute copy core counted " +
+    "counts credential data date detail details different dropped earlier example examples fact facts failed form frustration greeting handled " +
+    "happens hook identity invites issue key knows lands learned length line lines location lowers messaging missing model nudge number " +
+    "original patterns person personal phrases piece plain plainly preface problem progress quote rates reads reason recent reference request " +
+    "resolved reuse reword seen sentence sentences sign-off smaller specific stage step strings text traction tries unknown used uses usual " +
+    "voice wording words written"
   ).split(" "),
 );
 /** Mail providers and generic hosts: their domain is not the recipient's organisation. */
 const GENERIC_HOSTS = new Set("gmail googlemail outlook hotmail live yahoo icloud me mac aol proton protonmail gmx seznam mail email web www help support info".split(" "));
+/** Second-level labels under a country code ("co.uk", "com.au"). */
+const SECOND_LEVEL = new Set("co com org net ac gov edu ltd plc ne or go".split(" "));
 /** Address local parts that are a role, not a person ("sales@", "support@"). */
 const ROLE_LOCALS = new Set("info sales support hello contact contacts team jobs careers admin office press hr billing accounts marketing partners noreply no reply enquiries inquiries mail email".split(" "));
 /** Job titles and generic words of signature lines. */
@@ -123,6 +139,15 @@ const base = (w: string) => w.toLowerCase().replace(/['’]s$/, "").replace(/[-'
 const isCap = (w: string) => /^[\p{Lu}\p{Lt}\p{Lo}]/u.test(w);
 /** A word that is not a name by itself, wherever it stands: generic, common or a contraction of "I". */
 const plainWord = (b: string) => GENERIC.has(b) || COMMON.has(b) || /^i['’]/.test(b);
+/** A plain word or a word the generator writes: never a name by itself, never masked in lower case, never a leak. */
+export const ordinaryWord = (b: string) => plainWord(b) || GENERATOR_WORDS.has(b);
+/** May this base word name the author or their company (sets matched whatever the case)? Two letters or more, letters
+ * only (no digits, no brackets), not an ordinary word and not a job-title word. Anything else would mask ordinary text
+ * and make the generator's own wording a leak. */
+const promotable = (b: string) => [...b].length >= 2 && /^\p{L}[\p{L}\p{M}'’-]*$/u.test(b) && !ordinaryWord(b) && !TITLE_WORDS.has(b);
+/** A person or organisation name part: two letters or more, letters only. Plain words may stay (they are skipped in
+ * lower case and by the leak check), single letters and digits may not. */
+const nameLike = (b: string) => [...b].length >= 2 && /^\p{L}[\p{L}\p{M}'’-]*$/u.test(b);
 /** Does this text start with a capitalised word that is not a plain word (an unmasked name)? */
 export function startsUnmasked(text: string): boolean {
   const w = text.match(TOKEN_RE)?.[0];
@@ -137,9 +162,12 @@ export function addressParts(addr: string): { people: string[]; org: string | nu
   const people = local.split(/[._+\-:]/).filter((p) => /^\p{L}{2,}$/u.test(p) && !ROLE_LOCALS.has(p));
   let org: string | null = null;
   if (at >= 0) {
+    // The registrable label names the organisation ("app.northzone.com" -> northzone, "northzone.co.uk" -> northzone),
+    // not a subdomain ("app", "go", "mail").
     const labels = a.slice(at + 1).split(".").filter((l) => l !== "");
-    const stem = labels.length >= 2 ? labels.slice(0, -1).find((l) => !GENERIC_HOSTS.has(l)) : undefined;
-    org = stem !== undefined && stem.length >= 2 ? stem : null;
+    const sld = labels.length >= 3 && SECOND_LEVEL.has(labels.at(-2)!) && labels.at(-1)!.length === 2;
+    const stem = labels.length >= 2 ? labels.at(sld ? -3 : -2) : undefined;
+    org = stem !== undefined && stem.length >= 2 && !GENERIC_HOSTS.has(stem) && /^\p{L}/u.test(stem) ? stem : null;
   }
   return { people, org };
 }
@@ -167,21 +195,26 @@ function signatureLines(body: string): string[] {
   return out.slice(0, 6);
 }
 
+/** Add to the author or company set only a word that may name them (promotable). */
+const addIf = (set: Set<string>, b: string) => {
+  if (promotable(b)) set.add(b);
+};
+
 function addSignature(id: Identity, lines: readonly string[]): void {
   lines.forEach((line, i) => {
     for (const part of line.split(/[,|·]/).map((p) => p.trim()).filter((p) => p !== "")) {
-      for (const h of part.match(HOST_RE) ?? []) for (const l of h.toLowerCase().split(".").slice(0, -1)) if (!GENERIC_HOSTS.has(l) && l.length >= 2) id.company.add(l);
+      for (const h of part.match(HOST_RE) ?? []) for (const l of h.toLowerCase().split(".").slice(0, -1)) if (!GENERIC_HOSTS.has(l) && !SECOND_LEVEL.has(l)) addIf(id.company, l);
       if (/\d/.test(part) || /[@/]/.test(part)) continue;
       const words = part.split(/\s+/).filter((w) => /^\p{Lu}[\p{L}\p{M}\d'-]+$/u.test(w));
       if (words.length === 0) continue;
-      if (i === 0 && /^\p{Lu}[\p{L}\p{M}'-]+(?: \p{Lu}[\p{L}\p{M}'-]+){0,2}$/u.test(part)) for (const w of words) id.author.add(base(w));
-      else for (const w of words) if (!TITLE_WORDS.has(w.toLowerCase()) && !GENERIC.has(w.toLowerCase())) id.company.add(base(w));
+      if (i === 0 && /^\p{Lu}[\p{L}\p{M}'-]+(?: \p{Lu}[\p{L}\p{M}'-]+){0,2}$/u.test(part)) for (const w of words) addIf(id.author, base(w));
+      else for (const w of words) addIf(id.company, base(w));
     }
   });
 }
 
 /** The name after the greeting word ("Hi Łukasz," -> Łukasz). */
-const GREETING_NAME_RE = /^\p{L}+\s+([\p{Lu}\p{Lt}\p{Lo}][\p{L}\p{M}'-]*)/u;
+const GREETING_NAME_RE = /^\p{L}+\s+(?:(?:mr|mrs|ms|mx|dr|prof)\.?\s+)?([\p{Lu}\p{Lt}\p{Lo}][\p{L}\p{M}'-]*)/iu;
 
 const stripRe = (s: string) => s.replace(/^\s*(?:(?:re|fwd?|fw|aw)\s*:\s*)+/i, "").trim();
 
@@ -196,22 +229,31 @@ function initialAt(text: string, offset: number): boolean {
 export function buildIdentity(messages: readonly PlaybookMessage[], facts = ""): Identity {
   const id = emptyIdentity();
   const f = factLines(facts);
-  for (const w of (f.sign ?? "").split(/\s+/)) if (/^\p{L}[\p{L}\p{M}\d'-]+$/u.test(w)) id.author.add(base(w));
-  for (const w of (f.company ?? "").split(/\s+/)) if (/^\p{L}[\p{L}\p{M}\d'-]+$/u.test(w) && !GENERIC.has(w.toLowerCase())) id.company.add(base(w));
+  for (const w of (f.sign ?? "").split(/[\s,]+/)) addIf(id.author, base(w));
+  for (const w of (f.company ?? "").split(/[\s,]+/)) if (!GENERIC.has(w.toLowerCase())) addIf(id.company, base(w));
   const cores: string[] = [];
   for (const m of messages) {
     const c = cleanEmail({ id: m.id, to: m.to, subject: m.subject, body: m.body, sentAt: m.sentAt });
     for (const addr of m.to) {
       const p = addressParts(addr);
-      for (const n of p.people) id.people.add(n);
+      for (const n of p.people) if (nameLike(n)) id.people.add(n);
       if (p.org !== null) id.orgs.add(p.org);
     }
     const g = c.greeting === null ? null : GREETING_NAME_RE.exec(c.greeting)?.[1];
-    if (g !== undefined && g !== null) id.people.add(base(g));
-    if (c.signName !== null) for (const w of c.signName.split(/\s+/)) id.author.add(base(w));
+    if (g !== undefined && g !== null && nameLike(base(g)) && !GENERIC.has(base(g))) id.people.add(base(g));
+    if (c.signName !== null) for (const w of c.signName.split(/\s+/)) addIf(id.author, base(w));
     addSignature(id, signatureLines(m.body));
-    cores.push(c.core, stripRe(m.subject));
+    cores.push(c.core);
   }
+  // A Title Case subject ("Your Order Has Shipped") capitalises every word, so its capitals say nothing: each of its
+  // words is read as if it started a sentence (a name only if it is not common and never written in lower case).
+  const subjects = messages.map((m) => stripRe(m.subject)).filter((s) => s !== "");
+  const titleCase = (s: string) => {
+    const long = (s.match(TOKEN_RE) ?? []).filter((w) => !isPlaceholder(w) && [...w].length >= 4);
+    return long.length >= 2 && long.every(isCap);
+  };
+  const nCores = cores.length;
+  cores.push(...subjects);
   // Proper nouns: capitalised mid-sentence and not generic, or capitalised at the start of a sentence and neither a
   // common word nor ever written in lower case ("Priya is an engineer"). Brand words: capitalised in at least half
   // the subjects and never written in lower case (the author's product, e.g. the company name in every subject).
@@ -219,20 +261,21 @@ export function buildIdentity(messages: readonly PlaybookMessage[], facts = ""):
   const lower = new Set<string>();
   const masked = cores.map(maskContacts);
   for (const t of masked) for (const w of t.match(TOKEN_RE) ?? []) if (!isPlaceholder(w) && !isCap(w)) lower.add(base(w));
-  for (const t of masked) {
+  masked.forEach((t, ti) => {
+    const allInitial = ti >= nCores && titleCase(t);
     for (const mm of t.matchAll(TOKEN_RE)) {
       const w = mm[0];
       if (isPlaceholder(w) || !isCap(w) || [...w].length < 2) continue;
       const b = base(w);
       if (GENERIC.has(b) || /^i['’]/.test(b)) continue;
-      if (!initialAt(t, mm.index ?? 0) || (!COMMON.has(b) && !lower.has(b))) id.words.add(b);
+      if ((!allInitial && !initialAt(t, mm.index ?? 0)) || (!COMMON.has(b) && !lower.has(b))) id.words.add(b);
     }
-  }
+  });
   id.vocab = lower;
-  const subjects = messages.map((m) => stripRe(m.subject)).filter((s) => s !== "");
+  // Brand words count only capitals that carry meaning: a word capitalised in a subject that is not Title Case.
   const inSubjects = new Map<string, number>();
-  for (const s of subjects) for (const w of new Set((s.match(TOKEN_RE) ?? []).filter(isCap).map(base))) inSubjects.set(w, (inSubjects.get(w) ?? 0) + 1);
-  for (const [w, n] of inSubjects) if (n * 2 >= subjects.length && subjects.length >= 2 && !lower.has(w) && !GENERIC.has(w) && w.length >= 3) id.company.add(w);
+  for (const s of subjects) if (!titleCase(s)) for (const w of new Set((s.match(TOKEN_RE) ?? []).filter((x) => !isPlaceholder(x) && isCap(x)).map(base))) inSubjects.set(w, (inSubjects.get(w) ?? 0) + 1);
+  for (const [w, n] of inSubjects) if (n * 2 >= subjects.length && subjects.length >= 2 && !lower.has(w) && !GENERIC.has(w) && w.length >= 3) addIf(id.company, w);
   // A name is never also a generic word of the identity's other sets, and never an ordinary word.
   for (const set of [id.people, id.orgs, id.words]) for (const w of [...set]) if (id.author.has(w) || id.company.has(w)) set.delete(w);
   for (const set of [id.author, id.company, id.people, id.orgs, id.words]) for (const w of set) lower.delete(w);
@@ -268,12 +311,14 @@ export function maskText(text: string, id: Identity, scope: MaskScope = {}): str
   const out = t.replace(TOKEN_RE, (w, offset: number) => {
     if (isPlaceholder(w)) return w;
     const b = base(w);
-    if (inIdentity(id, "author", b)) return "{sender}";
-    if (inIdentity(id, "company", b)) return "{company}";
+    // An ordinary word is never the author or the company, even when an older identity digest holds it.
+    const ordinary = ordinaryWord(b);
+    if (!ordinary && inIdentity(id, "author", b)) return "{sender}";
+    if (!ordinary && inIdentity(id, "company", b)) return "{company}";
     // A known contact is masked whatever its case ("we help alice at northzone"), unless it is also an ordinary word
     // ("will", "hope"): then only its capitalised form is taken for the name.
     if (!isCap(w)) {
-      if (plainWord(b)) return w;
+      if (ordinary || [...b].length < 2) return w;
       if (first !== null && b === first) return "{first}";
       if (org !== null && b === org) return "{their_org}";
       return inIdentity(id, "contacts", b) ? "[name]" : w;

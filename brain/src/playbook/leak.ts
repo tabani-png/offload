@@ -1,7 +1,7 @@
 // De-personalisation check, fail closed: a playbook (or a notes edit, or a model's wording) that still holds a
 // person's name, an address, a phone, a link, a figure that is not one of the playbook's own counts, or the author's
 // name or company is refused. Findings carry the kind and the field path, never the value.
-import { EMAIL_RE, HOST_RE, identityBase, inIdentity, isCap, isPlaceholder, PHONE_RE, plainWord, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
+import { EMAIL_RE, HOST_RE, identityBase, inIdentity, isCap, isPlaceholder, ordinaryWord, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
 import type { Playbook } from "./types.ts";
 
 export type LeakKind = "author" | "company" | "name" | "email" | "phone" | "link" | "number";
@@ -45,10 +45,13 @@ export function findTextLeaks(text: string, id: Identity, allowedNumbers: Readon
     // Only the defined placeholders are skipped: a word in any other brackets ("{northzone}") is checked as text.
     if (isPlaceholder(w)) continue;
     const b = identityBase(w);
+    // An ordinary word (common, generic, or one the generator writes) is never a leak, even when an identity set or an
+    // older digest holds it: the generator's own wording must not fail the build.
+    if (ordinaryWord(b)) continue;
     if (inIdentity(id, "author", b)) add("author");
     else if (inIdentity(id, "company", b)) add("company");
-    else if (isCap(w) && [...w].length >= 2 && !plainWord(b) && (inIdentity(id, "names", b) || !vocab.has(b))) add("name");
-    else if (!isCap(w) && !plainWord(b) && inIdentity(id, "contacts", b)) add("name");
+    else if (isCap(w) && [...w].length >= 2 && (inIdentity(id, "names", b) || !vocab.has(b))) add("name");
+    else if (!isCap(w) && [...w].length >= 2 && inIdentity(id, "contacts", b)) add("name");
   }
   return out;
 }

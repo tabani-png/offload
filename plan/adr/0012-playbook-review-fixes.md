@@ -52,3 +52,16 @@ expired was checked against facts.md only while reporting "re-checked"; and that
   a stored salt.
 - `buildWorkflowPlaybook` takes no per-workflow lock: two concurrent builds (up to 61 model calls each) can race on
   `playbook.json` and the digest. Proposed: a per-workflow build lock (409 while one runs).
+
+## Fix round 4 (Codex re-review of 5b955cc)
+10. **Only name-like words join the identity (amends §1).** The author and company sets are matched whatever the case,
+    so every heuristic that fills them (facts `sign:`/`company:`, the sign name, the signature block, subject brand
+    words) adds a word only when it is two letters or more, letters only, not a common or generic word, not a job-title
+    word and not a word the generator writes (`GENERATOR_WORDS`, guarded by a drift test over `synth.ts`). A Title Case
+    subject gives no capitalisation evidence: it adds no brand word and its words count as sentence-initial. Greeting
+    names skip honorifics ("Dear Ms Kowalski" -> kowalski) and single letters; an address organisation is the
+    registrable label ("app.northzone.com" -> northzone), not a subdomain.
+11. **Ordinary words are never masked in lower case or read as a leak**, even when an older identity digest holds them,
+    so routine subjects or recipients named like generator words ("Tom Hook at Progress") cannot fail the build closed.
+    A real name that is also an ordinary word is still masked when capitalised mid-sentence (`[name]`); it is no longer
+    matched in lower case, which is the accepted cost.
