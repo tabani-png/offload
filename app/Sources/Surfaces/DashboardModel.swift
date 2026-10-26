@@ -11,7 +11,15 @@ final class DashboardModel: ObservableObject {
   /// Why the dashboard could not load, as one calm sentence (s09a).
   @Published private(set) var problem: String?
   /// s10d: the sidebar's place, the files kept until you delete them, and the auto-send sheet.
-  @Published var section: DashboardSection = .overview
+  @Published var section: DashboardSection = DashboardSection.home
+  /// s23: where the time goes (GET /time), for the week or one stored day (`timeDay`), and why it could not load.
+  @Published private(set) var time: TimeBreakdown?
+  @Published private(set) var timeDay: String?
+  @Published private(set) var timeProblem: String?
+  /// s23: the breakdown's dimension (task, app, kind of work).
+  @Published var timeDimension: TimeDimension = .task
+  /// The stored days of the week, for the day picker (kept while a day is shown).
+  @Published private(set) var timeWeekDays: [String] = []
   @Published private(set) var keptFiles: [KeptFile] = []
   @Published private(set) var autoSend: AutoSendSheet?
   @Published private(set) var autoSendWorking = false
@@ -75,6 +83,35 @@ final class DashboardModel: ObservableObject {
       problem = BrainError.message(for: error)
     }
     keptFiles = (try? await client.keptFiles()) ?? keptFiles
+    await loadTime()
+  }
+
+  /// s23: GET /time for the week (`day` nil) or one stored day. Reading time drafts nothing.
+  func loadTime(day: String? = nil) async {
+    do {
+      let b = try await client.timeBreakdown(day: day)
+      time = b
+      timeDay = day
+      if b.window.kind == .week { timeWeekDays = b.window.days }
+      timeProblem = nil
+    } catch {
+      timeProblem = BrainError.message(for: error)
+    }
+  }
+
+  func showTimeDay(_ day: String?) { Task { await loadTime(day: day) } }
+
+  /// s23: a workflow is opened only from a finding whose best fix is a workflow, and only when the person asks: the
+  /// existing draft flow (POST /workflows/draft), then the review window.
+  func openInsight(_ insightId: String) {
+    Task {
+      do {
+        let w = try await client.workflow(forInsight: insightId)
+        onOpenWorkflow?(w.id)
+      } catch {
+        timeProblem = BrainError.message(for: error)
+      }
+    }
   }
 
   func show(_ s: DashboardSection) { section = s }
@@ -246,6 +283,16 @@ final class DashboardModel: ObservableObject {
   }
 
   // MARK: snapshot support
+
+  /// s23 snapshots: the time screen on a fixed breakdown.
+  func previewTime(_ b: TimeBreakdown, weekDays: [String] = NeutralWeek.days, dimension: TimeDimension = .task) {
+    time = b
+    timeDay = b.window.kind == .day ? b.window.days.first : nil
+    timeWeekDays = weekDays
+    timeDimension = dimension
+    timeProblem = nil
+    section = .time
+  }
 
   func preview(_ d: DashboardData, pointer: PointerRequest? = nil, section: DashboardSection = .overview,
                keptFiles: [KeptFile] = MockBrainClient.sampleKeptFiles, autoSend: AutoSendSheet? = nil,
