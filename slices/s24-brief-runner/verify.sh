@@ -37,17 +37,22 @@ echo "$all" | grep -E "^Ran [0-9]+ tests" || true
 [ $acode -eq 0 ] || { echo "$all" | grep -E "\(fail\)" | head -20; fail "full brain suite exited $acode"; }
 
 echo "== scope"
-if git -C "$ROOT" cat-file -e "$BASE" 2>/dev/null; then
-  changed="$( (git -C "$ROOT" diff --name-only "$BASE"...HEAD; git -C "$ROOT" diff --name-only HEAD) 2>/dev/null | sort -u)"
-  for p in $changed; do
+. "$ROOT/scripts/lib/slice-changes.sh"
+slice_files --allow-skip "$BASE"; scope_rc=$?
+case $scope_rc in
+  0) ;;
+  3) echo "scope: SKIPPED ($SLICE_ERROR)" ;;
+  *) fail "scope check could not run: $SLICE_ERROR" ;;
+esac
+if [ $scope_rc -eq 0 ]; then
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
     case "$p" in
       engine/*|packet/*|schemas/*|app/*|brain/tools/import-screenwatch.ts|brain/src/understanding/induce.ts|brain/src/understanding/embed.ts|brain/src/plan/steps.ts|brain/src/insights/saving.ts|brain/src/store/vault.ts|brain/src/connectors/chain.ts|brain/src/connectors/targets.ts|brain/src/workflows/gate.ts|brain/src/workflows/allowlist.ts|brain/src/workflows/executor.ts|brain/src/workflows/batch.ts|brain/src/workflows/runner.ts|brain/src/workflows/chain-executor.ts)
         fail "out-of-scope path changed: $p" ;;
     esac
-  done
-  echo "scope checked ($(echo "$changed" | grep -c . ) files)"
-else
-  echo "scope: BASE $BASE not in history (shallow clone), skipped"
+  done <<< "$SLICE_FILES"
+  echo "scope checked ($(printf '%s\n' "$SLICE_FILES" | grep -c .) files)"
 fi
 
 [ "$fails" -eq 0 ] && echo "s24-brief-runner: PASS" || { echo "s24-brief-runner: $fails failing check(s)"; exit 1; }
