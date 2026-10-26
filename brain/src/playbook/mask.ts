@@ -283,7 +283,9 @@ export function buildIdentity(messages: readonly PlaybookMessage[], facts = "", 
     if (g !== undefined && g !== null && nameLike(base(g)) && !GENERIC.has(base(g))) id.people.add(base(g));
     if (c.signName !== null) for (const w of c.signName.split(/\s+/)) addIf(id.author, base(w));
     addSignature(id, signatureLines(m.body));
-    cores.push(c.core);
+    const so = stripSignOff(c.core);
+    if (so.name !== null) for (const w of so.name.match(TOKEN_RE) ?? []) addIf(id.author, base(w));
+    cores.push(so.core);
   }
   // A Title Case subject ("Your Order Has Shipped") capitalises every word, so its capitals say nothing: each of its
   // words is read as if it started a sentence (a name only if it is not common and never written in lower case).
@@ -422,6 +424,60 @@ function neighbourIsName(text: string, n: { w: string; at: number } | null, id?:
 }
 const nextIsName = (text: string, end: number, id?: Identity) => neighbourIsName(text, nextWord(text, end), id);
 
+/** A closing line of a sign-off ("Best,", "Thanks!", "Kind regards", "Talk soon"), in any case. */
+const CLOSING_LINE_RE = /^(?:best|thanks|thank you|thanks again|many thanks|cheers|regards|kind regards|warm regards|best regards|best wishes|warmly|sincerely|yours|yours sincerely|yours truly|all the best|talk soon|speak soon|ttyl|ta)[ \t]*[,.!]*$/i;
+const LONE_NAME_LINE_RE = /^[-–—~]?[ \t]*\p{L}[\p{L}\p{M}'’-]*(?:[ \t]+\p{L}[\p{L}\p{M}'’-]*)?$/u;
+const lineWords = (line: string) => (line.match(TOKEN_RE) ?? []).filter((w) => !isPlaceholder(w));
+
+/** The sign-off at the end of a core, in any case: from the last closing line ("Best,") with at most six short lines
+ * after it, from a "--" separator, or a lone short last paragraph: "- name" always, "frank" when not ordinary words.
+ * cleanEmail only strips a capitalised sign name; this strips "Best,\nfrank" too. `name`: the line after the closing,
+ * or the lone line. */
+export function stripSignOff(core: string): { core: string; name: string | null } {
+  const lines = core.replace(/\r\n?/g, "\n").split("\n");
+  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
+  const sep = lines.findIndex((l) => /^(?:--|—+|__+)[ \t]*$/.test(l.trim()));
+  let end = sep >= 0 ? sep : lines.length;
+  let name: string | null = null;
+  for (let i = end - 1; i >= Math.max(0, end - 8); i--) {
+    if (!CLOSING_LINE_RE.test(lines[i]!.trim())) continue;
+    const after = lines.slice(i + 1, end).filter((l) => l.trim() !== "");
+    if (after.length <= 6 && after.every((l) => lineWords(l).length <= 8)) {
+      name = after[0]?.trim() ?? null;
+      end = i;
+    }
+    break;
+  }
+  if (name === null && end === lines.length) {
+    const last = lines[end - 1]?.trim() ?? "";
+    const blankBefore = end >= 2 && lines[end - 2]!.trim() === "";
+    if (blankBefore && LONE_NAME_LINE_RE.test(last) && (/^[-–—~]/.test(last) || !lineWords(last).every((w) => ordinaryWord(base(w))))) {
+      name = last.replace(/^[-–—~][ \t]*/, "");
+      end -= 1;
+    }
+  }
+  while (end > 0 && lines[end - 1]!.trim() === "") end--;
+  return { core: lines.slice(0, end).join("\n"), name: name !== null && lineWords(name).length <= 3 ? name : null };
+}
+
+/** Is this word part of a sign-off name by where it stands: a short line (three words at most) right after a closing
+ * line, a lone short last paragraph ("frank", "- frank") that is not ordinary words, or the first part of a
+ * "name | title | company" line? Any case. */
+function signOffName(text: string, offset: number): boolean {
+  const ls = text.lastIndexOf("\n", offset - 1) + 1;
+  const le0 = text.indexOf("\n", offset);
+  const le = le0 < 0 ? text.length : le0;
+  const line = text.slice(ls, le).trim();
+  if (line.includes("|") && !text.slice(ls, offset).includes("|")) return true;
+  const before = text.slice(0, ls).split("\n");
+  while (before.length > 0 && before[before.length - 1]!.trim() === "") before.pop();
+  const prev = before[before.length - 1]?.trim() ?? "";
+  if (CLOSING_LINE_RE.test(prev) && lineWords(line).length <= 3 && !CLOSING_LINE_RE.test(line)) return true;
+  const isLast = text.slice(le).trim() === "";
+  const blankBefore = /\n[ \t]*\n[ \t]*$/.test(text.slice(0, ls));
+  return isLast && blankBefore && before.length > 0 && LONE_NAME_LINE_RE.test(line) && (/^[-–—~]/.test(line) || !lineWords(line).every((w) => ordinaryWord(base(w))));
+}
+
 /** A given or family name of the s18 lexicon, ambiguous or not ("frank", "rose", "will"). */
 const lexName = (b: string) => GIVEN.has(b) || FAMILY.has(b) || AMBIGUOUS_GIVEN.has(b);
 /** Dictionary words SCOWL also lists as proper nouns ("baker", "king", "young"): names in lower case next to a person
@@ -494,6 +550,7 @@ export function identityHit(text: string, w: string, offset: number, id: Identit
   if (!isCap(w) && org !== null && b === org) return "their_org";
   if (isCap(w) && org !== null && b.length >= 3 && (b === org || org.startsWith(b))) return "their_org";
   if ([...w].length < 2) return null;
+  if (signOffName(text, offset)) return "name";
   // A lexicon name (s18 GIVEN, FAMILY or ambiguous): capitalised anywhere (a month only outside a date; the
   // generator's own sentence openers stay), or in lower case next to a person or a cue word.
   if (lexName(b) && isCap(w)) {
@@ -548,7 +605,7 @@ export function maskedCore(m: PlaybookMessage, id: Identity): { core: string; fi
   const c = cleanEmail({ id: m.id, to: m.to, subject: m.subject, body: m.body, sentAt: m.sentAt });
   const first = c.greeting === null ? null : (GREETING_NAME_RE.exec(c.greeting)?.[1] ?? null);
   const org = m.to.map((a) => addressParts(a).org).find((o) => o !== null) ?? null;
-  return { core: maskText(c.core, id, { first, org }), first };
+  return { core: maskText(stripSignOff(c.core).core, id, { first, org }), first };
 }
 
 export { EMAIL_RE, HOST_RE, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, base as identityBase, initialAt, isCap, plainWord, GENERIC };

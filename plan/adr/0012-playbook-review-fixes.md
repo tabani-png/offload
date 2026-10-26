@@ -124,3 +124,14 @@ expired was checked against facts.md only while reporting "re-checked"; and that
     Accepted cost now: only a lone lower-case dictionary-word name with no cue and no neighbouring name stays ("bill me
     later" is kept, and so would "grace" alone be). Over-masking: a lexicon word after a cue used as a plain word
     ("to mark", "with grace"), and the capitalised word before a name at a sentence start ("The young king").
+
+## Fix round 9 (independent review of 1111dce)
+17. **Sign-offs in any case.** `stripSignOff` (mask.ts) removes the sign-off from every core after `cleanEmail`, in
+    any case: from the last closing line ("Best,", "Thanks!", "Kind regards", "Talk soon", ...) when at most six short
+    lines follow, from a `--` separator, or a lone short last paragraph ("- name" always; "frank" when not ordinary
+    words). Its name line joins the author set. `cleanEmail` (tone/clean.ts) is shared with the tone pack and outside
+    this slice, so the playbook strips on top of it rather than changing it. `identityHit` also reads, any case, a
+    short line (three words at most) right after a closing line, a lone short last paragraph and the first part of a
+    "name | title | company" line as a name, so the leak check catches the same text.
+    Accepted cost: a two-word last paragraph after a blank line that is not ordinary words ("Deck attached" is,
+    "Zentrix rocks" is not) and the words of a short line right after a closing are masked.
