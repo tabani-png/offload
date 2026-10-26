@@ -6,7 +6,7 @@ import type { Tx } from "../../db/pool.ts";
 import {
   SUPPRESSED, baselinesFor, buildRows, cellOf, inScope, median, nearestRank, selectRows, type Scope,
 } from "../../../../packages/hours-saved/src/index.ts";
-import { hiddenInTree, peopleCell } from "./floor.ts";
+import { hiddenInTree, loadHierarchy, peopleCell, type Cells } from "./floor.ts";
 import { aggregateRead, loadAttribution, loadInputs } from "./load.ts";
 import { bounds, checkGroupScope, parsePeriod, parseScope, periodDays, personRead, tenantSettings } from "./scope.ts";
 
@@ -54,7 +54,18 @@ async function adoption(c: Context<AppEnv>, deps: Deps) {
     const value = await (async () => {
       if (withData.size < floor) return SUPPRESSED;
       // Floored where the scope sits in the company tree, so a hidden department is not company minus the others.
-      if (await hiddenInTree(tx, scope, (s, parent) => peopleCell(peopleWithData(of(s, parent)).size), floor)) return SUPPRESSED;
+      const cells: Cells = {
+        cell: (s, parent) => peopleCell(peopleWithData(of(s, parent)).size),
+        rest: (parent, kids) => {
+          const x = of(parent, null);
+          const outside = (a: ReturnType<typeof who.get>, id: string) => !kids.some((k) => member(a, id, k));
+          return peopleCell(peopleWithData({
+            rows: x.rows.filter((r) => !kids.some((k) => inScope(r, k))),
+            daily: x.daily.filter((d) => outside(who.get(d.person_id), d.person_id)),
+          }).size);
+        },
+      };
+      if (hiddenInTree(await loadHierarchy(tx), scope, cells, floor)) return SUPPRESSED;
       const active = new Set([...rows.map((r) => r.personId), ...inDaily.filter((d) => d.active_workflows > 0).map((d) => d.person_id)]);
       const workflows = new Set([...rows.map((r) => r.workflowId), ...inDaily.filter((d) => (d.runs ?? 0) > 0).map((d) => d.workflow_id!)]);
       const head = await headcount(tx, scope, who);
@@ -118,8 +129,14 @@ async function workingTime(c: Context<AppEnv>, deps: Deps) {
     const kept = inDept(scope);
     const people = new Set(kept.map((r) => r.person_id)).size;
     const minutes = kept.map((r) => r.active_minutes).sort((a, b) => a - b);
-    // Working-time scopes stop at departments, so a cell under the company is the department's own cell.
-    const hidden = () => hiddenInTree(tx, scope, (s) => peopleCell(new Set(inDept(s).map((r) => r.person_id)).size), floor);
+    // Working-time scopes stop at departments, so a cell under the company is the department's own cell, and the
+    // company's remainder is the people in no department.
+    const peopleOf = (rs: typeof all) => peopleCell(new Set(rs.map((r) => r.person_id)).size);
+    const cells: Cells = {
+      cell: (s) => peopleOf(inDept(s)),
+      rest: (parent, kids) => peopleOf(inDept(parent).filter((r) => !kids.some((k) => k.type === "department" && r.department_id === k.id))),
+    };
+    const hidden = async () => hiddenInTree(await loadHierarchy(tx), scope, cells, floor);
     const value =
       scope.type !== "person" && (people < floor || (await hidden()))
         ? SUPPRESSED

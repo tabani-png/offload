@@ -5,30 +5,40 @@ import { principalOf, reply, tenantTx, type App, type AppEnv, type Deps } from "
 import type { Tx } from "../../db/pool.ts";
 import { HttpError, invalid, page, pageParams } from "../../schema/http.ts";
 import {
-  SUPPRESSED, baselinesFor, buildRows, cellOf, evidence, isSuppressed, report, selectRows, type Anomaly, type HoursSavedReport,
-  type Period, type ReportInput, type RunRow, type Scope,
+  SUPPRESSED, baselinesFor, buildRows, cellOf, evidence, inScope, isSuppressed, report, selectRows, type Anomaly,
+  type HoursSavedReport, type Period, type ReportInput, type RunRow, type Scope,
 } from "../../../../packages/hours-saved/src/index.ts";
-import { hiddenInTree, type CellFor } from "./floor.ts";
+import { COMPANY, childrenIn, floorNode, hiddenInTree, loadHierarchy, type Cells, type Hierarchy } from "./floor.ts";
 import { aggregateRead, loadInputs, loadReviews, loadRuns, loadSamples, withAggregateRead } from "./load.ts";
 import {
-  bounds, checkGroupScope, childrenOf, monthOf, parsePeriod, parseScope, personRead, tenantSettings,
+  bounds, checkGroupScope, monthOf, parsePeriod, parseScope, personRead, tenantSettings,
 } from "./scope.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** hours-saved-evidence.schema.json caps the sample list. */
 const MAX_SAMPLES = 500;
+/** hours-saved-report.schema.json caps the children list; the floor is applied over all of them first. */
+const MAX_CHILDREN = 500;
 
-/** The hs-1 input for a group scope over a period: every run of the tenant in the period (scope selection is hs-1's). */
-export async function groupInput(tx: Tx, scope: Scope, period: Period, tz: string, floor: number): Promise<ReportInput> {
+/**
+ * The hs-1 input for a group scope over a period: every run of the tenant in the period (scope selection is hs-1's)
+ * and every child of the scope (no page of them: the floor must see them all).
+ */
+export async function groupInput(tx: Tx, scope: Scope, period: Period, tz: string, floor: number, h?: Hierarchy): Promise<ReportInput> {
   const rows = await loadInputs(tx, bounds(period, tz));
-  return { ...rows, estimates: [], workflows: [], scope, children: await childrenOf(tx, scope), period, timezone: tz, floor };
+  const children = childrenIn(h ?? (await loadHierarchy(tx)), scope);
+  return { ...rows, estimates: [], workflows: [], scope, children, period, timezone: tz, floor };
 }
 
-/** The rows report() computes from, and the cells of any group scope over them. */
-function hoursCells(input: ReportInput): { rows: RunRow[]; cellFor: CellFor; sel: (rs: readonly RunRow[], s: Scope) => RunRow[] } {
+/** The rows report() computes from, and the cells of any group scope over those rows or a subset of them. */
+function hoursCells(input: ReportInput): { rows: RunRow[]; sel: (rs: readonly RunRow[], s: Scope) => RunRow[]; over: (base: readonly RunRow[]) => Cells } {
   const rows = buildRows(input.runs, input.reviews, baselinesFor(input.samples, input.estimates, input.runs));
   const sel = (rs: readonly RunRow[], s: Scope) => selectRows(rs, s, input.period, input.timezone);
-  return { rows, sel, cellFor: (s, parent) => cellOf(sel(parent === null ? rows : sel(rows, parent), s)) };
+  const over = (base: readonly RunRow[]): Cells => ({
+    cell: (s, parent) => cellOf(sel(parent === null ? base : sel(base, parent), s)),
+    rest: (parent, kids) => cellOf(sel(base, parent).filter((r) => !kids.some((k) => inScope(r, k)))),
+  });
+  return { rows, sel, over };
 }
 
 /**
@@ -72,16 +82,33 @@ async function hoursSaved(c: Context<AppEnv>, deps: Deps): Promise<HoursSavedRep
     }
     await checkGroupScope(c, tx, p, scope);
     await aggregateRead(tx);
-    const input = await groupInput(tx, scope, period, timezone, floor);
+    const h = await loadHierarchy(tx);
+    const input = await groupInput(tx, scope, period, timezone, floor, h);
     const r = report(input);
     const final = await isFinal(tx, scope, period, r.inputsDigest);
     const cells = hoursCells(input);
+    const all = cells.over(cells.rows);
     // Under the floor itself, or hidden in the company tree (ADR 0103 §5 across reads, floor.ts): nothing but the
     // suppression marker. Anomalies are per-row detail ("one person in ...", a workflow id), so they go too.
-    if (isSuppressed(r.total) || (await hiddenInTree(tx, scope, cells.cellFor, floor))) {
-      return { ...r, total: SUPPRESSED, children: r.children.map((c) => ({ ...c, value: SUPPRESSED })), topWorkflows: [], anomalies: [], final };
+    if (isSuppressed(r.total) || hiddenInTree(h, scope, all, floor)) {
+      const children = r.children.slice(0, MAX_CHILDREN).map((c) => ({ ...c, value: SUPPRESSED }));
+      return { ...r, total: SUPPRESSED, children, topWorkflows: [], anomalies: [], final };
     }
-    return { ...r, anomalies: flooredAnomalies(r.anomalies, cells.sel(cells.rows, scope), floor), final };
+    // Children floored over the complete set and the remainder (floor.ts), and only then cut to what the schema holds.
+    const children =
+      scope.type === "company" || scope.type === "department"
+        ? floorNode(scope, scope.type === "company" ? null : COMPANY, input.children, all, floor).children.slice(0, MAX_CHILDREN)
+        : [];
+    // A workflow listed under a department or job role is floored in the company tree of that workflow's runs, or the
+    // company's figure for it minus this one would give the workflow's seconds for the few people outside.
+    const topWorkflows =
+      scope.type === "company"
+        ? r.topWorkflows
+        : r.topWorkflows.filter((w) => {
+            const runsOfW = cells.over(cells.rows.filter((x) => x.workflowId === w.workflowId));
+            return !hiddenInTree(h, scope, runsOfW, floor, { ignoreEmpty: true });
+          });
+    return { ...r, children, topWorkflows, anomalies: flooredAnomalies(r.anomalies, cells.sel(cells.rows, scope), floor), final };
   });
 }
 
