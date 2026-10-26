@@ -67,6 +67,12 @@ struct CompanySyncRow: View {
     }
   }
 
+  /// The chip stays short so the row never squeezes the name; the sentence under it says the rest.
+  var chipText: String {
+    if case .syncing = state { return state.label(now: now) }
+    return state.short
+  }
+
   var body: some View {
     let p = Palette(scheme: scheme)
     RingBox {
@@ -78,7 +84,8 @@ struct CompanySyncRow: View {
         VStack(alignment: .leading, spacing: Tokens.Space.nudge) {
           HStack(spacing: Tokens.Space.s8) {
             Text(status.isConnected ? status.tenantLabel : "Company").textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
-            Chip(text: state.label(now: now), dot: state.role)
+              .fixedSize().layoutPriority(1)
+            Chip(text: chipText, dot: state.role)
           }
           Text(state.detail(status)).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
             .lineLimit(2).fixedSize(horizontal: false, vertical: true)
@@ -90,5 +97,21 @@ struct CompanySyncRow: View {
       .padding(.vertical, Tokens.Space.s12)
     }
     .accessibilityElement(children: .combine)
+  }
+}
+
+/// A ScrollView live; in snapshots the content itself, top-aligned and clipped (ImageRenderer draws no
+/// NSScrollView content), the way the dashboard and Connections pages do it.
+struct CompanyScroll<Content: View>: View {
+  var axes: Axis.Set = .vertical
+  @ViewBuilder var content: Content
+  @Environment(\.isSnapshot) private var isSnapshot
+
+  var body: some View {
+    if isSnapshot {
+      content.frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading).clipped()
+    } else {
+      ScrollView(axes) { content }
+    }
   }
 }

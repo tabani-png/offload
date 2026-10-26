@@ -13,7 +13,7 @@ struct CompanyView: View {
 
   var body: some View {
     let p = Palette(scheme: scheme)
-    ScrollView {
+    CompanyScroll {
       VStack(alignment: .leading, spacing: Tokens.Space.s24) {
         header(p)
         if model.status.isConnected {

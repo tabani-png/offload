@@ -62,7 +62,7 @@ struct CompanyShareSheet: View {
 
       if model.showSource {
         Well {
-          ScrollView([.vertical, .horizontal]) {
+          CompanyScroll(axes: [.vertical, .horizontal]) {
             Text(preview.source).textStyle(Tokens.TypeScale.code).foregroundStyle(p.ink2)
               .textSelection(.enabled)
               .fixedSize()

@@ -8,7 +8,7 @@ struct CompanyNoticeSheet: View {
   @Environment(\.colorScheme) private var scheme
 
   static let width: CGFloat = Tokens.Layout.confirmSheet
-  static let textHeight: CGFloat = 220
+  static let textHeight: CGFloat = 252
 
   var body: some View {
     let p = Palette(scheme: scheme)
@@ -20,7 +20,7 @@ struct CompanyNoticeSheet: View {
       }
 
       RingBox {
-        ScrollView {
+        CompanyScroll {
           NoticeText(markdown: s.notice?.markdown ?? "")
             .padding(Tokens.Space.s16)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -105,8 +105,13 @@ struct NoticeText: View {
     }
   }
 
+  /// Bold and italics render; links stay plain ink text (colour means state, and a notice is read, not clicked).
   static func inline(_ s: String) -> AttributedString {
-    (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
+    guard var a = try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) else {
+      return AttributedString(s)
+    }
+    for run in a.runs where run.link != nil { a[run.range].link = nil }
+    return a
   }
 }
 

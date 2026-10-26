@@ -146,10 +146,10 @@ enum Snapshotter {
     return [
       ("company/connect", scene(model(CompanySamples.status(.notConnected)), height: 300)),
       ("company/connect-waiting", scene(model(CompanySamples.status(.notConnected), connect: .waiting), height: 300)),
-      ("company/connect-connected", scene(model(connected))),
-      ("company/notice", scene(model(waiting, sheet: .notice), height: 860)),
+      ("company/connect-connected", scene(model(connected), height: 760)),
+      ("company/notice", scene(model(waiting, sheet: .notice), height: 640)),
       ("company/share", scene(model(connected, sheet: .share(share)), height: 700)),
-      ("company/share-source", scene(model(connected, sheet: .share(share), source: true), height: 900)),
+      ("company/share-source", scene(model(connected, sheet: .share(share), source: true), height: 780)),
       ("company/share-queued", scene(model(connected, sheet: .share(queuedShare), queued: true), height: 760)),
       ("company/status", status),
     ]
