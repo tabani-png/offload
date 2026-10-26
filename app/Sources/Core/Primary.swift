@@ -10,11 +10,14 @@ enum ReviewPrimary: Equatable, Sendable {
   /// voice yet: run it again with your voice before anything else. Approve and Connect are secondary.
   case runWithVoice
   case approve
+  /// s23 (PR #13 F4): the workflow is on. Nothing is left to approve or re-voice: the primary closes the review.
+  case done
 
   /// s10f (M8): below this window width the primary uses its short title, so it never truncates.
   static let compactBelow: Double = 720
 
   static func forWorkflow(_ w: Workflow, sample: Bool = false) -> ReviewPrimary {
+    if w.state == .active { return .done }
     if sample { return .runWithVoice }
     for s in w.steps {
       guard let id = s.connectorId, let c = w.connectors.first(where: { $0.id == id }), c.state != .connected else { continue }
@@ -34,6 +37,7 @@ enum ReviewPrimary: Equatable, Sendable {
       return "Connect \(compact ? Self.shortName(c.name) : c.name)"
     case .runWithVoice: return "Run with my voice"
     case .approve: return "Approve"
+    case .done: return "Done"
     }
   }
 
@@ -42,6 +46,20 @@ enum ReviewPrimary: Equatable, Sendable {
       return String(name.dropFirst(prefix.count))
     }
     return name
+  }
+}
+
+/// s23 (PR #13 F4): the review footer's secondary buttons, in order. After Turn on there is no Approve and no
+/// "Run with my voice": the workflow is on, and Done is the primary.
+enum ReviewFooterButtons {
+  static func secondary(_ w: Workflow, sample: Bool) -> [String] {
+    let primary = ReviewPrimary.forWorkflow(w, sample: sample)
+    switch primary {
+    case .done: return ["Run again", "Edit"]
+    case .runWithVoice: return ["Discard", "Edit", "Approve"]
+    case .connect: return ["Discard", "Run again", "Edit", "Approve"]
+    case .approve: return ["Discard", "Run again", "Edit"]
+    }
   }
 }
 

@@ -187,10 +187,22 @@ struct ToolsCopy: Equatable, Sendable {
   }
 
   /// The dry run header's "With Instantly and Google Sheets" (unique names, in step order); nil without tools.
-  static func with(_ tools: [DryRunTool]?) -> String? {
+  static func with(_ tools: [DryRunTool]?) -> String? { with(tools, steps: [], connectors: []) }
+
+  /// s23 (PR #13 F1): with the workflow's step tools, each step is named by what it ran with (`runsWith`):
+  /// "With Gmail and Google Sheets" while Instantly is chosen but Gmail sends.
+  static func with(_ tools: [DryRunTool]?, steps: [StepTools], connectors: [Connector]) -> String? {
     guard let tools, !tools.isEmpty else { return nil }
     var names: [String] = []
-    for t in tools where !names.contains(t.name) { names.append(t.name) }
+    for t in tools {
+      let name: String
+      if let step = steps.first(where: { $0.stepId == t.stepId }), !t.runsWith.isEmpty {
+        name = t.runsWith == t.tool ? t.name : Self.name(t.runsWith, tools: step, connectors: connectors)
+      } else {
+        name = t.name
+      }
+      if !names.contains(name) { names.append(name) }
+    }
     let list = names.count == 1 ? names[0] : names.dropLast().joined(separator: ", ") + " and " + names.last!
     return "With \(list)"
   }

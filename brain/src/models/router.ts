@@ -64,6 +64,8 @@ export const ROLE_ROUTES: Readonly<Record<ModelRole, Route>> = {
   label: "understand",
   refine: "refine",
   explain: "explain",
+  playbook_label: "classify",
+  playbook: "understand",
 };
 
 /** s18: roles whose reply the user reads and reviews as text; names are restored on the Mac. Every other reply (a task

@@ -8,9 +8,11 @@ import { join } from "node:path";
 /** draft = per-recipient emails (best model); bucket and style_card = cheap steps.
  * s14: workflow_design = the general workflow builder rewriting step text (best model); step = one text step of a
  * general workflow, e.g. a ticket reply (cheap model). Both see masked text only, never images (ADR 0007).
+ * s19: playbook_label = one sent message labelled within the playbook vocabularies (Haiku); playbook = the messaging
+ * playbook worded from its counts (Opus). Masked text only.
  * s22: solution_design = the solution designer wording each kind of fix and its builder brief (best model).
  * s24: build_checks = turning a brief's acceptance lines into an executable check script (code writing, cheap model). */
-export type ModelRole = "draft" | "bucket" | "style_card" | "workflow_design" | "step" | "label" | "refine" | "explain" | "solution_design" | "build_checks";
+export type ModelRole = "draft" | "bucket" | "style_card" | "workflow_design" | "step" | "label" | "refine" | "explain" | "playbook_label" | "playbook" | "solution_design" | "build_checks";
 
 export interface ModelRequest {
   role: ModelRole;
@@ -43,7 +45,7 @@ export interface ModelConfig {
 export const DEFAULT_MODELS: Readonly<ModelConfig> = { draft: TIER_MODELS.opus, cheap: TIER_MODELS.sonnet };
 
 export function modelFor(role: ModelRole, cfg: ModelConfig): string {
-  return role === "draft" || role === "workflow_design" || role === "solution_design" ? cfg.draft : cfg.cheap;
+  return role === "draft" || role === "workflow_design" || role === "playbook" || role === "solution_design" ? cfg.draft : cfg.cheap;
 }
 
 const MODEL_ID_RE = /^[a-z0-9][a-z0-9.\-]{2,80}$/;
@@ -97,11 +99,15 @@ export class StubModel implements Model {
     // s24: the deterministic fallback check script the prompt carries.
     if (req.role === "build_checks") return tagged(req.prompt, "fallback") ?? "";
     if (req.role === "step") return stubStepDraft(req.prompt);
+    // s19: the labeller echoes the rule read, the playbook model echoes the code baseline.
+    if (req.role === "playbook_label") return tagged(req.prompt, "label_hint") ?? "{}";
+    if (req.role === "playbook") return tagged(req.prompt, "baseline") ?? "{}";
     const examples = parseExamples(tagged(req.prompt, "examples") ?? "");
     if (req.role === "style_card") return stubStyleCard(examples);
     // s22 bias audit: only the email draft role gets the email-shaped stub; label, refine and explain get no text
     // (their callers fall back to the rules), never an investor email.
     if (req.role !== "draft") return "";
+    if (tagged(req.prompt, "playbook") !== null) return stubPlaybookDraft(req.prompt, examples);
     return stubDraft(req.prompt, examples);
   }
 }
@@ -153,6 +159,28 @@ function stubDraft(prompt: string, examples: readonly string[]): string {
   const traction = facts.traction !== undefined ? (/^traction\b/i.test(facts.traction) ? sentence(facts.traction) : `Traction: ${sentence(facts.traction)}`) : "[missing: traction]";
   lines.push("", `${raise} ${traction}`, "", facts.ask ?? exampleAsk(examples) ?? "Open to a short call next week?", "", sign);
   return lines.join("\n");
+}
+
+/** s19 draft with a playbook: the playbook's first-message template in slot order, filled from the facts and the
+ * recipient, in the voice of the examples (their greeting word, closing line, ask and name), never the playbook's. */
+function stubPlaybookDraft(prompt: string, examples: readonly string[]): string {
+  const recipient = JSON.parse(tagged(prompt, "recipient") ?? "{}") as Record<string, string>;
+  const facts = parseFactLines(tagged(prompt, "facts") ?? "");
+  const order = /^template: (.+)$/m.exec(tagged(prompt, "playbook") ?? "")?.[1]?.match(/\{[a-z_]+\}/g)?.map((x) => x.slice(1, -1)) ?? ["greeting", "claim", "proof", "ask", "sign_off"];
+  const greetWord = examples.map((e) => /^(Hi|Hello|Hey|Dear|Morning)\b/.exec(e.trim())?.[1]).find((g) => g !== undefined) ?? "Hi";
+  const closes = examples.map((e) => e.split("\n").map((l) => l.trim()).filter((l) => l !== "").at(-2) ?? "").filter((l) => /^(?:best|thanks|thank you|cheers|regards|kind regards|best regards|warm regards|speak soon|talk soon|many thanks|all the best)[,.!]?$/i.test(l));
+  const close = closes.length * 2 > examples.length ? closes[0]! : null;
+  const sign = facts.sign ?? exampleSign(examples) ?? "[missing: your name]";
+  const first = recipient.firstName !== undefined && recipient.firstName !== "" ? recipient.firstName : "there";
+  const part: Record<string, string | null> = {
+    greeting: `${greetWord} ${first},`,
+    hook: recipient.notes !== undefined && recipient.notes.trim() !== "" ? sentence(recipient.notes) : null,
+    claim: facts.pitch !== undefined ? sentence(facts.pitch) : "[missing: pitch]",
+    proof: [facts.raise !== undefined ? sentence(facts.raise) : null, facts.traction !== undefined ? sentence(facts.traction) : null].filter((x) => x !== null).join(" ") || "[missing: proof]",
+    ask: facts.ask ?? exampleAsk(examples) ?? "[missing: ask]",
+    sign_off: close === null ? sign : `${close}\n${sign}`,
+  };
+  return order.map((s) => part[s] ?? null).filter((x): x is string => x !== null && x !== "").join("\n\n");
 }
 
 /** Voice notes a person would write about their own emails, read from the examples. No numbers (code measures). */

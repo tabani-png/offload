@@ -192,6 +192,29 @@ The proof behind every number: `figures.<name>.eventIds` (all figures plus `savi
 ## GET /timeline?day=YYYY-MM-DD → `TimelineResponse`
 That day's spans in time order, each with its `taskId`, plus `byTask` minutes (sums to `activeMinutes`).
 
+## GET /time[?day=YYYY-MM-DD][&window=week] → `TimeBreakdownResponse` (s23)
+Where the time goes, then what could be faster (`brain/src/time/`). No `day`: the store's 7-day window; `day=`: that
+stored day only (400 malformed, 404 not stored). `window` other than `week` is 400. GET only (405). Reads spans, never
+content (ADR 0003); every number is code and carries its event ids (ADR 0005); no model call; drafts nothing (ADR 0006).
+- `total`: active minutes of every span in the window (sessionized as `analyze.ts` does); `eventIds` = the events
+  behind those spans.
+- `byTask` (one row per task, `unsorted` for spans in no task), `byApp` (per app bundle id, `name` the app name) and
+  `byKind` (fixed ids `code docs meeting sheet email chat browse other`, from the app bundle id, host and URL path)
+  each partition the spans: a row's `minutes` is the sum of its spans, its `eventIds` the union of their events,
+  `share` = minutes / total. Rows sort by minutes, most first, ties by id. Two tasks with one label name are told
+  apart by their masked title template.
+- `findings`: the analysis's insights (same ids and task ids), most hours freed first. `taskMinutes` = the task's
+  row (same value and display); `observedHoursPerWeek` = task minutes / 60 × 7 / window days; `hoursFreed` =
+  min(observed, the fix's estimate): s22's top option `weeklyHoursSaved` (the same `top` as
+  `GET /insights/:id/solutions`, rules only) when `brain/src/solutions/` is present, else the s04 estimate
+  (`saving.weeklyHoursSaved`). Never above observed. `arithmetic` shows the inputs and ends with `hoursFreed.display`.
+  No percentage, range or review chain.
+- Fix-kind fallback: `fixKind` is the s22 top kind (`workflow | tool | setup | remove_step | leave_alone`), or `fixKind: null`
+  when s22 is absent or answered a kind outside the five (never guessed); `fixKinds` says `"s22"` or `"absent"`.
+  `workflowInsightId` = `insightId` only when `fixKind` is null or `workflow`, else null. No workflow list of its own.
+- Rounding (`rounding: "tenths-half-up"`, one rule for brain and app): tenths = floor(hours × 10 + 0.5 + 1e-9),
+  display `"<tenths/10 with 1 decimal> h"`; minutes are shown as hours. 1479 min (24.65 h) → `24.7 h`.
+
 ## GET /dashboard → `DashboardResponse`
 `automations`: one per workflow. Existing fields are unchanged (`status` keeps its 4 legacy values: draft, dry_run,
 approved, paused). Added: `state` (`drafting | ready_for_review | active | paused | needs_you`), `needsYou[]` (plain
@@ -462,6 +485,40 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   route and model, prices, the last 100 routing decisions (route, tiers tried, escalation reasons, tokens, cost).
 - CLI: `draft` and `dry-run` take `--understanding v1|v2` (and the embedder flags); `draft` of a general insight uses
   the stub design model unless `--model real` is given.
+
+## s19: messaging playbook (additive, ADR 0011)
+A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,
+the patterns behind it and what got replies, with nothing personal kept, so a successor or a cloud worker can keep the
+same message going in their own voice. The style card (`/tone`) stays the voice; the playbook is the message.
+- `GET /workflows/:id/playbook` -> `{version, workflowId, playbook | null, markdown | null}`. `playbook` is
+  `playbook.json` (`schema: "offload.playbook/1"`, brain/src/playbook/types.ts `Playbook`): `version` (+1 on every
+  build and notes edit), `message` (2-3 plain sentences), `rules` (`{id, kind: do|dont, text, check?}`; `check` is
+  what the dry run tests in code), `templates` (first message, follow-up, reply: slots in order such as
+  `{greeting} {claim} {proof} {ask} {sign_off}`, each slot with what it says), `skeletons` (3-5), `cadence`, `avoid`,
+  `stats` and `outcomes` (counts, shares and lengths computed in code; outcomes are counts with sample sizes, a pattern
+  needs 5 known outcomes before it is compared and otherwise reads "too few to say"; no rate is ever written), `notes`,
+  `history`, `models`, `warnings`. `markdown` is `PLAYBOOK.md`, a fixed render of the same JSON.
+- `POST /workflows/:id/playbook {action: "build"}` builds from the sealed tone pack: the workflow's own sent messages
+  and the follow-ups in the threads they opened; later replies by the user count as "they replied". Each message is
+  labelled within fixed vocabularies (intent, opener, moves, CTA, proof, personal-hook kind, objection handling,
+  audience) by the rules and Haiku 5.5 (route classify), the wording by Opus 5.5 (route understand), from masked text
+  only. 409 when there is no tone pack or fewer than 3 messages, or when the de-personalisation check fails closed
+  (the message names the kind and field, never the value; nothing is written).
+- `POST /workflows/:id/playbook {action: "notes", notes}`: the user's notes (a string of at most 4000 characters, no
+  control characters), checked like every other field: a name, address, phone, link, figure or the author's identity
+  is 400 and nothing changes. 400 too before the first build and for any other key or action.
+- With a playbook, email drafts (dry run and live runs) say the playbook's message in the current user's voice (their
+  style card and sent mail; with none of this kind, all their sent mail). Dry-run instances gain
+  `playbook: {version, verdict: "yes"|"partly"|"no", rules: [{id, text, pass}]}`. Auto-run pins `playbook.json` once
+  it exists, so a rebuilt playbook holds the next auto batch for review.
+- Promotion seam (S2-06): `playbookForPromotion(home, workflowId)` (brain/src/playbook/promote.ts) returns the
+  re-checked playbook without `history`, `builtAt` and `warnings`, and `playbookHash` = sha256 of its JCS. The registry
+  field is proposed in plan/stage-2/adr/0112-playbook-on-promotion.md (schemas/stage2 is unchanged).
+- Re-checks (ADR 0012): a build also writes `playbook-identity.json` (0600, salted hashes of the identity set, never
+  promoted). Notes and `playbookForPromotion` are checked against the tone pack, facts.md and that digest; with
+  neither the tone pack nor a digest they are 409 (rebuild the playbook). A failed model call never fails a build:
+  the message keeps its rule read, the wording keeps the code baseline, and `warnings` says so (at most 60 label calls
+  per build). A `playbook.json` that does not parse reads as `playbook: null`; a dry run adds a warning.
 
 ## Solutions (s22): the best kind of fix per task (additive)
 For every insight, and every task the judge holds back because a person is at the keyboard (e.g. watching a coding

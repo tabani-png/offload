@@ -21,6 +21,7 @@ import { s14Route } from "./s14-routes.ts";
 import { ChainCapabilityResolver, observedTargets } from "../plan/chain-resolver.ts";
 import { solutionsRoute } from "../solutions/routes.ts";
 import { withSolutions } from "../solutions/service.ts";
+import { timeBreakdown } from "../time/breakdown.ts";
 import { syncRoute } from "./sync-routes.ts";
 import { SyncClient, type SyncDeps } from "../sync/client.ts";
 import { contextStamp, readUserContext } from "../context/store.ts";
@@ -382,6 +383,16 @@ export function createBrain(opts: BrainOptions): Brain {
       const a = await analysis(undefined);
       if (!a.windowDays.includes(day)) return error(404, "not_found", `no stored day ${day}`);
       return json(200, toTimeline(a, day));
+    }
+    // s23: where the time goes (by task, app and kind of work) and what could be faster, numbers by code, no model call.
+    if (path === "/time") {
+      const win = url.searchParams.get("window");
+      if (win !== null && win !== "week") return error(400, "bad_request", "window must be week (or leave it out)");
+      const day = url.searchParams.get("day");
+      if (day !== null && !DAY_RE.test(day)) return error(400, "bad_request", "day must be YYYY-MM-DD");
+      const a = await analysis(undefined);
+      if (day !== null && !a.windowDays.includes(day)) return error(404, "not_found", `no stored day ${day}`);
+      return json(200, await timeBreakdown(a, day === null ? {} : { day }));
     }
     return error(404, "not_found");
   }

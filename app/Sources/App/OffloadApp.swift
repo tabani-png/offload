@@ -581,7 +581,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       await companyModel.refreshQuietly()
       c.show()
       qaRecord("dashboard", c.window)
+      await qaTime(c.window)
     }
+  }
+
+  /// s23 QA: on the time page, `--qa-time-day N` shows the Nth stored day; the window is recorded as time-week or
+  /// time-day, and $OFFLOAD_QA_TIME_FILE gets what the screen shows (`--demo-week neutral` marks the neutral demo).
+  private func qaTime(_ w: NSWindow) async {
+    let args = CommandLine.arguments
+    guard dashboardModel.section == .time else { return }
+    if let i = args.firstIndex(of: "--qa-time-day"), args.indices.contains(i + 1), let n = Int(args[i + 1]),
+       dashboardModel.timeWeekDays.indices.contains(n) {
+      await dashboardModel.loadTime(day: dashboardModel.timeWeekDays[n])
+    }
+    guard let b = dashboardModel.time else { return }
+    qaRecord(b.window.kind == .day ? "time-day" : "time-week", w)
+    guard let path = ProcessInfo.processInfo.environment["OFFLOAD_QA_TIME_FILE"] else { return }
+    let s = TimeScreen(b)
+    let demo = args.firstIndex(of: "--demo-week").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil } ?? "default"
+    let lines = ["demo=\(demo)", "window=\(b.window.kind.rawValue)", "sections=\(s.qaSections)", "total=\(b.total.display)",
+                 "findings=\(b.findings.count)", "fix-kinds=\(b.fixKinds)"]
+    try? (lines.joined(separator: "\n") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
   }
 
   /// s17: any app Composio supports, set up once, then handed to the workflow builder.
