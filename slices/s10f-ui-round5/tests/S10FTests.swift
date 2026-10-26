@@ -350,3 +350,73 @@ struct S10FServerConfirmTests {
     #expect(f.confirmRun() == [])
   }
 }
+
+// MARK: PR #13 review fix round
+
+@Suite("S10F review fixes")
+struct S10FReviewFixTests {
+  /// The live case: the brain's tool plan was made before Gmail was connected, so its option says connected: false.
+  var stalePlan: StepTools {
+    var t = MockBrainClient.outreachTools[0]
+    t.options = t.options.map { var o = $0; if o.id == "gmail" { o.connected = false }; return o }
+    return t
+  }
+
+  @Test("connected and In use come from the live connector state, not the stale plan")
+  func liveConnectors() {
+    let before = ToolsCopy(stalePlan, connectors: [Connector(id: "gmail", name: "Gmail", kind: .mcp, connected: false)])
+    #expect(before.options.allSatisfy { $0.mark != .inUse })
+    let after = ToolsCopy(stalePlan, connectors: [MockBrainClient.gmail])
+    #expect(after.options.filter { $0.mark == .inUse }.map(\.name) == ["Gmail"])
+    #expect(after.options.first { $0.name == "Gmail" }?.connected == true)
+  }
+
+  @Test("Gmail connected mid-flow: the review shows exactly one In use on the send step")
+  func midFlow() {
+    var w = MockBrainClient.outreachToolsWorkflow
+    w.tools[0] = stalePlan
+    w.connectors = w.connectors.map { var c = $0; if c.id == "gmail" { c.connected = false }; return c }
+    var flow = ApprovalFlow(workflow: w)
+    #expect(ReviewCopy(workflow: flow.workflow, dryRun: nil).tools["s6"]!.options.filter { $0.mark == .inUse }.isEmpty)
+    flow.updateConnectors([:], connected: MockBrainClient.gmail)
+    let send = ReviewCopy(workflow: flow.workflow, dryRun: nil).tools["s6"]!
+    #expect(send.options.filter { $0.mark == .inUse }.count == 1)
+    #expect(send.options.first { $0.mark == .inUse }?.name == "Gmail")
+  }
+
+  @Test("a sentence you wrote that the draft dropped is counted as missing")
+  func missingSentence() {
+    let theirs = "Hi Sven,\n\nOffload watches a week of your work. Your investment in Toast is why I'm writing.\n\nWorth 20 minutes next week? Deck attached.\n\nMuhammad"
+    let ours = "Hi Sven,\n\nOffload watches a week of your work. Bessemer backs tools teams use every day.\n\nWorth 20 minutes next week?\n\nMuhammad"
+    let s = SentenceDiff.summary(ours: ours, theirs: theirs)
+    #expect(s.changed == 1 && s.missing == 1)
+    #expect(s.label == "Changed 1 of 4 sentences · 1 missing")
+    let onlyDropped = SentenceDiff.summary(ours: theirs.replacingOccurrences(of: " Deck attached.", with: ""), theirs: theirs)
+    #expect(onlyDropped.changed == 0 && onlyDropped.missing == 1 && onlyDropped.label == "1 sentence missing")
+    #expect(SentenceDiff.summary(ours: theirs, theirs: theirs).missing == 0)
+  }
+
+  @Test("⌘K opens Connections; K alone or another letter does not")
+  func commandK() {
+    #expect(DashboardSidebarLink.forShortcut(character: "k", command: true) == .connections)
+    #expect(DashboardSidebarLink.forShortcut(character: "K", command: true) == .connections)
+    #expect(DashboardSidebarLink.forShortcut(character: "k", command: false) == nil)
+    #expect(DashboardSidebarLink.forShortcut(character: "j", command: true) == nil)
+  }
+}
+
+@Suite("S10F review fixes: runs-with line")
+struct S10FRunsWithTests {
+  @Test("no 'Sends through X until X is connected' when the runner is the chosen tool (by connector id) or it is connected")
+  func noSelfReference() {
+    let o = ToolOption(id: "gsheets", name: "Google Sheets", via: "composio", why: "A sheet.", setup: "minutes", cost: "free",
+                       connected: false, connectorId: "google-sheets")
+    let t = StepTools(stepId: "s6", capability: "crm.log", need: "Log", options: [o], chosen: "gsheets", chosenBy: "default",
+                      runsWith: "google-sheets", suggestion: "")
+    #expect(ToolsCopy(t).runsWithLine == nil)
+    let live = ToolsCopy(t, connectors: [Connector(id: "google-sheets", name: "Google Sheets", kind: .composio, connected: true)])
+    #expect(live.runsWithLine == nil && live.options[0].mark == .inUse)
+    // A different runner still says so.
+    #expect(ToolsCopy(MockBrainClient.outreachTools[0]).runsWithLine == "Sends through Gmail until Instantly is connected.")
+  }
+}

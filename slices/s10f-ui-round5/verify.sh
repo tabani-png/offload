@@ -61,7 +61,7 @@ echo "ok view checks"
 
 echo "== snapshot (fresh render, 2x)"
 "$BIN" --snapshot "$OUT/png" | head -1
-for s in review-tools review-confirm review-640 review-dryrun-sample review-dryrun-general connections connections-search \
+for s in review-tools review-confirm review-640 review-dryrun-sample review-dryrun-general connections connections-search connections-search-tool \
          connections-detail connections-run-confirm onboarding-watches pointer-row dashboard; do
   for scheme in dark light; do
     [ -s "$OUT/png/$s-$scheme.png" ] || fail "missing fresh $s-$scheme.png"
@@ -77,9 +77,15 @@ else
   for appearance in dark light; do
     a="$ROOT/app/snapshots/live/glass-$appearance-over-white.png"; b="$ROOT/app/snapshots/live/glass-$appearance-over-dark.png"
     [ -s "$a" ] && [ -s "$b" ] || fail "missing live glass captures ($appearance)"
-    [ "$(md5 -q "$a")" != "$(md5 -q "$b")" ] || fail "glass ($appearance) identical over white and dark: no backdrop shows"
+    # PR #13 review: compare a crop INSIDE the card (an empty stretch of the header), not the whole capture, whose
+    # backdrop margin differs whatever the card is made of. An opaque card gives identical crops.
+    w="$(sips -g pixelWidth "$a" | awk '/pixelWidth/{print $2}')"; h="$(sips -g pixelHeight "$a" | awk '/pixelHeight/{print $2}')"
+    cx=$((w * 48 / 100)); cy=$((h * 15 / 100)); cs=$((w * 3 / 100))
+    sips -c "$cs" "$cs" --cropOffset "$cy" "$cx" "$a" --out "$OUT/ga.png" >/dev/null
+    sips -c "$cs" "$cs" --cropOffset "$cy" "$cx" "$b" --out "$OUT/gb.png" >/dev/null
+    [ "$(md5 -q "$OUT/ga.png")" != "$(md5 -q "$OUT/gb.png")" ] || fail "glass ($appearance): the card's inside is identical over white and dark (opaque)"
     [ -s "$ROOT/app/snapshots/live/glass-$appearance-over-color.png" ] || fail "missing glass-$appearance-over-color.png"
   done
-  echo "ok glass differs over white and dark in both appearances"
+  echo "ok the card's inside differs over white and dark in both appearances (glass, not opaque)"
 fi
 echo "PASS s10f-ui-round5"

@@ -434,6 +434,11 @@ enum DashboardSidebarLink: String, CaseIterable, Identifiable, Sendable {
   var symbol: String { "link" }
   /// The same chord as the menu's "Connections…".
   var shortcut: String { "⌘K" }
+
+  /// The dashboard window's key handler asks this: ⌘K is Connections; anything else is not a sidebar link.
+  static func forShortcut(character: String, command: Bool) -> DashboardSidebarLink? {
+    command && character.lowercased() == "k" ? .connections : nil
+  }
 }
 
 /// What the observer row offers, from its state and the permissions (s10d: never "Pause" when it is not recording).

@@ -207,6 +207,7 @@ enum Snapshotter {
     return [
       ("connections", scene(list(selected: "tk-linear"))),
       ("connections-search", scene(list("lin"))),
+      ("connections-search-tool", scene(list("invoice"))),
       ("connections-detail", scene(list(selected: "tk-linear", sheet: sheet("tk-linear")))),
       ("connections-key", scene(list(selected: "tk-linear", sheet: keyed))),
       ("connections-server", scene(list(selected: "tk-linear", sheet: server))),
