@@ -5,6 +5,7 @@ import type { Tx } from "../../src/db/pool.ts";
 import type { SeededTenant } from "../helpers/seed.ts";
 import { listMigrations } from "../../src/db/migrate.ts";
 import { ulid } from "../../src/schema/encoding.ts";
+import { templateById } from "../../src/modules/compliance/templates.ts";
 
 export const DAY_MS = 86_400_000;
 export const SHA = "a".repeat(64);
@@ -53,9 +54,17 @@ export function noticeBody(over: Partial<{ template: string; title: string; mark
   };
 }
 
+/** Template `id`'s text with every field filled in (a custom notice gets the default text): publishable as is. */
+export function filledMarkdown(id: string): string {
+  const t = templateById(id);
+  return t ? t.body.replace(/\{\{([a-z_]+)\}\}/g, (_, f: string) => `Acme's ${f.replace(/_/g, " ")}`) : noticeBody().markdown;
+}
+
 /** Creates and publishes a notice as the owner; returns the published notice DTO. */
 export async function publishNotice(owner: Person, over: Parameters<typeof noticeBody>[0] = {}) {
-  const created = await owner.post("/v1/compliance/notices", noticeBody(over));
+  const template = over.template ?? noticeBody().template;
+  const markdown = over.markdown ?? filledMarkdown(template);
+  const created = await owner.post("/v1/compliance/notices", noticeBody({ ...over, markdown }));
   if (created.status !== 201) throw new Error(`create notice ${created.status} ${JSON.stringify(created.json)}`);
   const pub = await owner.post(`/v1/compliance/notices/${created.json.id}/publish`);
   if (pub.status !== 200) throw new Error(`publish notice ${pub.status} ${JSON.stringify(pub.json)}`);

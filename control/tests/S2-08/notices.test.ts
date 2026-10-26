@@ -5,8 +5,8 @@ import { HttpError } from "../../src/schema/http.ts";
 import { ulid } from "../../src/schema/encoding.ts";
 import compliance from "../../src/modules/compliance/index.ts";
 import { allowsAt } from "../../src/modules/compliance/consent.ts";
-import { listTemplates } from "../../src/modules/compliance/templates.ts";
-import { noticeBody, publishNotice, signIn, sys, type Who } from "./fixtures.ts";
+import { listTemplates, templateById } from "../../src/modules/compliance/templates.ts";
+import { filledMarkdown, noticeBody, publishNotice, signIn, sys, type Who } from "./fixtures.ts";
 
 let h: Harness;
 let who: Who;
@@ -72,7 +72,7 @@ describe("NOTICE", () => {
   });
 
   test("NOTICE: publish stamps publishedAt once; a second publish is 409; versions increase", async () => {
-    const a = await who.admin.post("/v1/compliance/notices", noticeBody());
+    const a = await who.admin.post("/v1/compliance/notices", noticeBody({ markdown: filledMarkdown("ontario-esa-policy") }));
     const b = await who.admin.post("/v1/compliance/notices", noticeBody());
     expect(b.json.version).toBe(a.json.version + 1);
     const pub = await who.admin.post(`/v1/compliance/notices/${a.json.id}/publish`);
@@ -161,7 +161,7 @@ describe("NOTICE", () => {
     expect(await ok()).toBe(false);
     await lead.post(`/v1/me/notices/${v2.id}/ack`);
     expect(await ok()).toBe(true);
-    await publishNotice(who.owner, { features: ["workflow_metrics", "per_person_views"], markdown: "Clearer wording, same scope." });
+    await publishNotice(who.owner, { features: ["workflow_metrics", "per_person_views"], template: "custom", markdown: "Clearer wording, same scope." });
     expect(await ok()).toBe(true);
   });
 
@@ -203,6 +203,27 @@ describe("NOTICE", () => {
     expect((await who.member.get(`/v1/compliance/notices/${n.id}/acks`)).status).toBe(403);
     expect((await who.owner.get(`/v1/compliance/notices/${crypto.randomUUID()}/acks`)).status).toBe(404);
   });
+  test("NOTICE: a template notice missing its required sections, or filled with TBD, is not published (422 naming the fields)", async () => {
+    const on = templateById("ontario-esa-policy")!;
+    const ny = templateById("ny-notice-and-ack")!;
+    const tryPublish = async (template: string, markdown: string, jurisdictions: string[]) => {
+      const created = await who.owner.post("/v1/compliance/notices", noticeBody({ template, markdown, jurisdictions }));
+      expect(created.status).toBe(201);
+      return who.owner.post(`/v1/compliance/notices/${created.json.id}/publish`);
+    };
+    const bare = await tryPublish(on.id, "# Policy\nNothing here.", ["CA-ON"]);
+    expect(bare.status).toBe(422);
+    expect(bare.json.error.code).toBe("validation_failed");
+    expect([...bare.json.error.details.fields].sort()).toEqual([...on.requiredFields].sort());
+    const hello = await tryPublish(ny.id, "hello", ["US-NY"]);
+    expect(hello.status).toBe(422);
+    expect([...hello.json.error.details.fields].sort()).toEqual([...ny.requiredFields].sort());
+    const tbd = await tryPublish(ny.id, ny.body.replace(/\{\{[a-z_]+\}\}/g, "TBD"), ["US-NY"]);
+    expect(tbd.status).toBe(422);
+    expect([...tbd.json.error.details.fields].sort()).toEqual([...ny.requiredFields].sort());
+    for (const r of [bare, hello, tbd]) expect(r.json.error.message).toContain(r.json.error.details.fields.join(", "));
+  });
+
   test("NOTICE: a template notice with a {{field}} left or a required field emptied is not published (422)", async () => {
     const t = listTemplates().find((x) => x.id === "ontario-esa-policy")!;
     const values: Record<string, string> = {

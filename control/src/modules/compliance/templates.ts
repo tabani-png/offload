@@ -75,16 +75,30 @@ export function templateById(id: string): Template | undefined {
 const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Text that holds a field's place without filling it: TBD, TODO, "...", "-", "<fill in>", "[placeholder]" and the like. */
+const FILLER = /^(?:tbd|tba|tbc|todo|fixme|xxx+|placeholder|fill in|lorem ipsum.*|[-–—_.?…]*|<[^>]*>|\[[^\]]*\])$/i;
+
+/** Whether `text` is an actual value: not blank and not filler, ignoring markdown emphasis and trailing punctuation. */
+function isValue(text: string): boolean {
+  const v = text.replace(/[*_`]/g, "").trim().replace(/[.:;,!]+$/, "").trim();
+  return v !== "" && !FILLER.test(v);
+}
+
 /**
- * The fields a notice drafted from template `t` has not filled in: any `{{field}}` still in the text, a labelled
- * template line ("**Employer:** {{employer_name}}") whose value is blank, and a field that is a section of its own
- * (`{{how}}` under "## How we monitor") left with nothing under its heading. In the template's field order.
+ * The fields a notice drafted from template `t` has not filled in, in the template's field order:
+ * - any `{{field}}` still in the text;
+ * - a field whose every template mention is gone from the notice: its labelled line ("**Employer:** {{employer_name}}")
+ *   or its section (`{{how}}` under "## How we monitor") was removed, so the notice never says it;
+ * - a field left blank or filled with filler (TBD, TODO, ...) where the notice does keep its line or section.
  */
 export function unfilledFields(t: Template, markdown: string): string[] {
   const out = new Set<string>();
   for (const m of markdown.matchAll(PLACEHOLDER)) out.add(m[1]!);
   const lines = markdown.split("\n");
   const tl = t.body.split("\n");
+  // Per field: whether some template mention of it is present in the notice with a real value.
+  const filled = new Set<string>();
+  const found = (f: string, value: string) => (isValue(value) ? filled.add(f) : out.add(f));
   tl.forEach((line, i) => {
     const parts = line.split(PLACEHOLDER);
     const fields = parts.filter((_, k) => k % 2 === 1);
@@ -97,18 +111,16 @@ export function unfilledFields(t: Template, markdown: string): string[] {
       if (at < 0) return;
       const section: string[] = [];
       for (let j = at + 1; j < lines.length && lines[j]!.trim() !== below && !lines[j]!.startsWith("#"); j++) section.push(lines[j]!);
-      if (section.every((l) => l.trim() === "")) out.add(fields[0]!);
+      found(fields[0]!, section.join("\n"));
       return;
     }
     const re = new RegExp(`^${literals.map(escapeRe).join("(.*?)")}$`);
     for (const l of lines) {
       const m = re.exec(l);
-      if (!m) continue;
-      fields.forEach((f, k) => {
-        if (m[k + 1]!.trim() === "") out.add(f);
-      });
+      if (m) fields.forEach((f, k) => found(f, m[k + 1]!));
     }
   });
+  for (const f of t.requiredFields) if (!filled.has(f)) out.add(f);
   const order = [...t.body.matchAll(PLACEHOLDER)].map((m) => m[1]!);
   return [...out].sort((a, b) => (order.indexOf(a) + 1 || Infinity) - (order.indexOf(b) + 1 || Infinity));
 }
