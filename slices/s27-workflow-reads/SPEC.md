@@ -5,8 +5,8 @@ depends_on: [s13 (chain, gate, computer use), s14 (general plan, dry run), s17 (
 parallel_safe: true (seams in runner.ts, gate.ts, drafter.ts, plan/dryrun.ts, workflows/dryrun.ts, service.ts, workflow-routes.ts, server.ts)
 human_gated: false
 verify: bash slices/s27-workflow-reads/verify.sh
-paths_in_scope: [brain/tests/s27-workflow-reads/**, slices/s27-workflow-reads/**, brain/src/plan/read-source.ts (new), brain/src/workflows/read-fetch.ts (new), brain/src/workflows/gate.ts (read mode only), brain/src/workflows/types.ts (additive), brain/src/workflows/drafter.ts (read step on build), brain/src/workflows/plan-live.ts, brain/src/workflows/runner.ts (prepareLiveBatch seam), brain/src/workflows/dryrun.ts (read preview, totals), brain/src/plan/dryrun.ts (source fields, read minutes), brain/src/workflows/service.ts (estimate and measured with reading), brain/src/api/workflow-routes.ts (pass the fetcher), brain/src/api/server.ts (readers option), brain/src/api/types.ts (additive), brain/src/api/s14-types.ts (additive), brain/src/workflows/batch.ts (additive `source`), brain/src/api/scheduler.ts (pass the fetcher), brain/src/understanding/surfaces.ts (one known product: PostHog), brain/API.md, plan/plan.md (s27 row, ADR line), plan/adr/0015-read-steps.md]
-paths_out_of_scope: [engine/**, app/**, control/**, web/**, packet/**, schemas/**, brain/src/builder/** (the builder stays off), brain/fixtures/**, brain/src/connectors/** (read-only use), every other slice's tests]
+paths_in_scope: [brain/tests/s27-workflow-reads/**, slices/s27-workflow-reads/**, brain/src/plan/read-source.ts (new), brain/src/workflows/read-fetch.ts (new), brain/src/workflows/gate.ts (read mode only), brain/src/workflows/types.ts (additive), brain/src/workflows/drafter.ts (read step on build), brain/src/workflows/plan-live.ts, brain/src/workflows/runner.ts (prepareLiveBatch seam), brain/src/workflows/dryrun.ts (read preview, totals), brain/src/plan/dryrun.ts (source fields, read minutes), brain/src/workflows/service.ts (estimate and measured with reading), brain/src/api/workflow-routes.ts (pass the fetcher), brain/src/api/server.ts (readers option), brain/src/api/types.ts (additive), brain/src/api/s14-types.ts (additive), brain/src/workflows/batch.ts (additive `source`), brain/src/api/scheduler.ts (pass the fetcher), brain/src/understanding/surfaces.ts (one known product: PostHog), brain/src/connectors/api.ts (round 2: shared read resolver), brain/API.md, plan/plan.md (s27 row, ADR line), plan/adr/0015-read-steps.md]
+paths_out_of_scope: [engine/**, app/**, control/**, web/**, packet/**, schemas/**, brain/src/builder/** (the builder stays off), brain/fixtures/**, brain/src/connectors/** (read-only use, except the one shared read resolver `apiReadOperations` in connectors/api.ts, round 2), every other slice's tests]
 ---
 
 # s27 workflows fetch their own data (read steps)
@@ -68,7 +68,11 @@ only saving was the typing.
      an answer too large is refused, never cut.
    - A pause or delete during a read stops the chain: checked before every method and call, in the read gate's cancel
      callback, and by the built-in readers (signal); the method is not marked failed.
-8. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+8. **Round 2 (PR #35 review).** A dry run's read is cancelled like a live run's (`registerPreview` in runner.ts:
+   pause and delete abort it; the dry run answers 409 and nothing else is tried). A direct connection's read
+   operations (configured reads and OpenAPI GETs) come from ONE resolver, `apiReadOperations`, used by the probe, the
+   gate policies and the reader; read tools are recognised with the same naming as the probe (dotted operation ids).
+9. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)

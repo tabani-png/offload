@@ -15,7 +15,7 @@ import { buildChain } from "../workflows/chain-executor.ts";
 import { declaredActions } from "../workflows/runner.ts";
 import type { Model } from "../models/model.ts";
 import { draftWorkflow, NotFoundError } from "../workflows/drafter.ts";
-import { dryRun, DryRunError, readLastDryRun } from "../workflows/dryrun.ts";
+import { dryRun, DryRunError, DryRunStopped, readLastDryRun } from "../workflows/dryrun.ts";
 import type { ExecResult, Executor } from "../workflows/executor.ts";
 import { disableAutoRun, enableAutoRun, partitionForAuto } from "../workflows/autorun.ts";
 import type { Batch } from "../workflows/batch.ts";
@@ -126,6 +126,7 @@ export async function workflowRoute(req: Request, path: string, ctx: WorkflowCon
     return await route(req, path, ctx);
   } catch (err) {
     if (err instanceof HttpError) return error(err.status, err.code, err.message);
+    if (err instanceof DryRunStopped) return error(409, "conflict", err.message);
     if (err instanceof NotFoundError || err instanceof DryRunError) return error(404, "not_found", err.message);
     if (err instanceof RunError) return error(err.code === "not_found" ? 404 : err.code === "conflict" ? 409 : 400, err.code, err.message);
     if (err instanceof SkillEditError) return error(400, "bad_request", err.message);

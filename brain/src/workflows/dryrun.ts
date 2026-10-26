@@ -25,9 +25,12 @@ import { NameMap } from "../privacy/names.ts";
 import { readNamePolicy, signNames } from "../privacy/policy.ts";
 import type { ReadPreviewDTO } from "../api/s14-types.ts";
 import { recordRead, type SourceFetcher } from "./read-fetch.ts";
+import { registerPreview } from "./runner.ts";
 import { queryOf } from "../plan/read-source.ts";
 
 export class DryRunError extends Error {}
+/** s27: the dry run stopped because the workflow was paused or deleted while it read its source. */
+export class DryRunStopped extends Error {}
 
 export interface DryRunOptions {
   home: string;
@@ -71,7 +74,15 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
     if (src === undefined) read = { status: "none", name: null, via: null, query: null, rows: [], rowsTotal: 0, message: NO_SOURCE_DRY };
     else if (o.read === undefined) read = { status: "not_read", name: src.targetName, via: null, query: queryOf(src), rows: [], rowsTotal: 0, message: `Reading ${src.targetName} is not set up on this Mac yet; live runs use your list ${wf.inputs.list}.` };
     else {
-      const r = await o.read.fetch({ wf, now, logPath: gateLogPath(o.home, wf.id) });
+      // Pause and delete stop this read like a live run's: before every method and call, and in the readers.
+      const stop = registerPreview(o.home, wf.id);
+      let r;
+      try {
+        r = await o.read.fetch({ wf, now, logPath: gateLogPath(o.home, wf.id), signal: stop.signal, cancelled: stop.cancelled });
+      } finally {
+        stop.done();
+      }
+      if (!r.ok && r.status === "cancelled") throw new DryRunStopped(r.message);
       recordRead(o.home, wf.id, r, now);
       read = r.ok
         ? { status: "fetched", name: src.targetName, via: r.via, query: queryOf(src), rows: r.rows.slice(0, 20), rowsTotal: r.rows.length, message: r.message }

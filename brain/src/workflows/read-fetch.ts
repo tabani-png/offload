@@ -7,8 +7,7 @@
 import type { ReadSourceDTO, ReadStatusDTO } from "../api/s14-types.ts";
 import { scrubLogText } from "../log.ts";
 import { apiServer } from "../connectors/api.ts";
-import type { ApiOperation } from "../connectors/api-config.ts";
-import { buildRequest } from "../connectors/api.ts";
+import { apiReadOperations, buildRequest } from "../connectors/api.ts";
 import type { ChainResolver, FetchLike, MethodState } from "../connectors/chain.ts";
 import { COMPOSIO_CLI_SERVER } from "../connectors/composio.ts";
 import type { ComputerDriver } from "../connectors/computer/driver.ts";
@@ -77,7 +76,7 @@ export const VIA_WORDS: Record<Method, string> = {
   computer: "by reading its screen (no clicks, no typing)",
 };
 
-const CONCRETE = /^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/;
+const CONCRETE = /^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_.-]+$/;
 
 /** The read policies of one method for the target, bound to that method's server: the probe's read tools only. */
 export function readPolicies(target: ChainTarget, state: MethodState): { servers: Record<string, string[]>; policies: ToolPolicy[] } {
@@ -314,7 +313,8 @@ export class ApiSourceReader implements SourceReader {
     const tool = readTool(job.target, job.state);
     const parts = tool === null ? null : splitMcpName(tool);
     const entry = loadConnectorsConfig(this.o.home).config?.apis?.[job.target.id];
-    const op = entry?.operations.find((x: ApiOperation) => x.operationId === parts?.tool && x.role === "read");
+    // The same resolver the probe advertised it from (configured reads and OpenAPI GETs).
+    const op = entry === undefined ? undefined : apiReadOperations(entry).find((x) => x.operationId === parts?.tool);
     if (tool === null || entry === undefined || op === undefined) throw new Error("no direct read for this app");
     return job.call(tool, job.args, async () => {
       const secret = entry.auth === null ? null : await this.o.secrets.read(entry.auth.secret);

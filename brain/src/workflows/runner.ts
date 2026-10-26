@@ -101,15 +101,48 @@ export function acquireLock(home: string, id: string): { release(): void } {
 // ---------- cancel ----------
 
 const running = new Map<string, { ac: AbortController; auto: boolean }>();
+/** s27: dry runs reading their source (no run lock): every one of them is stopped by pause and delete too. */
+const previews = new Map<string, Set<AbortController>>();
 const runKey = (home: string, id: string) => `${home}\u0000${id}`;
 
 /** Pause and delete call this: the running prepare or batch stops before its next item and the executor is aborted.
  * `autoOnly` (auto-run turned off, REVIEW-2 N5): only a run that auto-run started is stopped. */
 export function requestCancel(home: string, id: string, opts: { autoOnly?: boolean } = {}): boolean {
+  let hit = false;
+  if (opts.autoOnly !== true) {
+    for (const ac of previews.get(runKey(home, id)) ?? []) {
+      ac.abort(new Error("workflow paused or deleted"));
+      hit = true;
+    }
+  }
   const r = running.get(runKey(home, id));
-  if (r === undefined || (opts.autoOnly === true && !r.auto)) return false;
+  if (r === undefined || (opts.autoOnly === true && !r.auto)) return hit;
   r.ac.abort(new Error(opts.autoOnly === true ? "auto-run was turned off" : "workflow paused or deleted"));
   return true;
+}
+
+/** s27: a dry run's cancellation, like a run's: aborted by pause and delete; `cancelled()` also re-reads the workflow
+ * (deleted, or paused after the dry run started). */
+export function registerPreview(home: string, id: string): { signal: AbortSignal; cancelled: () => string | null; done: () => void } {
+  const ac = new AbortController();
+  const key = runKey(home, id);
+  const set = previews.get(key) ?? new Set<AbortController>();
+  set.add(ac);
+  previews.set(key, set);
+  const pausedAtStart = readWorkflow(home, id)?.status === "paused";
+  return {
+    signal: ac.signal,
+    cancelled: () => {
+      if (ac.signal.aborted) return "the workflow was paused or deleted";
+      if (!workflowExists(home, id)) return "the workflow was deleted";
+      if (!pausedAtStart && readWorkflow(home, id)?.status === "paused") return "the workflow is paused";
+      return null;
+    },
+    done: () => {
+      set.delete(ac);
+      if (set.size === 0) previews.delete(key);
+    },
+  };
 }
 
 function register(home: string, id: string, auto = false): { ac: AbortController; done: () => void; setAuto: (a: boolean) => void } {

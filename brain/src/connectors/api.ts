@@ -63,6 +63,14 @@ export function mapArgs(op: ApiOperation, item: BatchItem, ctx: { batchHash: str
   return out;
 }
 
+/** s27: the one resolver of a direct connection's READ operations (configured reads, then OpenAPI GETs): the probe,
+ * the gate policies and the read step all use it, so a read the probe advertises is a read the reader can run. */
+export function apiReadOperations(entry: ApiEntry): Array<{ capability: string; operationId: string; path: string }> {
+  const out = entry.operations.filter((o) => o.role === "read").map((o) => ({ capability: o.capability, operationId: o.operationId, path: o.path }));
+  for (const r of readOpenapi(entry)) if (!out.some((o) => o.operationId === r.operationId)) out.push({ capability: `api.${r.operationId}`, operationId: r.operationId, path: r.path });
+  return out;
+}
+
 /** Gate policies for every configured operation (and OpenAPI reads), each bound to its target's api server. */
 export function apiPolicies(apis: ApisConfig | undefined): ToolPolicy[] {
   const out: ToolPolicy[] = [];
@@ -79,7 +87,7 @@ export function apiPolicies(apis: ApisConfig | undefined): ToolPolicy[] {
         ...(op.role === "read" ? {} : { fields: op.fields, expected: (item: BatchItem, ctx: { batchHash: string; crmSheet?: { spreadsheetId: string; range: string } }) => mapArgs(op, item, ctx) }),
       });
     }
-    for (const r of readOpenapi(entry)) if (!out.some((p) => p.server === server && p.tool === r.operationId)) out.push({ connector: id, flavor: "api", tool: r.operationId, role: "read", verified: false, server });
+    for (const r of apiReadOperations(entry)) if (!out.some((p) => p.server === server && p.tool === r.operationId)) out.push({ connector: id, flavor: "api", tool: r.operationId, role: "read", verified: false, server });
   }
   return out;
 }
@@ -158,13 +166,11 @@ export class ApiProbe implements MethodProbe {
       return result("failed", "down", CHAIN_WORDS.apiDown, {}, d.now() - t0);
     }
     const server = apiServer(t.id);
-    const reads = entry.operations.filter((o) => o.role === "read").map((o) => o.capability);
+    const readOps = apiReadOperations(entry);
+    const reads = readOps.map((o) => o.capability);
     const writes = entry.operations.filter((o) => o.role !== "read").map((o) => o.capability);
-    const tools: Record<string, string> = Object.fromEntries(entry.operations.map((o) => [o.capability, `mcp__${server}__${o.operationId}`]));
-    for (const r of readOpenapi(entry)) {
-      reads.push(`api.${r.operationId}`);
-      tools[`api.${r.operationId}`] = `mcp__${server}__${r.operationId}`;
-    }
+    const tools: Record<string, string> = Object.fromEntries(entry.operations.filter((o) => o.role !== "read").map((o) => [o.capability, `mcp__${server}__${o.operationId}`]));
+    for (const r of readOps) tools[r.capability] ??= `mcp__${server}__${r.operationId}`;
     return result("ok", "ok", null, { reads, writes, tools }, d.now() - t0);
   }
 }
