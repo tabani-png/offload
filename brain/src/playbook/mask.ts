@@ -32,13 +32,16 @@ export interface IdentityDigest {
   company: Set<string>;
   /** people, orgs and words. */
   names: Set<string>;
+  /** people and orgs only: the known contacts, matched in lower case too. */
+  contacts: Set<string>;
 }
 
 export const hashWord = (salt: string, w: string) => createHash("sha256").update(`${salt}\u0000${w}`).digest("hex");
 
-/** Is `b` (a base word) in the identity, plain or hashed? */
-export function inIdentity(id: Identity, kind: "author" | "company" | "names", b: string): boolean {
-  const plain = kind === "names" ? id.people.has(b) || id.orgs.has(b) || id.words.has(b) : id[kind].has(b);
+/** Is `b` (a base word) in the identity, plain or hashed? `contacts` is the recipients and their organisations only
+ * (the names known from addresses and greetings, not from capitalisation), checked whatever the case of the word. */
+export function inIdentity(id: Identity, kind: "author" | "company" | "names" | "contacts", b: string): boolean {
+  const plain = kind === "names" ? id.people.has(b) || id.orgs.has(b) || id.words.has(b) : kind === "contacts" ? id.people.has(b) || id.orgs.has(b) : id[kind].has(b);
   return plain || (id.hashed !== undefined && id.hashed[kind].has(hashWord(id.hashed.salt, b)));
 }
 
@@ -85,6 +88,8 @@ const COMMON = new Set(
 );
 /** Mail providers and generic hosts: their domain is not the recipient's organisation. */
 const GENERIC_HOSTS = new Set("gmail googlemail outlook hotmail live yahoo icloud me mac aol proton protonmail gmx seznam mail email web www help support info".split(" "));
+/** Address local parts that are a role, not a person ("sales@", "support@"). */
+const ROLE_LOCALS = new Set("info sales support hello contact contacts team jobs careers admin office press hr billing accounts marketing partners noreply no reply enquiries inquiries mail email".split(" "));
 /** Job titles and generic words of signature lines. */
 const TITLE_WORDS = new Set("founder cofounder co-founder ceo cto coo cfo head of support sales team manager director engineer recruiter partner lead talent people operations ops customer success".split(" "));
 
@@ -116,7 +121,7 @@ export function addressParts(addr: string): { people: string[]; org: string | nu
   const a = addr.trim().toLowerCase();
   const at = a.lastIndexOf("@");
   const local = at >= 0 ? a.slice(0, at) : a.includes(":") ? a.slice(a.indexOf(":") + 1) : a;
-  const people = local.split(/[._+\-:]/).filter((p) => /^\p{L}{2,}$/u.test(p));
+  const people = local.split(/[._+\-:]/).filter((p) => /^\p{L}{2,}$/u.test(p) && !ROLE_LOCALS.has(p));
   let org: string | null = null;
   if (at >= 0) {
     const labels = a.slice(at + 1).split(".").filter((l) => l !== "");
@@ -240,7 +245,8 @@ export interface MaskScope {
 }
 
 /** Masked text: contacts and figures, then the author ({sender}), their company ({company}), this recipient
- * ({first}, {their_org}) and every other identity word or proper noun ([name]): any capitalised word mid-sentence that
+ * ({first}, {their_org}) and every other identity word or proper noun ([name]): known contacts in any case, any
+ * capitalised word mid-sentence that
  * is not generic, and any at the start of a sentence that is not generic, common or written in lower case too. */
 export function maskText(text: string, id: Identity, scope: MaskScope = {}): string {
   const t = maskContacts(text);
@@ -251,7 +257,14 @@ export function maskText(text: string, id: Identity, scope: MaskScope = {}): str
     const b = base(w);
     if (inIdentity(id, "author", b)) return "{sender}";
     if (inIdentity(id, "company", b)) return "{company}";
-    if (!isCap(w)) return w;
+    // A known contact is masked whatever its case ("we help alice at northzone"), unless it is also an ordinary word
+    // ("will", "hope"): then only its capitalised form is taken for the name.
+    if (!isCap(w)) {
+      if (plainWord(b)) return w;
+      if (first !== null && b === first) return "{first}";
+      if (org !== null && b === org) return "{their_org}";
+      return inIdentity(id, "contacts", b) ? "[name]" : w;
+    }
     if (first !== null && b === first) return "{first}";
     if (org !== null && b.length >= 3 && (b === org || org.startsWith(b))) return "{their_org}";
     if (inIdentity(id, "names", b)) return "[name]";

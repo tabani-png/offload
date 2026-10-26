@@ -28,7 +28,8 @@ export function lowerWords(texts: readonly string[]): Set<string> {
   return out;
 }
 
-/** Leaks in one text field. A name is a word of the identity (plain or hashed), or any capitalised word that is not
+/** Leaks in one text field. A name is a word of the identity (plain or hashed), a known contact in lower case, or any
+ * capitalised word that is not
  * generic, not common and not written in lower case anywhere in `vocab` or this text: a name the identity set never
  * saw (one a model added, or one from mail no longer here) is caught too. */
 export function findTextLeaks(text: string, id: Identity, allowedNumbers: ReadonlySet<string>, path: string, vocab: ReadonlySet<string> = lowerWords([text])): Leak[] {
@@ -46,6 +47,7 @@ export function findTextLeaks(text: string, id: Identity, allowedNumbers: Readon
     if (inIdentity(id, "author", b)) add("author");
     else if (inIdentity(id, "company", b)) add("company");
     else if (isCap(w) && [...w].length >= 2 && !plainWord(b) && (inIdentity(id, "names", b) || !vocab.has(b))) add("name");
+    else if (!isCap(w) && !plainWord(b) && inIdentity(id, "contacts", b)) add("name");
   }
   return out;
 }

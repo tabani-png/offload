@@ -45,7 +45,7 @@ export function writeIdentityDigest(home: string, id: string, identity: Identity
   const h = (xs: Iterable<string>) => [...new Set([...xs].map((w) => hashWord(salt, w)))].sort();
   const dir = workflowDir(home, id);
   ensureDir(dir);
-  const digest = { schema: IDENTITY_SCHEMA, salt, author: h(identity.author), company: h(identity.company), names: h([...identity.people, ...identity.orgs, ...identity.words]) };
+  const digest = { schema: IDENTITY_SCHEMA, salt, author: h(identity.author), company: h(identity.company), names: h([...identity.people, ...identity.orgs, ...identity.words]), contacts: h([...identity.people, ...identity.orgs]) };
   writePrivate(join(dir, IDENTITY_FILE), JSON.stringify(digest) + "\n");
 }
 
@@ -58,7 +58,8 @@ export function readIdentityDigest(home: string, id: string): IdentityDigest | n
     const list = (v: unknown) => (Array.isArray(v) && v.every((x) => typeof x === "string") ? new Set(v as string[]) : null);
     const [author, company, names] = [list(j.author), list(j.company), list(j.names)];
     if (j.schema !== IDENTITY_SCHEMA || typeof j.salt !== "string" || author === null || company === null || names === null) return null;
-    return { salt: j.salt, author, company, names };
+    // A digest written before contacts were kept separately: every name counts as a contact (fail closed).
+    return { salt: j.salt, author, company, names, contacts: list(j.contacts) ?? names };
   } catch {
     return null;
   }
