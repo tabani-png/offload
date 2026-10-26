@@ -32,7 +32,8 @@ export async function recomputeTenant(deps: Deps, tenantId: string): Promise<voi
     // One recompute per tenant at a time. New data recorded so far marks every snapshot stale before any input is read;
     // an ingest committing after this point leaves its metric_dirty row for the next night (migration 0502).
     await tx`select pg_advisory_xact_lock(hashtextextended('metrics.recompute:' || current_setting('app.tenant_id'), 0))`;
-    if ((await tx`update metric_dirty set taken_at = now() where taken_at is null returning id`).length > 0) {
+    const taken = (await tx`update metric_dirty set taken_at = now() where taken_at is null returning id`).length > 0;
+    if (taken) {
       await tx`update metric_snapshots set stale = true where stale = false`;
     }
     await aggregateRead(tx);
@@ -53,21 +54,30 @@ export async function recomputeTenant(deps: Deps, tenantId: string): Promise<voi
             values (current_setting('app.tenant_id')::uuid, ${month}, ${scope.type}, ${scope.id}, ${fresh.inputsDigest},
               ${fresh}::jsonb, ${at}, ${v.digest})`;
         } else if (scope.type !== "company" || v.hidden) {
-          // Below the company, or a suppressed company. Its visible inputs moved: a new report, final from the next
-          // matching run. Unchanged: a hidden cell shows nothing to check; a visible one must reproduce what it showed
-          // (hs-1's digest of the whole tenant aside).
+          // Below the company, or a suppressed company: it follows only the inputs behind the cell shown (scope_digest).
+          // Unchanged inputs: a visible cell must reproduce what it showed (hs-1's digest of the whole tenant aside); a
+          // hidden one shows nothing to check. Changed inputs are new data only if ingest recorded some since the last
+          // run; otherwise its rows changed outside ingest. A mismatch, like the company's, is an alert: the stored
+          // report stays, and the cell is not final until new data replaces it. Never a silent correction.
           const same = snap.scope_digest === v.digest;
           const stored = snap.report as HoursSavedReport;
           const matches = v.hidden || jcs({ ...stored, inputsDigest: fresh.inputsDigest, final: false }) === jcs({ ...fresh, final: false });
-          if (same && !matches) {
+          const mismatch = same ? !matches : !taken && !v.hidden && snap.scope_digest !== null;
+          if (mismatch) {
             await tx`insert into metric_alerts (tenant_id, code, month, scope_key, stored_digest, fresh_digest, at)
               values (current_setting('app.tenant_id')::uuid, 'recompute_mismatch', ${month},
                 ${`${scope.type}:${scope.id ?? ""}`}, ${reportDigest(stored)}, ${reportDigest(fresh)}, ${at})
               on conflict (tenant_id, month, scope_key, stored_digest, fresh_digest) do nothing`;
+            await tx`update metric_snapshots set final = false, stale = false, checked_at = ${at}
+              where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid`;
+          } else if (same) {
+            await tx`update metric_snapshots set final = true, stale = false, checked_at = ${at}
+              where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid`;
+          } else {
+            await tx`update metric_snapshots set inputs_digest = ${fresh.inputsDigest}, report = ${fresh}::jsonb,
+                scope_digest = ${v.digest}, final = false, stale = false, computed_at = ${at}, checked_at = ${at}
+              where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid`;
           }
-          await tx`update metric_snapshots set inputs_digest = ${fresh.inputsDigest}, report = ${fresh}::jsonb,
-              scope_digest = ${v.digest}, final = ${same && matches}, stale = false, checked_at = ${at}
-            where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid`;
         } else if (snap.stale) {
           await tx`update metric_snapshots set inputs_digest = ${fresh.inputsDigest}, report = ${fresh}::jsonb, final = false,
               stale = false, computed_at = ${at}, checked_at = ${at}, scope_digest = ${v.digest}

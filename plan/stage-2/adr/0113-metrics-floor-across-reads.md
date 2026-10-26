@@ -65,6 +65,9 @@ pass the floor in the tree of the cell it is shown in.
   and the baselines of their workflow versions.
 - `final`: below the company, and for a suppressed company, it follows only the inputs behind the cell shown
   (`metric_snapshots.scope_digest`), never tenant-wide pending data. A visible company keeps §4.
+  A mismatch there is handled as the company's: an alert, the stored report kept, not final until new data through
+  ingest replaces it. Unchanged inputs whose report no longer matches, and inputs that changed with no ingest since the
+  last run (rows changed outside ingest), are both mismatches. The nightly job never silently corrects a snapshot.
 - Baseline samples are workflow reference data (ADR 0109 §7) and stay outside this rule.
 - Workflow-keyed figures (round 6): a department's or job role's top workflows and workflow anomalies depend only on
   its own subtree: floor people behind the figure in scope, and its listed children leave 0 or at least floor people

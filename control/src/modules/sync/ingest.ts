@@ -58,7 +58,7 @@ export function siblingHandlers(dir = join(import.meta.dir, "..")): Promise<Read
       const by = new Map<string, string>();
       for (const m of mods) {
         for (const [kind, fn] of Object.entries(m.syncHandlers ?? {})) {
-          if (!(kind in KIND_SCHEMAS)) throw new Error(`module ${m.name} handles unknown sync kind ${kind}`);
+          if (!Object.hasOwn(KIND_SCHEMAS, kind)) throw new Error(`module ${m.name} handles unknown sync kind ${kind}`);
           if (by.has(kind)) throw new Error(`sync kind ${kind} handled by both ${by.get(kind)} and ${m.name}`);
           by.set(kind, m.name);
           out.set(kind, fn);
@@ -148,7 +148,8 @@ async function one(
   budget: { left: number },
 ): Promise<RejectCode | null> {
   const kind = typeof obj.kind === "string" ? obj.kind : "";
-  const schema = KIND_SCHEMAS[kind];
+  // Own entries only: a kind like "constructor" or "__proto__" must not find an inherited property (Codex, 9c2c93b).
+  const schema = Object.hasOwn(KIND_SCHEMAS, kind) ? KIND_SCHEMAS[kind] : undefined;
   // Any field outside the kind's schema (a recipient, a title) fails here, before anything is stored.
   if (schema === undefined || !deps.validator.validate(schema, obj).ok) return "validation_failed";
   const digest = sha256Hex(jcs(obj));
