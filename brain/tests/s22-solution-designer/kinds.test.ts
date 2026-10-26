@@ -99,7 +99,7 @@ describe("s22 rules: tags and evidence", () => {
     expect(tag("generate image chatgpt image chat")).toContain("media_make");
     expect(tag("edit design canva")).toContain("media_make");
     expect(tag("publish post linkedin post editor")).toContain("publish");
-    expect(tag("enter bill xero new bill form")).toContain("data_entry");
+    expect(tag("enter bill xero new bill form", { verb: "enter", surface: " xero new bill form " })).toContain("data_entry");
     expect(tag("read article news", { category: "browse" })).toEqual(["reading"]);
   });
 
@@ -112,6 +112,13 @@ describe("s22 rules: tags and evidence", () => {
     expect(tag("x", { surface: " gmail " })).toContain("messaging");
     expect(tag("x", { kind: "email.replies" })).toContain("messaging");
     expect(tag("x", { category: "chat" })).toContain("messaging");
+  });
+
+  test("RULES: a live call is not data entry because its screen shows the word record (OCR never tags records or copies)", () => {
+    expect(tag("calls in zoom.us zoom meeting meeting mute record share stop video", { category: "call", surface: " zoom.us " })).toEqual([]);
+    expect(tag("export copy paste download", { category: "other" })).toEqual([]);
+    expect(tag("copy invoice total", { verb: "copy" })).toContain("copy_between");
+    expect(tag("enter bill xero", { verb: "enter", surface: " xero " })).toContain("data_entry");
   });
 
   test("RULES: with an agent at work, test and git words do not make it the person's manual commands", () => {

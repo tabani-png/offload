@@ -13,6 +13,8 @@ import { buildFixture, CODING_AGENT, LINKEDIN_IMAGE } from "./fixtures.ts";
 import { freshFounder, NOW, tmp } from "./setup.ts";
 
 const stub = new StubModel();
+/** The held-back Claude Code task, by id (held-back order depends on active time, which can shift per time zone). */
+const codingId = (a: { heldBack?: Array<{ id: string; label: { kind: string } }> }) => a.heldBack!.find((h) => h.label.kind === "code.claude-code")!.id;
 const linkedin = () => {
   const f = buildFixture(LINKEDIN_IMAGE);
   const set = rulesSolutions({ subject: f.subject, task: f.task, windowDays: 7, stepOf: f.stepOf });
@@ -48,7 +50,7 @@ describe("s22 hand-off: workflow -> the drafter, the rest -> a draft brief", () 
   test("BRIEF: the held-back Claude Code task becomes a setup brief on disk (0600), status draft, nothing executed", async () => {
     const { home, a } = await freshFounder();
     expect(a.heldBack?.map((h) => h.label.kind)).toContain("code.claude-code");
-    const { set } = await designSolutions({ analysis: a, ref: "held:1", model: stub, models: DEFAULT_MODELS });
+    const { set } = await designSolutions({ analysis: a, ref: codingId(a), model: stub, models: DEFAULT_MODELS });
     expect(set.top).toBe("setup");
     const r = await chooseSolution({ home, analysis: a, set, kind: "setup", model: stub, models: DEFAULT_MODELS, now: () => NOW });
     if (r.kind === "workflow") throw new Error("expected a brief");
@@ -66,7 +68,7 @@ describe("s22 hand-off: workflow -> the drafter, the rest -> a draft brief", () 
 
   test("BRIEF: leave_alone and options that are not a fit cannot be chosen; a held-back task has no workflow", async () => {
     const { home, a } = await freshFounder();
-    const { set } = await designSolutions({ analysis: a, ref: "held:1", model: stub, models: DEFAULT_MODELS });
+    const { set } = await designSolutions({ analysis: a, ref: codingId(a), model: stub, models: DEFAULT_MODELS });
     for (const kind of ["leave_alone", "workflow", "remove_step"] as const) await expect(chooseSolution({ home, analysis: a, set, kind, model: stub, models: DEFAULT_MODELS })).rejects.toBeInstanceOf(ChooseError);
   });
 

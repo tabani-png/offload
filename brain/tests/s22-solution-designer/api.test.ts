@@ -112,9 +112,12 @@ describe("s22 cli", () => {
     for (const o of set.options) expect(o.weeklyHoursSaved).toBeLessThanOrEqual(set.observedWeeklyHours);
   });
 
-  test("CLI: --held 1 shows the coding task with setup first in plain text", async () => {
+  test("CLI: a held-back coding task (by id) shows setup first in plain text", async () => {
     const home = founderLive();
-    const r = cli("solutions", "--held", "1", "--home", home);
+    // Pick the coding task by id: the order of held-back tasks (by active time) can differ per time zone.
+    const listed = JSON.parse(cli("analyze", "--home", home, "--json").out) as { heldBack: Array<{ id: string; kind: string }> };
+    const id = listed.heldBack.find((h) => h.kind === "code.claude-code")!.id;
+    const r = cli("solutions", "--insight", id, "--home", home);
     expect(r.code).toBe(0);
     expect(r.out).toContain("Coding with Claude Code (held back");
     expect(r.out).toMatch(/1\. setup/);
@@ -123,7 +126,8 @@ describe("s22 cli", () => {
   test("CLI: --choose setup writes a brief; approve and handoff work once", async () => {
     const home = tmp();
     cpSync(founderLive(), home, { recursive: true });
-    const c = cli("solutions", "--held", "1", "--home", home, "--choose", "setup", "--json");
+    const listed = JSON.parse(cli("analyze", "--home", home, "--json").out) as { heldBack: Array<{ id: string; kind: string }> };
+    const c = cli("solutions", "--insight", listed.heldBack.find((h) => h.kind === "code.claude-code")!.id, "--home", home, "--choose", "setup", "--json");
     expect(c.code).toBe(0);
     const { brief } = JSON.parse(c.out) as { brief: { id: string; hash: string } };
     const ap = cli("solutions", "approve", "--brief", brief.id, "--hash", brief.hash, "--home", home, "--json");

@@ -56,8 +56,11 @@ export function tagsFor(t: TagInput): PartTag[] {
   } else if (codeSurface && has(x, APPROVAL)) tags.add("approval_prompt");
   // With an agent at work the agent types the commands; the person's repeated commands only count without one.
   if (codeSurface && !agent && has(x, CODE_MANUAL)) tags.add("code_manual");
-  if (t.category === "sheet" || (has(x, DATA_APPS) && has(x, DATA_VERBS)) || (has(x, DATA_VERBS) && !tags.has("messaging") && !codeSurface && !tags.has("media_make"))) tags.add("data_entry");
-  if (has(x, COPY_VERBS) && !codeSurface && !tags.has("media_make")) tags.add("copy_between");
+  // Like messaging, record and copy verbs count only as the step's own verb (or a records app as the surface), never
+  // from OCR words: "record" on a call screen is not data entry.
+  const verb = t.verb === undefined ? "" : words(t.verb);
+  if (t.category === "sheet" || (has(t.surface, DATA_APPS) && (verb === "" || has(verb, DATA_VERBS))) || (has(verb, DATA_VERBS) && !tags.has("messaging") && !codeSurface && !tags.has("media_make"))) tags.add("data_entry");
+  if (has(verb, COPY_VERBS) && !codeSurface && !tags.has("media_make")) tags.add("copy_between");
   const writes = tags.has("messaging") || tags.has("publish") || tags.has("data_entry") || tags.has("media_make") || tags.has("code_manual");
   if (!writes && !codeSurface && (t.category === "browse" || t.category === "social" || has(x, READ_VERBS))) tags.add("reading");
   return [...tags].sort();
