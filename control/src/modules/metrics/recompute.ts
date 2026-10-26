@@ -1,6 +1,6 @@
 // Nightly recompute (ADR 0109 §11): per tenant, the current and previous month for every group scope. A snapshot that
-// new data made stale (metric_dirty) is replaced; otherwise hs-1's recompute() must reproduce it exactly, or an alert row is written
-// and the month loses its "final" badge. Never corrects a number.
+// new data made stale (metric_dirty) is replaced; otherwise hs-1's recompute() must reproduce it exactly, or an alert
+// row is written and the month loses its "final" badge. Never corrects a number.
 import type { Deps, Job } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
 import { withTenant } from "../../db/tenant.ts";
