@@ -5,7 +5,7 @@ import { S205_TABLES, addDevice, addPerson, at, dailyAggregate, populate, review
 import nightly from "../../src/modules/metrics/index.ts";
 
 const PERSON_TABLES = ["run_outcomes", "review_events", "baseline_samples", "baseline_sample_instances", "daily_aggregates",
-  "daily_aggregate_workflows", "working_time_aggregates"];
+  "daily_aggregate_workflows", "working_time_aggregates", "run_owners"];
 
 let s: S205;
 let people: Awaited<ReturnType<typeof populate>>;

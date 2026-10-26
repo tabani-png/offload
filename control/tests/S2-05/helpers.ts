@@ -14,7 +14,7 @@ import { createSession, type SeededTenant } from "../helpers/seed.ts";
 export const S205_TABLES = [
   "device_seq", "sync_objects", "run_outcomes", "review_events", "baseline_samples", "baseline_sample_instances",
   "daily_aggregates", "daily_aggregate_workflows", "working_time_aggregates", "metric_snapshots", "metric_alerts", "metric_dirty",
-  "sync_accepts",
+  "sync_accepts", "run_owners",
 ];
 
 /** Consent and features as S2-08 will answer them, held in memory. */
