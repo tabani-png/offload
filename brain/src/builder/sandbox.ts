@@ -12,7 +12,7 @@
 // (env -i still applies). With neither, the run is refused (fail closed) before the approval is used.
 import type { HookCallback, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { spawnSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { executorEnv } from "../workflows/executor.ts";
 
@@ -82,10 +82,31 @@ export function insideWorkspace(ws: string, p: string): string | null {
   return within(realish(ws), realish(abs)) ? abs : null;
 }
 
+/** True when the path is accept/ or inside it - lexically OR canonically (a symlinked alias of accept/ is accept/). */
 const inCheckDir = (ws: string, abs: string) => {
   const rel = relative(ws, abs);
-  return rel === CHECK_DIR || rel.startsWith(`${CHECK_DIR}/`);
+  if (rel === CHECK_DIR || rel.startsWith(`${CHECK_DIR}/`)) return true;
+  return within(realish(join(ws, CHECK_DIR)), realish(abs));
 };
+
+/** True when any existing component of the path below the workspace is a symlink. Writes through one are refused:
+ * the SDK file tools run unsandboxed, so a decision on a symlinked path could be swapped after the check. (Sandboxed
+ * builder code cannot create symlinks or hard links at all - see sandboxProfile - so this is defence in depth.) */
+export function throughSymlink(ws: string, abs: string): boolean {
+  const parts = relative(ws, abs).split("/").filter((x) => x !== "" && x !== ".");
+  let cur = ws;
+  for (const part of parts) {
+    cur = join(cur, part);
+    try {
+      if (lstatSync(cur).isSymbolicLink()) return true;
+    } catch {
+      return false; // the rest does not exist yet
+    }
+  }
+  return false;
+}
+
+const writeRefusal = (ws: string, abs: string): string | null => (inCheckDir(ws, abs) ? "the acceptance check is read-only" : throughSymlink(ws, abs) ? "writes through a symlink are refused" : null);
 
 export interface ToolDecision {
   allow: boolean;
@@ -105,7 +126,10 @@ export function decideBashCommand(ws: string, command: string): ToolDecision {
     if (w.startsWith("-")) continue;
     const abs = insideWorkspace(ws, w);
     if (abs === null) return { allow: false, reason: `${w} is outside the workspace` };
-    if ((head === "mv" || head === "cp" || head === "mkdir") && inCheckDir(ws, abs)) return { allow: false, reason: "the acceptance check is read-only" };
+    if (head === "mv" || head === "cp" || head === "mkdir") {
+      const no = writeRefusal(ws, abs);
+      if (no !== null) return { allow: false, reason: no };
+    }
   }
   return { allow: true, reason: "allowlisted command" };
 }
@@ -120,7 +144,10 @@ export function decideTool(ws: string, tool: string, input: Record<string, unkno
   if (typeof raw !== "string") return { allow: false, reason: "bad path" };
   const abs = insideWorkspace(ws, raw);
   if (abs === null) return { allow: false, reason: `${raw} is outside the workspace` };
-  if ((tool === "Write" || tool === "Edit") && inCheckDir(ws, abs)) return { allow: false, reason: "the acceptance check is read-only" };
+  if (tool === "Write" || tool === "Edit") {
+    const no = writeRefusal(ws, abs);
+    if (no !== null) return { allow: false, reason: no };
+  }
   return { allow: true, reason: "inside the workspace" };
 }
 
@@ -249,6 +276,9 @@ export function sandboxProfile(o: { ws: string; frozenDir: string; readOnly: rea
     `(allow file-read* (subpath ${sbStr(realish(o.frozenDir))}))`,
     `(allow file-read* file-write* (subpath ${sbStr(ws)}))`,
     `(deny file-write* (subpath ${sbStr(join(ws, CHECK_DIR))}) (subpath ${sbStr(realish(o.frozenDir))}))`,
+    // No links at all: a symlink or hard link made by sandboxed code could steer the unsandboxed SDK file tools.
+    "(deny file-write-create (vnode-type SYMLINK))",
+    "(deny file-link)",
     '(allow file-write* file-ioctl (literal "/dev/null") (literal "/dev/tty"))',
     '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))',
     "(deny network*)",

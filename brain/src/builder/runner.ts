@@ -13,8 +13,8 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { TIER_MODELS } from "../models/router.ts";
 import { BriefError, type SolutionBrief } from "../solutions/brief.ts";
 import { ensureDir } from "../workflows/store.ts";
@@ -208,11 +208,13 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   const rt: SandboxRuntime = resolveSandbox(o.profile, o.sandboxExec ?? SANDBOX_EXEC);
   const model = o.model ?? TIER_MODELS.sonnet;
   const runCheck = o.runCheck ?? runCheckProcess;
+  // Absolute before any path is derived: workspace, profile and check paths are used with cwd = workspace.
+  const home = resolve(o.home);
   // The gate first: nothing exists on disk for a run that is not approved.
-  const { brief, checks, content } = consumeBuildApproval(o.home, o.briefId, o.token, now());
+  const { brief, checks, content } = consumeBuildApproval(home, o.briefId, o.token, now());
   const startedAt = now();
   const id = `run_${randomBytes(8).toString("hex")}`;
-  const runDir = join(buildsDir(o.home), id);
+  const runDir = join(buildsDir(home), id);
   const ws = join(runDir, "workspace");
   ensureDir(join(ws, CHECK_DIR));
   mkdirSync(join(ws, ".tmp"), { recursive: true, mode: 0o700 });
@@ -233,7 +235,22 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   const sandbox = sandboxArgv(rt, profilePath, childEnv);
   const known = secretValues(parentEnv);
   const scrub = (t: string) => redactSecrets(t, known);
-  const intact = () => [checkPath, frozenPath].every((f) => existsSync(f) && checkSha(readFileSync(f, "utf8")) === checks.sha256);
+  // accept/ is locked as a whole: exactly the check file, nothing added (a module there would shadow the check's
+  // imports), nothing swapped for a link.
+  const acceptListing = () => {
+    try {
+      const dir = join(ws, CHECK_DIR);
+      if (lstatSync(dir).isSymbolicLink()) return "symlink";
+      return readdirSync(dir, { withFileTypes: true })
+        .map((e) => `${e.isFile() ? "f" : e.isSymbolicLink() ? "l" : "o"}:${e.name}`)
+        .sort()
+        .join("/");
+    } catch {
+      return "missing";
+    }
+  };
+  const lockedListing = acceptListing();
+  const intact = () => acceptListing() === lockedListing && [checkPath, frozenPath].every((f) => existsSync(f) && checkSha(readFileSync(f, "utf8")) === checks.sha256);
 
   // SDK auth stays in the Claude Code process env; every Bash child it starts is wrapped in `env -i` + the sandbox.
   const env = builderEnv(parentEnv);
@@ -389,6 +406,6 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
     artifactPath: ws,
     denials: perms.denials.slice(0, 50),
   };
-  writeRunRecord(o.home, record);
+  writeRunRecord(home, record);
   return record;
 }
