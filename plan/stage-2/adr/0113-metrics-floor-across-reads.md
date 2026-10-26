@@ -21,7 +21,9 @@ number of people with data in the period.
 ## 2. One run per run id (ADR 0111 §4)
 Rows stay one per `(deviceId, runId)`, and a device's later envelope replaces its own row (latest seq). hs-1 takes one
 run per run id, so when two devices report the same run id the metrics read keeps the copy received first. A second
-device cannot replace a run by reusing its id. Run ids are ULIDs, so two honest devices do not collide.
+device cannot replace a run by reusing its id. Run ids are ULIDs, so two honest devices do not collide. The kept copy
+is chosen among every copy of the run id in the tenant before the period, person and workflow filters of a read, so a
+later copy with another end date, person or workflow does not count where the kept one does not (PR #9 wave C).
 
 ## 3. One working-time value per person-day (ADR 0111 §5)
 Working-time medians take one value per (person, day): the latest report by `createdAt`, then by the device's seq. Two

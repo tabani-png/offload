@@ -98,29 +98,34 @@ function runOf(r: RunRow): RunOutcome {
 
 /**
  * Runs ending in [startMs, endMsExclusive), one per runId as hs-1 requires. Each device's row is its latest report of
- * the run; across devices the first device to report the run id keeps it (migration 0503).
+ * the run; across devices the first device to report the run id keeps it (migration 0503). That copy is chosen among
+ * every copy of the run id in the tenant before the period, person and workflow filters apply, so a later copy with
+ * another end date, person or workflow never counts where the kept one does not. Choosing it reads other people's
+ * copies (aggregate read), but only rows of the person asked for are returned.
  */
 export async function loadRuns(tx: Tx, o: LoadOpts): Promise<RunInput[]> {
   const personId = o.personId ?? null;
   const wf = o.workflow?.workflowId ?? null;
   const ver = o.workflow?.version ?? null;
-  const rows = (await tx.unsafe(
-    `select r.*, p.department_id, ${ATTRIBUTION} as job_role_id
-     from run_outcomes r join people p on p.tenant_id = r.tenant_id and p.id = r.person_id
+  const rows = (await withAggregateRead(tx, () => tx.unsafe(
+    `with candidates as (
+       select distinct r.run_id from run_outcomes r
+       where r.ended_at_ms >= $1 and r.ended_at_ms < $2
+         and ($3::uuid is null or r.person_id = $3::uuid)
+         and ($4::uuid is null or (r.workflow_id = $4::uuid and r.version = $5::int))),
+     kept as (
+       select distinct on (r.run_id) r.* from run_outcomes r
+       where r.run_id in (select run_id from candidates)
+       order by r.run_id, r.first_received_at, r.device_id)
+     select r.*, p.department_id, ${ATTRIBUTION} as job_role_id
+     from kept r join people p on p.tenant_id = r.tenant_id and p.id = r.person_id
      where r.ended_at_ms >= $1 and r.ended_at_ms < $2
        and ($3::uuid is null or r.person_id = $3::uuid)
        and ($4::uuid is null or (r.workflow_id = $4::uuid and r.version = $5::int))
-     order by r.run_id, r.first_received_at, r.device_id`,
+     order by r.run_id`,
     [o.startMs, o.endMsExclusive, personId, wf, ver],
-  )) as RunRow[];
-  const out: RunInput[] = [];
-  let lastRun: string | null = null;
-  for (const r of rows) {
-    if (r.run_id === lastRun) continue;
-    lastRun = r.run_id;
-    out.push({ run: runOf(r), personId: r.person_id, departmentId: r.department_id, jobRoleId: r.job_role_id });
-  }
-  return out;
+  ))) as RunRow[];
+  return rows.map((r) => ({ run: runOf(r), personId: r.person_id, departmentId: r.department_id, jobRoleId: r.job_role_id }));
 }
 
 /** Review events of these runs. */
