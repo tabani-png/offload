@@ -26,6 +26,11 @@ export interface Conns {
   api: string;
   org: string;
   roleIdentity: string;
+  /** Role identities of the sales job role on the company MCP, API and Composio org connections (round 3: a company
+   * connection sends only as a role identity). */
+  roleMcp: string;
+  roleApi: string;
+  roleOrg: string;
 }
 
 /** Records every argv; answers as told. `during` runs inside the call (to look at the journal mid-call). */
@@ -102,10 +107,19 @@ export async function world(): Promise<World> {
     api: await conn("api", "company", "api", null, "api_sales"),
     org: await conn("composio_org", "company", "composio", null, "acct_org"),
     roleIdentity: "",
+    roleMcp: "",
+    roleApi: "",
+    roleOrg: "",
   };
   const [ri] = await db`insert into role_identities (tenant_id, job_role_id, label, address, connection_id)
     values (${t.id}, ${t.jobRoles.sdr}, 'Sales inbox', 'sales@acme.example.com', ${t.connections.company}) returning id`;
   conns.roleIdentity = ri!.id as string;
+  const role = async (label: string, connectionId: string) =>
+    ((await db`insert into role_identities (tenant_id, job_role_id, label, connection_id)
+      values (${t.id}, ${t.jobRoles.sdr}, ${label}, ${connectionId}) returning id`)[0]!.id as string);
+  conns.roleMcp = await role("Sales MCP", conns.mcp);
+  conns.roleApi = await role("Sales Slack", conns.api);
+  conns.roleOrg = await role("Sales outreach", conns.org);
   await db`insert into job_role_holders (tenant_id, job_role_id, person_id) values (${t.id}, ${t.jobRoles.sdr}, ${member})`;
   await setRolePolicy(h, t, t.jobRoles.sdr, {});
   for (const wf of [WF, WF2, WF3]) await roleWorkflow(h, t, wf, t.jobRoles.sdr, t.departments.sales);
@@ -184,6 +198,9 @@ export function memberRun(w: World, over: Partial<ProposeRun> = {}): ProposeRun 
     ...over,
   };
 }
+
+/** The run of a role identity through its company connection. */
+export const asRole = (id: string, connectionId: string): Partial<ProposeRun> => ({ identity: { type: "role_identity", id }, connectionId });
 
 export async function propose(w: World, items: Stage2Item[], over: Partial<ProposeRun> = {}) {
   const r = await w.broker.proposeBatch(w.t.id, memberRun(w, over), items);

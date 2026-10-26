@@ -7,6 +7,7 @@ import { ComposioCliExecutor, type ComposioRunner } from "../../src/modules/brok
 import { itemRef } from "../../src/modules/broker/stage1.ts";
 import {
   approveToken,
+  asRole,
   client,
   email,
   items,
@@ -100,7 +101,7 @@ describe("S2-07 review B: changing a policy stops what it approved (fix 1)", () 
 describe("S2-07 review B: no address in audit detail or item errors (fix 2)", () => {
   test("AUDIT: a refused recipient's address and domain are in neither the audit row nor the reason; the item ref is", async () => {
     const addr = "lead.person@hidden-domain.example";
-    const r = await propose(w, [{ key: addr, capability: "outreach.add_lead", fields: [["to", addr], ["subject", ""], ["body", ""], ["verb", "add_to_campaign"]] }], { connectionId: w.conns.org });
+    const r = await propose(w, [{ key: addr, capability: "outreach.add_lead", fields: [["to", addr], ["subject", ""], ["body", ""], ["verb", "add_to_campaign"]] }], asRole(w.conns.roleOrg, w.conns.org));
     expect(r).toMatchObject({ ok: false, code: "forbidden" });
     const rows = await w.h.db.migrator`select detail from audit_events where tenant_id = ${w.t.id} and action = 'batch.propose_rejected'`;
     const text = JSON.stringify(rows);

@@ -4,7 +4,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { ComposioCliExecutor, type CommitCall } from "../../src/modules/broker/executors.ts";
 import type { BatchItem, CrmSheet, ToolPolicy } from "../../src/modules/broker/stage1.ts";
-import { approveHttp, approveToken, batchState, client, email, FakeComposio, items, propose, proposeOk, world, type World } from "./setup.ts";
+import { approveHttp, approveToken, asRole, batchState, client, email, FakeComposio, items, propose, proposeOk, world, type World } from "./setup.ts";
 
 let w: World;
 let n = 0;
@@ -227,7 +227,7 @@ describe("S2-07 deterministic executors", () => {
   test("EXEC: company MCP: the MCP client gets the approved send_email arguments on the connection's server", async () => {
     const r = to();
     const before = w.mcp.calls.length;
-    const hash = await proposeOk(w, [email(r)], { connectionId: w.conns.mcp });
+    const hash = await proposeOk(w, [email(r)], asRole(w.conns.roleMcp, w.conns.mcp));
     await approveHttp(w, "member", hash);
     expect(w.mcp.calls.length - before).toBe(1);
     expect(w.mcp.calls.at(-1)).toEqual({ server: "mcp_sales_gmail", tool: "send_email", args: { to: [r], subject: "Seed round follow-up", body: `Hi,\nshort note for ${r}.\nSam` } });
@@ -236,7 +236,7 @@ describe("S2-07 deterministic executors", () => {
   test("EXEC: direct API: the transport gets the approved operation and body", async () => {
     const before = w.api.calls.length;
     const item = { key: "ops@northzone.com", capability: "chat.post", fields: [["to", "ops@northzone.com"], ["subject", ""], ["body", "Deploy done."], ["verb", "post_message"], ["channel", "C042"]] as Array<[string, string]> };
-    const hash = await proposeOk(w, [item], { connectionId: w.conns.api });
+    const hash = await proposeOk(w, [item], asRole(w.conns.roleApi, w.conns.api));
     await approveHttp(w, "member", hash);
     expect(w.api.calls.length - before).toBe(1);
     expect(w.api.calls.at(-1)).toEqual({ connectionRef: "api_sales", operation: "SLACK_SEND_MESSAGE", body: { channel: "C042", markdown_text: "Deploy done.", unfurl_links: false, unfurl_media: false } });
@@ -244,7 +244,7 @@ describe("S2-07 deterministic executors", () => {
 
   test("EXEC: a non-email commit (Instantly lead) is built from its labelled fields", async () => {
     const item = { key: "lead@target.com", capability: "outreach.add_lead", fields: [["to", "lead@target.com"], ["subject", ""], ["body", ""], ["verb", "add_to_campaign"], ["campaign_id", "cmp_1"], ["first_name", "Lea"]] as Array<[string, string]> };
-    const hash = await proposeOk(w, [item], { connectionId: w.conns.org });
+    const hash = await proposeOk(w, [item], asRole(w.conns.roleOrg, w.conns.org));
     await approveHttp(w, "member", hash);
     expect(w.composio.tools().at(-1)).toBe("INSTANTLY_ADD_LEADS_BULK");
     expect(w.composio.args().at(-1)).toEqual({ campaign_id: "cmp_1", leads: [{ email: "lead@target.com", first_name: "Lea" }], skip_if_in_campaign: true, verify: false });
