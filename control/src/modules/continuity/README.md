@@ -25,6 +25,22 @@ connections, record the offboarding, open one hand-over per role workflow (regis
 lock) LAST, then S2-10's own audit events, which were queued until then. Lock order: control/src/modules/broker/broker.ts. After commit: `WorkersPort.pauseFor` (advisory lock +
 `pause_pending`, retried by the sweep).
 
+## Lock order (with the broker's, control/src/modules/broker/broker.ts)
+S2-10's rows come before the broker's step 1, in this order, and no path goes back up:
+1. the leaver's `people` row (`FOR UPDATE`): freeze, depart, and every hand-over route (`lockHandover`, before the hand-over);
+2. the advisory lock `continuity:<person>` (freeze, and its after-commit worker pause);
+3. `handovers` rows, by id;
+4. `offboardings` row;
+then the broker's steps 2-9 (the freeze locks the leaver's active policies, step 2, before deleting connections that
+batches reference), and the tenant's audit-chain lock last: S2-10's audit events are queued per transaction
+(`deferAudits`) and written after the last row lock; `broker.stopRunsFor` flushes its own just before.
+
+## Remote calls never block offboarding
+`broker.stopRunsFor` calls `WorkersPort.pauseFor`. In the freeze it runs in a savepoint; if it fails, the freeze still
+commits (tokens revoked, `person.freeze` with `runsStopDeferred: true`) and `offboardings.pause_pending` stays set:
+after commit and on every sweep, `pausePending` calls `stopRunsFor` again (policies, workers) until it is delivered
+(`person.workers_paused`). Registry calls (`workflowsOf`, `getVersion`) are in-process reads without locks.
+
 ## Gate
 Mounting routes wraps `registry.isRunnableBy` and `broker.proposeBatch` (ADR 0113 §1). A test or wiring that overrides
 `ports.continuity` gets no gate.

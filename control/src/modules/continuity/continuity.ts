@@ -96,6 +96,8 @@ export interface Continuity extends ContinuityPort {
   assign(tx: Tx, h: HandoverRow, by: { personId: string; actor: Actor }, input: { successor: Successor; inFlight?: InFlight; inboxStep?: InboxStep | null }): Promise<HandoverDto>;
   accept(tx: Tx, h: HandoverRow, by: { personId: string; actor: Actor }, input: { reviewedHandoverMessage?: boolean }): Promise<HandoverDto>;
   close(tx: Tx, h: HandoverRow, by: { personId: string; actor: Actor }): Promise<HandoverDto>;
+  /** Locks the hand-over's leaver (people row), then the hand-over; null when there is none. */
+  lockHandover(tx: Tx, id: string): Promise<HandoverRow | null>;
   /** One pass for one tenant: departures, end dates, early hand-overs for leavers, pending worker pauses. */
   sweep(tenantId: string): Promise<SweepResult>;
   /** Resolves when every after-commit follow-up started so far has finished (tests, shutdown). */
@@ -205,14 +207,37 @@ export function createContinuity(deps: Deps): Continuity {
    * Revokes approvals, pauses policies and workers through the S2-07 broker (its full API when loaded, else the frozen
    * port). `stopRunsFor` revokes the person's tokens itself, then writes its audit events and so takes the audit-chain
    * lock before it returns: it is called after every row lock the freeze takes (ADR 0113 §4, broker.ts lock order).
+   *
+   * `stopRunsFor` also calls `WorkersPort.pauseFor`, a remote service. Offboarding is never blocked by it: the call runs
+   * in a savepoint, and when it fails only the tokens are revoked here; policies and workers are paused after commit
+   * from the durable `offboardings.pause_pending` marker (`pausePending`, retried by the sweep until delivered). A
+   * frozen person's policy cannot send meanwhile: the broker refuses a runner who is not active, at every call.
    */
-  async function stopRuns(tx: Tx, personId: string): Promise<{ tokens: number; policies: number }> {
+  async function stopRuns(tx: Tx, personId: string): Promise<{ tokens: number; policies: number; deferred: boolean }> {
     const b = deps.ports.broker as Partial<Broker>;
-    if (b.isFullBroker === true && b.stopRunsFor) {
-      const s = await b.stopRunsFor(tx, personId);
-      return { tokens: s.tokens, policies: s.policies };
+    if (b.isFullBroker === true && b.stopRunsFor && b.revokeTokensFor) {
+      try {
+        const s = await tx.savepoint((sp) => b.stopRunsFor!(sp as unknown as Tx, personId));
+        return { tokens: s.tokens, policies: s.policies, deferred: false };
+      } catch (e) {
+        console.warn("continuity: stopping runs failed in the freeze; policies and workers are paused after commit:", e instanceof Error ? e.message : e);
+        return { tokens: await b.revokeTokensFor(tx, personId), policies: 0, deferred: true };
+      }
     }
-    return { tokens: await deps.ports.broker.revokeTokensOf(tx, personId), policies: 0 };
+    return { tokens: await deps.ports.broker.revokeTokensOf(tx, personId), policies: 0, deferred: false };
+  }
+
+  /** Writes the S2-10 audit events of `fn` after its last row lock (the audit-chain lock stays last). */
+  async function deferAudits<T>(tx: Tx, fn: () => Promise<T>): Promise<T> {
+    if (queued.has(tx)) return fn();
+    queued.set(tx, []);
+    try {
+      const r = await fn();
+      await flushQueued(tx);
+      return r;
+    } finally {
+      queued.delete(tx);
+    }
   }
 
   /** Lock order step 2 up front: the person's active policies (by id), before the connection deletes below take a KEY
@@ -320,7 +345,10 @@ export function createContinuity(deps: Deps): Continuity {
   async function pausePending(tx: Tx, personId: string): Promise<boolean> {
     const [o] = await tx`select pause_pending from offboardings where person_id = ${personId} for update`;
     if (!o?.pause_pending) return false;
-    const workers = await deps.ports.workers.pauseFor(tx, personId);
+    // The full broker pauses policies and workers (and revokes any token left); without it, the workers port alone.
+    const b = deps.ports.broker as Partial<Broker>;
+    const workers =
+      b.isFullBroker === true && b.stopRunsFor ? (await b.stopRunsFor(tx, personId)).workers : await deps.ports.workers.pauseFor(tx, personId);
     await tx`update offboardings set pause_pending = false, paused_at = ${new Date(now())} where person_id = ${personId}`;
     await audit(tx, {
       actor: SYSTEM,
@@ -382,15 +410,10 @@ export function createContinuity(deps: Deps): Continuity {
     // Lock order: person and its advisory lock (S2-10's own, before step 1), the person's policies (2), then S2-10's
     // rows; the broker's stopRunsFor (2-9, then the audit lock, 10) and the queued audit events come last.
     await lockPolicies(tx, personId);
-    queued.set(tx, []);
-    let runs: { tokens: number; policies: number };
-    let access: { sessions: number; devices: number };
-    let removed: string[];
-    let opened: number;
-    try {
+    await deferAudits(tx, async () => {
       await tx`update people set state = 'frozen', pending_freeze_at = ${new Date(at)} where id = ${personId}`;
-      access = await revokeAccess(tx, personId, at);
-      removed = await removePersonalConnections(tx, personId, req.actor);
+      const access = await revokeAccess(tx, personId, at);
+      const removed = await removePersonalConnections(tx, personId, req.actor);
       await tx`insert into offboardings (tenant_id, person_id, state, reason, effective_on, note, requested_by, created_at,
           frozen_at, pause_pending)
         values (current_setting('app.tenant_id')::uuid, ${personId}, 'frozen', ${req.reason}, ${req.effectiveOn ?? null}::date,
@@ -400,7 +423,7 @@ export function createContinuity(deps: Deps): Continuity {
           note = case when excluded.note <> '' then excluded.note else offboardings.note end,
           requested_by = coalesce(excluded.requested_by, offboardings.requested_by),
           frozen_at = excluded.frozen_at, pause_pending = true`;
-      opened = await openHandovers(tx, personId, removed, req.actor);
+      const opened = await openHandovers(tx, personId, removed, req.actor);
       await tx`update handovers set removed_connections = ${removed}::jsonb where person_id = ${personId} and state <> 'closed'`;
       // Hand-overs that were settled while the person was leaving resume now, under the successor.
       for (const h of (await tx.unsafe(
@@ -409,28 +432,27 @@ export function createContinuity(deps: Deps): Continuity {
       )) as HandoverRow[]) {
         await resumed(tx, h, req.actor);
       }
-      runs = await stopRuns(tx, personId);
-      await flushQueued(tx);
-    } finally {
-      queued.delete(tx);
-    }
-    await audit(tx, {
-      actor: req.actor,
-      action: "person.freeze",
-      subjectPersonId: personId,
-      resource: { type: "person", id: personId },
-      // `pending`: the after-commit worker pause is still to come (S2-01 contract of this event).
-      detail: {
-        pending: true,
-        source: req.source,
-        ...(req.detail !== undefined ? { detail: req.detail } : {}),
-        reason: req.reason,
-        ...access,
-        tokens: runs.tokens,
-        policies: runs.policies,
-        connectionsRemoved: removed.length,
-        handoversOpened: opened,
-      },
+      // Last: the broker takes its own row locks (steps 2-9) and then the audit-chain lock (10).
+      const runs = await stopRuns(tx, personId);
+      await audit(tx, {
+        actor: req.actor,
+        action: "person.freeze",
+        subjectPersonId: personId,
+        resource: { type: "person", id: personId },
+        // `pending`: the after-commit worker pause is still to come (S2-01 contract of this event).
+        detail: {
+          pending: true,
+          source: req.source,
+          ...(req.detail !== undefined ? { detail: req.detail } : {}),
+          reason: req.reason,
+          ...access,
+          tokens: runs.tokens,
+          policies: runs.policies,
+          ...(runs.deferred ? { runsStopDeferred: true } : {}),
+          connectionsRemoved: removed.length,
+          handoversOpened: opened,
+        },
+      });
     });
     afterFreeze(t!.tenant as string, personId);
     return true;
@@ -546,6 +568,16 @@ export function createContinuity(deps: Deps): Continuity {
     const detail = { workflowId: h.workflow_id, successor: s, inFlight, inboxStep };
     await event(tx, h.id, "assigned", by.actor, detail);
     await audit(tx, { actor: by.actor, action: "handover.assigned", subjectPersonId: h.person_id, resource: { type: "handover", id: h.id }, detail });
+    // The named successor is the subject of their own event, so it is in their access log and export (ADR 0108 §4).
+    if (isPerson) {
+      await audit(tx, {
+        actor: by.actor,
+        action: "handover.successor_named",
+        subjectPersonId: s.personId,
+        resource: { type: "handover", id: h.id },
+        detail: { workflowId: h.workflow_id, leaverPersonId: h.person_id, inFlight, inboxStep },
+      });
+    }
     const after = await handoverById(tx, h.id);
     if (ready(after) && GONE.includes((await personState(tx, h.person_id))!)) await resumed(tx, after, by.actor);
     return handoverDto(after);
@@ -590,6 +622,19 @@ export function createContinuity(deps: Deps): Continuity {
     await audit(tx, { actor: by.actor, action: "handover.closed", subjectPersonId: h.person_id, resource: { type: "handover", id: h.id }, detail: { workflowId: h.workflow_id } });
     await departIfDone(tx, h.person_id, by.actor, false);
     return handoverDto(await handoverById(tx, h.id));
+  }
+
+  /**
+   * S2-10 lock order (before the broker's step 1, see broker.ts): the leaver's people row, then `continuity:<person>`
+   * (freeze only), then hand-over rows (by id), then offboardings; the broker's rows next; the audit-chain lock last.
+   * Locks the hand-over's leaver, then the hand-over, so a close (which may depart the leaver) never holds a hand-over
+   * while waiting for a person a freeze holds.
+   */
+  async function lockHandover(tx: Tx, id: string): Promise<HandoverRow | null> {
+    const [r] = await tx`select person_id from handovers where id = ${id}`;
+    if (!r) return null;
+    await tx`select 1 from people where id = ${r.person_id as string} for update`;
+    return handoverById(tx, id, true);
   }
 
   async function sweep(tenantId: string): Promise<SweepResult> {
@@ -650,13 +695,15 @@ export function createContinuity(deps: Deps): Continuity {
       });
     },
     freezeWith,
-    markLeaving,
+    markLeaving: (tx, personId, req) => deferAudits(tx, () => markLeaving(tx, personId, req)),
     held,
     runAs,
     checkRun,
-    assign,
-    accept,
-    close,
+    // Callers lock the leaver's row, then the hand-over row (`lockHandover`); audit events are written last.
+    assign: (tx, h, by, input) => deferAudits(tx, () => assign(tx, h, by, input)),
+    accept: (tx, h, by, input) => deferAudits(tx, () => accept(tx, h, by, input)),
+    close: (tx, h, by) => deferAudits(tx, () => close(tx, h, by)),
+    lockHandover,
     sweep,
     idle,
   };
