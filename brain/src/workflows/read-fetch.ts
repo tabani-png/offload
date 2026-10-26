@@ -7,7 +7,7 @@
 import type { ReadSourceDTO, ReadStatusDTO } from "../api/s14-types.ts";
 import { scrubLogText } from "../log.ts";
 import { apiServer } from "../connectors/api.ts";
-import { apiReadOperations, buildRequest, pathParams } from "../connectors/api.ts";
+import { apiReadOperations, buildRequest, mapArgs, pathParams } from "../connectors/api.ts";
 import type { ChainResolver, FetchLike, MethodState } from "../connectors/chain.ts";
 import { COMPOSIO_CLI_SERVER } from "../connectors/composio.ts";
 import type { ComputerDriver } from "../connectors/computer/driver.ts";
@@ -25,7 +25,10 @@ import { updateWorkflow, WorkflowGoneError } from "./store.ts";
 import type { WorkflowJson } from "./types.ts";
 
 /** Asks the read gate about one call; runs it only when allowed. A refused call throws ReadRefused. */
-export type ReadCall = (tool: string, input: Record<string, unknown>, run: () => Promise<string>) => Promise<string>;
+export type ReadCall = <T = string>(tool: string, input: Record<string, unknown>, run: () => Promise<T>) => Promise<T>;
+
+/** What a reader returns: the source's text, or the text with a note on how exact it is (MCP structuredContent). */
+export type ReaderAnswer = string | { text: string; note?: string };
 
 export interface ReaderJob {
   target: ChainTarget;
@@ -40,7 +43,7 @@ export interface ReaderJob {
 
 /** One way of reading a source (per chain method). Every call goes through `job.call`. Returns what the source showed. */
 export interface SourceReader {
-  read(job: ReaderJob): Promise<string>;
+  read(job: ReaderJob): Promise<ReaderAnswer>;
 }
 
 export class ReadRefused extends Error {}
@@ -180,8 +183,11 @@ export class ChainSourceFetcher implements SourceFetcher {
         return run();
       };
       let text: string;
+      let note: string | undefined;
       try {
-        text = await reader.read({ target, state, source: src, args, call, ...(f.signal === undefined ? {} : { signal: f.signal }) });
+        const ans = await reader.read({ target, state, source: src, args, call, ...(f.signal === undefined ? {} : { signal: f.signal }) });
+        text = typeof ans === "string" ? ans : ans.text;
+        note = typeof ans === "string" ? undefined : ans.note;
       } catch (err) {
         // Cancelled: the method is not to blame and nothing else is tried.
         const s = stop();
@@ -224,7 +230,7 @@ export class ChainSourceFetcher implements SourceFetcher {
         ok: true,
         via: state.method,
         rows: f.keep === undefined ? rows : rows.filter(f.keep),
-        message: `Read from ${src.targetName} ${VIA_WORDS[state.method]}.${out.kind === "empty" ? ` It has no rows for ${contextWords(query)} right now.` : ""}${state.method === "computer" || mentionsContext(text, query) ? "" : ` It did not say which report or period it answered for; Offload asked for ${contextWords(query)}.`}`,
+        message: `Read from ${src.targetName} ${VIA_WORDS[state.method]}.${note === undefined ? "" : ` ${note}`}${out.kind === "empty" ? ` It has no rows for ${contextWords(query)} right now.` : ""}${state.method === "computer" || mentionsContext(text, query) ? "" : ` It did not say which report or period it answered for; Offload asked for ${contextWords(query)}.`}`,
         ...(more === true ? { more } : {}),
         ...(skipped.length === 0 ? {} : { skipped }),
       };
@@ -254,6 +260,42 @@ export function recordRead(home: string, id: string, r: FetchResult, now: number
 
 // ---------- the default readers (real) ----------
 
+/**
+ * s27 round 12: a direct read's arguments. The operation's configured `map` (connectors.json) is read with the same
+ * code as sends (api.ts mapArgs); a read's map may hold fixed values only. Rule: configured fixed values win on every
+ * clash (ids and scope always; report, fields and filters when the configuration pins them); the learned query fills
+ * only the arguments the configuration does not set.
+ */
+export function readArgs(op: { operationId: string; path: string; map: Record<string, string | boolean> }, learned: Record<string, unknown>): Record<string, unknown> {
+  const dynamic = Object.entries(op.map).filter(([, v]) => typeof v === "string" && v.startsWith("$")).map(([k]) => k);
+  if (dynamic.length > 0) throw new Error(`a read's configured arguments must be fixed values (${dynamic.join(", ")} is not)`);
+  const fixed = mapArgs({ capability: "", operationId: op.operationId, method: "GET", path: op.path, role: "read", fields: {}, body: "none", map: op.map }, NO_ITEM, { batchHash: "" }) ?? {};
+  return { ...learned, ...fixed };
+}
+const NO_ITEM = { key: "", to: "", subject: "", body: "", warnings: [] };
+
+/**
+ * s27 round 12: what an MCP tool answered, as text for the shared parser. Text blocks are used as sent (exact). When
+ * the tool answers with structuredContent only, or its text does not read as rows, structuredContent is used,
+ * re-serialized from what the MCP software already parsed: `note` says its number formatting comes from that software
+ * (round 9 honesty rule). Images and other blocks are not read.
+ */
+export function mcpAnswer(r: { content?: unknown; structuredContent?: unknown }, fields: ReadSourceDTO["fields"] | ReadonlyArray<{ label: string; sourceLabel: string }>): { text: string; note?: string } {
+  const blocks = Array.isArray(r.content) ? (r.content as Array<{ type?: string; text?: string; resource?: { text?: unknown } }>) : [];
+  // Text blocks, and embedded resources that carry text, are used exactly as sent.
+  const text = blocks
+    .map((c) => (c.type === "text" && typeof c.text === "string" ? c.text : c.type === "resource" && typeof c.resource?.text === "string" ? c.resource.text : null))
+    .filter((x): x is string => x !== null)
+    .join("\n");
+  const structured = r.structuredContent !== undefined && r.structuredContent !== null && typeof r.structuredContent === "object";
+  if (!structured) return { text };
+  if (text.trim() !== "") {
+    const k = readValues(text, fields).kind;
+    if (k === "ok" || k === "empty") return { text };
+  }
+  return { text: JSON.stringify(r.structuredContent), note: "Its number formatting comes from the connector software (structured answer)." };
+}
+
 /** Computer use, read only: open the app or site, then read the window's accessibility text. No planner, no clicks. */
 export class ScreenReader implements SourceReader {
   constructor(private readonly driver: ComputerDriver) {}
@@ -278,7 +320,7 @@ export class ScreenReader implements SourceReader {
 export class McpSourceReader implements SourceReader {
   constructor(private readonly o: { home: string; env: Env }) {}
 
-  async read(job: ReaderJob): Promise<string> {
+  async read(job: ReaderJob): Promise<ReaderAnswer> {
     const tool = readTool(job.target, job.state);
     const parts = tool === null ? null : splitMcpName(tool);
     if (tool === null || parts === null) throw new Error("no read tool");
@@ -300,8 +342,7 @@ export class McpSourceReader implements SourceReader {
         }
         const r = await client.callTool({ name: parts.tool, arguments: job.args }, undefined, job.signal === undefined ? {} : { signal: job.signal });
         if (r.isError === true) throw new Error("the connector answered with an error");
-        const content = Array.isArray(r.content) ? (r.content as Array<{ type?: string; text?: string }>) : [];
-        return content.filter((c) => c.type === "text" && typeof c.text === "string").map((c) => c.text!).join("\n");
+        return mcpAnswer(r as { content?: unknown; structuredContent?: unknown }, job.source.fields);
       } finally {
         await client.close().catch(() => {});
       }
@@ -356,15 +397,16 @@ export class ApiSourceReader implements SourceReader {
     // The learned arguments fill the path first ({report}); a path argument Offload did not learn is a plain refusal
     // of this way (never an empty path segment); only the arguments left go in the query string.
     const text = (v: unknown) => (Array.isArray(v) ? v.map(String).join(",") : v === null || v === undefined ? "" : String(v));
+    const args = readArgs(op, job.args);
     const params = pathParams(op.path);
-    const lacking = params.filter((k) => text(job.args[k]).trim() === "");
+    const lacking = params.filter((k) => text(args[k]).trim() === "");
     if (lacking.length > 0) throw new Error(`the direct read needs ${lacking.join(", ")}, which Offload has not seen you use`);
-    return job.call(tool, job.args, async () => {
+    return job.call(tool, args, async () => {
       const secret = entry.auth === null ? null : await this.o.secrets.read(entry.auth.secret);
-      const built = buildRequest(entry, { method: "GET", path: op.path, body: "none" }, Object.fromEntries(params.map((k) => [k, text(job.args[k])])), secret);
-      // Offload's own view of the data (report, fields, filters): the arguments not in the path, as the query string.
+      const built = buildRequest(entry, { method: "GET", path: op.path, body: "none" }, Object.fromEntries(params.map((k) => [k, text(args[k])])), secret);
+      // The arguments not in the path (configured ids and scope, then the learned report, fields, filters) as the query.
       const u = new URL(built.url);
-      for (const [k, v] of Object.entries(job.args)) if (!params.includes(k)) u.searchParams.set(k, text(v));
+      for (const [k, v] of Object.entries(args)) if (!params.includes(k)) u.searchParams.set(k, text(v));
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), this.o.timeoutMs ?? 15_000);
       const onAbort = () => ac.abort();

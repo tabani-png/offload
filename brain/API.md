@@ -552,6 +552,8 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   - Round 9: workflow runs sign in with an API key through apiKeyHelper; with only a Claude Code OAuth token, the
     token goes in the child env as before (one warning line in the brain log); with neither, runs are refused
     ("add a key in Settings"). Composio answers are parsed from the CLI's raw text.
+  - Round 12: a configured direct read's fixed `map` values are sent and win on clashes; the learned query fills the
+    rest. MCP answers with only structuredContent are read too (with a note on number formatting).
 
 ## s19: messaging playbook (additive, ADR 0011)
 A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,

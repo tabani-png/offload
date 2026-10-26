@@ -39,7 +39,6 @@ function apiWorld(map: Record<string, string>): { calls: string[]; setup: () => 
           baseUrl: "https://us.posthog.com",
           health: { method: "GET", path: "/health" },
           operations: { "metrics.read": { operationId: "insights.get", method: "GET", path: "/api/projects/{project_id}/insights/{report}", role: "read", fields: { project_id: "id", team: "id", report: "text" }, map } },
-          openapi: null,
         },
       },
     }),
@@ -91,5 +90,6 @@ describe("s27 round 12: MCP structuredContent", () => {
   test("FETCH: text only is used as is; nothing at all is empty text", () => {
     expect(mcpAnswer({ content: [{ type: "text", text: "Signups: 1\nActive users: 2" }] }, fields)).toEqual({ text: "Signups: 1\nActive users: 2" });
     expect(mcpAnswer({ content: [{ type: "image", data: "x" }] }, fields)).toEqual({ text: "" });
+    expect(mcpAnswer({ content: [{ type: "resource", resource: { uri: "x://r", text: "Signups: 1\nActive users: 2" } }] }, fields)).toEqual({ text: "Signups: 1\nActive users: 2" });
   });
 });

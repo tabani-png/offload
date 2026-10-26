@@ -140,7 +140,14 @@ only saving was the typing.
     executors use: PATH, HOME, USER, LOGNAME, SHELL, TMPDIR, LANG, LC_*), never OFFLOAD_TOKEN, a model login or a
     connector secret; its output cap is the read limit + 1 (`MAX_ANSWER_CHARS + 1`) and an answer over the limit is
     refused explicitly, never cut and parsed. The brain-wide audit of child processes is in the PR thread.
-19. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+19. **Round 12 (PR #35 review).** A configured direct read keeps its `map` (read with the send side's `mapArgs`; a
+    read's map holds fixed values only). Merge rule: configured fixed values win on every clash (ids and scope always;
+    report, fields and filters when the configuration pins them); the learned query fills only the arguments the
+    configuration does not set; path arguments are filled from the merged set, the rest go in the query string. An
+    MCP answer reaches the parser from its text blocks (and embedded resources with text) as sent; when there are none,
+    or they do not read as rows, its structuredContent is used, re-serialized, and the read says its number
+    formatting comes from the connector software.
+20. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)

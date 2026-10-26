@@ -4,11 +4,11 @@
 import { describe, expect, test } from "bun:test";
 import type { LinkRunner } from "../../src/connectors/link.ts";
 import { readValues } from "../../src/plan/read-source.ts";
-import { ComposioSourceReader, MAX_ANSWER_CHARS } from "../../src/workflows/read-fetch.ts";
+import { ComposioSourceReader, MAX_ANSWER_CHARS, type ReadCall } from "../../src/workflows/read-fetch.ts";
 
 const SECRETS = { OFFLOAD_TOKEN: "tok-s27", ANTHROPIC_API_KEY: "sk-ant-s27", CLAUDE_CODE_OAUTH_TOKEN: "oat-s27", COMPOSIO_API_KEY: "ck-s27", GMAIL_OAUTH_PATH: "/secret.json", OFFLOAD_ANTHROPIC_KEYCHAIN: "svc/acct", AWS_SECRET_ACCESS_KEY: "aws-s27" };
 const state = { method: "composio", reads: ["composio.read"], tools: { "composio.read": "mcp__composio_cli__POSTHOG_GET_INSIGHT" }, info: { account: "acct_1" } } as any;
-const job = { target: { id: "web-us-posthog-com" } as any, state, source: {} as any, args: {}, call: async (_t: string, _i: Record<string, unknown>, run: () => Promise<string>) => run() };
+const job = { target: { id: "web-us-posthog-com" } as any, state, source: {} as any, args: {}, call: (async (_t: string, _i: Record<string, unknown>, run: () => Promise<unknown>) => run()) as ReadCall };
 
 /** A runner that records what it was given and answers like SpawnLinkRunner (output cut at maxBytes, 64 KiB default). */
 function fakeRunner(stdout: string): LinkRunner & { seen: Array<{ env: Record<string, string>; maxBytes?: number }> } {

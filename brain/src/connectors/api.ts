@@ -65,9 +65,9 @@ export function mapArgs(op: ApiOperation, item: BatchItem, ctx: { batchHash: str
 
 /** s27: the one resolver of a direct connection's READ operations (configured reads, then OpenAPI GETs): the probe,
  * the gate policies and the read step all use it, so a read the probe advertises is a read the reader can run. */
-export function apiReadOperations(entry: ApiEntry): Array<{ capability: string; operationId: string; path: string }> {
-  const out = entry.operations.filter((o) => o.role === "read").map((o) => ({ capability: o.capability, operationId: o.operationId, path: o.path }));
-  for (const r of readOpenapi(entry)) if (!out.some((o) => o.operationId === r.operationId)) out.push({ capability: `api.${r.operationId}`, operationId: r.operationId, path: r.path });
+export function apiReadOperations(entry: ApiEntry): Array<{ capability: string; operationId: string; path: string; map: Record<string, string | boolean> }> {
+  const out = entry.operations.filter((o) => o.role === "read").map((o) => ({ capability: o.capability, operationId: o.operationId, path: o.path, map: o.map }));
+  for (const r of readOpenapi(entry)) if (!out.some((o) => o.operationId === r.operationId)) out.push({ capability: `api.${r.operationId}`, operationId: r.operationId, path: r.path, map: {} });
   return out;
 }
 
