@@ -15,6 +15,8 @@ import { rulesSolutions } from "../../src/solutions/rules.ts";
 import { buildFixture, LINKEDIN_IMAGE } from "../s22-solution-designer/fixtures.ts";
 
 process.env.OFFLOAD_KEYS ??= "file";
+// The builder is off by default (sandboxed code can read same-user process environments); these tests opt in.
+process.env.OFFLOAD_BUILDER_ENABLED = "1";
 
 // The build preflight refuses secret-bearing variables in the brain's LAUNCH environment (sandbox.ts launchEnv). The
 // developer/agent shell running these tests may carry such variables (e.g. CLAUDE_CODE_MESSAGING_TOKEN), so tests see
@@ -79,8 +81,8 @@ export function releaseTemps(): void {
   if (strays.length > 0) throw new Error(`temp folders created by this run were left behind: ${strays.slice(0, 5).join(", ")}`);
 }
 
-export function briefHome(): { home: string; briefId: string; briefHash: string } {
-  const home = tmp();
+export function briefHome(prefix?: string): { home: string; briefId: string; briefHash: string } {
+  const home = tmp(prefix);
   const f = buildFixture(LINKEDIN_IMAGE);
   const set = rulesSolutions({ subject: f.subject, task: f.task, windowDays: 7, stepOf: f.stepOf });
   const option = set.options.find((o) => o.kind === "remove_step")!;
@@ -102,8 +104,8 @@ export function fakeRouted(home: string, reply: string | ((r: BackendRequest) =>
   return { model: new RoutedModel(new ModelRouter({ home, backend, monthlyBudgetUsd: null, env: {} })), calls };
 }
 
-export async function prepared() {
-  const b = briefHome();
+export async function prepared(prefix?: string) {
+  const b = briefHome(prefix);
   const { model, calls } = fakeRouted(b.home);
   const c = await writeChecks({ home: b.home, briefId: b.briefId, model, models: DEFAULT_MODELS, modelLabel: "router:build_checks", now: NOW });
   return { ...b, checkHash: c.set.sha256, checks: c, calls };
