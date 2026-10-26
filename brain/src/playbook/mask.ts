@@ -281,11 +281,12 @@ export function buildIdentity(messages: readonly PlaybookMessage[], facts = "", 
     }
     const g = c.greeting === null ? null : GREETING_NAME_RE.exec(c.greeting)?.[1];
     if (g !== undefined && g !== null && nameLike(base(g)) && !GENERIC.has(base(g))) id.people.add(base(g));
-    if (c.signName !== null) for (const w of c.signName.split(/\s+/)) addIf(id.author, base(w));
+    if (c.signName !== null && nameLikeLine(c.signName)) for (const w of c.signName.split(/\s+/)) addIf(id.author, base(w));
     addSignature(id, signatureLines(m.body));
-    const so = stripSignOff(c.core);
-    if (so.name !== null) for (const w of so.name.match(TOKEN_RE) ?? []) addIf(id.author, base(w));
-    cores.push(so.core);
+    // The sign-off name (masked, never cut) is the author.
+    const core = coreOf(c);
+    for (const mm of core.matchAll(TOKEN_RE)) if (!isPlaceholder(mm[0]) && signOffName(core, mm.index ?? 0)) addIf(id.author, base(mm[0]));
+    cores.push(core);
   }
   // A Title Case subject ("Your Order Has Shipped") capitalises every word, so its capitals say nothing: each of its
   // words is read as if it started a sentence (a name only if it is not common and never written in lower case).
@@ -310,7 +311,8 @@ export function buildIdentity(messages: readonly PlaybookMessage[], facts = "", 
       if (isPlaceholder(w) || !isCap(w) || [...w].length < 2) continue;
       const b = base(w);
       if (GENERIC.has(b) || /^i['’]/.test(b)) continue;
-      if ((!allInitial && !initialAt(t, mm.index ?? 0)) || (!COMMON.has(b) && !lower.has(b))) id.words.add(b);
+      // At the start of a sentence a known word ("ASAP", "Progress") is not a proper noun by itself; a name is.
+      if ((!allInitial && !initialAt(t, mm.index ?? 0)) || (!COMMON.has(b) && !lower.has(b) && (!knownWord(b) || personWord(b)))) id.words.add(b);
     }
   });
   id.vocab = lower;
@@ -353,7 +355,7 @@ const DICTIONARY: ReadonlySet<string> = (() => {
 })();
 /** Is this base word known vocabulary? A hyphenated word is known when every part is ("time-boxed"). */
 export function knownWord(b: string): boolean {
-  if (ordinaryWord(b) || CAP_ALLOW.has(b) || DICTIONARY.has(b) || /^i(?:['’]\p{L}+)?$/u.test(b)) return true;
+  if (ordinaryWord(b) || CAP_ALLOW.has(b) || DICTIONARY.has(b) || CLOSING_WORDS.has(b) || /^i(?:['’]\p{L}+)?$/u.test(b)) return true;
   const parts = b.split("-").filter((x) => x !== "");
   return parts.length > 1 && parts.every((x) => ordinaryWord(x) || CAP_ALLOW.has(x) || DICTIONARY.has(x));
 }
@@ -424,58 +426,60 @@ function neighbourIsName(text: string, n: { w: string; at: number } | null, id?:
 }
 const nextIsName = (text: string, end: number, id?: Identity) => neighbourIsName(text, nextWord(text, end), id);
 
-/** A closing line of a sign-off ("Best,", "Thanks!", "Kind regards", "Talk soon"), in any case. */
-const CLOSING_LINE_RE = /^(?:best|thanks|thank you|thanks again|many thanks|cheers|regards|kind regards|warm regards|best regards|best wishes|warmly|sincerely|yours|yours sincerely|yours truly|all the best|talk soon|speak soon|ttyl|ta)[ \t]*[,.!]*$/i;
-const LONE_NAME_LINE_RE = /^[-–—~]?[ \t]*\p{L}[\p{L}\p{M}'’-]*(?:[ \t]+\p{L}[\p{L}\p{M}'’-]*)?$/u;
+/** Closing phrases of a sign-off, any case: English formal and informal, and common non-English ones. */
+const CLOSINGS = [
+  "best", "best wishes", "best regards", "all the best", "thanks", "thank you", "thanks again", "thanks so much", "many thanks",
+  "thx", "tks", "ty", "cheers", "cheers mate", "regards", "kind regards", "warm regards", "warmest regards", "sincerely",
+  "yours", "yours sincerely", "yours truly", "warmly", "talk soon", "speak soon", "ttyl", "take care", "xo", "xoxo", "ta",
+  "love", "saludos", "un saludo", "un abrazo", "atentamente", "mit freundlichen grüßen", "mit freundlichen gruessen",
+  "freundliche grüße", "viele grüße", "liebe grüße", "lg", "vg", "mfg", "cordialement", "bien à vous", "bien cordialement",
+  "amitiés", "cumprimentos", "atenciosamente", "abraços", "groetjes", "met vriendelijke groet", "vriendelijke groeten",
+  "distinti saluti", "cordiali saluti", "saluti", "un saluto",
+];
+const reEsc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const CLOSING_LINE_RE = new RegExp(`^(?:${CLOSINGS.map(reEsc).join("|")})[ \\t]*[,.!]*$`, "iu");
+/** The words of the closing phrases are vocabulary ("Saludos," is kept, the name after it is not). */
+const CLOSING_WORDS: ReadonlySet<string> = new Set(CLOSINGS.flatMap((c) => c.split(" ")));
 const lineWords = (line: string) => (line.match(TOKEN_RE) ?? []).filter((w) => !isPlaceholder(w));
 
-/** The sign-off at the end of a core, in any case: from the last closing line ("Best,") with at most six short lines
- * after it, from a "--" separator, or a lone short last paragraph: "- name" always, "frank" when not ordinary words.
- * cleanEmail only strips a capitalised sign name; this strips "Best,\nfrank" too. `name`: the line after the closing,
- * or the lone line. */
-export function stripSignOff(core: string): { core: string; name: string | null } {
-  const lines = core.replace(/\r\n?/g, "\n").split("\n");
-  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
-  const sep = lines.findIndex((l) => /^(?:--|—+|__+)[ \t]*$/.test(l.trim()));
-  let end = sep >= 0 ? sep : lines.length;
-  let name: string | null = null;
-  for (let i = end - 1; i >= Math.max(0, end - 8); i--) {
-    if (!CLOSING_LINE_RE.test(lines[i]!.trim())) continue;
-    const after = lines.slice(i + 1, end).filter((l) => l.trim() !== "");
-    if (after.length <= 6 && after.every((l) => lineWords(l).length <= 8)) {
-      name = after[0]?.trim() ?? null;
-      end = i;
-    }
-    break;
-  }
-  if (name === null && end === lines.length) {
-    const last = lines[end - 1]?.trim() ?? "";
-    const blankBefore = end >= 2 && lines[end - 2]!.trim() === "";
-    if (blankBefore && LONE_NAME_LINE_RE.test(last) && (/^[-–—~]/.test(last) || !lineWords(last).every((w) => ordinaryWord(base(w))))) {
-      name = last.replace(/^[-–—~][ \t]*/, "");
-      end -= 1;
-    }
-  }
-  while (end > 0 && lines[end - 1]!.trim() === "") end--;
-  return { core: lines.slice(0, end).join("\n"), name: name !== null && lineWords(name).length <= 3 ? name : null };
+/** A name-like line: one to three words, no sentence punctuation (? ! . : ;), no digits, not a closing, and at least
+ * one word that is a name by vocabulary (not known vocabulary, or a lexicon or proper-noun word). "frank", "- rose",
+ * "Zentrix" are; "Call me.", "Will do.", "ASAP", "CEO" are not. */
+function nameLikeLine(line: string): boolean {
+  const l = line.trim().replace(/^[-–—~][ \t]*/, "").replace(/,$/, "").trim();
+  if (l === "" || /[?!.:;\d@]/.test(l) || CLOSING_LINE_RE.test(l)) return false;
+  const ws = lineWords(l);
+  if (ws.length < 1 || ws.length > 3) return false;
+  return ws.some((w) => {
+    const b = base(w);
+    return !knownWord(b) || personWord(b);
+  });
 }
 
-/** Is this word part of a sign-off name by where it stands: a short line (three words at most) right after a closing
- * line, a lone short last paragraph ("frank", "- frank") that is not ordinary words, or the first part of a
- * "name | title | company" line? Any case. */
+/** The core of a cleaned message, losing no content: cleanEmail (tone/clean.ts, shared and left as is) drops a last
+ * capitalised line it takes for the sign name; when that line is not name-like ("ASAP") it is content and comes back. */
+function coreOf(c: { core: string; signName: string | null }): string {
+  return c.signName !== null && !nameLikeLine(c.signName) ? `${c.core}\n\n${c.signName}`.replace(/^\n+/, "") : c.core;
+}
+
+/** Is this word part of a sign-off name by where it stands? Never deletes anything: the word is masked, the rest of
+ * the text stays. A name-like line right after a closing line (or the second of two name-like lines after it), a
+ * name-like last line after a blank line or after a short line ending in a comma ("Cheers mate,\nfrank", "Ok then,\nhunter"),
+ * or the first part of a "name | title | company" line. Any case. */
 function signOffName(text: string, offset: number): boolean {
   const ls = text.lastIndexOf("\n", offset - 1) + 1;
   const le0 = text.indexOf("\n", offset);
   const le = le0 < 0 ? text.length : le0;
-  const line = text.slice(ls, le).trim();
+  const line = text.slice(ls, le);
   if (line.includes("|") && !text.slice(ls, offset).includes("|")) return true;
-  const before = text.slice(0, ls).split("\n");
-  while (before.length > 0 && before[before.length - 1]!.trim() === "") before.pop();
-  const prev = before[before.length - 1]?.trim() ?? "";
-  if (CLOSING_LINE_RE.test(prev) && lineWords(line).length <= 3 && !CLOSING_LINE_RE.test(line)) return true;
-  const isLast = text.slice(le).trim() === "";
-  const blankBefore = /\n[ \t]*\n[ \t]*$/.test(text.slice(0, ls));
-  return isLast && blankBefore && before.length > 0 && LONE_NAME_LINE_RE.test(line) && (/^[-–—~]/.test(line) || !lineWords(line).every((w) => ordinaryWord(base(w))));
+  if (!nameLikeLine(line)) return false;
+  const before = text.slice(0, ls).split("\n").map((x) => x.trim()).filter((x) => x !== "");
+  const p1 = before[before.length - 1] ?? "";
+  const p2 = before[before.length - 2] ?? "";
+  if (CLOSING_LINE_RE.test(p1)) return true;
+  if (CLOSING_LINE_RE.test(p2) && nameLikeLine(p1)) return true;
+  if (text.slice(le).trim() !== "" || before.length === 0) return false;
+  return /\n[ \t]*\n[ \t]*$/.test(text.slice(0, ls)) || (/,$/.test(p1) && lineWords(p1).length <= 4);
 }
 
 /** A given or family name of the s18 lexicon, ambiguous or not ("frank", "rose", "will"). */
@@ -557,7 +561,7 @@ export function identityHit(text: string, w: string, offset: number, id: Identit
     const initial = initialAt(text, offset);
     if (MONTHS.has(b)) return monthKept(text, w, offset) ? null : "name";
     // "Will you", "May I": a modal opening a question is the verb.
-    const modalQuestion = MODALS.has(b) && initial && /^[ \t]+(?:i|you|we|they|he|she|it|this|that|there)(?![\p{L}])/iu.test(text.slice(offset + w.length));
+    const modalQuestion = MODALS.has(b) && initial && /^[ \t]+(?:i|you|we|they|he|she|it|this|that|there|do|be|have|not|send|try)(?![\p{L}])/iu.test(text.slice(offset + w.length));
     if (!modalQuestion && !(GENERATOR_OPENERS.has(b) && initial)) return "name";
   } else if (personWord(b) && !isCap(w) && !MODALS.has(b) && lowerLexName(text, w, offset, id)) return "name";
   if (addressOrg(text, w, offset, id)) return "name";
@@ -605,7 +609,7 @@ export function maskedCore(m: PlaybookMessage, id: Identity): { core: string; fi
   const c = cleanEmail({ id: m.id, to: m.to, subject: m.subject, body: m.body, sentAt: m.sentAt });
   const first = c.greeting === null ? null : (GREETING_NAME_RE.exec(c.greeting)?.[1] ?? null);
   const org = m.to.map((a) => addressParts(a).org).find((o) => o !== null) ?? null;
-  return { core: maskText(stripSignOff(c.core).core, id, { first, org }), first };
+  return { core: maskText(coreOf(c), id, { first, org }), first };
 }
 
 export { EMAIL_RE, HOST_RE, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, base as identityBase, initialAt, isCap, plainWord, GENERIC };

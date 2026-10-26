@@ -135,3 +135,18 @@ expired was checked against facts.md only while reporting "re-checked"; and that
     "name | title | company" line as a name, so the leak check catches the same text.
     Accepted cost: a two-word last paragraph after a blank line that is not ordinary words ("Deck attached" is,
     "Zentrix rocks" is not) and the words of a short line right after a closing are masked.
+
+## Fix round 10 (independent review of 8581c6c)
+18. **Mask, never delete (replaces the cutting in 17).** `stripSignOff` is gone: nothing after a closing is removed
+    to protect privacy. A name-like line (one to three words, no sentence punctuation or digits, not a closing, with
+    a word that is a name by vocabulary: unknown, or a lexicon or proper-noun word) is masked when it comes right after
+    a closing line (or is the second of two such lines), when it is the last line after a blank line or after a short
+    line ending in a comma, or is the first part of a "name | title" line. Requests, questions and P.S. paragraphs
+    stay as content and go through the normal rules. Closings are a phrase lexicon (English formal and informal: cheers
+    mate, xo, thx, take care, ...; and common Spanish, German, French, Portuguese, Dutch and Italian closings), whose
+    words are vocabulary. `cleanEmail` stays as is; a last line it drops as a sign name that is not name-like ("ASAP")
+    comes back into the core, and only a name-like sign name joins the author set. A known word at a sentence start is
+    no longer a proper noun of the identity by itself. "Will do" / "May be" read as the verb.
+    Accepted cost: a name-like line in those positions is masked even when it is a word that happens to be a lexicon
+    name ("Thanks,\nfrank" and "Thanks,\nFrank" alike, but also "Best,\nhope"); a sign name that is all known non-name
+    words ("The Team") stays.

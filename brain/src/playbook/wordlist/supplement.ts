@@ -3,5 +3,5 @@
 export const SUPPLEMENT_WORDS: readonly string[] = (
   "app apps signup signups onboarding offboarding fintech saas cofounder cofounders roadmap roadmaps analytics " +
   "ecommerce chatbot chatbots upsell upsells api apis crm gtm mvp okr okrs kpi kpis devops frontend backend " +
-  "ui ux llm llms sdk sdks b2b b2c"
+  "ui ux llm llms sdk sdks b2b b2c asap fyi eod eow tbd tba fwiw imo btw lol aka ooo pto"
 ).split(" ");
