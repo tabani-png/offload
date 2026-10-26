@@ -14,7 +14,7 @@ import { decideTool, UnsafeProfileError } from "../../src/builder/sandbox.ts";
 const checkEnv = (...a: unknown[]) => (sandbox as any).checkEnv(...a) as Record<string, string>;
 const redactSecrets = (...a: unknown[]) => (sandbox as any).redactSecrets(...a) as string;
 import { DEFAULT_MODELS } from "../../src/models/model.ts";
-import { briefHome, fakeQuery, fakeRouted, NOW, prepared, tmp, writeSlug, shell } from "./setup.ts";
+import { briefHome, fakeQuery, fakeRouted, NOW, prepared, tmp, writeSlug, shell, cleanSpawnEnv } from "./setup.ts";
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 const SENTINEL_KEY = "sk-ant-api03-SENTINELsentinelSENTINEL0123456789abcdef";
@@ -240,7 +240,7 @@ describe("s24 limit validation", () => {
     const p = await preparedWith(FALLBACK_CHECK);
     const { token } = approveBuild(p.home, p.briefId, p.briefHash, p.checkHash, NOW);
     const CLI = join(import.meta.dir, "..", "..", "src", "cli.ts");
-    const env = { ...process.env, OFFLOAD_TOKEN: "", OFFLOAD_KEYS: "file", OFFLOAD_BUILDER_FAKE_SDK: join(import.meta.dir, "fake-sdk.ts"), NODE_ENV: "test" };
+    const env = { ...cleanSpawnEnv(), OFFLOAD_TOKEN: "", OFFLOAD_KEYS: "file", OFFLOAD_BUILDER_FAKE_SDK: join(import.meta.dir, "fake-sdk.ts"), NODE_ENV: "test" };
     for (const [k, v] of [["--max-tries", "abc"], ["--max-tries", "Infinity"], ["--max-usd", "-1"], ["--max-usd", "NaN"], ["--max-tries", "2.5"]] as const) {
       const r = Bun.spawnSync([process.execPath, "run", CLI, "build", "run", "--brief", p.briefId, "--token", token, "--home", p.home, k, v], { env, stdout: "pipe", stderr: "pipe" });
       expect(r.exitCode).toBe(2);

@@ -11,7 +11,7 @@ import { approveBuild } from "../../src/builder/approval.ts";
 import { verifyArtifact } from "../../src/builder/record.ts";
 import { runBuild, type BuilderQuery } from "../../src/builder/runner.ts";
 import { UnsafeProfileError } from "../../src/builder/sandbox.ts";
-import { fakeQuery, NOW, prepared, shell, writeSlug } from "./setup.ts";
+import { cleanSpawnEnv, fakeQuery, NOW, prepared, shell, withLaunchEnv, writeSlug } from "./setup.ts";
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 const KEY = "sk-ant-api03-S24KEYSENTINELs24keysentinel0123456789abcdef";
@@ -95,23 +95,18 @@ describe("s24 no secret in any readable environment", () => {
     const p = await prepared();
     const { token } = approveBuild(p.home, p.briefId, p.briefHash, p.checkHash, NOW);
     const f = fakeQuery([{ act: writeSlug("good") }]);
-    const saved = process.env.ANTHROPIC_API_KEY;
-    process.env.ANTHROPIC_API_KEY = KEY;
-    try {
+    await withLaunchEnv({ PATH: "/usr/bin", ANTHROPIC_API_KEY: KEY }, async () => {
       await expect(runBuild({ home: p.home, briefId: p.briefId, token, query: f.query, profile: ALLOW })).rejects.toBeInstanceOf(UnsafeProfileError);
-    } finally {
-      if (saved === undefined) delete process.env.ANTHROPIC_API_KEY;
-      else process.env.ANTHROPIC_API_KEY = saved;
-    }
+    });
     expect(f.seen).toHaveLength(0);
     expect((await runBuild({ home: p.home, briefId: p.briefId, token, query: f.query, profile: ALLOW })).outcome).toBe("PASS");
     // The CLI too.
     const CLI = join(import.meta.dir, "..", "..", "src", "cli.ts");
     const q = await prepared();
     const t2 = approveBuild(q.home, q.briefId, q.briefHash, q.checkHash, NOW).token;
-    const r = spawnSync(process.execPath, ["run", CLI, "build", "run", "--brief", q.briefId, "--token", t2, "--home", q.home], { env: { ...process.env, OFFLOAD_TOKEN: "", OFFLOAD_KEYS: "file", OFFLOAD_BUILDER_FAKE_SDK: join(import.meta.dir, "fake-sdk.ts"), NODE_ENV: "test", CLAUDE_CODE_OAUTH_TOKEN: OAUTH }, encoding: "utf8" });
+    const r = spawnSync(process.execPath, ["run", CLI, "build", "run", "--brief", q.briefId, "--token", t2, "--home", q.home], { env: { ...cleanSpawnEnv(), OFFLOAD_TOKEN: "", OFFLOAD_KEYS: "file", OFFLOAD_BUILDER_FAKE_SDK: join(import.meta.dir, "fake-sdk.ts"), NODE_ENV: "test", CLAUDE_CODE_OAUTH_TOKEN: OAUTH }, encoding: "utf8" });
     expect(r.status).toBe(2);
-    expect(r.stderr).toContain("Keychain");
+    expect(r.stderr).toContain("CLAUDE_CODE_OAUTH_TOKEN");
   }, 60_000);
 });
 

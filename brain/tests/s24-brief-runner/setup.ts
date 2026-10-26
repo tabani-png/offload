@@ -5,6 +5,7 @@ import { copyFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeChecks } from "../../src/builder/checks.ts";
+import * as sandbox from "../../src/builder/sandbox.ts";
 import type { BuilderQuery } from "../../src/builder/runner.ts";
 import { DEFAULT_MODELS } from "../../src/models/model.ts";
 import { ModelRouter, RoutedModel, type Backend, type BackendRequest } from "../../src/models/router.ts";
@@ -13,6 +14,31 @@ import { rulesSolutions } from "../../src/solutions/rules.ts";
 import { buildFixture, LINKEDIN_IMAGE } from "../s22-solution-designer/fixtures.ts";
 
 process.env.OFFLOAD_KEYS ??= "file";
+
+// The build preflight refuses secret-bearing variables in the brain's LAUNCH environment (sandbox.ts launchEnv). The
+// developer/agent shell running these tests may carry such variables (e.g. CLAUDE_CODE_MESSAGING_TOKEN), so tests see
+// a clean launch environment by default; the preflight tests set their own with withLaunchEnv().
+const sb = sandbox as unknown as { launchEnv?: { read: () => Record<string, string> }; secretEnvNames?: (e: Record<string, string>) => string[] };
+const CLEAN_LAUNCH = () => ({ PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: process.env.HOME ?? "/" });
+if (sb.launchEnv) sb.launchEnv.read = CLEAN_LAUNCH;
+
+export async function withLaunchEnv<T>(env: Record<string, string>, fn: () => Promise<T>): Promise<T> {
+  if (!sb.launchEnv) return fn();
+  sb.launchEnv.read = () => env;
+  try {
+    return await fn();
+  } finally {
+    sb.launchEnv.read = CLEAN_LAUNCH;
+  }
+}
+
+/** process.env without secret-bearing variables, for spawning a CLI that should start "clean". */
+export function cleanSpawnEnv(): Record<string, string> {
+  const env = Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined));
+  const drop = sb.secretEnvNames ? sb.secretEnvNames(env) : Object.keys(env).filter((k) => /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL/i.test(k));
+  for (const k of drop) delete env[k];
+  return env;
+}
 export const NOW = new Date(2026, 9, 26, 12).getTime();
 export const REC = join(import.meta.dir, "recorded");
 export const CHECK_REPLY = readFileSync(join(REC, "check-writer.json"), "utf8");

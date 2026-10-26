@@ -7,12 +7,13 @@ import { solutionsRoute } from "../../src/solutions/routes.ts";
 import { chooseSolution, designSolutions } from "../../src/solutions/service.ts";
 import { founderLive, freshFounder, NOW } from "../s22-solution-designer/setup.ts";
 import { query as fakeSdk } from "./fake-sdk.ts";
+import { cleanSpawnEnv } from "./setup.ts";
 
 const CLI = join(import.meta.dir, "..", "..", "src", "cli.ts");
 const FAKE = join(import.meta.dir, "fake-sdk.ts");
 
 function cli(args: string[], env: Record<string, string> = {}) {
-  const r = Bun.spawnSync([process.execPath, "run", CLI, ...args], { env: { ...process.env, OFFLOAD_TOKEN: "", OFFLOAD_KEYS: "file", ...env }, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync([process.execPath, "run", CLI, ...args], { env: { ...cleanSpawnEnv(), OFFLOAD_TOKEN: "", OFFLOAD_KEYS: "file", ...env }, stdout: "pipe", stderr: "pipe" });
   return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
 }
 

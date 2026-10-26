@@ -12,7 +12,7 @@ import { checksDir, checkSha, writeChecks } from "../../src/builder/checks.ts";
 import { readRunRecord } from "../../src/builder/record.ts";
 import { runBuild, type CheckRunner } from "../../src/builder/runner.ts";
 import { DEFAULT_MODELS } from "../../src/models/model.ts";
-import { briefHome, fakeQuery, fakeRouted, NOW, prepared, tmp, writeSlug, type FakeTry } from "./setup.ts";
+import { briefHome, cleanSpawnEnv, fakeQuery, fakeRouted, NOW, prepared, tmp, writeSlug, type FakeTry } from "./setup.ts";
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 const KEY = "sk-ant-api03-S24CLEANUPKEYs24cleanup0123456789abcdef";
@@ -106,7 +106,7 @@ describe("s24 every exit path releases everything", () => {
     writeFileSync(fake, `export function query(args: { options: { cwd?: string } }) { return (async function* () { require("node:fs").writeFileSync(${JSON.stringify(join(dir, "ws.txt"))}, args.options.cwd!); yield { type: "system", subtype: "init" }; await Bun.sleep(30000); })(); }\n`);
     const CLI = join(import.meta.dir, "..", "..", "src", "cli.ts");
     const child = spawn(process.execPath, ["run", CLI, "build", "run", "--brief", p.briefId, "--token", token, "--home", p.home], {
-      env: { ...process.env, OFFLOAD_TOKEN: "", OFFLOAD_KEYS: "file", OFFLOAD_BUILDER_FAKE_SDK: fake, NODE_ENV: "test", OFFLOAD_ANTHROPIC_KEYCHAIN: "offload-s24-test-service/none" },
+      env: { ...cleanSpawnEnv(), OFFLOAD_TOKEN: "", OFFLOAD_KEYS: "file", OFFLOAD_BUILDER_FAKE_SDK: fake, NODE_ENV: "test", OFFLOAD_ANTHROPIC_KEYCHAIN: "offload-s24-test-service/none" },
       stdio: "ignore",
     });
     for (let i = 0; i < 100 && !existsSync(join(dir, "ws.txt")); i++) await Bun.sleep(100);
