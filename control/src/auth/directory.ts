@@ -62,6 +62,13 @@ async function upsertUser(tx: Tx, deps: Deps, u: DirectoryUser, deleted: boolean
       returning id`;
     personId = p!.id;
   }
+  const inactive = deleted || (u.state !== undefined && u.state !== "active");
+  const [now] = await tx`select state from people where id = ${personId}`;
+  if (inactive && now && (now.state === "active" || now.state === "leaving")) {
+    await deps.ports.continuity.freeze(tx, personId, { source: "directory", detail: deleted ? "deleted" : "inactive" });
+  }
+  // After the freeze: writing an audit event takes the tenant's audit-chain lock, which stays last (lock order,
+  // modules/broker/broker.ts); the freeze takes row locks through the broker.
   await deps.ports.audit.write(tx, {
     actor: SYSTEM,
     action: "person.directory_sync",
@@ -69,11 +76,6 @@ async function upsertUser(tx: Tx, deps: Deps, u: DirectoryUser, deleted: boolean
     resource: { type: "person", id: personId },
     detail: { directoryUserId: u.id, state: u.state ?? null, deleted },
   });
-  const inactive = deleted || (u.state !== undefined && u.state !== "active");
-  const [now] = await tx`select state from people where id = ${personId}`;
-  if (inactive && now && (now.state === "active" || now.state === "leaving")) {
-    await deps.ports.continuity.freeze(tx, personId, { source: "directory", detail: deleted ? "deleted" : "inactive" });
-  }
 }
 
 async function groupMembership(tx: Tx, deps: Deps, u: DirectoryUser, g: DirectoryGroup, added: boolean): Promise<void> {
