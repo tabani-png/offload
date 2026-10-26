@@ -39,3 +39,7 @@ BEGIN
 END
 $$;
 CREATE TRIGGER s207_batches_guard BEFORE UPDATE ON batches FOR EACH ROW EXECUTE FUNCTION s207_batches_guard();
+
+-- N3: who paused a policy. Only that person (or an owner, admin or dept lead) resumes it; a pause by the system (a
+-- freeze) has none. A trip is re-armed only by an owner, admin or dept lead.
+ALTER TABLE overnight_policies ADD COLUMN paused_by uuid;

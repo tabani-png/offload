@@ -100,6 +100,9 @@ export const MIN_DRY_RUN_NIGHTS = 3;
 
 const mayShortenDryRun = (p: Principal) => p.accessRole === "owner" || p.accessRole === "admin";
 
+/** Re-arming a trip or lifting someone else's pause (N3); a dept lead's scope is the owner's, checked by ownerAccess. */
+const mayRearm = (p: Principal) => p.accessRole === "owner" || p.accessRole === "admin" || p.accessRole === "dept_lead";
+
 /** Content-free stand-in for an allowlisted address (the Stage 1 itemRef of the policy's workflow). */
 const emailRef = (policy: OvernightPolicy, email: string) => itemRef(policy.workflowId, email.trim());
 
@@ -222,6 +225,13 @@ function routes(app: App, deps: Deps): void {
       if (next.dryRunNights < MIN_DRY_RUN_NIGHTS && next.dryRunNights < cur.dryRunNights && !mayShortenDryRun(p)) {
         throw forbidden(`only an owner or admin sets fewer than ${MIN_DRY_RUN_NIGHTS} dry-run nights`);
       }
+      // Leaving a trip, or resuming a pause someone else (or the system) set, is above the owner (N3).
+      const [pb] = await tx`select paused_by from overnight_policies where id = ${id}`;
+      const leavesTrip = cur.state === "tripped" && next.state !== "tripped";
+      const resumesOthers = cur.state === "paused" && next.state === "active" && pb?.paused_by !== p.personId;
+      if ((leavesTrip || resumesOthers) && !mayRearm(p)) {
+        throw forbidden("only an owner, admin or dept lead re-arms a tripped policy or resumes one paused by someone else");
+      }
       const rearm = cur.state === "tripped" && next.state === "active";
       if (rearm) next.trippedReason = null;
       // Any trust-widening edit (a new template, more recipients, a wider window, higher caps, attachments, mode
@@ -242,6 +252,9 @@ function routes(app: App, deps: Deps): void {
       checkPolicy(next);
       const saved = await updateOvernight(tx, next, deps.clock.now(), rearm);
       if (rearm) await tx`update overnight_policies set connection_fingerprint = null where id = ${id}`;
+      if (saved.state !== cur.state) {
+        await tx`update overnight_policies set paused_by = ${saved.state === "paused" ? p.personId : null} where id = ${id}`;
+      }
       // Pausing or narrowing takes back what the policy approved and has not sent (ADR 0112 §1).
       const unlinked = await brokerOf(deps.ports).policyChanged(tx, id, change);
       await deps.ports.audit.write(tx, {
