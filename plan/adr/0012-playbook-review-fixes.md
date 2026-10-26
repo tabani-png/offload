@@ -77,3 +77,19 @@ expired was checked against facts.md only while reporting "re-checked"; and that
     workflow's recipients.csv and the user's own name in privacy.json) at build time and for notes and promotion
     re-checks, so a contact s18 masks on the way to a model is a known contact (masked and a leak in any case) for s19,
     its address domain is a known organisation, and the user's own name is the author. The digest keeps them.
+
+## Fix round 6 (independent review of fda41c2)
+14. **Default deny (amends 12).** A capitalised word that is not at the start of a sentence is a name unless it is on
+    a small allow list (`CAP_ALLOW`: weekdays, languages, common acronyms such as CTA/CRM/ROI, funding stages,
+    honorifics; a month only in a date: before a digit or after in/on/by). Product and company names are not on it.
+    At the start of a sentence a word is a name when it is a known contact, when the next word is a name too ("Will
+    Smith"), or on evidence: a name of these messages, an unambiguous given or family name of s18's lexicon, the same
+    word capitalised mid-sentence in the text, or a non-Latin word the vocabulary never writes in lower case. Masking
+    never adds to the identity set (promotion stays as strict as round 4), so masking an unknown word cannot fail a
+    build. `maskText` and `findTextLeaks` still share `identityHit`. Notes may hold small plain numbers ("under 100
+    words"), not phone- or id-shaped ones, and a refused note names the offending words (only the user's own notes;
+    mail and model text are never echoed) and says to reword.
+    Accepted cost: products and platforms are masked mid-sentence ("a [name] app", "on [name]"); the word before a
+    name at a sentence start goes with it ("[name] [name] for an intro" for "Ask Will for an intro"); a lone unknown
+    Latin-script name at the start of a sentence with no other evidence ("Njeri replied.") in notes or model wording
+    is not caught (in mail it is, through the identity's proper nouns).

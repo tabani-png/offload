@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureDir, workflowDir, writePrivate } from "../workflows/store.ts";
-import { assertDepersonalised } from "./leak.ts";
+import { allowedNumbers, assertDepersonalised, findTextLeaks, lowerWords, PlaybookLeakError, textFields } from "./leak.ts";
 import { hashWord, type Identity, type IdentityDigest } from "./mask.ts";
 import { renderPlaybookMd } from "./render.ts";
 import { CHANNELS, CTAS, MAX_NOTES_CHARS, MOVES, OPENERS, PLAYBOOK_SCHEMA, PROOFS, SLOTS, type Playbook } from "./types.ts";
@@ -169,6 +169,10 @@ export function setPlaybookNotes(home: string, id: string, notes: unknown, ident
   if (prev === null) throw new PlaybookNotesError("build the playbook first");
   const version = prev.version + 1;
   const next: Playbook = { ...prev, notes: notes.trim(), version, history: [...prev.history, { version, at: now, change: "notes" as const }].slice(-50) };
+  // The user's own words: a refusal names them and says to reword.
+  const words: string[] = [];
+  const typed = findTextLeaks(next.notes, identity, allowedNumbers(next), "notes", lowerWords(textFields(next).map(([, t]) => t)), words);
+  if (typed.length > 0) throw new PlaybookLeakError(typed, words);
   assertDepersonalised(next, identity);
   writePlaybook(home, next);
   return next;

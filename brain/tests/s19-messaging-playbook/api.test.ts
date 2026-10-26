@@ -62,7 +62,9 @@ describe("s19 playbook API", () => {
       expect(r.status).toBe(400);
       expect(r.body.error).toBe("bad_request");
       expect(r.body.message).toMatch(/kept a personal detail/);
-      expect(r.body.message).not.toMatch(/Anna|anna@|2\.5M|Muhammad/);
+      // Fix 6: the notes are the user's own words, so the refusal names the offending word and says to reword.
+      expect(r.body.message).toMatch(/Anna|anna@|2\.5|Muhammad/);
+      expect(r.body.message).toMatch(/Reword/);
     }
     expect(readPlaybook(w.home, w.outreach.id)!.version).toBe(3);
   });

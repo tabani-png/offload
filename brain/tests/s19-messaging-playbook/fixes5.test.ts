@@ -28,7 +28,8 @@ describe("s19 fix 5: masking and the leak check agree", () => {
   });
 
   test("MASK: the same capitalised contacts are masked, the lower-case words are not", () => {
-    expect(maskText("Ask Will for an introduction.", ID)).toBe("Ask [name] for an introduction.");
+    // Default deny (fix 6): the sentence-initial word next to a name is masked with it.
+    expect(maskText("Ask Will for an introduction.", ID)).toBe("[name] [name] for an introduction.");
     expect(maskText("We will hope for a hook.", ID)).toBe("We will hope for a hook.");
   });
 
@@ -75,7 +76,7 @@ describe("s19 fix 5: generator openers", () => {
     const id = buildIdentity([{ ...MAIL[0]!, to: ["ann.short@balderton.com"], body: "Hi Ann,\n\nWorth a call?\n\nBest,\nDana" }, MAIL[1]!, MAIL[2]!]);
     expect(findTextLeaks("Short form of the first message.", id, NONE, "templates[0].text")).toEqual([]);
     expect(findTextLeaks("Ask Short for an intro.", id, NONE, "notes").map((l) => l.kind)).toEqual(["name"]);
-    expect(maskText("Ask Short for an intro.", id)).toBe("Ask [name] for an intro.");
+    expect(maskText("Ask Short for an intro.", id)).toBe("[name] [name] for an intro.");
   });
 
   test("LEAK: every word synth.ts writes capitalised at a sentence start is a known opener (drift guard)", async () => {

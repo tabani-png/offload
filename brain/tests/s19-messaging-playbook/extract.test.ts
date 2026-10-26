@@ -43,9 +43,9 @@ describe("s19 masking", () => {
     expect(t).toBe("{first}, you backed [name] early. {company} has [number] partners, raising [number]. Mail [email] or [phone], see [link]");
   });
 
-  test("MASK: generic words, days and products stay; the recipient's organisation becomes {their_org}", () => {
+  test("MASK: days stay, products are masked (default deny, fix 6); the recipient's organisation becomes {their_org}", () => {
     const id = fr.identity;
-    expect(maskText("I can do Tuesday on Zoom; the Mac app helps Northzone.", id, { org: "northzone" })).toBe("I can do Tuesday on Zoom; the Mac app helps {their_org}.");
+    expect(maskText("I can do Tuesday on Zoom; the Mac app helps Northzone.", id, { org: "northzone" })).toBe("I can do Tuesday on [name]; the [name] app helps {their_org}.");
   });
 
   test("MASK: the support persona's street, depot, codes and order numbers are masked", () => {
@@ -108,7 +108,7 @@ describe("s19 per-message read", () => {
   test("READ: a model's free-text label is masked again and kept only when it is text of the message", () => {
     const rule = fr.reads[0]!;
     const merge = (coreClaim: string) => mergeLabels(rule, JSON.stringify({ coreClaim }), fr.identity, coreOf(rule)).coreClaim;
-    expect(merge("Offload is a Mac app that watches a week of your work")).toBe("{company} is a Mac app that watches a week of your work");
+    expect(merge("Offload is a Mac app that watches a week of your work")).toBe("{company} is a [name] app that watches a week of your work");
     expect(merge("You backed Spotify early")).toBe("You backed [name] early");
     expect(merge("Offload saves 9 hours")).toBe(rule.coreClaim);
   });

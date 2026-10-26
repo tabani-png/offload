@@ -13,8 +13,14 @@ export interface Leak {
 }
 
 export class PlaybookLeakError extends Error {
-  constructor(readonly leaks: Leak[]) {
-    super(`the playbook kept a personal detail (${leaks.slice(0, 5).map((l) => `${l.kind} in ${l.path}`).join(", ")}${leaks.length > 5 ? ", ..." : ""}); nothing was written`);
+  /** `words`: the offending words of text the user just typed (notes); the message names them and says to reword.
+   * Never passed for text that came from mail or a model. */
+  constructor(readonly leaks: Leak[], words: readonly string[] = []) {
+    super(
+      words.length > 0
+        ? `the playbook kept a personal detail in notes: ${[...new Set(words)].slice(0, 5).map((w) => `"${w}"`).join(", ")}. Reword the note without it (write [name], {company} or {their_org} for a person or company); nothing was written`
+        : `the playbook kept a personal detail (${leaks.slice(0, 5).map((l) => `${l.kind} in ${l.path}`).join(", ")}${leaks.length > 5 ? ", ..." : ""}); nothing was written`,
+    );
   }
 }
 
@@ -31,20 +37,30 @@ export function lowerWords(texts: readonly string[]): Set<string> {
 /** Leaks in one text field: contact patterns, figures that are not counts, and every word mask.ts identityHit names
  * (the author, the company, a known contact in any case, or a capitalised word mid-sentence or never written in lower
  * case in `vocab`): a name the identity set never saw (one a model added, or one from mail no longer here) is caught. */
-export function findTextLeaks(text: string, id: Identity, allowedNumbers: ReadonlySet<string>, path: string, vocab: ReadonlySet<string> = lowerWords([text])): Leak[] {
+export function findTextLeaks(text: string, id: Identity, allowedNumbers: ReadonlySet<string>, path: string, vocab: ReadonlySet<string> = lowerWords([text]), words?: string[]): Leak[] {
   const out: Leak[] = [];
-  const add = (kind: LeakKind) => {
+  /** One leak per kind; every offending word goes to `words` when the caller asks (the user's own notes only). */
+  const add = (kind: LeakKind, word: string) => {
+    words?.push(word);
     if (!out.some((l) => l.kind === kind)) out.push({ kind, path });
   };
-  if ((text.match(EMAIL_RE) ?? []).length > 0) add("email");
-  if ((text.match(URL_RE) ?? []).length > 0 || (text.match(WWW_RE) ?? []).length > 0 || (text.match(HOST_RE) ?? []).some((h) => !LOCAL.has(h.toLowerCase()) && !/^\d+(?:\.\d+)+$/.test(h))) add("link");
-  if ((text.match(PHONE_RE) ?? []).some((p) => p.replace(/\D/g, "").length >= 9)) add("phone");
-  for (const n of text.match(NUM_RE) ?? []) if (!allowedNumbers.has(n)) add("number");
+  for (const e of text.match(EMAIL_RE) ?? []) add("email", e);
+  for (const u of [...(text.match(URL_RE) ?? []), ...(text.match(WWW_RE) ?? []), ...(text.match(HOST_RE) ?? []).filter((h) => !LOCAL.has(h.toLowerCase()) && !/^\d+(?:\.\d+)+$/.test(h))]) add("link", u);
+  for (const p of (text.match(PHONE_RE) ?? []).filter((x) => x.replace(/\D/g, "").length >= 9)) add("phone", p);
+  for (const m of text.matchAll(NUM_RE)) {
+    const n = m[0];
+    if (allowedNumbers.has(n)) continue;
+    // Notes may say a small plain number ("under 100 words"); an id-shaped one ("#4821", "A-123", "12a") is refused.
+    const before = text.slice(Math.max(0, (m.index ?? 0) - 1), m.index ?? 0);
+    const after = text.slice((m.index ?? 0) + n.length, (m.index ?? 0) + n.length + 1);
+    if (path === "notes" && /^\d{1,3}$/.test(n) && !/[#\p{L}\d_+-]/u.test(before) && !/[\p{L}\d_-]/u.test(after)) continue;
+    add("number", n);
+  }
   // One decision with maskText (identityHit): a word maskText would mask is a leak, and no other word is.
   for (const mm of text.matchAll(TOKEN_RE)) {
     const hit = identityHit(text, mm[0], mm.index ?? 0, id, vocab);
-    if (hit === "author" || hit === "company") add(hit);
-    else if (hit !== null) add("name");
+    if (hit === "author" || hit === "company") add(hit, mm[0]);
+    else if (hit !== null) add("name", mm[0]);
   }
   return out;
 }

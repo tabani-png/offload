@@ -3,6 +3,7 @@
 // links and figures. The playbook keeps patterns; these never leave this file unmasked. Pure string code.
 import { createHash } from "node:crypto";
 import { cleanEmail } from "../tone/clean.ts";
+import { AMBIGUOUS_GIVEN, FAMILY, GIVEN } from "../privacy/lexicon.ts";
 import type { ContactEntry } from "../privacy/names.ts";
 import { SLOTS, type PlaybookMessage } from "./types.ts";
 
@@ -54,6 +55,19 @@ const GENERIC = new Set(
     "saas ai api crm ats series seed ps mr mrs ms mx dr prof sir madam"
   ).split(" "),
 );
+/** Default deny: the only capitalised words that may stand mid-sentence unmasked. Weekdays, languages, common
+ * acronyms, funding stages and honorifics name nobody; months only in a date (see allowedCap). Product and company
+ * names are deliberately NOT here: "Spotify" or "Slack" mid-sentence is masked, and refused in notes. */
+const CAP_ALLOW = new Set(
+  (
+    "monday tuesday wednesday thursday friday saturday sunday " +
+    "english french german spanish italian portuguese dutch swedish danish norwegian finnish polish russian ukrainian " +
+    "arabic hebrew hindi urdu bengali chinese mandarin cantonese japanese korean turkish greek " +
+    "am pm ok ps ceo cto cfo coo cmo vp hr pdf csv uk us eu usa saas ai api crm ats cta roi kpi faq url sql seo b2b " +
+    "series seed mr mrs ms mx dr prof"
+  ).split(" "),
+);
+const MONTHS = new Set("january february march april may june july august september october november december".split(" "));
 /** Words that often start a sentence and name nothing: function words, greetings and the verbs of writing advice.
  * A capitalised word at the start of a sentence is masked unless it is one of these, generic, or (input only) a word
  * the messages also write in lower case. */
@@ -323,6 +337,26 @@ export interface MaskScope {
   org?: string | null;
 }
 
+/** May this capitalised word stand unmasked mid-sentence? The allow list, "I" and its contractions, and a month only in
+ * a date ("by May 5", "in April"). */
+function allowedCap(text: string, w: string, offset: number): boolean {
+  const b = base(w);
+  if (CAP_ALLOW.has(b) || /^i(?:['’]\p{L}+)?$/u.test(b)) return true;
+  if (!MONTHS.has(b)) return false;
+  if (/^[ \t]+\d/.test(text.slice(offset + w.length))) return true;
+  return /(?:^|[^\p{L}])(?:in|on|by)[ \t]+$/iu.test(text.slice(Math.max(0, offset - 4), offset));
+}
+
+/** Is the next word (spaces only between) a capitalised word that is not allowed, or a [name] placeholder? A word
+ * at the start of a sentence followed by one ("Will Smith", "Hope Lee") is part of a name. */
+function nextIsName(text: string, end: number): boolean {
+  const m = /^[ \t]+(\[name\]|\p{L}[\p{L}\p{M}'’-]*)/u.exec(text.slice(end));
+  if (m === null) return false;
+  const n = m[1]!;
+  if (n === "[name]") return true;
+  return isCap(n) && [...n].length >= 2 && !allowedCap(text, n, end + m[0].length - n.length);
+}
+
 /** What a word of a text is, for masking and for the leak check alike (one decision, so the two can never disagree):
  * the author, their company, this recipient ({first}, {their_org}), another person or proper noun ("name"), or null
  * (an ordinary word, kept). `vocab` is the lower-case vocabulary a sentence-initial capital may come from.
@@ -348,11 +382,20 @@ export function identityHit(text: string, w: string, offset: number, id: Identit
   }
   if (first !== null && b === first) return "first";
   if (org !== null && b.length >= 3 && (b === org || org.startsWith(b))) return "their_org";
-  if (inIdentity(id, "contacts", b) && !(ordinary && GENERATOR_OPENERS.has(b) && initialAt(text, offset))) return "name";
-  if (ordinary) return null;
+  const initial = initialAt(text, offset);
+  if (inIdentity(id, "contacts", b) && !(ordinary && GENERATOR_OPENERS.has(b) && initial)) return "name";
+  // Default deny: mid-sentence, a capitalised word is a name unless it is allowed (allowedCap).
+  if (!initial) return allowedCap(text, w, offset) ? null : "name";
+  // At the start of a sentence: a name when the next word is one too ("Will Smith"). A lone word needs evidence: a
+  // name of these messages, a given or family name of s18's lexicon (not an ordinary or ambiguous one: "Mark the
+  // date"), the same word capitalised mid-sentence elsewhere in this text ("Łukasz said yes. I met Łukasz"), or a word
+  // in a script without Latin letters that the vocabulary never writes in lower case.
+  if (nextIsName(text, offset + w.length)) return "name";
+  if (ordinary || allowedCap(text, w, offset)) return null;
   if (inIdentity(id, "names", b)) return "name";
-  if (!initialAt(text, offset)) return "name";
-  return vocab.has(b) ? null : "name";
+  if ((GIVEN.has(b) || FAMILY.has(b)) && !AMBIGUOUS_GIVEN.has(b)) return "name";
+  for (const m of text.matchAll(TOKEN_RE)) if (m.index !== offset && base(m[0]) === b && isCap(m[0]) && !initialAt(text, m.index ?? 0)) return "name";
+  return !/\p{Script=Latin}/u.test(b) && !vocab.has(b) ? "name" : null;
 }
 
 const HIT_PLACEHOLDER = { author: "{sender}", company: "{company}", first: "{first}", their_org: "{their_org}", name: "[name]" } as const;

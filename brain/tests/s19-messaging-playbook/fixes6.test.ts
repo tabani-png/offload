@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { buildPlaybook } from "../../src/playbook/build.ts";
 import { findTextLeaks } from "../../src/playbook/leak.ts";
-import { buildIdentity, emptyIdentity, maskedCore, maskText } from "../../src/playbook/mask.ts";
+import { buildIdentity, emptyIdentity, maskContacts, maskedCore, maskText } from "../../src/playbook/mask.ts";
 import { setPlaybookNotes, writePlaybook } from "../../src/playbook/store.ts";
 import type { PlaybookMessage } from "../../src/playbook/types.ts";
 import { StubModel } from "../../src/models/model.ts";
@@ -15,7 +15,8 @@ const mk = (i: number, body: string, subject = "Payroll for startups"): Playbook
   id: `m${i}`, channel: "email", to: [`x${i}@corp${i}.com`], subject, body: `Hi Sam,\n\n${body}\n\nBest,\nMuhammad Ali`, sentAt: NOW - (10 - i) * 86_400_000,
 });
 const REVIEW_BODY = "We build payroll tooling with Will Smith at Open and May Chen. Would you take 15 minutes this week?";
-const SURVIVOR = /\b(?:Will|Smith|Open|May|Chen)\b/;
+// "Open" is also the generator's own opener ("Open with what you offer"), so it counts only where the body put it.
+const SURVIVOR = /\b(?:Will|Smith|May|Chen)\b|at Open\b/;
 
 describe("s19 fix 6: default-deny masking of capitalised words", () => {
   test("MASK: a person or company named like an ordinary word in the body is masked (reviewer repro)", () => {
@@ -34,7 +35,7 @@ describe("s19 fix 6: default-deny masking of capitalised words", () => {
   test("MASK: the allow list keeps weekdays, dated months, languages and acronyms", () => {
     const id = emptyIdentity();
     for (const t of ["Prefer Tuesday mornings in plain English.", "We start in April and ship by May 5.", "Mention the CTA, our CRM and the ROI.", "Ask about their Series A."]) {
-      expect([t, maskText(t, id)]).toEqual([t, t]);
+      expect([t, maskText(t, id)]).toEqual([t, maskContacts(t)]);
       expect([t, findTextLeaks(t, id, new Set(["5"]), "notes")]).toEqual([t, []]);
     }
   });
@@ -70,7 +71,8 @@ describe("s19 fix 6: default-deny masking of capitalised words", () => {
       const msgs = bodies.map((b, i) => mk(i, b, `Payroll ${i}`));
       const r = await buildPlaybook({ workflowId: "w", channel: "email", messages: msgs, model: null, now: NOW });
       const out = [JSON.stringify(r.playbook), ...msgs.map((m) => maskedCore(m, r.identity).core)].join("\n");
-      for (const n of new Set(names)) if (new RegExp(`\\b${n}\\b`).test(out)) survivors.push(`${n} in ${bodies.join(" / ")}`);
+      // "Open" is also the generator's opener, so it only counts where the body put it (before a surname, after a preposition).
+      for (const n of new Set(names)) if (new RegExp(n === "Open" ? `(?:at|from|with|and) Open\\b|\\bOpen (?:${lasts.join("|")})\\b` : `\\b${n}\\b`).test(out)) survivors.push(`${n} in ${bodies.join(" / ")}`);
     }
     expect(survivors.slice(0, 8)).toEqual([]);
   });

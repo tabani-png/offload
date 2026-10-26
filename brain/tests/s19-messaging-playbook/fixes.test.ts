@@ -84,7 +84,9 @@ describe("s19 fix: sentence-initial and non-Latin names", () => {
     expect(findTextLeaks("Mention what you liked about Zara's work.", id, new Set(), "message")).toContainEqual({ kind: "name", path: "message" });
     expect(findTextLeaks("Zara replied first.", id, new Set(), "message")).toContainEqual({ kind: "name", path: "message" });
     expect(findTextLeaks("Дмитрий replied first.", id, new Set(), "message")).toContainEqual({ kind: "name", path: "message" });
-    expect(findTextLeaks("Open with a line about them. Keep it short; ask for a call on Zoom.", id, new Set(), "message")).toEqual([]);
+    expect(findTextLeaks("Open with a line about them. Keep it short; ask for a call on Tuesday.", id, new Set(), "message")).toEqual([]);
+    // Default deny (fix 6): a product mid-sentence is a name too.
+    expect(findTextLeaks("Ask for a call on Zoom.", id, new Set(), "message")).toContainEqual({ kind: "name", path: "message" });
   });
 
   test("LEAK: a wording model that adds a name outside the identity set is refused; the baseline stands", async () => {
