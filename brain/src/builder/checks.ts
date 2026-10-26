@@ -3,6 +3,7 @@
 // (bun test). The script is stored with its sha256 next to the brief and shown in BUILD.md for approval; the builder
 // never gets write access to it and the runner verifies the hash after every try (runner.ts).
 import { createHash } from "node:crypto";
+import { builtinModules } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { modelFor, type Model, type ModelConfig } from "../models/model.ts";
@@ -70,7 +71,28 @@ export function parseCheckReply(reply: string): { file: CheckFile; content: stri
   if (typeof content !== "string" || content.trim() === "") return { reason: "the check script is empty" };
   if (Buffer.byteLength(content, "utf8") > MAX_CHECK_BYTES) return { reason: `the check script is over ${MAX_CHECK_BYTES} bytes` };
   if (content.includes("\u0000")) return { reason: "the check script has a NUL byte" };
+  if (file === "accept.test.ts") {
+    const bad = disallowedTsImport(content);
+    if (bad !== null) return { reason: `the check may only import bun:/node: builtins or relative files; it imports ${bad} (run the built tool as a subprocess instead)` };
+  }
   return { file: file as CheckFile, content };
+}
+
+const NODE_BUILTINS = new Set(builtinModules);
+const TS_SPECIFIERS = [/\bfrom\s*["']([^"']+)["']/g, /\bimport\s*["']([^"']+)["']/g, /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g, /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g];
+
+/** The first import a bun check may not have (a non-builtin bare specifier, or a computed import/require), or null.
+ * A bare specifier would be resolved from somewhere the builder could plant code (node_modules, tsconfig paths). */
+export function disallowedTsImport(content: string): string | null {
+  if (/\b(?:import|require)\s*\(\s*[^"'\s)]/.test(content)) return "a computed import()/require()";
+  for (const re of TS_SPECIFIERS) {
+    for (const m of content.matchAll(re)) {
+      const spec = m[1]!;
+      if (spec.startsWith("./") || spec.startsWith("../") || spec === "bun" || spec.startsWith("bun:") || spec.startsWith("node:") || NODE_BUILTINS.has(spec)) continue;
+      return JSON.stringify(spec);
+    }
+  }
+  return null;
 }
 
 export const checksDir = (home: string, briefId: string) => join(solutionsDir(home), briefId, "checks");

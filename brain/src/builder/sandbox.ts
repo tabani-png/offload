@@ -134,11 +134,23 @@ export function decideBashCommand(ws: string, command: string): ToolDecision {
   return { allow: true, reason: "allowlisted command" };
 }
 
+export interface ToolLimits {
+  /** A Bash call may not ask for a timeout longer than this (the run's wall cap). */
+  maxCommandMs?: number;
+}
+
 /** The allowlist for one tool call. Unknown tool = deny. */
-export function decideTool(ws: string, tool: string, input: Record<string, unknown>): ToolDecision {
+export function decideTool(ws: string, tool: string, input: Record<string, unknown>, limits: ToolLimits = {}): ToolDecision {
   if ((DISALLOWED_TOOLS as readonly string[]).includes(tool) || tool.startsWith("mcp__")) return { allow: false, reason: `${tool} is not available to the builder` };
   if (!(BUILDER_TOOLS as readonly string[]).includes(tool)) return { allow: false, reason: `${tool} is not on the builder's tool allowlist` };
-  if (tool === "Bash") return typeof input.command === "string" ? decideBashCommand(ws, input.command) : { allow: false, reason: "no command" };
+  if (tool === "Bash") {
+    // A background command would outlive the call that started it; every command runs to completion under the
+    // supervisor instead.
+    if (input.run_in_background === true) return { allow: false, reason: "background commands are not allowed" };
+    if (input.timeout !== undefined && (typeof input.timeout !== "number" || !Number.isFinite(input.timeout) || input.timeout <= 0 || (limits.maxCommandMs !== undefined && input.timeout > limits.maxCommandMs)))
+      return { allow: false, reason: `a command timeout must be a positive number of ms up to ${limits.maxCommandMs ?? "the run's wall time"}` };
+    return typeof input.command === "string" ? decideBashCommand(ws, input.command) : { allow: false, reason: "no command" };
+  }
   if (tool === "Glob" && typeof input.pattern === "string" && (isAbsolute(input.pattern) || input.pattern.split("/").includes(".."))) return { allow: false, reason: "the pattern leaves the workspace" };
   const raw = input.file_path ?? input.path ?? ".";
   if (typeof raw !== "string") return { allow: false, reason: "bad path" };
@@ -165,7 +177,7 @@ export interface CommandWrapper {
   unwrap: (command: string) => string | null;
 }
 
-export function builderPermissions(ws: string, wrapper?: CommandWrapper): BuilderPermissions {
+export function builderPermissions(ws: string, wrapper?: CommandWrapper, limits: ToolLimits = {}): BuilderPermissions {
   const denials: BuilderPermissions["denials"] = [];
   const check = (tool: string, input: Record<string, unknown>): ToolDecision & { input: Record<string, unknown> } => {
     let cur = input;
@@ -173,7 +185,7 @@ export function builderPermissions(ws: string, wrapper?: CommandWrapper): Builde
       const inner = wrapper.unwrap(input.command.trim());
       if (inner !== null) cur = { ...input, command: inner };
     }
-    const d = decideTool(ws, tool, cur);
+    const d = decideTool(ws, tool, cur, limits);
     if (!d.allow) {
       denials.push({ tool, reason: redactSecrets(d.reason) });
       return { ...d, input: cur };
@@ -265,7 +277,7 @@ const sbStr = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"
 
 /** Deny-default sandbox-exec profile: workspace read-write (accept/ read-only), frozen checks and toolchain read-only,
  * no network, no other files. */
-export function sandboxProfile(o: { ws: string; frozenDir: string; readOnly: readonly string[] }): string {
+export function sandboxProfile(o: { ws: string; frozenDir: string; readOnly: readonly string[]; socket?: string }): string {
   const ws = realish(o.ws);
   // Directory listings (names only) of the workspace's ancestors: bun walks up from cwd and refuses to start without.
   const ancestors: string[] = [];
@@ -291,6 +303,14 @@ export function sandboxProfile(o: { ws: string; frozenDir: string; readOnly: rea
     ...(ancestors.length > 0 ? [`(allow file-read-data ${ancestors.map((a) => `(literal ${sbStr(a)})`).join(" ")})`] : []),
     "(deny file-write-create (vnode-type FIFO))",
     '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))',
+    // The per-run supervisor's socket (and only it): the supervisor binds it, command clients connect to it.
+    ...(o.socket === undefined
+      ? []
+      : [
+          `(allow file-read* file-write* (literal ${sbStr(realish(o.socket))}))`,
+          `(allow network-bind network-inbound (local unix-socket (path-literal ${sbStr(realish(o.socket))})))`,
+          `(allow network-outbound (remote unix-socket (path-literal ${sbStr(realish(o.socket))})))`,
+        ]),
     "(deny network*)",
     "",
   ].join("\n");
@@ -311,8 +331,10 @@ export function harnessArgv(rt: SandboxRuntime, profilePath: string, env: Record
 }
 export const sweepMode = (rt: SandboxRuntime) => (rt.kind === "sandbox-exec" ? "sweep" : "nosweep");
 
-export function commandWrapper(rt: SandboxRuntime, profilePath: string, env: Record<string, string>, harnessPath: string): CommandWrapper {
-  const prefix = [...harnessArgv(rt, profilePath, env, harnessPath), "run", sweepMode(rt), "--"].map(shq).join(" ") + " ";
+/** A builder command becomes a sandboxed client that hands the argv to the per-run supervisor (harness.ts "serve"),
+ * which runs it as its own child inside the one supervisor sandbox instance and sweeps that instance afterwards. */
+export function commandWrapper(rt: SandboxRuntime, profilePath: string, env: Record<string, string>, harnessPath: string, socket: string): CommandWrapper {
+  const prefix = [...harnessArgv(rt, profilePath, env, harnessPath), "client", sweepMode(rt), socket, "--"].map(shq).join(" ") + " ";
   return { wrap: (c) => prefix + c, unwrap: (c) => (c.startsWith(prefix) ? c.slice(prefix.length) : null) };
 }
 

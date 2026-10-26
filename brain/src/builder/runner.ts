@@ -24,6 +24,7 @@ import { BriefError, type SolutionBrief } from "../solutions/brief.ts";
 import { ensureDir } from "../workflows/store.ts";
 import { claimBuildApproval, peekBuildApproval } from "./approval.ts";
 import { GUARD_TS, HARNESS_PY } from "./harness.ts";
+import { startSupervisor, supervisorSocket, type Supervisor } from "./supervisor.ts";
 import { checkSha, identityMask, type CheckFile, type Mask } from "./checks.ts";
 import { artifactDigest, buildsDir, DEFAULT_LIMITS, truncateOutput, writeRunRecord, type BuildLimits, type BuildOutcome, type RunRecord, type TryRecord } from "./record.ts";
 import {
@@ -246,6 +247,9 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   const profilePath = join(runDir, "sandbox.sb");
   const harnessPath = join(frozenDir, "harness.py");
   let claimed: ReturnType<typeof claimBuildApproval>;
+  const sock = supervisorSocket();
+  let sup: Supervisor | null = null;
+  const childEnv = checkEnv(ws, parentEnv);
   try {
     ensureDir(join(ws, CHECK_DIR));
     mkdirSync(join(ws, ".tmp"), { recursive: true, mode: 0o700 });
@@ -259,19 +263,23 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
     writeFileSync(join(frozenDir, "guard.ts"), GUARD_TS, { mode: 0o444 });
     const guard = JSON.stringify(join(frozenDir, "guard.ts"));
     writeFileSync(join(frozenDir, "bunfig.toml"), `preload = [${guard}]\n\n[test]\npreload = [${guard}]\n`, { mode: 0o444 });
-    writeFileSync(profilePath, sandboxProfile({ ws, frozenDir, readOnly: tc.readOnly }), { mode: 0o444 });
+    writeFileSync(profilePath, sandboxProfile({ ws, frozenDir, readOnly: tc.readOnly, socket: sock.socket }), { mode: 0o444 });
+    // One supervisor per run: every builder command runs as its child, in one sandbox instance it can sweep.
+    sup = await startSupervisor({ argv: [...harnessArgv(rt, profilePath, childEnv, harnessPath), "serve", sweepMode(rt), sock.socket, ws], cwd: ws, env: childEnv, dir: sock.dir, socket: sock.socket });
     // Last: use the single-use approval (atomic claim). The inputs are re-verified against what was written above.
     claimed = claimBuildApproval(home, o.briefId, o.token, now());
     if (claimed.checks.sha256 !== c0.sha256 || claimed.content !== content0) throw new BriefError("the check script changed during setup", "conflict");
   } catch (err) {
+    if (sup !== null) await sup.stop();
+    rmSync(sock.dir, { recursive: true, force: true });
     rmSync(runDir, { recursive: true, force: true });
     throw err;
   }
+  const supervisor: Supervisor = sup!;
   const { brief, checks } = claimed;
   const startedAt = now();
   const checkPath = join(ws, CHECK_DIR, checks.file);
   const frozenPath = join(frozenDir, checks.file);
-  const childEnv = checkEnv(ws, parentEnv);
   const harness = harnessArgv(rt, profilePath, childEnv, harnessPath);
   const sweep = sweepMode(rt);
   const known = secretValues(parentEnv);
@@ -295,7 +303,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
 
   // SDK auth stays in the Claude Code process env; every Bash child it starts is wrapped in `env -i` + the sandbox.
   const env = builderEnv(parentEnv);
-  const perms = builderPermissions(ws, commandWrapper(rt, profilePath, childEnv, harnessPath));
+  const perms = builderPermissions(ws, commandWrapper(rt, profilePath, childEnv, harnessPath, supervisor.socket), { maxCommandMs: limits.wallMs });
   const bypass = o.profile.mode === "bypass";
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(new Error("wall time")), limits.wallMs);
@@ -393,8 +401,18 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         reason = `wall time ${limits.wallMs} ms reached`;
         break;
       }
+      // Quiescent first: nothing the builder started may still run (and write) while the check runs.
+      const quiet = await supervisor.sweep();
+      if (!quiet.clean) {
+        rec.ms = now() - t0;
+        tries.push(rec);
+        outcome = "FAIL";
+        reason = `builder processes could not be stopped before the check (${quiet.why ?? "sweep not clean"})`;
+        break;
+      }
       const nonce = randomBytes(16).toString("hex");
-      const c = await runCheck({ ws, file: checks.file, checkPath, frozenDir, env: childEnv, harness, sweep, nonce, timeoutMs: Math.min(120_000, left), signal: abort.signal });
+      // bun runs the frozen copy (resolution root outside the workspace); python runs accept/<file> (cwd workspace).
+      const c = await runCheck({ ws, file: checks.file, checkPath: checks.file === "accept.py" ? checkPath : frozenPath, frozenDir, env: childEnv, harness, sweep, nonce, timeoutMs: Math.min(120_000, left), signal: abort.signal });
       // Exit 0 is only half: the harness must prove the check's own code completed (and nothing survived it).
       const proof = proofPasses(c.proof, nonce);
       rec.checkOutput = truncateOutput(scrub(c.exit === 0 && !proof.ok ? `${c.output}\n[not a pass: ${proof.why}]` : c.output));
@@ -427,6 +445,24 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
     clearTimeout(timer);
   }
 
+  // The artifact at the verdict: sweep once more, then hash twice with a gap; any change means something still writes.
+  let artifactSha256 = "";
+  try {
+    const fin = await supervisor.sweep();
+    const d1 = artifactDigest(ws);
+    await new Promise((r) => setTimeout(r, 150));
+    artifactSha256 = artifactDigest(ws);
+    if (outcome === "PASS" && !fin.clean) {
+      outcome = "FAIL";
+      reason = `builder processes could not be stopped after the check (${fin.why ?? "sweep not clean"})`;
+    } else if (outcome === "PASS" && d1 !== artifactSha256) {
+      outcome = "FAIL";
+      reason = "the workspace was still changing after the check";
+    }
+  } finally {
+    await supervisor.stop();
+  }
+
   const totals = tries.reduce(
     (t, r) => ({ costUsd: round(t.costUsd + r.costUsd), turns: t.turns + r.turns, tokens: { input: t.tokens.input + r.tokens.input, output: t.tokens.output + r.tokens.output, cacheRead: t.tokens.cacheRead + r.tokens.cacheRead } }),
     { costUsd: 0, turns: 0, tokens: { input: 0, output: 0, cacheRead: 0 } },
@@ -450,7 +486,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
     reason,
     artifactPath: ws,
     // Taken at the verdict, after the harness stopped every builder process.
-    artifactSha256: artifactDigest(ws),
+    artifactSha256,
     denials: perms.denials.slice(0, 50),
   };
   writeRunRecord(home, record);

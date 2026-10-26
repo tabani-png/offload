@@ -541,7 +541,13 @@ check script exits 0, never "the model says done".
   command ends the harness stops every process left in that sandbox instance (fork + setsid daemons included).
   `RunRecord.artifactSha256` is the workspace hash at the verdict; an install step must refuse when
   `verifyArtifact(home, runId)` is false. The approval is verified first and claimed atomically (O_EXCL
-  `build-approval.claim`) after setup, so a failed setup keeps it. No usable sandbox and no container profile = 403 / exit 2
+  `build-approval.claim`) after setup, so a failed setup keeps it.
+  Every builder Bash command runs through one per-run sandboxed supervisor (harness "serve", unix socket in a 0700
+  /tmp folder): the command is the supervisor's child, so one sweep reaches every builder process ever started. The
+  runner sweeps before every check and before hashing; the artifact is hashed twice with a gap and must not change.
+  Background Bash and timeouts above the run's wall cap are denied. Bun checks run the frozen copy with their module
+  resolution root outside the workspace; any module whose resolved path is in the workspace is refused, and checks
+  that import non-builtin bare specifiers are refused when written. No usable sandbox and no container profile = 403 / exit 2
   before the approval is used (fail closed). Check output is secret-redacted before it is stored or re-prompted.
   Limits must be finite and positive (whole numbers for tries); bad values are refused (400 / exit 2) before the
   token is consumed.

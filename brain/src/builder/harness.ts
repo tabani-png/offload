@@ -100,24 +100,42 @@ def sweep(enabled):
         pass
     except ProcessLookupError:
         return {"swept": False, "killed": 0, "clean": False, "why": "parent gone; cannot prove the signal restriction"}
-    me, total, last = os.getpid(), 0, -1
-    for _ in range(6):
-        hit = 0
-        for sig in (signal.SIGSTOP, signal.SIGKILL):
-            for pid in range(2, 100000):
-                if pid == me:
-                    continue
-                try:
-                    os.kill(pid, sig)
-                    if sig == signal.SIGKILL:
-                        hit += 1
-                except OSError:
-                    pass
-        total += hit
-        last = hit
-        if hit == 0:
+    import time
+    me, total, hits = os.getpid(), 0, []
+    # Repeat until a pass finds nothing. macOS lets kill() "succeed" on ANY zombie (dead, unreaped, anywhere on the
+    # machine), so a target counts only if it is also alive (getpgid works on live processes, fails on zombies).
+    # Zombies cannot run or write. About 3 s in total before giving up (clean = false, never PASS).
+    def alive(pid):
+        try:
+            os.getpgid(pid)
+            return True
+        except OSError:
+            return False
+    for attempt in range(40):
+        hits = []
+        for pid in range(2, 100000):
+            if pid == me:
+                continue
+            try:
+                os.kill(pid, signal.SIGSTOP)
+            except OSError:
+                continue
+            if alive(pid):
+                hits.append(pid)
+        for pid in hits:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        if attempt == 0:
+            total = len(hits)
+        if not hits:
             break
-    return {"swept": True, "killed": total, "clean": last == 0}
+        time.sleep(0.02 if attempt < 3 else 0.08)
+    out = {"swept": True, "killed": total, "clean": not hits}
+    if hits:
+        out["why"] = "still present after the sweep: pids " + ",".join(str(p) for p in hits[:10])
+    return out
 
 def read_nonce():
     try:
@@ -185,6 +203,113 @@ def junit_pass(xml):
         return False, "no test ran"
     return True, "%d test(s) passed" % (tests - skipped)
 
+# ---- per-run supervisor: every builder Bash command runs as ITS child, inside ONE sandbox instance, so a sweep
+# reaches every builder process ever started (fork + setsid daemons and commands whose client was SIGKILLed).
+import socket, threading
+
+def _send(conn, kind, data=b""):
+    conn.sendall(kind + str(len(data)).encode() + b"\n" + data)
+
+def _recv_line(f):
+    line = f.readline(1 << 20)
+    return line.decode("utf8", "replace") if line else ""
+
+def serve():
+    sock_path, ws = sys.argv[3], os.path.realpath(sys.argv[4])
+    token = read_nonce()
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(sock_path)
+    srv.listen(16)
+    run_lock = threading.Lock()
+    print("OFFLOAD_SUPERVISOR_READY", flush=True)
+
+    def handle(conn):
+        f = conn.makefile("rb")
+        try:
+            hdr = json.loads(_recv_line(f) or "{}")
+        except ValueError:
+            conn.close(); return
+        op = hdr.get("op")
+        if op in ("sweep", "shutdown"):
+            if hdr.get("token") != token:
+                conn.close(); return
+            with run_lock:
+                res = sweep(MODE_SWEEP)
+            conn.sendall((json.dumps(res) + "\n").encode())
+            conn.close()
+            if op == "shutdown":
+                os._exit(0)
+            return
+        if op != "run":
+            conn.close(); return
+        argv = hdr.get("argv")
+        if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+            conn.close(); return
+        cwd = os.path.realpath(str(hdr.get("cwd") or ws))
+        if not (cwd == ws or cwd.startswith(ws + os.sep)):
+            cwd = ws
+        with run_lock:
+            try:
+                p = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            except (FileNotFoundError, PermissionError) as e:
+                _send(conn, b"D", ("command not found: %s\n" % argv[0]).encode()); _send(conn, b"X", b"127"); conn.close(); return
+            gone = threading.Event()
+            def watch():
+                # The client went away (Claude Code timeout or SIGKILL): stop the command.
+                try:
+                    while conn.recv(1):
+                        pass
+                except OSError:
+                    pass
+                gone.set()
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+            threading.Thread(target=watch, daemon=True).start()
+            for chunk in iter(lambda: p.stdout.read1(65536), b""):
+                if gone.is_set():
+                    break
+                try:
+                    _send(conn, b"D", chunk)
+                except OSError:
+                    gone.set(); p.kill(); break
+            rc = p.wait()
+            sw = sweep(MODE_SWEEP)
+            try:
+                if sw.get("killed"):
+                    _send(conn, b"D", ("[offload sandbox: stopped %d leftover process(es)]\n" % sw["killed"]).encode())
+                _send(conn, b"X", str(rc).encode())
+            except OSError:
+                pass
+        conn.close()
+
+    while True:
+        conn, _ = srv.accept()
+        threading.Thread(target=handle, args=(conn,), daemon=True).start()
+
+def client():
+    sock_path = sys.argv[3]
+    argv = sys.argv[5:] if sys.argv[4:5] == ["--"] else sys.argv[4:]
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(sock_path)
+    except OSError as e:
+        print("offload sandbox supervisor is not running (%s)" % e, file=sys.stderr); sys.exit(255)
+    s.sendall((json.dumps({"op": "run", "argv": argv, "cwd": os.getcwd()}) + "\n").encode())
+    f = s.makefile("rb")
+    out = sys.stdout.buffer
+    while True:
+        kind = f.read(1)
+        if not kind:
+            print("offload sandbox supervisor closed the connection", file=sys.stderr); sys.exit(255)
+        n = int(_recv_line(f).strip() or "0")
+        data = f.read(n) if n else b""
+        if kind == b"D":
+            out.write(data); out.flush()
+        elif kind == b"X":
+            sys.exit(int(data or b"1"))
+
 mode, MODE_SWEEP = sys.argv[1], sys.argv[2] == "sweep"
 for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
     signal.signal(s, on_signal)
@@ -203,6 +328,13 @@ if mode == "run":
         print("[offload sandbox: stopped %d leftover process(es)]" % sw["killed"], file=sys.stderr)
     sys.exit(rc)
 
+if mode == "serve":
+    serve()
+    sys.exit(0)
+if mode == "client":
+    client()
+
+CHILD_CWD = [None]
 nonce = read_nonce()
 r, w = os.pipe()
 if mode == "check-py":
@@ -210,13 +342,17 @@ if mode == "check-py":
     argv = [sys.executable, "-I", "-c", CHILD_BOOT, check, ws, str(w), MSG]
     env = dict(os.environ)
 elif mode == "check-bun":
+    # The FROZEN copy runs with cwd = the frozen dir, so bun's module resolution root (node_modules, tsconfig,
+    # package.json lookups) never reaches the workspace; the preload then chdirs to the workspace for the check's
+    # own file and subprocess work, and refuses any module whose resolved path is inside the workspace.
     check, ws, bunfig, bun = sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
     argv = [bun, "test", "--config=" + bunfig, "--no-env-file", "--reporter=junit", "--reporter-outfile=/dev/fd/%d" % w, check]
-    env = dict(os.environ, OFFLOAD_WS=os.path.realpath(ws), OFFLOAD_REFUSED=MSG)
+    env = dict(os.environ, OFFLOAD_WS=os.path.realpath(ws), OFFLOAD_WS_RAW=os.path.abspath(ws), OFFLOAD_REFUSED=MSG)
+    CHILD_CWD[0] = os.path.dirname(os.path.abspath(check))
 else:
     print("unknown harness mode", file=sys.stderr)
     sys.exit(2)
-CHILD["p"] = subprocess.Popen(argv, pass_fds=(w,), env=env, stdin=subprocess.DEVNULL)
+CHILD["p"] = subprocess.Popen(argv, pass_fds=(w,), env=env, stdin=subprocess.DEVNULL, cwd=CHILD_CWD[0])
 os.close(w)
 rc = CHILD["p"].wait()
 CHILD["p"] = None
@@ -238,9 +374,15 @@ import { plugin } from "bun";
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 const WS = process.env.OFFLOAD_WS ?? "/nonexistent-offload-ws";
+const WS_RAW = process.env.OFFLOAD_WS_RAW ?? WS;
 const MSG = process.env.OFFLOAD_REFUSED ?? "builder code may not be imported by the check";
 const real = (p: string) => { try { return realpathSync(p); } catch { return p; } };
-const builder = (p: string) => (p === WS || p.startsWith(WS + "/")) && !p.startsWith(WS + "/accept/");
+const inside = (p: string, root: string) => p === root || p.startsWith(root + "/");
+const builder = (p: string) => inside(p, WS) || inside(p, WS_RAW) || inside(real(p), WS);
+const esc = (s: string) => s.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
+// The check's own working directory is the workspace (its subprocess and file work); module resolution started from
+// the frozen dir before this preload ran.
+if (process.env.OFFLOAD_WS_RAW) process.chdir(process.env.OFFLOAD_WS_RAW);
 plugin({
   name: "offload-check-guard",
   setup(b) {
@@ -252,6 +394,13 @@ plugin({
       }
       return undefined;
     });
+    // The RESOLVED path decides, however it was reached (bare specifier, node_modules, tsconfig paths, symlink):
+    // nothing inside the workspace is ever loaded into the check.
+    for (const root of new Set([WS, WS_RAW])) {
+      b.onLoad({ filter: new RegExp("^" + esc(root) + "(/|$)") }, (a) => {
+        throw new Error(MSG + " (" + a.path + ")");
+      });
+    }
   },
 });
 `;
