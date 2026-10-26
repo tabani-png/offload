@@ -1,0 +1,30 @@
+{
+  "about": "The Managed Agents HTTP surface Offload uses, recorded from @anthropic-ai/sdk 1.3.0 (resources/beta/*.js request paths, *.d.ts parameter interfaces). FakeManagedAgents rejects any request outside it; tests/S2-09/contract.test.ts re-reads the SDK files and checks every entry still matches.",
+  "sdk": "@anthropic-ai/sdk@1.3.0",
+  "beta": "managed-agents-2026-04-01",
+  "endpoints": [
+    { "op": "environments.create", "method": "POST", "path": "/v1/environments", "js": "resources/beta/environments/environments.js", "dts": "resources/beta/environments/environments.d.ts", "params": "EnvironmentCreateParams", "required": ["name"], "fields": ["name", "config", "description", "metadata", "scope"] },
+    { "op": "environments.update", "method": "POST", "path": "/v1/environments/{id}", "js": "resources/beta/environments/environments.js", "dts": "resources/beta/environments/environments.d.ts", "params": "EnvironmentUpdateParams", "required": [], "fields": ["name", "config", "description", "metadata", "scope"] },
+    { "op": "vaults.create", "method": "POST", "path": "/v1/vaults", "js": "resources/beta/vaults/vaults.js", "dts": "resources/beta/vaults/vaults.d.ts", "params": "VaultCreateParams", "required": ["display_name"], "fields": ["display_name", "metadata"] },
+    { "op": "vaults.credentials.create", "method": "POST", "path": "/v1/vaults/{id}/credentials", "js": "resources/beta/vaults/credentials.js", "dts": "resources/beta/vaults/credentials.d.ts", "params": "CredentialCreateParams", "required": ["auth"], "fields": ["auth", "display_name", "metadata"] },
+    { "op": "agents.create", "method": "POST", "path": "/v1/agents", "js": "resources/beta/agents/agents.js", "dts": "resources/beta/agents/agents.d.ts", "params": "AgentCreateParams", "required": ["model", "name"], "fields": ["model", "name", "description", "execution_identity", "mcp_servers", "metadata", "multiagent", "skills", "system", "tools"] },
+    { "op": "sessions.create", "method": "POST", "path": "/v1/sessions", "js": "resources/beta/sessions/sessions.js", "dts": "resources/beta/sessions/sessions.d.ts", "params": "SessionCreateParams", "required": ["agent", "environment_id"], "fields": ["agent", "environment_id", "budget", "initial_events", "metadata", "resources", "title", "vault_ids"] },
+    { "op": "sessions.retrieve", "method": "GET", "path": "/v1/sessions/{id}", "js": "resources/beta/sessions/sessions.js", "dts": "resources/beta/sessions/sessions.d.ts", "params": "SessionRetrieveParams", "required": [], "fields": [] },
+    { "op": "sessions.delete", "method": "DELETE", "path": "/v1/sessions/{id}", "js": "resources/beta/sessions/sessions.js", "dts": "resources/beta/sessions/sessions.d.ts", "params": "SessionDeleteParams", "required": [], "fields": [] },
+    { "op": "sessions.events.send", "method": "POST", "path": "/v1/sessions/{id}/events", "js": "resources/beta/sessions/events.js", "dts": "resources/beta/sessions/events.d.ts", "params": "EventSendParams", "required": ["events"], "fields": ["events"] },
+    { "op": "sessions.events.stream", "method": "GET", "path": "/v1/sessions/{id}/events/stream", "js": "resources/beta/sessions/events.js", "dts": "resources/beta/sessions/events.d.ts", "params": "EventStreamParams", "required": [], "fields": [] },
+    { "op": "sessions.events.list", "method": "GET", "path": "/v1/sessions/{id}/events", "js": "resources/beta/sessions/events.js", "dts": "resources/beta/sessions/events.d.ts", "params": "EventListParams", "required": [], "fields": [], "query": ["order", "created_at[gte]", "page", "limit"] },
+    { "op": "deployments.create", "method": "POST", "path": "/v1/deployments", "js": "resources/beta/deployments.js", "dts": "resources/beta/deployments.d.ts", "params": "DeploymentCreateParams", "required": ["agent", "environment_id", "initial_events", "name"], "fields": ["agent", "environment_id", "initial_events", "name", "budget", "description", "metadata", "resources", "schedule", "vault_ids"] },
+    { "op": "deployments.pause", "method": "POST", "path": "/v1/deployments/{id}/pause", "js": "resources/beta/deployments.js", "dts": "resources/beta/deployments.d.ts", "params": "DeploymentPauseParams", "required": [], "fields": [] },
+    { "op": "deployments.unpause", "method": "POST", "path": "/v1/deployments/{id}/unpause", "js": "resources/beta/deployments.js", "dts": "resources/beta/deployments.d.ts", "params": "DeploymentUnpauseParams", "required": [], "fields": [] },
+    { "op": "deployments.archive", "method": "POST", "path": "/v1/deployments/{id}/archive", "js": "resources/beta/deployments.js", "dts": "resources/beta/deployments.d.ts", "params": "DeploymentArchiveParams", "required": [], "fields": [] },
+    { "op": "deploymentRuns.list", "method": "GET", "path": "/v1/deployment_runs", "js": "resources/beta/deployment-runs.js", "dts": "resources/beta/deployment-runs.d.ts", "params": "DeploymentRunListParams", "required": [], "fields": [], "query": ["deployment_id", "created_at[gt]", "page", "limit"] }
+  ],
+  "userEvents": {
+    "dts": "resources/beta/sessions/events.d.ts",
+    "user.message": { "params": "BetaManagedAgentsUserMessageEventParams", "fields": ["type", "content"] },
+    "user.interrupt": { "params": "BetaManagedAgentsUserInterruptEventParams", "fields": ["type", "session_thread_id"] },
+    "user.tool_confirmation": { "params": "BetaManagedAgentsUserToolConfirmationEventParams", "fields": ["type", "result", "tool_use_id", "deny_message"] },
+    "user.custom_tool_result": { "params": "BetaManagedAgentsUserCustomToolResultEventParams", "fields": ["type", "custom_tool_use_id", "content", "is_error"] }
+  }
+}
