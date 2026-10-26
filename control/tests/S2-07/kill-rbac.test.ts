@@ -87,8 +87,9 @@ describe("S2-07 kill switches", () => {
       expect(await w.h.deps.ports.broker.killSwitchActive(t, { personId: w.t.people.member2.id })).toBe(false);
       expect(await w.broker.tenantKilled(t)).toBe(false);
     });
-    // Set by the member: the member may clear it.
-    expect((await clear("member", "person", member)).status).toBe(200);
+    // Set by the member on themselves: nobody lifts a switch that stops themselves (follow-up 1); their dept lead may.
+    expect((await clear("member", "person", member)).status).toBe(403);
+    expect((await clear("lead", "person", member)).status).toBe(200);
   });
 
   test("KILL: a member sets only their own person and workflows, and clears only what they set", async () => {

@@ -228,6 +228,8 @@ export function killRoutes(app: App, deps: Deps, broker: () => Broker): void {
       // ADR 0106 §4: revoke unspent tokens; queued batches stay queued. Cloud workers of the person pause too.
       const revoked = await broker().revokeForKill(tx, req.scope, req.targetId, "kill switch");
       const workers = req.scope === "person" ? await deps.ports.workers.pauseFor(tx, req.targetId!) : 0;
+      // Lock order: the broker's audit events (and the one below) after the last row lock.
+      await broker().flushAudits(tx);
       await deps.ports.audit.write(tx, {
         actor: actorOf(p),
         action: "kill.set",
@@ -253,12 +255,24 @@ export function killRoutes(app: App, deps: Deps, broker: () => Broker): void {
       if (!r) throw notFound();
       const k = killRow(r);
       // API.md clearing rules.
+      // Nobody lifts a switch that stops themselves, whatever their role: someone else must.
+      if (k.scope === "person" && k.targetId === p.personId) throw forbidden("a kill switch on you is cleared by someone else");
       if (p.accessRole === "admin" && k.scope === "tenant" && k.setByRole === "owner") {
         throw forbidden("a tenant kill switch set by an owner is cleared by an owner");
       }
       if (p.accessRole === "dept_lead" || p.accessRole === "member") {
         await killScopeCheck(tx, deps, p, k.scope, k.targetId);
+        // A switch an owner or admin set is cleared by an owner or admin.
+        if (k.setByRole === "owner" || k.setByRole === "admin") throw forbidden("a kill switch set by an owner or admin is cleared by an owner or admin");
         if (p.accessRole === "member" && k.setBy !== p.personId) throw forbidden("you can clear only a kill switch you set");
+        if (p.accessRole === "dept_lead" && k.setBy !== p.personId) {
+          // A dept lead clears what a dept lead or member of their own department set.
+          const [setter] = await tx`select department_id from people where id = ${k.setBy}`;
+          const dept = (setter?.department_id as string | null | undefined) ?? null;
+          if (!(k.setByRole === "dept_lead" || k.setByRole === "member") || dept === null || !p.departmentScope.includes(dept)) {
+            throw forbidden("a dept lead clears only kill switches set in their department");
+          }
+        }
       }
       const t = deps.clock.now();
       const [row] = await tx`update kill_switches set active = false, cleared_at = ${new Date(t)}, cleared_by = ${p.personId}

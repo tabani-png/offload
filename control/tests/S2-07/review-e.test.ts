@@ -163,7 +163,14 @@ describe("S2-07 round 4: lock-order audit (one global order: kill switch, policy
       const g = await gate(lockBatch(hash));
       const send = settle(w.broker.runDue(w.t.id, hash));
       await g.blocked(1);
-      const kill = settle(tx(w, (t) => w.broker.revokeForKill(t, "workflow", WF2, "kill switch")));
+      const kill = settle(
+        tx(w, async (t) => {
+          // As the kill route runs it: revoke, then the queued audit events (follow-up: unflushed events roll back).
+          const n = await w.broker.revokeForKill(t, "workflow", WF2, "kill switch");
+          await w.broker.flushAudits(t);
+          return n;
+        }),
+      );
       await g.blocked(2);
       await g.open();
       const [s, k] = await Promise.all([send, kill]);

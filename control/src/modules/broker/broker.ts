@@ -26,6 +26,9 @@
  *   6. overnight_counters FOR UPDATE / UPDATE / INSERT
  *   7. advisory s207:<workflow>:<recipient> (executeItem, right before the journal)
  *   8. contacted_ledger INSERT / UPDATE
+ *   9. worker rows (workers.pauseFor, from stopRunsFor and the kill route)
+ *  10. the tenant's audit-chain advisory lock (audit.ts), LAST: audit events are queued per transaction and written by
+ *      flushAudits after the last row lock (service() and every entry point run in a caller's transaction do it).
  * The night cap's per-policy step is the policy row lock (2), held by executeItem; there is no separate advisory lock.
  * executeItem decides everything that unlinks or trips a policy before it locks its batch (unlinkPolicy and tripPolicy
  * lock many batches, by hash, and must not start from one already held). A deadlock or serialization failure that still
@@ -173,7 +176,10 @@ export interface Broker extends BrokerPort {
   /** Is the tenant-wide kill switch on? */
   tenantKilled(tx: Tx): Promise<boolean>;
   stopRunsFor(tx: Tx, personId: string): Promise<{ tokens: number; policies: number; workers: number }>;
+  /** Queues its audit events: the caller calls `flushAudits(tx)` after its last row lock. */
   revokeForKill(tx: Tx, scope: "tenant" | "person" | "workflow", targetId: string | null, reason: string): Promise<number>;
+  /** Writes the audit events queued in `tx` (lock order: the audit-chain lock is last). */
+  flushAudits(tx: Tx): Promise<void>;
   reportNightSignals(tenantId: string, policyId: string, s: { sends?: number; bounces?: number; negativeReplies?: number; costCents?: number }): Promise<string | null>;
   reportRunResult(tenantId: string, policyId: string, ok: boolean): Promise<string | null>;
   /** After a policy edit (policies module): a narrowing edit unlinks what the policy approved and has not sent; a
@@ -421,7 +427,9 @@ async function runRefusal(tx: Tx, r: RunBinding, conn: ConnRow): Promise<string 
   return null;
 }
 
-const fingerprintOf = (c: ConnRow) => `${c.id}:${c.externalRef}:${c.ownership}:${c.kind}`;
+/** What a policy saw of its commit connection; any change (re-linked account, new owner, re-bound job role, another
+ * provider) trips the breaker (ADR 0106 §3). */
+const fingerprintOf = (c: ConnRow) => sha256Hex(jcs({ v: 2, id: c.id, ref: c.externalRef, ownership: c.ownership, kind: c.kind, provider: c.provider, owner: c.ownerPersonId, jobRole: c.jobRoleId }));
 
 /** The SQLSTATE of a Postgres error ("" for anything else). */
 export function sqlStateOf(err: unknown): string {
@@ -447,14 +455,48 @@ export async function cleanConflict<T>(p: Promise<T>, uniqueAs?: string): Promis
 
 export function createBroker(deps: Deps): Broker {
   const now = () => deps.clock.now();
-  const audit = (tx: Tx, e: AuditInput) => deps.ports.audit.write(tx, e);
+  // Audit events are queued per transaction and written after its last row lock (lock order step 10): writing one
+  // takes the tenant's audit-chain lock until commit, and no transaction may wait for a row while holding it.
+  // Fail closed: starting a queue inserts a marker row that a deferred constraint trigger refuses to commit
+  // (migration 0703); writing the queue deletes it. A caller that never flushes rolls back, it never drops events.
+  const pendingAudits = new WeakMap<Tx, { marker: string; events: AuditInput[] }>();
+  const audit = async (tx: Tx, e: AuditInput): Promise<void> => {
+    const q = pendingAudits.get(tx);
+    if (q) {
+      q.events.push(e);
+      return;
+    }
+    const [m] = await tx`insert into broker_audit_pending (tenant_id) values (current_setting('app.tenant_id')::uuid) returning id`;
+    pendingAudits.set(tx, { marker: m!.id as string, events: [e] });
+  };
+  /** Writes the transaction's queued audit events, in order. The last thing a broker transaction does. */
+  async function flushAudits(tx: Tx): Promise<void> {
+    const q = pendingAudits.get(tx);
+    if (!q) return;
+    pendingAudits.delete(tx);
+    for (const e of q.events) await deps.ports.audit.write(tx, e);
+    await tx`delete from broker_audit_pending where id = ${q.marker}`;
+  }
+  /** A broker entry point run in the caller's transaction: its audit events are written when it is done. */
+  const flushed =
+    <A extends unknown[], R>(f: (tx: Tx, ...a: A) => Promise<R>) =>
+    async (tx: Tx, ...a: A): Promise<R> => {
+      const r = await f(tx, ...a);
+      await flushAudits(tx);
+      return r;
+    };
   let executors: Executors = {};
   const inflight = new Set<Promise<unknown>>();
   let lockRetries = 0;
   /** A broker transaction. One that Postgres aborted as a deadlock victim or a serialization failure (nothing of it
    * committed) runs once more: the lock order above should make that unreachable, so each retry is counted. */
   const service = async <T>(tenantId: string, fn: (tx: Tx) => Promise<T>, retryOn: readonly string[] = []): Promise<T> => {
-    const run = () => withTenant(deps.db, { tenantId, principalId: null, principalPersonId: null, accessRole: "service" }, fn);
+    const run = () =>
+      withTenant(deps.db, { tenantId, principalId: null, principalPersonId: null, accessRole: "service" }, async (tx) => {
+        const r = await fn(tx);
+        await flushAudits(tx);
+        return r;
+      });
     try {
       return await run();
     } catch (err) {
@@ -476,16 +518,29 @@ export function createBroker(deps: Deps): Broker {
         or (scope = 'workflow' and target_id = ${wf}::uuid)) limit 1`;
     return r !== undefined;
   }
-  const batchKilled = (tx: Tx, b: BatchRow) =>
-    killActive(tx, { personIds: [b.runnerPersonId, ...(b.identityType === "person" ? [b.identityId] : [])], workflowId: b.workflowId });
+  /** A switch on the tenant, the workflow, the runner, a person identity, or the person who approved (`approver`). */
+  const batchKilled = (tx: Tx, b: BatchRow, approver: string | null = null) =>
+    killActive(tx, {
+      personIds: [b.runnerPersonId, ...(b.identityType === "person" ? [b.identityId] : []), ...(approver !== null ? [approver] : [])],
+      workflowId: b.workflowId,
+    });
+  /** The person behind a token, or null for a policy's approval. */
+  const approverOf = (tk: Record<string, unknown>) => (tk.approver_kind === "person" ? (tk.approved_by as string) : null);
+
+  /** One audit event for a state change of a batch, about its runner. */
+  async function auditBatch(tx: Tx, hash: string, action: string, detail: Record<string, unknown>): Promise<void> {
+    const [b] = await tx`select runner_person_id from batches where hash = ${hash}`;
+    await audit(tx, { actor: SERVICE, action, subjectPersonId: (b?.runner_person_id as string | undefined) ?? null, resource: { type: "batch", id: hash }, detail });
+  }
 
   // ---------- state ----------
 
   /** Expired, never-used tokens no longer authorise their items. */
   async function sweepTokens(tx: Tx, hash: string): Promise<void> {
-    await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${new Date(now())}
+    const it = await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${new Date(now())}
       where batch_hash = ${hash} and state = 'pending' and token_id in (select id from approval_tokens
         where batch_hash = ${hash} and used_at is null and (revoked_at is not null or expires_at <= ${new Date(now())}))`;
+    if (it.count > 0) await auditBatch(tx, hash, "batch.tokens_swept", { items: it.count });
   }
 
   async function recompute(tx: Tx, hash: string): Promise<BatchState> {
@@ -666,8 +721,23 @@ export function createBroker(deps: Deps): Broker {
     const t = new Date(now());
     const r = await tx`update approval_tokens set revoked_at = ${t}, revoked_reason = ${reason}
       where batch_hash = ${hash} and used_at is null and revoked_at is null`;
-    await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${t}
+    const it = await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${t}
       where batch_hash = ${hash} and state = 'pending' and token_id is not null`;
+    if (r.count > 0 || it.count > 0) await auditBatch(tx, hash, "batch.tokens_revoked", { reason: reason.slice(0, 200), tokens: r.count, items: it.count });
+    await recompute(tx, hash);
+    return r.count;
+  }
+
+  /** Revokes one person's approvals in a batch (unspent tokens, and the unsent items of spent ones). */
+  async function revokeApprovals(tx: Tx, hash: string, personId: string, reason: string): Promise<number> {
+    await tx`select 1 from batches where hash = ${hash} for update`;
+    const t = new Date(now());
+    const r = await tx`update approval_tokens set revoked_at = ${t}, revoked_reason = ${reason}
+      where batch_hash = ${hash} and approver_kind = 'person' and approved_by = ${personId} and used_at is null and revoked_at is null`;
+    const it = await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${t}
+      where batch_hash = ${hash} and state = 'pending' and token_id in (select id from approval_tokens
+        where batch_hash = ${hash} and approver_kind = 'person' and approved_by = ${personId})`;
+    if (r.count > 0 || it.count > 0) await auditBatch(tx, hash, "batch.tokens_revoked", { reason: reason.slice(0, 200), tokens: r.count, items: it.count, approver: personId });
     await recompute(tx, hash);
     return r.count;
   }
@@ -716,11 +786,14 @@ export function createBroker(deps: Deps): Broker {
     // Lock order: the caller holds the policy; each batch (by hash) before its tokens and items.
     for (const o of open) {
       await tx`select 1 from batches where hash = ${o.batch_hash} for update`;
-      await tx`update approval_tokens set revoked_at = ${t}, revoked_reason = ${reason.slice(0, 200)}
+      const r = await tx`update approval_tokens set revoked_at = ${t}, revoked_reason = ${reason.slice(0, 200)}
         where batch_hash = ${o.batch_hash} and policy_id = ${policyId} and used_at is null and revoked_at is null`;
-      await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${t}
+      const it = await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${t}
         where batch_hash = ${o.batch_hash} and state = 'pending'
           and token_id in (select id from approval_tokens where policy_id = ${policyId})`;
+      if (r.count > 0 || it.count > 0) {
+        await auditBatch(tx, o.batch_hash as string, "batch.policy_unlinked", { policyId, reason: reason.slice(0, 200), tokens: r.count, items: it.count });
+      }
       await recompute(tx, o.batch_hash as string);
     }
     return open.length;
@@ -931,7 +1004,7 @@ export function createBroker(deps: Deps): Broker {
     let b = await loadBatch(tx, hash, true);
     if (!b) throw notFound();
     await mustApprove(tx, p, b);
-    if (await batchKilled(tx, b)) throw new HttpError(409, "kill_switch_active", "a kill switch stops this batch");
+    if (await batchKilled(tx, b, p.personId)) throw new HttpError(409, "kill_switch_active", "a kill switch stops this batch");
     // The runner and the sending identity as they are now (Codex round 3): a freeze after propose revoked the tokens,
     // and a new approval must not mint one for a frozen or offboarded runner.
     const bconn = await connectionOf(tx, b.connectionId);
@@ -1097,7 +1170,7 @@ export function createBroker(deps: Deps): Broker {
         await audit(tx, { actor: SERVICE, action: "batch.tamper_detected", subjectPersonId: b.runnerPersonId, resource: { type: "batch", id: hash }, detail: {} });
         return new HttpError(409, "hash_mismatch", "the batch changed after it was approved");
       }
-      if (await batchKilled(tx, b)) {
+      if (await batchKilled(tx, b, approverOf(tk))) {
         await revokeBatch(tx, hash, "kill switch");
         return new HttpError(409, "kill_switch_active", "a kill switch stops this batch");
       }
@@ -1274,7 +1347,7 @@ export function createBroker(deps: Deps): Broker {
         if (Number(spent?.budget_cents ?? 0) >= cap) return takeBack("night budget spent");
       }
       if (row.scheduledFor !== null && row.scheduledFor > now()) return { done: "waiting" as const };
-      if (await batchKilled(tx, b)) {
+      if (await batchKilled(tx, b, approverOf(tk))) {
         await revokeBatch(tx, hash, "kill switch");
         return { done: "waiting" as const };
       }
@@ -1389,7 +1462,11 @@ export function createBroker(deps: Deps): Broker {
       await tx`update contacted_ledger set outcome = ${answer} where batch_hash = ${hash} and item_key = ${key} and outcome = 'sending'`;
       if (ok && prepared.policyId !== null) {
         const night = nightOf(now(), await tenantTimezone(tx));
-        await tx`update overnight_counters set sends = sends + 1 where policy_id = ${prepared.policyId} and night = ${night}::date`;
+        // Upsert: a send counts even if nothing created tonight's row yet (it is not evaluated: the night's first batch
+        // still decides whether it is a dry run).
+        await tx`insert into overnight_counters (tenant_id, policy_id, night, dry_run, evaluated, sends)
+          values (current_setting('app.tenant_id')::uuid, ${prepared.policyId}, ${night}::date, false, false, 1)
+          on conflict (tenant_id, policy_id, night) do update set sends = overnight_counters.sends + 1`;
       }
       await recompute(tx, hash);
       await audit(tx, {
@@ -1416,6 +1493,8 @@ export function createBroker(deps: Deps): Broker {
         returning batch_hash, key`;
       for (const r of rows) {
         await tx`update contacted_ledger set outcome = 'unknown' where batch_hash = ${r.batch_hash} and item_key = ${r.key} and outcome = 'sending'`;
+        const [wf] = await tx`select workflow_id from batches where hash = ${r.batch_hash}`;
+        await auditBatch(tx, r.batch_hash as string, "batch.item_reconciled", { item: itemRef(wf!.workflow_id as string, r.key as string), from: "sending", to: "unknown" });
         await recompute(tx, r.batch_hash as string);
       }
       return rows.length;
@@ -1450,16 +1529,26 @@ export function createBroker(deps: Deps): Broker {
   }
 
   async function revokeForKill(tx: Tx, scope: "tenant" | "person" | "workflow", targetId: string | null, reason: string): Promise<number> {
-    const hashes =
+    const own =
       scope === "tenant"
-        ? await tx`select hash from batches where state in ('pending', 'approved', 'sending') order by hash`
+        ? await tx`select hash from batches where state in ('pending', 'approved', 'sending')`
         : scope === "person"
           ? await tx`select hash from batches where state in ('pending', 'approved', 'sending')
-              and (runner_person_id = ${targetId} or (identity_type = 'person' and identity_id = ${targetId})) order by hash`
-          : await tx`select hash from batches where state in ('pending', 'approved', 'sending') and workflow_id = ${targetId} order by hash`;
-    // Lock order: the kill switch row (the route), then batches by hash.
+              and (runner_person_id = ${targetId} or (identity_type = 'person' and identity_id = ${targetId}))`
+          : await tx`select hash from batches where state in ('pending', 'approved', 'sending') and workflow_id = ${targetId}`;
+    // A person switch also stops the person's approvals of other people's batches (follow-up 2).
+    const approved =
+      scope === "person"
+        ? await tx`select distinct t.batch_hash as hash from approval_tokens t where t.approver_kind = 'person' and t.approved_by = ${targetId}
+            and t.revoked_at is null and (t.used_at is null or exists (select 1 from batch_items i
+              where i.tenant_id = t.tenant_id and i.token_id = t.id and i.state = 'pending'))`
+        : [];
+    // Lock order: the kill switch row (the route), then every batch in ONE pass by hash (two passes, each sorted, let
+    // two kills lock the same batches in opposite orders).
+    const whole = new Set(own.map((r: Record<string, unknown>) => r.hash as string));
+    const all = [...new Set([...whole, ...approved.map((r: Record<string, unknown>) => r.hash as string)])].sort();
     let n = 0;
-    for (const h of hashes) n += await revokeBatch(tx, h.hash as string, reason);
+    for (const h of all) n += whole.has(h) ? await revokeBatch(tx, h, reason) : await revokeApprovals(tx, h, targetId!, reason);
     return n;
   }
 
@@ -1517,9 +1606,9 @@ export function createBroker(deps: Deps): Broker {
         ? true
         : killActive(tx, { ...(target.personId ? { personIds: [target.personId] } : {}), ...(target.workflowId ? { workflowId: target.workflowId } : {}) }),
     tenantKilled: (tx) => killActive(tx, {}),
-    revokeTokensOf: revokeTokensFor,
-    revokeTokensFor,
-    async stopRunsFor(tx, personId) {
+    revokeTokensOf: flushed(revokeTokensFor),
+    revokeTokensFor: flushed(revokeTokensFor),
+    stopRunsFor: flushed(async (tx: Tx, personId: string) => {
       // Lock order: the person's policies (by id) before any batch; pausing them below upgrades nothing.
       await tx`select id from overnight_policies where owner_person_id = ${personId} and state = 'active' order by id for no key update`;
       const tokens = await revokeTokensFor(tx, personId);
@@ -1528,21 +1617,23 @@ export function createBroker(deps: Deps): Broker {
         where owner_person_id = ${personId} and state = 'active'`;
       const workers = await deps.ports.workers.pauseFor(tx, personId);
       return { tokens, policies: pol.count, workers };
-    },
+    }),
+    // The kill route queues more work (workers.pauseFor) and then calls flushAudits itself.
     revokeForKill,
+    flushAudits,
     get lockRetries() {
       return lockRetries;
     },
     proposeBatch,
-    approve,
-    reject: rejectBatch,
-    release,
+    approve: flushed(approve),
+    reject: flushed(rejectBatch),
+    release: flushed(release),
     commitApproved,
     runDue,
     reconcile,
     reportNightSignals,
     reportRunResult,
-    policyChanged,
+    policyChanged: flushed(policyChanged),
     async idle() {
       while (inflight.size > 0) await Promise.allSettled([...inflight]);
     },
