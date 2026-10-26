@@ -25,7 +25,8 @@ describe("s27 round 16: JSON tables share the text tables' row rules", () => {
 
   const PARITY: Array<[string, string, string]> = [
     ["too many cells", "Signups\tProfit\n1\t2\t9\n3\t4", '{"columns":["Signups","Profit"],"rows":[["1","2","9"],["3","4"]]}'],
-    ["too few cells", "Signups | Profit\n1\n3 | 4", '{"columns":["Signups","Profit"],"rows":[["1"],["3","4"]]}'],
+    // A text line without any delimiter ends a text table, so "too few" in text needs a wider table.
+    ["too few cells", "Signups | Note | Profit\n1 | 2\n3 | x | 4", '{"columns":["Signups","Note","Profit"],"rows":[["1","2"],["3","x","4"]]}'],
     ["an empty cell", "Signups\tProfit\n\t2\n3\t4", '{"columns":["Signups","Profit"],"rows":[["","2"],["3","4"]]}'],
     ["a formatting-only cell", "Signups | Profit\n— | 2\n3 | 4", '{"columns":["Signups","Profit"],"rows":[["—","2"],["3","4"]]}'],
     ["a column named twice", "Signups | Signups | Profit\n1 | 9 | 2\n3 | 3 | 4", '{"columns":["Signups","Signups","Profit"],"rows":[["1","9","2"],["3","3","4"]]}'],

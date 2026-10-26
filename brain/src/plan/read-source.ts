@@ -500,14 +500,7 @@ function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | 
         const cells = cellsOf(lines[j]!, outer);
         if (cells === null) break;
         n += 1;
-        const r: Obj = {};
-        if (cells.length !== head.length) {
-          (r as Record<symbol, string>)[MALFORMED] = `row ${n} has ${cells.length} cell${cells.length === 1 ? "" : "s"}, the table has ${head.length}`;
-          rows.push(r);
-          continue;
-        }
-        head.forEach((h, k) => putKey(r, normKey(h), cells[k]!.trim()));
-        rows.push(r);
+        rows.push(tableRow(head, cells, n));
       }
       i = j - 1;
       continue;
@@ -561,17 +554,42 @@ const MAX_DEPTH = 4;
 function tableRows(o: Obj): Obj[] | null {
   const cols = o.columns;
   const rows = Array.isArray(o.rows) ? o.rows : Array.isArray(o.data) ? o.data : null;
-  if (!Array.isArray(cols) || rows === null || rows.length === 0 || !rows.every(Array.isArray)) return null;
+  if (!Array.isArray(cols) || rows === null || rows.length === 0 || !rows.every((r) => Array.isArray(r) || isObj(r))) return null;
   const names = cols.map((c) => (typeof c === "string" ? c : isObj(c) && typeof c.name === "string" ? c.name : null));
   if (names.some((n) => n === null)) return null;
-  return (rows as unknown[][]).map((r) => {
-    const out: Obj = {};
-    names.forEach((n, i) => putKey(out, n as string, r[i]));
-    return out;
-  });
+  // Round 16: the same row rule as text tables (tableRow).
+  return rows.map((r, i) => tableRow(names as string[], r as unknown[] | Obj, i + 1));
 }
 
-/** Pagination markers: a non-empty next link or cursor, or has_more true. Only page one was read. */
+/**
+ * s27 round 16: ONE row rule for every table, text or JSON. Array rows: exactly one cell per column, else the row is
+ * kept in place as skipped and named ("row 2 has 3 cells, the table has 2"); object rows (JSON): only the declared
+ * columns, else skipped and named. Repeated column names are Repeated (I7); empty and formatting-only cells are judged
+ * later by the row pass (cleanValue), the same for both.
+ */
+function tableRow(headers: readonly string[], cells: readonly unknown[] | Obj, n: number): Obj {
+  const r: Obj = {};
+  // A row that cannot be read still shows which columns the table has (null), so the table is chosen by presence and
+  // the row is skipped and named in the row pass, never dropped.
+  const malformed = (why: string): Obj => {
+    for (const h of headers) if (!Object.hasOwn(r, h)) r[h] = null;
+    (r as Record<symbol, string>)[MALFORMED] = why;
+    return r;
+  };
+  // Keys are the column names as given (flattening normalises them: a null never hides a value, two different values
+  // under one name are Repeated), the same for text and JSON.
+  if (Array.isArray(cells)) {
+    if (cells.length !== headers.length) return malformed(`row ${n} has ${cells.length} cell${cells.length === 1 ? "" : "s"}, the table has ${headers.length}`);
+    headers.forEach((h, k) => putKey(r, h, typeof cells[k] === "string" ? (cells[k] as string).trim() : cells[k]));
+    return r;
+  }
+  const allowed = new Set(headers.map(normKey));
+  const outside = Object.keys(cells).filter((k) => !allowed.has(normKey(k)));
+  if (outside.length > 0) return malformed(`row ${n} has keys outside the columns: ${outside.join(", ")}`);
+  for (const [k, v] of Object.entries(cells)) putKey(r, k, v);
+  return r;
+}
+
 function morePages(o: Obj): boolean {
   for (const [k, v] of Object.entries(o)) {
     const n = normKey(k);
@@ -616,7 +634,10 @@ function collections(v: unknown): { all: Collection[]; more: boolean } {
     if (t !== null) all.push({ rows: t, depth, context: here, order: all.length });
     // The object itself as one row: its own scalars are the row's, only the envelopes above are context.
     all.push({ rows: [x], depth, context: ctx, order: all.length });
+    // A table's own rows are read only through the table (tableRow), never as a second, unchecked list.
+    const tableKey = t === null ? null : Array.isArray(x.rows) ? "rows" : "data";
     for (const k of Object.keys(x)) {
+      if (k === tableKey) continue;
       const v = x[k];
       if (v instanceof Repeated) for (const y of v.values) walk(y, depth + 1, here);
       else walk(v, depth + 1, here);

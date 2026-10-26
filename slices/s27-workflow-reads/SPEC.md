@@ -165,7 +165,11 @@ only saving was the typing.
     middle cells keep their place; a header may have an unnamed first column). A row with empty field cells is a
     skipped row; a row with the wrong number of cells is skipped and named ("row 2 has 3 cells, the table has 2") and
     never ends the table; only a line with no cell delimiter ends it. The commit-screen parse splits before trimming too.
-23. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+23. **Round 16 (PR #35 review).** One row rule for every table (`tableRow`), text or JSON `columns + rows`: exactly one
+    cell per column (too many or too few: skipped and named, later rows continue); object rows inside a columns table
+    may only use the declared columns (else skipped and named); a table's rows are read only through the table, never
+    also as a plain list; empty, formatting-only and repeated cells are judged the same way in both.
+24. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)
