@@ -20,7 +20,7 @@ struct CompanyView: View {
           WindowSection(title: CompanyCopy.sees, trailing: model.status.tenantLabel) {
             RingBox(padding: Tokens.Space.s16) {
               HStack(alignment: .top, spacing: Tokens.Space.s24) {
-                VisibilityList(title: "Sees", symbol: "checkmark", items: CompanyVisibility.sees(features: model.status.features))
+                VisibilityList(title: "Sees", symbol: "checkmark", items: CompanyVisibility.sees(model.status))
                 VisibilityList(title: "Never sees", symbol: "xmark", items: CompanyVisibility.neverSees)
               }
               VStack(alignment: .leading, spacing: Tokens.Space.s8) {

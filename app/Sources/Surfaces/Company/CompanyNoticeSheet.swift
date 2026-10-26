@@ -30,7 +30,7 @@ struct CompanyNoticeSheet: View {
       .padding(.top, Tokens.Space.s16)
 
       HStack(alignment: .top, spacing: Tokens.Space.s16) {
-        VisibilityList(title: CompanyCopy.sees, symbol: "checkmark", items: CompanyVisibility.sees(features: s.features))
+        VisibilityList(title: CompanyCopy.sees, symbol: "checkmark", items: CompanyVisibility.sees(s))
         VisibilityList(title: CompanyCopy.neverSees, symbol: "xmark", items: CompanyVisibility.neverSees)
       }
       .padding(.top, Tokens.Space.s16)
@@ -147,7 +147,9 @@ struct FeatureChips: View {
   var body: some View {
     let p = Palette(scheme: scheme)
     let on = status.featuresOn.filter { $0 != .workflowMetrics }
-    if on.isEmpty {
+    if !status.featuresKnown {
+      Text(CompanyCopy.featuresUnknown).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+    } else if on.isEmpty {
       HStack(spacing: Tokens.Space.s8) {
         Chip(text: CompanyFeature.workflowMetrics.plain)
         Text(CompanyCopy.noFeatures).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)

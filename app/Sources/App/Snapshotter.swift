@@ -122,8 +122,12 @@ enum Snapshotter {
     let share = CompanySamples.share
     var queuedShare = share
     queuedShare.confirmed = true
+    // Round 3: signed in, the brain has not read the notice yet: blue "Checking", never green.
+    var checking = CompanySamples.status(.connected)
+    checking.noticeState = .unknown
+    checking.featuresKnown = false
     let states: [(CompanyStatus, CompanySyncState)] = [
-      CompanySamples.status(.notConnected), CompanySamples.status(.connecting), waiting, connected,
+      CompanySamples.status(.notConnected), CompanySamples.status(.connecting), waiting, checking, connected,
       CompanySamples.status(.paused, lastSync: lastSync), CompanySamples.status(.revoked),
     ].map { ($0, CompanySyncState($0)) }
     let status = AnyView(Backdrop(padding: 28) {

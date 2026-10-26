@@ -34,7 +34,15 @@ struct CompanyNotice: Equatable, Sendable {
   var features: [CompanyFeature]
 }
 
-/// `GET /sync/status` (SyncStatusDTO), the parts the app shows.
+/// What the brain knows about the notice. Only `.required` with an acknowledgement opens sharing; `.unknown` (the brain
+/// has not read the device config yet: `notice: null`) and `.noneRequired` (the config has `required: null`, so the
+/// brain sends nothing) both fail closed.
+enum CompanyNoticeState: Equatable, Sendable {
+  case unknown, noneRequired
+  case required(CompanyNotice)
+}
+
+/// `GET /sync/status` (SyncStatusDTO), the parts the app shows. Every nullable wire field decodes to its safe reading.
 struct CompanyStatus: Equatable, Sendable {
   var phase: CompanyPhase
   var controlURL: URL?
@@ -44,22 +52,36 @@ struct CompanyStatus: Equatable, Sendable {
   var tenantName: String?
   var enrolledAt: Date?
   var paused: Bool
-  var notice: CompanyNotice?
+  var noticeState: CompanyNoticeState
   var noticeAcknowledged: Bool
   var features: [CompanyFeature: Bool]
-  var queued: Int
+  /// `features: null` (config not read yet): what is on is unknown, never "only workflow results".
+  var featuresKnown: Bool
+  /// `outbox: null`: unknown, never "up to date".
+  var queued: Int?
   var lastSyncAt: Date?
   var nextSyncAt: Date?
   var failures: Int
   var lastError: String?
 
   static let empty = CompanyStatus(phase: .notConfigured, controlURL: nil, configError: nil, tenantId: nil, tenantName: nil,
-                                   enrolledAt: nil, paused: false, notice: nil, noticeAcknowledged: false, features: [:],
-                                   queued: 0, lastSyncAt: nil, nextSyncAt: nil, failures: 0, lastError: nil)
+                                   enrolledAt: nil, paused: false, noticeState: .unknown, noticeAcknowledged: false, features: [:],
+                                   featuresKnown: false, queued: nil, lastSyncAt: nil, nextSyncAt: nil, failures: 0, lastError: nil)
+
+  /// The required notice, if the brain knows one. Setting it marks the notice required (nil: none required).
+  var notice: CompanyNotice? {
+    get { if case .required(let n) = noticeState { return n } else { return nil } }
+    set { noticeState = newValue.map(CompanyNoticeState.required) ?? .noneRequired }
+  }
 
   var isConnected: Bool { phase == .connected || phase == .paused }
   /// Connected, a notice is required and this Mac has not acknowledged it: nothing but the ack may leave.
   var waitingForNotice: Bool { isConnected && notice != nil && !noticeAcknowledged }
+  /// Connected and the brain does not know of a notice to acknowledge (not read yet, or none published): nothing is
+  /// shared, and the app says it is checking rather than "up to date".
+  var checkingNotice: Bool { isConnected && notice == nil }
+  /// The only state in which sharing and resuming may happen: a known, required notice, acknowledged.
+  var consentReady: Bool { isConnected && notice != nil && noticeAcknowledged }
   /// Features that are on for me, in a fixed order.
   var featuresOn: [CompanyFeature] { CompanyFeature.allCases.filter { features[$0] == true } }
 
@@ -98,15 +120,20 @@ struct CompanyStatus: Equatable, Sendable {
     func date(_ ms: Double?) -> Date? { ms.map { Date(timeIntervalSince1970: $0 / 1000) } }
     var features: [CompanyFeature: Bool] = [:]
     for (k, v) in w.features ?? [:] { if let f = CompanyFeature(rawValue: k) { features[f] = v } }
-    let notice = w.notice?.required.map {
-      CompanyNotice(noticeVersionId: $0.noticeVersionId, title: $0.title, markdown: $0.markdown,
-                    features: $0.features.compactMap(CompanyFeature.init(rawValue:)))
+    let noticeState: CompanyNoticeState
+    if let n = w.notice {
+      noticeState = n.required.map {
+        .required(CompanyNotice(noticeVersionId: $0.noticeVersionId, title: $0.title, markdown: $0.markdown,
+                                features: $0.features.compactMap(CompanyFeature.init(rawValue:))))
+      } ?? .noneRequired
+    } else {
+      noticeState = .unknown
     }
     return CompanyStatus(phase: phase, controlURL: w.controlUrl.flatMap(URL.init(string:)), configError: w.configError,
                          tenantId: w.tenantId, tenantName: w.tenantName, enrolledAt: date(w.enrolledAt), paused: w.paused,
-                         notice: notice, noticeAcknowledged: w.notice?.acknowledged ?? false, features: features,
-                         queued: w.outbox?.total ?? 0, lastSyncAt: date(w.lastFlushAt), nextSyncAt: date(w.nextFlushAt),
-                         failures: w.failures ?? 0, lastError: w.lastError)
+                         noticeState: noticeState, noticeAcknowledged: w.notice?.acknowledged ?? false, features: features,
+                         featuresKnown: w.features != nil, queued: w.outbox?.total, lastSyncAt: date(w.lastFlushAt),
+                         nextSyncAt: date(w.nextFlushAt), failures: w.failures ?? 0, lastError: w.lastError)
   }
 }
 
@@ -114,7 +141,7 @@ struct CompanyStatus: Equatable, Sendable {
 
 /// What the rail and the dashboard say about company sync. Colour means state only.
 enum CompanySyncState: Equatable, Sendable {
-  case notSetUp, notConnected, connecting, waitingForNotice, syncing(last: Date?), paused, revoked
+  case notSetUp, notConnected, connecting, waitingForNotice, checkingNotice, syncing(last: Date?), paused, revoked
 
   init(_ s: CompanyStatus) {
     switch s.phase {
@@ -125,6 +152,7 @@ enum CompanySyncState: Equatable, Sendable {
     case .connected, .paused:
       if s.waitingForNotice { self = .waitingForNotice }
       else if s.phase == .paused || s.paused { self = .paused }
+      else if s.checkingNotice { self = .checkingNotice }
       else { self = .syncing(last: s.lastSyncAt) }
     }
   }
@@ -132,7 +160,7 @@ enum CompanySyncState: Equatable, Sendable {
   var role: StatusRole {
     switch self {
     case .notSetUp, .notConnected, .paused: return .neutral
-    case .connecting: return .working
+    case .connecting, .checkingNotice: return .working
     case .waitingForNotice, .revoked: return .needsYou
     case .syncing: return .done
     }
@@ -144,6 +172,7 @@ enum CompanySyncState: Equatable, Sendable {
     case .notConnected: return "Not connected"
     case .connecting: return "Finish signing in in your browser"
     case .waitingForNotice: return "Waiting for you to read the notice"
+    case .checkingNotice: return "Checking your company's notice…"
     case .syncing(let last): return last.map { "Last sync \(Self.ago($0, now: now))" } ?? "Connected, not synced yet"
     case .paused: return "Sync paused"
     case .revoked: return "This Mac was disconnected by your company"
@@ -156,6 +185,7 @@ enum CompanySyncState: Equatable, Sendable {
     case .notSetUp, .notConnected: return "Not connected"
     case .connecting: return "Signing in"
     case .waitingForNotice: return "Notice to read"
+    case .checkingNotice: return "Checking notice"
     case .syncing: return "Syncing"
     case .paused: return "Paused"
     case .revoked: return "Disconnected"
@@ -169,9 +199,14 @@ enum CompanySyncState: Equatable, Sendable {
     case .notConnected: return "Connect to share workflow results with your company. Nothing is shared until you read its notice."
     case .connecting: return "Offload opened your company's sign-in page."
     case .waitingForNotice: return "Nothing leaves this Mac until you read and acknowledge it."
+    case .checkingNotice:
+      return s.noticeState == .noneRequired
+        ? "Your company has not published a notice yet. Nothing is shared until it does and you read it."
+        : "Nothing is shared until Offload has your company's notice and you read it."
     case .syncing:
       if s.failures >= 2 { return "Offload will try again on its own." }
-      return s.queued > 0 ? "\(Format.count(s.queued)) ready for the next sync." : "Up to date."
+      guard let queued = s.queued else { return "Connected." }
+      return queued > 0 ? "\(Format.count(queued)) ready for the next sync." : "Up to date."
     case .paused: return "Nothing is sent until you resume."
     case .revoked: return "Connect again to keep sharing."
     }
@@ -241,6 +276,11 @@ enum CompanyVisibility {
   static let reviews = "How long reviews took, in seconds"
   static let perPerson = "Those numbers with your name on them"
   static let workingTime = "Daily working time, as totals"
+
+  /// What the company sees for this status: unknown features add one line saying so, never an understatement.
+  static func sees(_ s: CompanyStatus) -> [String] {
+    sees(features: s.features) + (s.featuresKnown ? [] : [CompanyCopy.featuresUnknown])
+  }
 
   static func sees(features: [CompanyFeature: Bool]) -> [String] {
     var out = [runs, timeSaved, reviews]
@@ -368,7 +408,7 @@ enum CompanyGate {
     case .connect: return !s.isConnected
     case .acknowledge: return s.waitingForNotice
     case .pause: return s.isConnected
-    case .share, .resume: return s.isConnected && !s.waitingForNotice
+    case .share, .resume: return s.consentReady
     }
   }
 }
@@ -407,7 +447,7 @@ enum CompanyEntry {
 enum CompanyControls {
   static func isPaused(_ s: CompanyStatus) -> Bool { s.paused || s.phase == .paused }
   static func pauseEnabled(_ s: CompanyStatus) -> Bool { s.isConnected && !isPaused(s) }
-  static func resumeEnabled(_ s: CompanyStatus) -> Bool { s.isConnected && isPaused(s) && !s.waitingForNotice }
+  static func resumeEnabled(_ s: CompanyStatus) -> Bool { isPaused(s) && s.consentReady }
 }
 
 /// What the dashboard's company row needs: the status (tenant, queue) and the state the Company window shows.
@@ -419,11 +459,12 @@ struct CompanyGlance: Equatable, Sendable {
 // MARK: errors and copy
 
 enum CompanyError: Error, Equatable {
-  case noticeFirst, noNotice, notConnected, unsafeURL, signInTimedOut, revoked, changedSincePreview, badHash
+  case noticeFirst, noticeUnknown, noNotice, notConnected, unsafeURL, signInTimedOut, revoked, changedSincePreview, badHash
 
   var userMessage: String {
     switch self {
     case .noticeFirst: return "Read your company's notice first. Nothing is shared before you acknowledge it."
+    case .noticeUnknown: return "Offload is still checking your company's notice. Nothing is shared until you read it."
     case .noNotice: return "Your company has no notice for you to acknowledge right now."
     case .notConnected: return "Connect to your company first."
     case .unsafeURL: return "That sign-in page is not your company's address. Do not sign in there; Offload stopped waiting."
@@ -455,6 +496,7 @@ enum CompanyCopy {
   static let neverSees = "What it never sees"
   static let featuresOn = "On for you"
   static let noFeatures = "Only workflow results. Nothing about you by name."
+  static let featuresUnknown = "Checking what else is on for you…"
   static let shareTitle = "Share with my team"
   static let shareAction = "Share"
   static let shareConfirm = "Share with my team"
@@ -479,6 +521,9 @@ protocol CompanyAPI: Sendable {
   func sharePreview(workflowId: String) async throws -> SharePreview
   func confirmShare(workflowId: String, hash: String) async throws -> SharePreview
   func setPaused(_ paused: Bool) async throws -> CompanyStatus
+  /// Asks the brain to read the device config now (GET /sync/preview refreshes it the way a flush would). The brain's
+  /// `/sync/status` never refreshes config itself, so right after sign-in the notice is unknown until this runs.
+  func refreshConfig() async throws
 }
 
 /// The brain's company-sync routes over the same loopback endpoint, token and transport as every other route.
@@ -532,6 +577,8 @@ struct CompanyClient: CompanyAPI {
   func setPaused(_ paused: Bool) async throws -> CompanyStatus {
     try CompanyStatus.decode(try await raw("POST", paused ? "sync/pause" : "sync/resume"))
   }
+
+  func refreshConfig() async throws { _ = try await raw("GET", "sync/preview") }
 }
 
 // MARK: service
@@ -555,17 +602,47 @@ actor CompanyService {
     self.sleep = sleep
   }
 
+  /// Bumped before and after every request that changes sync state (pause, resume, ack): a status read that was in
+  /// flight across one is stale and is dropped, so a 30 s poll can never undo Pause on screen.
+  private var generation = 0
+
   @discardableResult
   func refresh() async throws -> CompanyStatus {
+    let started = generation
     let s = try await api.status()
+    if started != generation, let current = status { return current }
     status = s
     return s
   }
 
+  private func mutate<T>(_ body: () async throws -> T) async rethrows -> T {
+    generation += 1
+    defer { generation += 1 }
+    return try await body()
+  }
+
   /// The background read for the rail, the dashboard and the menu: a brain without company sync (404), or one that
   /// is not up yet, reads as "not set up" (or the last state seen), never as an error.
+  ///
+  /// While connected with the notice unknown, it first nudges the brain to read the config, so the first-run notice
+  /// shows up without waiting for the brain's next flush.
   func statusQuietly() async -> CompanyStatus {
+    if let s = status, s.isConnected, s.noticeState == .unknown { try? await api.refreshConfig() }
     do { return try await refresh() } catch { return status ?? .empty }
+  }
+
+  /// After sign-in: the brain has not read the device config yet, so ask it to, and poll a few times for the notice.
+  private func settleNotice(_ connected: CompanyStatus) async -> CompanyStatus {
+    var s = connected
+    var tries = 0
+    while s.noticeState == .unknown, tries < 5 {
+      try? await api.refreshConfig()
+      if let now = try? await refresh() { s = now }
+      if s.noticeState != .unknown { break }
+      tries += 1
+      await sleep(pollInterval)
+    }
+    return s
   }
 
   private func current() async throws -> CompanyStatus {
@@ -596,7 +673,7 @@ actor CompanyService {
     var waited = 0.0
     while true {
       if let now = try? await refresh() {
-        if now.isConnected { return now }
+        if now.isConnected { return await settleNotice(now) }
         if now.lastError != errorBefore, now.lastError?.hasPrefix("connect failed") == true { throw CompanyError.signInTimedOut }
         switch now.phase {
         case .connecting: break
@@ -616,7 +693,7 @@ actor CompanyService {
     guard let notice = s.notice, CompanyGate.allows(.acknowledge, status: s) else {
       throw s.isConnected ? CompanyError.noNotice : CompanyError.notConnected
     }
-    try await api.acknowledge(noticeVersionId: notice.noticeVersionId)
+    try await mutate { try await api.acknowledge(noticeVersionId: notice.noticeVersionId) }
     // The ack landed; a failed read after it must not report it as failed.
     if let now = try? await refresh() { return now }
     var acked = s
@@ -638,12 +715,16 @@ actor CompanyService {
 
   func setPaused(_ paused: Bool) async throws -> CompanyStatus {
     try gate(paused ? .pause : .resume, try await current())
-    let s = try await api.setPaused(paused)
+    let s = try await mutate { try await api.setPaused(paused) }
     status = s
     return s
   }
 
   private func gate(_ a: CompanyGate.Action, _ s: CompanyStatus) throws {
-    guard CompanyGate.allows(a, status: s) else { throw s.waitingForNotice ? CompanyError.noticeFirst : CompanyError.notConnected }
+    guard CompanyGate.allows(a, status: s) else {
+      if s.waitingForNotice { throw CompanyError.noticeFirst }
+      if s.checkingNotice { throw CompanyError.noticeUnknown }
+      throw CompanyError.notConnected
+    }
   }
 }

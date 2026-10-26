@@ -66,8 +66,11 @@ final class CompanyModel: ObservableObject {
   /// The app's background read (launch, the refresh timer, opening the dashboard): never an error. A brain without
   /// company sync reads as not set up, so the rail shows nothing and the menu offers a calm "Connect your company…".
   func refreshQuietly() async {
+    let wasChecking = syncState == .checkingNotice
     let s = await service.statusQuietly()
     if s != status { status = s }
+    // The notice arrived after sign-in (the brain read the config late): bring it up once, as connect would have.
+    if wasChecking, status.waitingForNotice, sheet == nil, connect == .idle { sheet = .notice }
   }
 
   private func reloadWorkflows() async {
@@ -178,8 +181,11 @@ final class CompanyModel: ObservableObject {
   }
 
   func togglePause() {
+    guard !busy else { return }
+    busy = true
     let pause = !CompanyControls.isPaused(status)
     Task {
+      defer { busy = false }
       do { status = try await service.setPaused(pause) } catch { message = CompanyError.message(for: error) }
     }
   }
@@ -232,6 +238,7 @@ enum CompanySamples {
     s.notice = notice
     s.noticeAcknowledged = acknowledged
     s.features = features
+    s.featuresKnown = true
     s.lastSyncAt = lastSync
     s.queued = queued
     return s
@@ -289,4 +296,6 @@ actor MockCompanyAPI: CompanyAPI {
     current.phase = paused ? .paused : .connected
     return current
   }
+
+  func refreshConfig() async throws {}
 }
