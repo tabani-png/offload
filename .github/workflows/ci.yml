@@ -28,6 +28,7 @@ jobs:
     outputs:
       brain: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.brain }}
       mac: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.mac }}
+      web: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.web }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -40,6 +41,14 @@ jobs:
               - 'schemas/**'
               - 'slices/**'
               - 'scripts/**'
+              - '.github/workflows/ci.yml'
+            web:
+              - 'web/**'
+              - 'app/Sources/Core/Tokens.swift'
+              - 'schemas/stage2/**'
+              - 'plan/stage-2/API.md'
+              - 'slices/S2-04-web-shell/**'
+              - 'slices/S2-common/**'
               - '.github/workflows/ci.yml'
             mac:
               - 'engine/**'
@@ -96,6 +105,28 @@ jobs:
             echo "$s $r"
           done
           [ "${#failed[@]}" -eq 0 ] || { echo "::error::failed slices: ${failed[*]}"; exit 1; }
+
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # verify.sh diffs against main for out-of-scope paths
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.x
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - name: Admin web slice verify (typecheck, tests, tags, build)
+        env:
+          S2_BASE: origin/main
+        run: bash slices/S2-04-web-shell/verify.sh
 
   mac:
     needs: changes

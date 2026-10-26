@@ -1,0 +1,364 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { ERROR_CODES, ERROR_WORDS, createHttpClient, errorWords, ApiError } from "../src/api/client.ts";
+import * as fx from "../src/api/mock/fixtures.ts";
+import { uuid } from "../src/api/mock/ids.ts";
+import { validateEnable, toEnableRequest, type EnableForm } from "../src/screens/Compliance.tsx";
+import { check } from "./helpers/schemas.ts";
+import { findRoute } from "../src/api/mock/server.ts";
+import { adoption, headcount, hoursSavedReport, peopleWithData } from "../src/api/mock/metrics.ts";
+import { isSuppressed, type Batch, type HoursSavedReport, type WorkingTimeReport } from "../src/api/types.ts";
+import { main, renderAt, settle, until } from "./helpers/render.tsx";
+
+afterEach(cleanup);
+
+const dialogEl = () => document.querySelector("[role=dialog]") as HTMLElement;
+
+const NUMBER_HOURS = /\d[\d,]*\.\d h/;
+const rowOf = (label: string) => screen.getAllByRole("row").find((r) => r.querySelector("td")?.textContent === label)!;
+
+describe("suppressed cells", () => {
+  test("STATES: overview shows the floor message for small departments and no number", async () => {
+    await renderAt("/");
+    for (const name of ["Legal", "Facilities", "People"]) {
+      const row = rowOf(name);
+      expect(row.textContent).toContain("Fewer than 5 people");
+      expect(row.textContent).not.toMatch(NUMBER_HOURS);
+      expect(row.textContent!.replace("Fewer than 5 people", "")).not.toMatch(/\d/);
+    }
+    expect(rowOf("Sales").textContent).toMatch(NUMBER_HOURS);
+  });
+
+  test("STATES: a department under the floor shows the floor message instead of a hero number", async () => {
+    await renderAt(`/departments/${fx.DEPT.legal}`);
+    const t = main().textContent!;
+    expect(t).toContain("Fewer than 5 people");
+    expect(t).not.toMatch(NUMBER_HOURS);
+    expect(main().querySelector("[data-suppressed=group_floor]")).toBeTruthy();
+  });
+
+  test("STATES: complementary suppression hides a second job role so the small one cannot be derived", async () => {
+    await renderAt(`/departments/${fx.DEPT.finance}`);
+    // Controller has fewer than 5 people with data; AP clerk (6) is hidden only so Controller cannot be derived.
+    await until(() => rowOf("AP clerk, Finance").textContent!.includes("Hidden to protect a small group"), "complementary words");
+    const ap = rowOf("AP clerk, Finance");
+    const controller = rowOf("Controller, Finance");
+    expect(ap.textContent).not.toContain("Fewer than 5 people");
+    expect(controller.textContent).toContain("Fewer than 5 people");
+    for (const r of [ap, controller]) expect(r.textContent).not.toMatch(NUMBER_HOURS);
+  });
+
+  test("STATES: the floor counts people with data in the period, not headcount", () => {
+    // People: 6 in the directory, 4 of them with data (the recruiting workflow has 4 users).
+    expect(headcount(fx.DEPT.people)).toBe(6);
+    expect(peopleWithData({ type: "department", id: fx.DEPT.people }, "2026-10-01", "2026-10-26")).toBe(4);
+    expect(isSuppressed(hoursSavedReport({ type: "department", id: fx.DEPT.people }, "2026-10-01", "2026-10-26").total)).toBe(true);
+    expect(isSuppressed(hoursSavedReport({ type: "job_role", id: fx.JR.recruiter }, "2026-10-01", "2026-10-26").total)).toBe(true);
+    expect(isSuppressed(adoption({ type: "department", id: fx.DEPT.people }, "2026-10-01", "2026-10-26").value)).toBe(true);
+    // Sales has 14 people but nobody with data before May, so that period is under the floor too.
+    expect(isSuppressed(hoursSavedReport({ type: "department", id: fx.DEPT.sales }, "2026-01-01", "2026-02-01").total)).toBe(true);
+    expect(isSuppressed(hoursSavedReport({ type: "department", id: fx.DEPT.sales }, "2026-10-01", "2026-10-26").total)).toBe(false);
+    const company = hoursSavedReport({ type: "company", id: null }, "2026-10-01", "2026-10-26");
+    const people = company.children.find((c) => c.scope.id === fx.DEPT.people)!;
+    expect(isSuppressed(people.value)).toBe(true);
+  });
+});
+
+describe("evidence and the group floor", () => {
+  test("STATES: evidence for a workflow behind fewer than 5 people is refused and shown in plain words", async () => {
+    await renderAt(`/workflows/${fx.WF[307]}/evidence`);
+    expect(screen.getByRole("alert").textContent).toBe(ERROR_WORDS.group_floor);
+    expect(main().textContent).not.toContain("samples");
+    cleanup();
+    await renderAt(`/departments/${fx.DEPT.legal}`);
+    expect(screen.queryAllByRole("link", { name: "Evidence" })).toEqual([]);
+  });
+});
+
+describe("sensitive views are gated", () => {
+  test("STATES: per-person metrics column is absent and the gate is visible while the feature is off", async () => {
+    const { api } = await renderAt("/people");
+    expect(main().querySelector("[data-feature-off=per_person_views]")?.textContent).toContain("Per-person views are off");
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).not.toContainEqual(expect.stringContaining("hours"));
+    expect(api.calls.some((c) => c.includes("metrics"))).toBe(false);
+  });
+
+  test("STATES: per-person metrics column appears only when the feature is on and effective", async () => {
+    const { api } = await renderAt("/people", { features: ["per_person_views"] });
+    expect(main().querySelector("[data-feature-off]")).toBeNull();
+    expect(main().querySelector("[data-feature-on=per_person_views]")).toBeTruthy();
+    expect(screen.getAllByRole("columnheader").at(-1)!.textContent).toContain("Own hours saved");
+    // Opening the page reads nobody's numbers: each person is opened on purpose, one at a time.
+    expect(api.calls.filter((c) => c === "GET /v1/metrics/hours-saved")).toEqual([]);
+  });
+
+  test("STATES: opening one person's hours reads only that person and writes one audit event", async () => {
+    const { api } = await renderAt("/people", { features: ["per_person_views"] });
+    const subject = fx.people.find((p) => p.jurisdiction === "CA-ON" && p.id !== fx.ME.id && p.state === "active")!;
+    const before = (await api.get<{ items: { action: string }[] }>("/v1/audit-log?action=person.read&limit=200")).items.length;
+    fireEvent.click(within(rowOf(subject.displayName)).getByRole("button", { name: `Show hours for ${subject.displayName}` }));
+    await until(() => NUMBER_HOURS.test(rowOf(subject.displayName).textContent!), "the person's hours");
+    expect(api.calls.filter((c) => c === "GET /v1/metrics/hours-saved").length).toBe(1);
+    const after = (await api.get<{ items: { action: string; subjectPersonId: string }[] }>("/v1/audit-log?action=person.read&limit=200")).items;
+    expect(after.length).toBe(before + 1);
+    expect(after[0]!.subjectPersonId).toBe(subject.id);
+  });
+
+  test("STATES: a failed per-person read shows plain words, not an endless placeholder", async () => {
+    await renderAt("/people", { features: ["per_person_views"], failures: { "GET /v1/metrics/hours-saved": "server_error" } });
+    const subject = fx.people.find((p) => p.jurisdiction === "GB" && p.state === "active")!;
+    fireEvent.click(within(rowOf(subject.displayName)).getByRole("button", { name: `Show hours for ${subject.displayName}` }));
+    await until(() => !!rowOf(subject.displayName).querySelector("[role=alert]"), "error words");
+    expect(rowOf(subject.displayName).querySelector("[role=alert]")!.textContent).toBe(ERROR_WORDS.server_error);
+    expect(rowOf(subject.displayName).textContent).not.toContain("…");
+  });
+
+  test("STATES: per-person views apply by the subject's jurisdiction", async () => {
+    // The enablement covers CA-ON and GB only. Everyone else shows a plain reason and no numbers, and is never read.
+    const { api } = await renderAt("/people", { features: ["per_person_views"] });
+    const outside = fx.people.filter((p) => !["CA-ON", "GB"].includes(p.jurisdiction));
+    expect(outside.length).toBeGreaterThan(10);
+    for (const p of outside) {
+      const row = rowOf(p.displayName);
+      expect(row.textContent).toContain(`Off in ${p.jurisdiction}`);
+      expect(within(row).queryByRole("button", { name: /Show hours/ })).toBeNull();
+    }
+    const inside = fx.people.find((p) => p.jurisdiction === "GB")!;
+    expect(within(rowOf(inside.displayName)).getByRole("button", { name: /Show hours/ })).toBeTruthy();
+    expect(api.calls).not.toContain("GET /v1/metrics/hours-saved");
+  });
+
+  test("STATES: the API suppresses per-person numbers outside enabled jurisdictions and audits nothing", async () => {
+    const { createMockClient } = await import("../src/api/mock/server.ts");
+    const api = createMockClient({ features: ["per_person_views", "working_time"] });
+    const de = fx.people.find((p) => p.jurisdiction === "DE")!;
+    const on = fx.people.find((p) => p.jurisdiction === "CA-ON" && p.id !== fx.ME.id)!;
+    const reads = async () => (await api.get<{ items: unknown[] }>("/v1/audit-log?action=person.read&limit=200")).items.length;
+    const start = await reads();
+    const r = await api.get<HoursSavedReport>(`/v1/metrics/hours-saved?scope=person:${de.id}`);
+    expect(r.total).toEqual({ suppressed: true, reason: "jurisdiction" });
+    expect(r.topWorkflows).toEqual([]);
+    const w = await api.get<WorkingTimeReport>(`/v1/metrics/working-time?scope=person:${de.id}`);
+    expect(w.value).toEqual({ suppressed: true, reason: "jurisdiction" });
+    expect(await reads()).toBe(start);
+    const ok = await api.get<HoursSavedReport>(`/v1/metrics/hours-saved?scope=person:${on.id}`);
+    expect(isSuppressed(ok.total)).toBe(false);
+    expect(await reads()).toBe(start + 1);
+  });
+
+  test("STATES: working time is hidden behind its gate and never requested while off", async () => {
+    const { api } = await renderAt(`/departments/${fx.DEPT.sales}`);
+    expect(main().querySelector("[data-feature-off=working_time]")).toBeTruthy();
+    expect(api.calls).not.toContain("GET /v1/metrics/working-time");
+    cleanup();
+    const on = await renderAt(`/departments/${fx.DEPT.sales}`, { features: ["working_time"] });
+    expect(main().querySelector("[data-feature-off=working_time]")).toBeNull();
+    expect(main().textContent).toContain("median active time a day");
+    expect(main().textContent).toContain("Nobody is listed or ranked");
+    expect(on.api.calls).toContain("GET /v1/metrics/working-time");
+  });
+
+  test("STATES: working time for a group under the floor shows the floor message", async () => {
+    await renderAt(`/departments/${fx.DEPT.facilities}`, { features: ["working_time"] });
+    expect(main().textContent).toContain("Fewer than 5 people");
+    expect(main().textContent).not.toContain("median active time a day");
+  });
+
+  test("STATES: self-view tells me which sensitive features are off for me", async () => {
+    await renderAt("/me");
+    expect(main().textContent).toContain("Off. Nobody at the company can see your own numbers.");
+  });
+});
+
+describe("errors in plain words", () => {
+  test("STATES: every error code has plain words and screens show them, not the code", async () => {
+    for (const code of ERROR_CODES) {
+      expect(ERROR_WORDS[code].length).toBeGreaterThan(10);
+      expect(ERROR_WORDS[code]).not.toContain("_");
+    }
+    for (const code of ["forbidden", "rate_limited", "server_error", "feature_disabled"] as const) {
+      await renderAt("/people", { failures: { "GET /v1/people": code } });
+      const alert = screen.getByRole("alert");
+      expect(alert.textContent).toBe(ERROR_WORDS[code]);
+      expect(main().textContent).not.toContain(code);
+      cleanup();
+    }
+  });
+
+  test("STATES: unknown errors fall back to the server_error words", () => {
+    expect(errorWords(new Error("boom"))).toBe(ERROR_WORDS.server_error);
+    expect(errorWords(new ApiError("hash_mismatch", 409))).toBe(ERROR_WORDS.hash_mismatch);
+  });
+
+  test("STATES: the HTTP client maps error.code from the body and sends CSRF on mutations", async () => {
+    const seen: { url: string; init: RequestInit }[] = [];
+    const fake = async (url: string, init: RequestInit) => {
+      seen.push({ url, init });
+      if (url.endsWith("/auth/session")) return new Response(JSON.stringify({ csrfToken: "csrf-abc" }), { status: 200 });
+      return new Response(JSON.stringify({ error: { code: "kill_switch_active", message: "stopped" } }), { status: 409 });
+    };
+    const http = createHttpClient("", fake);
+    const err = await http.post("/v1/batches/x/approve", {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe("kill_switch_active");
+    const post = seen.find((s) => s.init.method === "POST")!;
+    expect((post.init.headers as Record<string, string>)["x-csrf-token"]).toBe("csrf-abc");
+  });
+
+  test("STATES: a promote that would bind a personal LinkedIn commit is refused with forbidden_binding", async () => {
+    const r = findRoute("POST", `/v1/workflows/${fx.WF[309]}/promote`)!;
+    expect(r).toBeTruthy();
+    const { createMockClient } = await import("../src/api/mock/server.ts");
+    const api = createMockClient();
+    const body = { jobRoleId: fx.JR.sdr, departmentId: fx.DEPT.sales, fromVersion: 1, bindings: [{ stepId: "send-invites", connectionId: uuid(506), disable: false }] };
+    expect(api.post(`/v1/workflows/${fx.WF[309]}/promote`, body)).rejects.toMatchObject({ code: "forbidden_binding" });
+  });
+});
+
+const SALES_LEAD = fx.people.find((p) => p.deptLeadOf.includes(fx.DEPT.sales))!;
+
+describe("approvals visibility", () => {
+  test("STATES: approving a batch from its sheet removes it from the queue", async () => {
+    const { api } = await renderAt("/approvals", { personId: SALES_LEAD.id });
+    fireEvent.click(screen.getByRole("button", { name: /Review the oldest/ }));
+    await settle();
+    const dialog = dialogEl();
+    expect(within(dialog).getByText(/Thanks for asking about a demo for Harbor Logistics/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: /Approve 6 items/ }));
+    await until(() => document.querySelector("[role=dialog]") === null, "sheet to close");
+    await until(() => document.querySelectorAll("[role=listitem]").length === 2, "queue to shrink");
+    expect(api.calls).toContain(`POST /v1/batches/${fx.batches[0]!.batchHash}/approve`);
+  });
+
+  test("STATES: someone who is not an approver sees count, workflow and state, no contents and no approve button", async () => {
+    // The owner works in Operations; the SDR batch's policy is runner_or_dept_lead, so the owner is not an approver.
+    await renderAt("/approvals");
+    const rows = screen.getAllByRole("listitem");
+    fireEvent.click(within(rows[0]!).getByRole("button", { name: "Open" }));
+    await settle();
+    const d = dialogEl();
+    expect(d.textContent).toContain("You are not an approver for this batch.");
+    expect(d.textContent).toContain("Follow up on demo requests");
+    expect(d.textContent).toContain("6 items");
+    expect(d.textContent).toContain("Waiting for approval");
+    expect(d.textContent).not.toMatch(/buyer1@|Thanks for asking|Subject/);
+    expect(within(d).queryByRole("button", { name: /Approve|Reject/ })).toBeNull();
+  });
+
+  test("STATES: the owner approves their own run, the oldest one they may approve", async () => {
+    const { api } = await renderAt("/approvals");
+    fireEvent.click(screen.getByRole("button", { name: /Review the oldest/ }));
+    await settle();
+    const d = dialogEl();
+    expect(d.textContent).toContain("Shipments this week");
+    fireEvent.click(within(d).getByRole("button", { name: /Approve 1 item/ }));
+    await until(() => document.querySelector("[role=dialog]") === null, "sheet to close");
+    expect(api.calls).toContain(`POST /v1/batches/${fx.batches[2]!.batchHash}/approve`);
+  });
+
+  test("STATES: the API hides item fields from non-approvers and refuses their approval", async () => {
+    const { createMockClient } = await import("../src/api/mock/server.ts");
+    const owner = createMockClient();
+    const sdr = fx.batches[0]!;
+    const seen = await owner.get<Batch>(`/v1/batches/${sdr.batchHash}`);
+    expect(seen.items.length).toBe(6);
+    expect(seen.items.every((i) => i.fields.length === 0)).toBe(true);
+    const listed = await owner.get<{ items: Batch[] }>("/v1/batches?state=pending");
+    expect(listed.items.find((b) => b.batchHash === sdr.batchHash)!.items.every((i) => i.fields.length === 0)).toBe(true);
+    expect(listed.items.find((b) => b.batchHash === fx.batches[2]!.batchHash)!.items[0]!.fields.length).toBeGreaterThan(0);
+    await expect(owner.post(`/v1/batches/${sdr.batchHash}/approve`, { batchHash: sdr.batchHash, itemKeys: null, edits: [] })).rejects.toMatchObject({ code: "forbidden", status: 403 });
+    await expect(owner.post(`/v1/batches/${sdr.batchHash}/reject`, { reason: "no" })).rejects.toMatchObject({ code: "forbidden" });
+    const lead = createMockClient({ personId: SALES_LEAD.id });
+    expect((await lead.get<Batch>(`/v1/batches/${sdr.batchHash}`)).items[0]!.fields.length).toBeGreaterThan(0);
+    // AP batches need the Finance lead (policy dept_lead); the Sales lead is not one.
+    expect((await lead.get<Batch>(`/v1/batches/${fx.batches[1]!.batchHash}`)).items[0]!.fields).toEqual([]);
+  });
+});
+
+describe("flows", () => {
+
+  test("STATES: a kill switch turns approval into plain words", async () => {
+    const { api } = await renderAt("/approvals", { personId: SALES_LEAD.id });
+    await act(async () => {
+      await api.post("/v1/kill-switches", { scope: "tenant", targetId: null, reason: "Audit week" });
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Review the oldest/ }));
+    await settle();
+    fireEvent.click(within(dialogEl()).getByRole("button", { name: /Approve/ }));
+    await until(() => dialogEl().querySelector("[role=alert]")?.textContent === ERROR_WORDS.kill_switch_active, "kill switch words");
+  });
+
+  test("STATES: promoting a proposal keeps the personal LinkedIn step off and becomes a role workflow", async () => {
+    const { api } = await renderAt(`/workflows/${fx.WF[309]}`);
+    fireEvent.keyDown(window, { key: "p" });
+    await settle();
+    const dialog = dialogEl();
+    expect(dialog.textContent).toContain("A personal LinkedIn can never be automated");
+    fireEvent.click(within(dialog).getByRole("button", { name: /Promote as a new version/ }));
+    expect(within(dialog).getByRole("alert").textContent).toContain("Choose the job role");
+    fireEvent.change(within(dialog).getByLabelText("Job role"), { target: { value: fx.JR.sdr } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Promote as a new version/ }));
+    await until(() => document.querySelector("[role=dialog]") === null, "sheet to close");
+    await settle();
+    expect(main().textContent).toContain("Role workflow");
+    expect(api.calls).toContain(`POST /v1/workflows/${fx.WF[309]}/promote`);
+  });
+
+  test("STATES: assigning a hand-over to a role identity closes the open task", async () => {
+    await renderAt("/offboarding");
+    fireEvent.click(screen.getByRole("button", { name: /Assign the next hand-over/ }));
+    await settle();
+    const dialog = dialogEl();
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Assign/ }));
+    expect(within(dialog).getByRole("alert").textContent).toContain("Choose a successor");
+    fireEvent.click(within(dialog).getByLabelText(/Sales team/));
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Assign/ }));
+    await until(() => document.querySelector("[role=dialog]") === null, "sheet to close");
+  });
+
+  test("STATES: enabling a sensitive feature needs a complete DPIA attestation and respects jurisdiction rules", () => {
+    const ok: EnableForm = {
+      jurisdictions: ["CA-ON"], legalBasis: "legitimate_interest", completedOn: "2026-10-20", documentName: "DPIA.pdf",
+      documentHash: "ab".repeat(32), signerName: "Pia Roy", signerTitle: "Owner", noticeVersionId: uuid(703),
+      noticePeriodDays: "0", worksName: "", worksHash: "", quebecAck: false, attest: true,
+    };
+    expect(validateEnable(ok)).toEqual({});
+    expect(validateEnable({ ...ok, jurisdictions: ["US-NY"] }).noticePeriodDays).toContain("at least 1 day");
+    expect(validateEnable({ ...ok, jurisdictions: ["DE"], noticePeriodDays: "14" }).worksName).toContain("works agreement");
+    expect(validateEnable({ ...ok, jurisdictions: ["CA-QC"] }).quebecAck).toContain("8.1");
+    expect(validateEnable({ ...ok, documentHash: "nope" }).documentHash).toBeTruthy();
+    expect(validateEnable({ ...ok, attest: false }).attest).toBeTruthy();
+    const body = toEnableRequest("per_person_views", ok);
+    expect(check(findRoute("POST", "/v1/compliance/features/per_person_views/enable")!.route.request!, body)).toBeNull();
+  });
+
+  test("STATES: only the owner can turn a sensitive feature on", async () => {
+    await renderAt("/compliance", { role: "admin" });
+    for (const b of screen.getAllByRole("button", { name: /Turn on/ })) expect((b as HTMLButtonElement).disabled).toBe(true);
+    expect(main().textContent).toContain("Only the owner can turn a sensitive feature on.");
+  });
+
+  test("STATES: an owner's enablement is scheduled after the notice period, not on at once", async () => {
+    await renderAt("/compliance");
+    fireEvent.click(screen.getAllByRole("button", { name: /Turn on/ })[0]!);
+    await settle();
+    const d = dialogEl();
+    fireEvent.click(within(d).getByLabelText("CA-ON"));
+    fireEvent.change(within(d).getByLabelText("DPIA completed on"), { target: { value: "2026-10-20" } });
+    fireEvent.change(within(d).getByLabelText("DPIA document"), { target: { value: "DPIA.pdf" } });
+    fireEvent.change(within(d).getByLabelText(/Document SHA-256/), { target: { value: "cd".repeat(32) } });
+    fireEvent.change(within(d).getByLabelText("Signed by"), { target: { value: "Pia Roy" } });
+    fireEvent.change(within(d).getByLabelText("Title"), { target: { value: "Owner" } });
+    fireEvent.click(within(d).getByLabelText(/I attest/));
+    fireEvent.click(within(d).getByRole("button", { name: /Turn on after the notice period/ }));
+    await until(() => document.querySelector("[role=dialog]") === null, "sheet to close");
+    await settle();
+    expect(main().textContent).toMatch(/Starts .* after a 14-day notice period/);
+  });
+
+  test("STATES: verifying the audit chain reports it intact", async () => {
+    await renderAt("/compliance");
+    fireEvent.click(screen.getByRole("button", { name: "Verify chain" }));
+    await until(() => main().textContent!.includes("Chain intact"), "chain result");
+  });
+});

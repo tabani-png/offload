@@ -13,7 +13,9 @@ Decisions: ADR 0101-0110. Implemented by `control/`; the permission matrix below
   403 forbidden / feature_disabled / consent_missing, 404 not_found (also for resources outside your scope: we do not
   reveal existence), 409 conflict / forbidden_binding / hash_mismatch / token_used / kill_switch_active,
   422 group_floor, 429 rate_limited (with `Retry-After`), 500 server_error.
-- Lists: `?cursor=&limit=` (limit 1..200, default 50), response includes `page.nextCursor`.
+- Lists: `?cursor=&limit=` (limit 1..200, default 50; outside that range is `400 validation_failed`). Every endpoint
+  written `→ x[]` below answers `{ "items": x[], "page": common#/$defs/page }`; `page.nextCursor` is opaque and `null`
+  on the last page. (Decided 2026-10-25 with S2-04.)
 - Tenant comes only from the credential. No endpoint takes a tenant id from the client.
 - Every mutation and every per-person read writes an `audit-event` in the same transaction (ADR 0108 §5).
 - Idempotency: mutations accept `Idempotency-Key` (ULID); repeats within 24 h return the first response.
@@ -130,7 +132,7 @@ Owner/admin do not approve other people's batches unless the role policy names t
 |---|---|---|---|---|---|---|---|
 | GET /v1/metrics/hours-saved?scope=company\|department:<id>\|job_role:<id>&from=&to= | → hours-saved-report | T | T | Dp | - | T | - |
 | GET /v1/metrics/hours-saved?scope=person:<id> | → hours-saved-report | F:per_person_views | F:per_person_views | Dp + F:per_person_views | S (always) | - | - |
-| GET /v1/metrics/hours-saved/evidence?workflowId=&version=&from=&to= | → hours-saved-evidence (runs of people outside scope are counted, not listed) | T | T | Dp | S | T | - |
+| GET /v1/metrics/hours-saved/evidence?workflowId=&version=&from=&to= | → hours-saved-evidence (runs of people outside scope are counted, not listed; a workflow whose job role or department has fewer people than the group floor answers `422 group_floor`, except for the caller's own runs under S) | T | T | Dp | S | T | - |
 | GET /v1/metrics/adoption?scope= | → adoption-report | T | T | Dp | - | T | - |
 | GET /v1/metrics/working-time?scope=company\|department:<id> | → working-time-report | F:working_time | F:working_time | Dp + F:working_time | - | - | - |
 | GET /v1/metrics/working-time?scope=person:<id> | → working-time-report | F:working_time + F:per_person_views | same | same + Dp | S (when working_time is on for me) | - | - |
