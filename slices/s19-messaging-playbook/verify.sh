@@ -104,7 +104,7 @@ for f in $touched; do
   case "$f" in
     brain/src/playbook/*|brain/fixtures/playbook-personas.ts|brain/tests/s19-messaging-playbook/*|slices/s19-messaging-playbook/*) ;;
     brain/src/models/model.ts|brain/src/models/router.ts|brain/src/tone/draft.ts|brain/src/workflows/dryrun.ts|brain/src/workflows/runner.ts|brain/src/workflows/autorun.ts) ;;
-    brain/src/api/workflow-routes.ts|brain/src/api/types.ts|brain/API.md|plan/adr/0010-messaging-playbook.md|plan/stage-2/adr/0112-playbook-on-promotion.md) ;;
+    brain/src/api/workflow-routes.ts|brain/src/api/types.ts|brain/API.md|plan/adr/0011-messaging-playbook.md|plan/adr/0012-playbook-review-fixes.md|plan/stage-2/adr/0112-playbook-on-promotion.md) ;;
     *) fail "s19 commit touched out-of-scope $f";;
   esac
 done

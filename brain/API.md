@@ -406,7 +406,7 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
 - CLI: `draft` and `dry-run` take `--understanding v1|v2` (and the embedder flags); `draft` of a general insight uses
   the stub design model unless `--model real` is given.
 
-## s19: messaging playbook (additive, ADR 0010)
+## s19: messaging playbook (additive, ADR 0011)
 A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,
 the patterns behind it and what got replies, with nothing personal kept, so a successor or a cloud worker can keep the
 same message going in their own voice. The style card (`/tone`) stays the voice; the playbook is the message.
@@ -434,6 +434,11 @@ same message going in their own voice. The style card (`/tone`) stays the voice;
 - Promotion seam (S2-06): `playbookForPromotion(home, workflowId)` (brain/src/playbook/promote.ts) returns the
   re-checked playbook without `history`, `builtAt` and `warnings`, and `playbookHash` = sha256 of its JCS. The registry
   field is proposed in plan/stage-2/adr/0112-playbook-on-promotion.md (schemas/stage2 is unchanged).
+- Re-checks (ADR 0012): a build also writes `playbook-identity.json` (0600, salted hashes of the identity set, never
+  promoted). Notes and `playbookForPromotion` are checked against the tone pack, facts.md and that digest; with
+  neither the tone pack nor a digest they are 409 (rebuild the playbook). A failed model call never fails a build:
+  the message keeps its rule read, the wording keeps the code baseline, and `warnings` says so (at most 60 label calls
+  per build). A `playbook.json` that does not parse reads as `playbook: null`; a dry run adds a warning.
 
 ## Company sync (S2-02, ADR 0103)
 The brain's sync client (`src/sync/`) connects this Mac to the company control plane (`OFFLOAD_CONTROL_URL`, https;

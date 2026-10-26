@@ -6,7 +6,7 @@ feeds: [S2-06-registry (a promoted workflow carries its playbook; seam only, see
 parallel_safe: true
 human_gated: false
 verify: bash slices/s19-messaging-playbook/verify.sh
-paths_in_scope: [brain/src/playbook/**, brain/fixtures/playbook-personas.ts, brain/tests/s19-messaging-playbook/**, brain/src/models/model.ts (two roles + stub branches, additive), brain/src/models/router.ts (ROLE_ROUTES for the two roles, additive), brain/src/tone/draft.ts (optional playbook, additive), brain/src/workflows/dryrun.ts (playbook verdict per draft, additive), brain/src/workflows/runner.ts (pass the playbook to draftInTone, one line), brain/src/workflows/autorun.ts (pin playbook.json when it exists), brain/src/api/workflow-routes.ts (GET/POST /workflows/:id/playbook), brain/src/api/types.ts (DryRunInstanceDTO.playbook, additive), brain/API.md, plan/adr/0010-messaging-playbook.md, plan/stage-2/adr/0112-playbook-on-promotion.md (proposed amendment), slices/s19-messaging-playbook/**]
+paths_in_scope: [brain/src/playbook/**, brain/fixtures/playbook-personas.ts, brain/tests/s19-messaging-playbook/**, brain/src/models/model.ts (two roles + stub branches, additive), brain/src/models/router.ts (ROLE_ROUTES for the two roles, additive), brain/src/tone/draft.ts (optional playbook, additive), brain/src/workflows/dryrun.ts (playbook verdict per draft, additive), brain/src/workflows/runner.ts (pass the playbook to draftInTone, one line), brain/src/workflows/autorun.ts (pin playbook.json when it exists), brain/src/api/workflow-routes.ts (GET/POST /workflows/:id/playbook), brain/src/api/types.ts (DryRunInstanceDTO.playbook, additive), brain/API.md, plan/adr/0011-messaging-playbook.md, plan/adr/0012-playbook-review-fixes.md (review fixes), plan/stage-2/adr/0112-playbook-on-promotion.md (proposed amendment), slices/s19-messaging-playbook/**]
 paths_out_of_scope: [app/**, engine/**, packet/**, schemas/** (frozen: the registry field is proposed in ADR 0112, not added), control/**, web/**, brain/package.json + brain/bun.lock (no new deps), brain/fixtures/{gen,gen-domains,sent-mail}.ts (read only), brain/src/sync/** (S2-02, read only)]
 ---
 
@@ -23,7 +23,7 @@ Style card (s05) = how this person sounds. Playbook (s19) = what they are saying
 result. The drafter uses the playbook for the message and the CURRENT user's style card and examples for the voice.
 
 ADR 0005 (counts, shares, lengths and cadence are code), ADR 0006 (nothing here opens a gate), ADR 0007/0009 (models
-see masked text only, through the router) hold throughout. Decision record: plan/adr/0010-messaging-playbook.md.
+see masked text only, through the router) hold throughout. Decision record: plan/adr/0011-messaging-playbook.md, amended by plan/adr/0012-playbook-review-fixes.md.
 
 ## Design
 
