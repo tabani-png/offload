@@ -216,7 +216,7 @@ export function createBrain(opts: BrainOptions): Brain {
   if (opts.chain?.computer !== undefined) computer = { ...opts.chain.computer, sessions };
   else if (!simulated && env.OFFLOAD_COMPUTER_REAL === "1") {
     let api: MessagesApi | null = null;
-    computer = { driver: new OsaDriver(resolver.deps.runner, env), planner: new ClaudePlanner({ create: async (p) => (api ??= await anthropicMessages()).create(p) }, opts.chain?.pickModel ?? (router === undefined ? undefined : (route, ctx) => router.pickModel(route, ctx))), sessions };
+    computer = { driver: new OsaDriver(resolver.deps.runner, env), planner: new ClaudePlanner({ create: async (p) => (api ??= await anthropicMessages({ env })).create(p) }, opts.chain?.pickModel ?? (router === undefined ? undefined : (route, ctx) => router.pickModel(route, ctx))), sessions };
   }
   const targetOf = (id: string) => knownTarget(opts.home, id, now());
   const linker = new Linker({

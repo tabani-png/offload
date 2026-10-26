@@ -7,6 +7,7 @@
 // read tool (`read_ui`, the AX outline of the focused window) and one end tool (`done`).
 // The planner only proposes. Every action it proposes is classified and checked by the gate in executor.ts.
 import type Anthropic from "@anthropic-ai/sdk";
+import { anthropicOrigin, guardedFetch, resolveAnthropicKey, type KeyRunner } from "../../vision/claude.ts";
 import { UNTRUSTED_RULE, untrustedBlock } from "../../workflows/untrusted.ts";
 import type { ChainTarget } from "../targets.ts";
 import type { Screenshot } from "./driver.ts";
@@ -163,9 +164,14 @@ export class ScriptedPlanner implements Planner {
   }
 }
 
-/** The real client, created on first use (ANTHROPIC_API_KEY or the SDK's other credential sources). */
-export async function anthropicMessages(): Promise<MessagesApi> {
+/** The real client, created on first use. s29: the key comes from the shared resolver (ANTHROPIC_API_KEY, else the
+ * Keychain item named by OFFLOAD_ANTHROPIC_KEYCHAIN), the same one the router and the captioner use; it is held in
+ * memory only. Requests go only to api.anthropic.com (the captioner's host guard). No key = a plain refusal. */
+export async function anthropicMessages(o: { env?: Readonly<Record<string, string | undefined>>; run?: KeyRunner; fetch?: Parameters<typeof guardedFetch>[0]; baseURL?: string } = {}): Promise<MessagesApi> {
+  const k = resolveAnthropicKey(o.env ?? process.env, o.run);
+  if (k.key === null) throw new Error("computer use needs your Claude API key: add it in Offload's Settings");
+  const origin = anthropicOrigin(o.baseURL);
   const { default: AnthropicClient } = await import("@anthropic-ai/sdk");
-  const client = new AnthropicClient();
+  const client = new AnthropicClient({ apiKey: k.key, baseURL: origin, fetch: guardedFetch(o.fetch) as never });
   return { create: (p) => client.messages.create(p) };
 }
