@@ -72,9 +72,12 @@ registry port (e.g. `discardProposal`); continuity will call it once it exists.
 
 ## 7. Matrix gap: who can accept
 API.md gives `POST /v1/handovers/:id/accept` to the member column only (`S`). A successor whose access role is
-dept_lead or admin therefore cannot accept. Proposal: `S` for every person column. Not changed (permissions.ts is S2-01's).
+dept_lead or admin therefore cannot accept. Resolved (manager-approved cross-slice change, PR #16): `S` for every person
+column in API.md and permissions.ts; the route still answers 404 to anyone but the named successor.
 
 ## 8. For S2-08: person columns of the continuity tables
+Resolved in PR #16: registered in `PERSON_COLUMNS` (subject columns shown through the access log; the successor gets
+its own `handover.successor_named` event; actor columns listed with a reason). The table below is the original proposal.
 `SELFVIEW: the catalog scan ...` (already red on `integration-wave-b` for wave-B columns) also needs these rows in
 `PERSON_COLUMNS` (`control/src/modules/compliance/selfview.ts`):
 

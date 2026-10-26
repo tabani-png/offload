@@ -156,7 +156,7 @@ No endpoint sorts or ranks people. Person scope reads write `person.read` audit 
 | POST /v1/people/:id/offboard | offboarding-request → person (state leaving or frozen) | T | T | - | - | - | - |
 | GET /v1/handovers?state= | → handover[] | T | T | Dp | - | T | - |
 | POST /v1/handovers/:id/assign | `{successor, inFlight, inboxStep}` → handover (successor person must hold the job role and accept) | T | T | Dp | - | - | - |
-| POST /v1/handovers/:id/accept | successor accepts → handover | - | - | - | S (named successor) | - | - |
+| POST /v1/handovers/:id/accept | successor accepts → handover | S (named successor) | S (named successor) | S (named successor) | S (named successor) | - | - |
 | POST /v1/handovers/:id/close | → handover | T | T | Dp | - | - | - |
 
 ### Compliance
