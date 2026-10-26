@@ -162,8 +162,8 @@ struct S29ReviewReplaceTests {
   @Test("REPLACE: 'Save without checking' that the Keychain refuses keeps the old key and does not restart")
   func refusedUnverified() async {
     let store = ReviewStore(oldKey)
-    let v = GatedValidator(.unreachable("Offline.")
-    let c = ClaudeKeyController(store: store, validator: v))
+    let v = GatedValidator(.unreachable("Offline."))
+    let c = ClaudeKeyController(store: store, validator: v)
     var changes = 0
     c.onChange = { _ in changes += 1 }
     c.beginReplace()
