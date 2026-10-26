@@ -33,3 +33,7 @@ $$;
 -- The nightly retention job lists tenant ids under app.job (as S2-05's recompute does), then works tenant by tenant.
 CREATE POLICY compliance_retention_tenants ON tenants FOR SELECT
   USING (nullif(current_setting('app.job', true), '') = 'compliance_retention');
+
+-- A correction request's text is the employee's; only its state is ever updated.
+REVOKE UPDATE ON correction_requests FROM offload_app;
+GRANT UPDATE (state) ON correction_requests TO offload_app;
