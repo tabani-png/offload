@@ -3,7 +3,9 @@
 // mode (docs/store-contract.md "Plain mode"), then captions the kept frames with the LOCAL Ollama captioner.
 //
 //   bun run brain/tools/import-screenwatch.ts import  --src DIR --home DIR --work DIR [--days 7] [--max-per-day 250]
-//   bun run brain/tools/import-screenwatch.ts caption --home DIR --work DIR [--model qwen3-vl:2b-instruct] [--concurrency 2] [--retry-failed]
+//   bun run brain/tools/import-screenwatch.ts caption --home DIR --work DIR [--model qwen3-vl:2b-instruct|claude] [--concurrency N] [--max-usd 15] [--retry-failed]
+//   bun run brain/tools/import-screenwatch.ts regroup --home DIR --work DIR
+//   bun run brain/tools/import-screenwatch.ts stats   --work DIR [--home DIR] [--json]
 //
 // import: rows are deduped by epoch; activity runs = rows no more than 2 min apart (a longer gap is idle). Each run
 // opens with a focus event, each kept frame starts a new focus (so a span = one screen state), and the run ends
@@ -16,11 +18,26 @@
 // appended to <work>/notes-cache/<day>.jsonl first, so a crash resumes where it stopped; the plain fixture sidecar
 // <home>/frames/<day>.jsonl (understanding/frames.ts readFrameSidecars) is rewritten from the cache.
 // Screenshots are read in place and converted to a temporary JPEG under <work>/tmp that is deleted after the call.
+// v2 (s21):
+// - caption --model claude: the frames go to Claude through vision/claude.ts ClaudeCaptioner with the model router's
+//   "caption" route (Haiku), up to 8 at a time. The archive has no app, window or url, so CAPTION_ADDENDUM is appended
+//   to the shared system prompt (through the captioner's fetch hook, under its api.anthropic.com guard) to ask for the
+//   app or site seen, the specific object and a concrete verb. --max-usd (default 15) stops starting frames once the
+//   home's ledger plus the frames in flight would pass it; a fatal captioner error (key, model, request shape) or
+//   25 failures in a row also stop the run. All stops are clean: the cache keeps what is done and a rerun resumes.
+// - regroup: after captioning, consecutive kept frames in one activity run whose captioned task (frameKey: app part
+//   of the surface + verb + object) is the same are merged into one span, so an instance is a task occurrence, not a
+//   screenshot. It always starts from the import's original events (<work>/events-orig), so it can be rerun.
+// - stats: caption counts, the share of generic verbs (GENERIC_VERBS) and the caption cost from the home's ledger.
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OffloadEvent } from "../src/types.ts";
+import { ModelBackend, ModelRouter } from "../src/models/router.ts";
+import { StubModel } from "../src/models/model.ts";
+import { ClaudeCaptioner, type ClaudeOptions } from "../src/vision/claude.ts";
+import { CaptionerFatalError } from "../src/vision/ollama.ts";
 import type { Captioner, CaptionFields, FrameNote, FrameRef } from "../src/vision/types.ts";
 
 export interface Row {
@@ -376,8 +393,21 @@ export interface CaptionDeps {
   now?: () => number;
 }
 
-/** Captions every manifest frame without a cache line (or with a failed one when retryFailed), `concurrency` at a time. */
-export async function captionFrames(frames: readonly ManifestFrame[], cachePath: (day: string) => string, deps: CaptionDeps, opts: { concurrency: number; retryFailed: boolean; onDayProgress?: (day: string) => void }): Promise<{ done: number; failed: number; skipped: number }> {
+export interface CaptionRunOptions {
+  concurrency: number;
+  retryFailed: boolean;
+  onDayProgress?: (day: string) => void;
+  /** Checked before each frame starts: a reason stops the run (frames in flight finish and are cached). */
+  shouldStop?: (state: { inFlight: number; done: number; failed: number }) => string | null;
+  /** Stop after this many failures in a row (default 25). */
+  maxConsecutiveFailures?: number;
+}
+
+export const MAX_CONSECUTIVE_FAILURES = 25;
+
+/** Captions every manifest frame without a cache line (or with a failed one when retryFailed), `concurrency` at a time.
+ * `stopped` is the reason the run ended early (cost cap, fatal error, failures in a row), else null. */
+export async function captionFrames(frames: readonly ManifestFrame[], cachePath: (day: string) => string, deps: CaptionDeps, opts: CaptionRunOptions): Promise<{ done: number; failed: number; skipped: number; stopped: string | null }> {
   const now = deps.now ?? Date.now;
   const caches = new Map<string, Map<string, CacheLine>>();
   const cacheOf = (day: string) => {
@@ -396,12 +426,19 @@ export async function captionFrames(frames: readonly ManifestFrame[], cachePath:
   let next = 0;
   let done = 0;
   let failed = 0;
+  let inFlight = 0;
+  let streak = 0;
+  let stopped: string | null = null;
+  const maxStreak = opts.maxConsecutiveFailures ?? MAX_CONSECUTIVE_FAILURES;
   const t0 = now();
   const work = async () => {
     for (;;) {
+      if (stopped === null) stopped = opts.shouldStop?.({ inFlight, done, failed }) ?? null;
+      if (stopped !== null) return;
       const i = next++;
       const f = todo[i];
       if (f === undefined) return;
+      inFlight += 1;
       const start = now();
       let line: CacheLine;
       try {
@@ -410,16 +447,23 @@ export async function captionFrames(frames: readonly ManifestFrame[], cachePath:
         const fields = await deps.captioner.caption({ image, ref });
         line = { frameId: f.frameId, ok: true, note: deps.build(ref, deps.mask(fields), deps.captioner.id), ms: now() - start };
         done += 1;
+        streak = 0;
       } catch (err) {
         // The reason only (never note text): the captioner's errors carry status codes and timeouts.
-        line = { frameId: f.frameId, ok: false, error: (err instanceof Error ? err.message : String(err)).slice(0, 160), ms: now() - start };
+        const reason = (err instanceof Error ? err.message : String(err)).slice(0, 160);
+        line = { frameId: f.frameId, ok: false, error: reason, ms: now() - start };
         failed += 1;
+        streak += 1;
+        if (stopped === null && err instanceof CaptionerFatalError) stopped = `captioner cannot continue: ${reason}`;
+        else if (stopped === null && streak >= maxStreak) stopped = `${streak} frames failed in a row (last: ${reason})`;
+      } finally {
+        inFlight -= 1;
       }
       mkdirSync(join(cachePath(f.day), ".."), { recursive: true, mode: 0o700 });
       appendFileSync(cachePath(f.day), JSON.stringify(line) + "\n", { mode: 0o600 });
       cacheOf(f.day).set(f.frameId, line);
       const n = done + failed;
-      if (n % 10 === 0 || n === todo.length) {
+      if (n % 10 === 0 || n === todo.length || stopped !== null) {
         const rate = (now() - t0) / n;
         deps.log(`captioned ${n}/${todo.length} (ok ${done}, failed ${failed}, skipped ${skipped}) avg ${(rate / 1000).toFixed(1)} s/frame wall, eta ${((rate * (todo.length - n)) / 60000).toFixed(0)} min`);
         opts.onDayProgress?.(f.day);
@@ -427,7 +471,186 @@ export async function captionFrames(frames: readonly ManifestFrame[], cachePath:
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, opts.concurrency) }, work));
-  return { done, failed, skipped };
+  return { done, failed, skipped, stopped };
+}
+
+/** True when starting another frame could pass the cap: spent so far plus the frames in flight (and this one) at the
+ * average cost per frame. */
+export function costCapReached(s: { spentUsd: number; avgUsd: number; inFlight: number; maxUsd: number }): boolean {
+  return s.spentUsd + (s.inFlight + 1) * s.avgUsd >= s.maxUsd;
+}
+
+// ---------------------------------------------------------------- Claude captions (v2)
+
+/** Appended to the shared captioning prompt for this archive: the screenshot is the only signal. */
+export const CAPTION_ADDENDUM = `Extra rules for this recording. No app name, window title or web address is known for these screenshots, so the screenshot is the only signal:
+- surface: always name the specific app or web site you can see (from the window or tab title, the address bar, a logo, the menu bar or the page header), then the view. Write "unknown app" only when nothing on screen identifies it.
+- object: the specific kind of thing being worked on, as precise as the screen allows. Avoid vague nouns such as "document", "page", "screen" or "content" when something more precise is visible.
+- verb: a concrete action word for what is happening on screen, such as writing, editing, entering, typing, coding, prompting, running, searching, comparing, filtering, scheduling, messaging, calling, watching, scrolling, configuring, designing or approving. Text being typed in an editor, chat box or form is writing or entering; commands in a terminal are running; a meeting or call window is calling. Do not use "reviewing", "viewing", "looking", "checking" or "reading" unless the person is clearly only reading, with nothing being typed, selected, run or changed.
+- activity: start with the same verb in -ing form.`;
+
+type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+/** Inner HTTP layer for ClaudeCaptioner (it runs under the captioner's api.anthropic.com guard): appends `addendum`
+ * to the system prompt of a JSON request body. Any other request is passed through unchanged. */
+export function promptFetch(addendum: string, inner: FetchFn = (i, init) => fetch(i, init)): FetchFn {
+  return async (input, init) => {
+    if (init !== undefined && typeof init.body === "string") {
+      let body: { system?: unknown } | null = null;
+      try {
+        body = JSON.parse(init.body) as { system?: unknown };
+      } catch {
+        body = null;
+      }
+      if (body !== null && typeof body === "object") {
+        if (typeof body.system === "string") body.system = `${body.system}\n\n${addendum}`;
+        else if (Array.isArray(body.system)) body.system = [...body.system, { type: "text", text: addendum }];
+        return inner(input, { ...init, body: JSON.stringify(body) });
+      }
+    }
+    return inner(input, init);
+  };
+}
+
+/** The existing ClaudeCaptioner (router "caption" route, so Haiku and the router's prices) with CAPTION_ADDENDUM. */
+export function claudeCaptioner(opts: ClaudeOptions & { addendum?: string }): ClaudeCaptioner {
+  const { addendum, ...rest } = opts;
+  return new ClaudeCaptioner({ ...rest, fetch: promptFetch(addendum ?? CAPTION_ADDENDUM, rest.fetch) });
+}
+
+// ---------------------------------------------------------------- regrouping (v2)
+
+const norm = (s: string | undefined) => (s ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
+
+/** The captioned task of a frame: the app part of the surface ("App - view" -> "app"), the verb and the object,
+ * normalised. null when there is no note (a failed caption) or nothing to compare. */
+export function frameKey(note: Pick<CaptionFields, "surface" | "verb" | "object"> | undefined): string | null {
+  if (note === undefined) return null;
+  const app = norm((note.surface ?? "").split(/\s+[-\u2013\u2014|:>\u00b7\u2022\/]\s+/)[0]);
+  const verb = norm(note.verb);
+  const object = norm(note.object);
+  if (app === "" && verb === "" && object === "") return null;
+  return `${app}|${verb}|${object}`;
+}
+
+/**
+ * Merges spans: a focus event that opens a kept frame is dropped when the frame's key equals the key of the span
+ * before it in the same activity run, and the first frame of a run joins the run's opening span (which had no frame).
+ * A run opens with the day's first focus or a focus at an idle_end. Frames with a null key never merge.
+ */
+export function regroupEvents(events: readonly OffloadEvent[], keys: ReadonlyMap<number, string | null>): OffloadEvent[] {
+  const sorted = [...events].sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1));
+  const runStarts = new Set(sorted.filter((e) => e.kind === "idle_end").map((e) => e.ts));
+  const firstFocus = sorted.find((e) => e.kind === "focus");
+  if (firstFocus !== undefined) runStarts.add(firstFocus.ts);
+  const START = Symbol("run start");
+  let last: string | null | typeof START = START;
+  const out: OffloadEvent[] = [];
+  for (const e of sorted) {
+    if (e.kind !== "focus") {
+      out.push(e);
+      continue;
+    }
+    if (runStarts.has(e.ts)) {
+      out.push(e);
+      last = keys.has(e.ts) ? keys.get(e.ts)! : START;
+      continue;
+    }
+    if (!keys.has(e.ts)) {
+      out.push(e);
+      last = null;
+      continue;
+    }
+    const k = keys.get(e.ts)!;
+    if (last === START || (k !== null && k === last)) {
+      if (last === START) last = k;
+      continue;
+    }
+    out.push(e);
+    last = k;
+  }
+  return out;
+}
+
+export interface DayRegroup {
+  day: string;
+  spansBefore: number;
+  spansAfter: number;
+}
+
+const readJsonl = <T>(path: string): T[] =>
+  existsSync(path)
+    ? readFileSync(path, "utf8")
+        .split("\n")
+        .filter((l) => l.trim() !== "")
+        .map((l) => JSON.parse(l) as T)
+    : [];
+
+/** Regroups one day in place from the original import events (kept once in <work>/events-orig/<day>.jsonl). */
+export function regroupDay(home: string, work: string, day: string): DayRegroup {
+  const live = join(home, "days", `${day}.jsonl`);
+  const origDir = join(work, "events-orig");
+  const orig = join(origDir, `${day}.jsonl`);
+  if (!existsSync(orig)) {
+    mkdirSync(origDir, { recursive: true, mode: 0o700 });
+    writeFileSync(orig, readFileSync(live, "utf8"), { mode: 0o600 });
+  }
+  const events = readJsonl<OffloadEvent>(orig);
+  const manifest = readJsonl<ManifestFrame>(join(work, "manifest", `${day}.jsonl`));
+  const cache = readCache(join(work, "notes-cache", `${day}.jsonl`));
+  const keys = new Map<number, string | null>();
+  for (const m of manifest) {
+    const c = cache.get(m.frameId);
+    keys.set(m.ts, c !== undefined && c.ok ? frameKey(c.note) : null);
+  }
+  const out = regroupEvents(events, keys);
+  writeFileSync(live, out.map((e) => JSON.stringify(e)).join("\n") + "\n", { mode: 0o600 });
+  const focus = (l: readonly OffloadEvent[]) => l.filter((e) => e.kind === "focus").length;
+  return { day, spansBefore: focus(events), spansAfter: focus(out) };
+}
+
+// ---------------------------------------------------------------- stats (v2)
+
+/** Verbs that say "looking at the screen" without saying what work is done (-ing forms; base forms match too). */
+export const GENERIC_VERBS = ["reviewing", "viewing", "reading", "looking", "checking", "examining", "monitoring", "observing"] as const;
+const stem = (v: string) => v.replace(/ing$/, "").replace(/e$/, "");
+const GENERIC_STEMS = new Set(GENERIC_VERBS.map(stem));
+
+export interface CaptionStats {
+  frames: number;
+  ok: number;
+  failed: number;
+  /** Notes whose verb (else the activity's first word) is generic. */
+  generic: number;
+  genericShare: number;
+  /** Notes whose verb is review / reviewing. */
+  reviewing: number;
+  topVerbs: Array<[string, number]>;
+  errors: Array<[string, number]>;
+}
+
+export function captionStats(lines: Iterable<CacheLine>): CaptionStats {
+  let frames = 0;
+  let ok = 0;
+  let generic = 0;
+  let reviewing = 0;
+  const verbs = new Map<string, number>();
+  const errors = new Map<string, number>();
+  for (const c of lines) {
+    frames += 1;
+    if (!c.ok) {
+      const e = c.error.replace(/\d+(\.\d+)?\s*(ms|s)\b/g, "N").slice(0, 80);
+      errors.set(e, (errors.get(e) ?? 0) + 1);
+      continue;
+    }
+    ok += 1;
+    const v = norm(c.note.verb) || norm(c.note.activity).split(" ")[0] || "";
+    verbs.set(v, (verbs.get(v) ?? 0) + 1);
+    if (GENERIC_STEMS.has(stem(v))) generic += 1;
+    if (stem(v) === "review") reviewing += 1;
+  }
+  const top = (m: Map<string, number>) => [...m.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+  return { frames, ok, failed: frames - ok, generic, genericShare: ok === 0 ? 0 : Math.round((generic / ok) * 1000) / 1000, reviewing, topVerbs: top(verbs).slice(0, 25), errors: top(errors).slice(0, 10) };
 }
 
 /** webp -> JPEG (quality 60, long edge <= 1280, like the observer's keyframes) through sips, in a temp file. */
@@ -482,10 +705,16 @@ async function main(argv: readonly string[]): Promise<number> {
     const home = flag(args, "--home");
     const work = flag(args, "--work");
     const model = flag(args, "--model", "qwen3-vl:2b-instruct");
-    const concurrency = Math.min(2, Math.max(1, Number(flag(args, "--concurrency", "2"))));
+    const useClaude = model === "claude";
+    const maxUsd = Number(flag(args, "--max-usd", "15"));
+    if (!Number.isFinite(maxUsd) || maxUsd <= 0) throw new Error("--max-usd needs a positive number");
+    const concurrency = Math.min(useClaude ? 8 : 2, Math.max(1, Number(flag(args, "--concurrency", useClaude ? "8" : "2"))));
     const { OllamaCaptioner } = await import("../src/vision/ollama.ts");
     const { maskFields, buildNote } = await import("../src/vision/notes.ts");
-    const captioner = new OllamaCaptioner({ model, timeoutMs: 180_000 });
+    // Claude: the router's caption route (Haiku) prices every frame into <home>/model-usage.json; no monthly cap
+    // there, the run's own --max-usd applies.
+    const router = useClaude ? new ModelRouter({ home, backend: new ModelBackend("stub", new StubModel()), monthlyBudgetUsd: null }) : null;
+    const captioner: Captioner = router !== null ? claudeCaptioner({ router, timeoutMs: 90_000, maxRetries: 3 }) : new OllamaCaptioner({ model, timeoutMs: 180_000 });
     const h = await captioner.health();
     if (!h.ok) throw new Error(`captioner not ready: ${h.detail}`);
     const mdir = join(work, "manifest");
@@ -496,20 +725,53 @@ async function main(argv: readonly string[]): Promise<number> {
     const cachePath = (day: string) => join(work, "notes-cache", `${day}.jsonl`);
     const logPath = join(work, "caption.log");
     const log = (s: string) => {
-      const line = `${new Date().toISOString()} ${s}`;
+      const line = `${new Date().toISOString()} ${s}${router !== null ? ` [spent $${router.spentUsd().toFixed(4)}]` : ""}`;
       appendFileSync(logPath, line + "\n");
       console.error(line);
     };
     const t0 = Date.now();
-    log(`start: ${frames.length} frames, model ${captioner.id}, concurrency ${concurrency}`);
+    log(`start: ${frames.length} frames, model ${captioner.id}, concurrency ${concurrency}${router !== null ? `, cap $${maxUsd}` : ""}`);
+    const shouldStop =
+      router === null
+        ? undefined
+        : ({ inFlight }: { inFlight: number }) => {
+            const u = captioner.usage?.();
+            const avgUsd = u !== undefined && u.frames > 0 ? (u.costUsd ?? 0) / u.frames : 0.001;
+            const spentUsd = router.spentUsd();
+            return costCapReached({ spentUsd, avgUsd, inFlight, maxUsd }) ? `cost cap $${maxUsd} reached ($${spentUsd.toFixed(4)} spent)` : null;
+          };
     const sync = (day: string) => writeSidecar(home, day, readCache(cachePath(day)));
-    const r = await captionFrames(frames, cachePath, { captioner, load: sipsJpeg(join(work, "tmp")), mask: maskFields, build: buildNote, log }, { concurrency, retryFailed: args.includes("--retry-failed"), onDayProgress: sync });
+    const r = await captionFrames(frames, cachePath, { captioner, load: sipsJpeg(join(work, "tmp")), mask: maskFields, build: buildNote, log }, { concurrency, retryFailed: args.includes("--retry-failed"), onDayProgress: sync, ...(shouldStop === undefined ? {} : { shouldStop }) });
     const days = [...new Set(frames.map((f) => f.day))];
     for (const d of days) log(`sidecar ${d}: ${sync(d)} notes`);
-    log(`done: ok ${r.done}, failed ${r.failed}, skipped (cached) ${r.skipped}, wall ${((Date.now() - t0) / 60000).toFixed(1)} min`);
+    const u = captioner.usage?.();
+    log(`done: ok ${r.done}, failed ${r.failed}, skipped (cached) ${r.skipped}, wall ${((Date.now() - t0) / 60000).toFixed(1)} min${u !== undefined ? `, tokens in ${u.inputTokens} out ${u.outputTokens}, refusals ${u.refusals}, this run $${(u.costUsd ?? 0).toFixed(4)}` : ""}${r.stopped !== null ? `; STOPPED: ${r.stopped}` : ""}`);
+    return r.stopped !== null ? 3 : 0;
+  }
+  if (cmd === "regroup") {
+    const home = flag(args, "--home");
+    const work = flag(args, "--work");
+    const days = readdirSync(join(work, "manifest")).filter((n) => n.endsWith(".jsonl")).map((n) => n.slice(0, -6)).filter((d) => DAY_DIR_RE.test(d)).sort();
+    const out = days.map((d) => regroupDay(home, work, d));
+    for (const r of out) console.error(`${r.day}: spans ${r.spansBefore} -> ${r.spansAfter}`);
+    const before = out.reduce((n, r) => n + r.spansBefore, 0);
+    const after = out.reduce((n, r) => n + r.spansAfter, 0);
+    console.error(`total: spans ${before} -> ${after}`);
+    writeFileSync(join(work, "regroup-report.json"), JSON.stringify({ before, after, days: out }, null, 2) + "\n");
     return 0;
   }
-  console.error("usage: import-screenwatch.ts import --src DIR --home DIR --work DIR [--days 7] [--max-per-day 250] | caption --home DIR --work DIR [--model TAG] [--concurrency 1|2] [--retry-failed]");
+  if (cmd === "stats") {
+    const work = flag(args, "--work");
+    const home = flag(args, "--home", "");
+    const dir = join(work, "notes-cache");
+    const lines = readdirSync(dir).filter((n) => n.endsWith(".jsonl")).sort().flatMap((n) => [...readCache(join(dir, n)).values()]);
+    const s = captionStats(lines);
+    let cost: unknown = null;
+    if (home !== "" && existsSync(join(home, "model-usage.json"))) cost = (JSON.parse(readFileSync(join(home, "model-usage.json"), "utf8")) as { routes?: Record<string, unknown> }).routes?.caption ?? null;
+    console.log(JSON.stringify({ ...s, captionCost: cost }, null, args.includes("--json") ? 0 : 2));
+    return 0;
+  }
+  console.error("usage: import-screenwatch.ts import --src DIR --home DIR --work DIR [--days 7] [--max-per-day 250] | caption --home DIR --work DIR [--model TAG|claude] [--concurrency N (local 1-2, claude 1-8)] [--max-usd 15] [--retry-failed] | regroup --home DIR --work DIR | stats --work DIR [--home DIR] [--json]");
   return 2;
 }
 
