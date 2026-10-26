@@ -17,15 +17,14 @@ const OUTCOME = {
 export const canStopAll = (me: Person | undefined) => me?.accessRole === "owner" || me?.accessRole === "admin";
 
 /**
- * Who may clear the tenant stop (API.md "Clearing a kill switch"): an owner always; an admin unless an owner set it.
- * The setter's role comes from the directory; when it cannot be read the button is not offered (the server decides).
+ * Who is offered "Clear the stop" (API.md "Clearing a kill switch"): owners and admins. An admin may not clear a
+ * stop an owner set, but the server decides on the role recorded when the stop was set, which the kill-switch DTO
+ * (frozen schema) does not carry; a person's current role may differ. So admins are offered the action and a
+ * refusal is explained in plain words (CLEAR_REFUSED_WORDS), never guessed from the directory.
  */
-export function canClearStopAll(me: Person | undefined, k: KillSwitch, people: Person[] | undefined) {
-  if (me?.accessRole === "owner") return true;
-  if (me?.accessRole !== "admin") return false;
-  const setter = people?.find((p) => p.id === k.setBy);
-  return setter !== undefined && setter.accessRole !== "owner";
-}
+export const canClearStopAll = (me: Person | undefined) => me?.accessRole === "owner" || me?.accessRole === "admin";
+
+export const CLEAR_REFUSED_WORDS = "An owner set this stop, so only an owner can clear it. Sending stays stopped.";
 
 export function DigestScreen() {
   const navigate = useNavigate();
@@ -40,9 +39,8 @@ export function DigestScreen() {
   const waiting = q.data?.waiting.length ?? 0;
   const tenantStop = switches.data?.find((k) => k.scope === "tenant" && k.active);
   const me = useSession().data?.person;
-  const people = useList<Person>(tenantStop && me?.accessRole === "admin" ? "/v1/people" : null);
   const [clearOpen, setClearOpen] = useState(false);
-  const canClear = tenantStop !== undefined && canClearStopAll(me, tenantStop, people.data);
+  const canClear = tenantStop !== undefined && canClearStopAll(me);
 
   return (
     <Page title="Morning digest" subtitle={q.data ? dayText(q.data.day) : undefined}
@@ -154,7 +152,9 @@ function ClearSheet(props: { open: boolean; onClose: () => void }) {
       footer={<Button primary type="submit" form="clear-form" disabled={m.isPending} keycap="↩">Clear now</Button>}>
       <form id="clear-form" className="stack" onSubmit={(e) => { e.preventDefault(); m.mutate(); }}>
         <p className="t-body ink2">Workflows may send again from their next step. Batches still need their approvals.</p>
-        {m.isError && <ErrorNote error={m.error} />}
+        {m.isError && (m.error instanceof ApiError && m.error.code === "forbidden"
+          ? <div className="error-note" role="alert"><span className="t-body ink1">{CLEAR_REFUSED_WORDS}</span></div>
+          : <ErrorNote error={m.error} />)}
       </form>
     </Sheet>
   );

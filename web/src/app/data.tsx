@@ -11,6 +11,8 @@ export interface AppDeps {
   api: ApiClient;
   /** Clock for "effective" checks and relative times. The mock passes its fixed day. */
   now: () => number;
+  /** Evidence run-list paging (page size, pages per load). Defaults 200 and 50; tests pass small values. */
+  evidencePaging?: { pageSize: number; maxPages: number };
 }
 
 const Deps = createContext<AppDeps | null>(null);

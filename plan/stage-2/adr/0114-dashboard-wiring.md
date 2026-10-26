@@ -57,6 +57,10 @@ Renumbered from 0113 (three ADRs held that number). Fitted to the merged S2-05, 
 10. **Expected refusals are calm.** Evidence `422 group_floor` (too few people ran it in scope, or its baseline comes
     from fewer than 5 senders) is a note, not an alert; `GET /v1/me/digest` answering 404 (no digest for the day) says
     so and leaves the kill-switch controls usable.
-11. **Kill-switch rights follow API.md.** "Stop all sending" is offered to owners and admins only. "Clear the stop" is
-    offered to an owner, or to an admin when the stop was not set by an owner (setter's role from the directory; when
-    unknown, not offered). The server stays the authority.
+11. **Kill-switch rights follow API.md.** "Stop all sending" and "Clear the stop" are offered to owners and admins.
+    The server decides a clear on the role recorded when the stop was set, which the frozen kill-switch DTO does not
+    carry (and a person's current role may differ), so the web does not guess: an admin's refused clear says "An
+    owner set this stop, so only an owner can clear it. Sending stays stopped."
+12. **A partial evidence list says so.** The run list loads up to 50 pages of 200; if `page.nextCursor` is still set
+    the screen says it shows the first N runs, labels its counts and hours as those runs' only, and offers "Load more
+    runs" from the cursor. Totals are never shown as the workflow's from a partial list (ADR 0005).
