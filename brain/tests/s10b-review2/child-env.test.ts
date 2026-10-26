@@ -8,7 +8,8 @@ import { observerStatus } from "../../src/api/observer-route.ts";
 import { modelQueryOptions } from "../../src/models/model.ts";
 import { observerChildEnv, runObserverSync } from "../../src/store/observer.ts";
 import { requestObserverPurge } from "../../src/store/reader.ts";
-import { executorEnv } from "../../src/workflows/executor.ts";
+// s27 round 13 scope change: SDK children get their env only from agentSdkAuth (models/agent-auth.ts).
+import { agentSdkAuth } from "../../src/models/agent-auth.ts";
 import { tempHome } from "../helpers.ts";
 
 const ALLOWED = ["HOME", "OFFLOAD_HOME", "OFFLOAD_KEYS", "PATH"];
@@ -68,20 +69,31 @@ describe("s10b N6: child environments", () => {
   });
 
   test("N6: the executor child gets no OFFLOAD_* setting and no connector secret", () => {
-    const env = executorEnv(process.env);
-    for (const k of Object.keys(env)) expect(k.startsWith("OFFLOAD_")).toBe(false);
-    expect(env.GMAIL_OAUTH_PATH).toBeUndefined();
-    expect(env.COMPOSIO_API_KEY).toBeUndefined();
-    expect(env.PATH).toBe(process.env.PATH!);
+    const auth = agentSdkAuth(process.env, () => {});
+    try {
+      const env = auth.env;
+      for (const k of Object.keys(env)) expect(k.startsWith("OFFLOAD_")).toBe(false);
+      expect(env.GMAIL_OAUTH_PATH).toBeUndefined();
+      expect(env.COMPOSIO_API_KEY).toBeUndefined();
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(env.PATH).toBe(process.env.PATH!);
+    } finally {
+      auth.cleanup();
+    }
   });
 
   test("N6: the model child gets the same allowlist and no tools", () => {
-    const o = modelQueryOptions({ role: "draft", model: "claude-opus-5-5", system: "s", prompt: "p" }, process.env);
-    const env = o.options.env as Record<string, string>;
-    expect(env.OFFLOAD_TOKEN).toBeUndefined();
-    expect(env.COMPOSIO_API_KEY).toBeUndefined();
-    expect(env).toEqual(executorEnv(process.env));
-    expect(o.options.tools).toEqual([]);
-    expect(o.options.mcpServers).toEqual({});
+    const auth = agentSdkAuth(process.env, () => {});
+    try {
+      const o = modelQueryOptions({ role: "draft", model: "claude-opus-5-5", system: "s", prompt: "p" }, auth);
+      const env = o.options.env as Record<string, string>;
+      expect(env.OFFLOAD_TOKEN).toBeUndefined();
+      expect(env.COMPOSIO_API_KEY).toBeUndefined();
+      expect(env).toEqual(auth.env);
+      expect(o.options.tools).toEqual([]);
+      expect(o.options.mcpServers).toEqual({});
+    } finally {
+      auth.cleanup();
+    }
   });
 });

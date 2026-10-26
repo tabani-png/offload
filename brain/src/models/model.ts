@@ -1,6 +1,6 @@
 // Every model call in the brain goes through `Model` so tests run offline and deterministic (StubModel).
 // ADR 0005: models name things and write drafts; they never produce a time or saving figure.
-import { executorEnv } from "../workflows/executor.ts";
+import { agentSdkAuth, type AgentSdkAuth } from "./agent-auth.ts";
 import { TIER_MODELS } from "./router.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -239,7 +239,7 @@ function stubStepDraft(prompt: string): string {
  */
 /** The exact query() arguments of a model call (exported so tests pin them without a network call). The child gets
  * executorEnv: no OFFLOAD_TOKEN, no OFFLOAD_* setting, no connector secret (REVIEW-1 L5, REVIEW-2 N6). */
-export function modelQueryOptions(req: ModelRequest, env: Readonly<Record<string, string | undefined>> = process.env) {
+export function modelQueryOptions(req: ModelRequest, auth: Pick<AgentSdkAuth, "env" | "settings">) {
   return {
     prompt: req.prompt,
     options: {
@@ -250,7 +250,9 @@ export function modelQueryOptions(req: ModelRequest, env: Readonly<Record<string
       settingSources: [] as [],
       strictMcpConfig: true,
       mcpServers: {},
-      env: executorEnv(env),
+      // s27 round 13: env and key helper only from agentSdkAuth (models/agent-auth.ts).
+      env: { ...auth.env },
+      ...(auth.settings === undefined ? {} : { settings: { ...auth.settings } }),
       maxTurns: 1,
       permissionMode: "default" as const,
       canUseTool: async () => ({ behavior: "deny" as const, message: "model calls have no tools" }),
@@ -259,13 +261,21 @@ export function modelQueryOptions(req: ModelRequest, env: Readonly<Record<string
 }
 
 export class AgentSdkModel implements Model {
+  constructor(private readonly o: { env?: Readonly<Record<string, string | undefined>>; log?: (line: string) => void } = {}) {}
+
   async complete(req: ModelRequest): Promise<string> {
-    const { query } = await import("@anthropic-ai/claude-agent-sdk");
-    const q = query(modelQueryOptions(req, process.env));
-    for await (const m of q) {
-      if (m.type !== "result") continue;
-      if (m.subtype === "success" && !m.is_error) return m.result.trim();
-      throw new Error(`model ${req.model} (${req.role}) failed: ${m.subtype}`);
+    // Signed in before anything starts (the one sign-in function); no key and no token is a plain refusal.
+    const auth = agentSdkAuth(this.o.env ?? process.env, this.o.log);
+    try {
+      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      const q = query(modelQueryOptions(req, auth));
+      for await (const m of q) {
+        if (m.type !== "result") continue;
+        if (m.subtype === "success" && !m.is_error) return m.result.trim();
+        throw new Error(`model ${req.model} (${req.role}) failed: ${m.subtype}`);
+      }
+    } finally {
+      auth.cleanup();
     }
     throw new Error(`model ${req.model} (${req.role}) returned no result`);
   }

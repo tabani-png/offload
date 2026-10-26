@@ -147,7 +147,16 @@ only saving was the typing.
     MCP answer reaches the parser from its text blocks (and embedded resources with text) as sent; when there are none,
     or they do not read as rows, its structuredContent is used, re-serialized, and the read says its number
     formatting comes from the connector software.
-20. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+20. **Round 13 (PR #35 review): one sign-in function for every Agent SDK caller.** `models/agent-auth.ts
+    agentSdkAuth` returns `{env, settings.apiKeyHelper?, cleanup}` (API key -> helper; OAuth only -> token in env +
+    one warning; neither -> NoClaudeKeyError, "add a key in Settings"). The workflow executor and AgentSdkModel (the
+    Claude Code model backend) both use it; `executorEnv` is gone: the pure allowlist is `models/child-env.ts
+    baseChildEnv`, which never decides sign-in (connector runners and the builder start from it; import-only changes in
+    connectors/link.ts and builder/sandbox.ts). The builder keeps its own sandboxed key path (builds/<run>/cred, no
+    secrets in its env by design); its OAuth-as-API-key mix-up is reported, not changed. Scope changes:
+    `tests/s10b-review2/child-env.test.ts` and `tests/s05b-privacy/privacy.test.ts` now read the child env from
+    agentSdkAuth / baseChildEnv (same assertions: no OFFLOAD_*, no connector secret, no key in the env).
+21. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)

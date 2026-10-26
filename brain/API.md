@@ -554,6 +554,8 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
     ("add a key in Settings"). Composio answers are parsed from the CLI's raw text.
   - Round 12: a configured direct read's fixed `map` values are sent and win on clashes; the learned query fills the
     rest. MCP answers with only structuredContent are read too (with a note on number formatting).
+  - Round 13: every Agent SDK child (workflow sends, model completions on the Claude Code backend) signs in through
+    one function: an API key via apiKeyHelper, else an OAuth token in its env (warned), else refused.
 
 ## s19: messaging playbook (additive, ADR 0011)
 A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,

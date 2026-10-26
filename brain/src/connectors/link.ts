@@ -11,7 +11,7 @@
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ConnectLinkDTO, ModelLabel } from "../api/types.ts";
-import { executorEnv } from "../workflows/executor.ts";
+import { baseChildEnv } from "../models/child-env.ts";
 import { CONNECTORS, connectorById, type Connector } from "./catalog.ts";
 import { isAppTargetId, isUniverseId } from "./targets.ts";
 import { knownSurfaceForTargetId } from "../understanding/surfaces.ts";
@@ -109,7 +109,7 @@ export class SpawnLinkRunner implements LinkRunner {
 
 /** The child's environment: the plain process basics only. Never OFFLOAD_TOKEN, a connector secret or a model login. */
 export function linkEnv(env: Env): Record<string, string> {
-  const base = executorEnv(env);
+  const base = baseChildEnv(env);
   const out: Record<string, string> = {};
   for (const k of ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"]) if (base[k] !== undefined) out[k] = base[k]!;
   return out;

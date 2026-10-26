@@ -14,7 +14,7 @@ import type { HookCallback, PermissionResult } from "@anthropic-ai/claude-agent-
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { executorEnv } from "../workflows/executor.ts";
+import { baseChildEnv } from "../models/child-env.ts";
 
 /** Built-in tools the builder gets. No WebFetch, WebSearch, Task or MCP. */
 export const BUILDER_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"] as const;
@@ -93,7 +93,7 @@ export const launchEnv = { read: readLaunchEnv };
 /** Env for the Claude Code subprocess: the executor's allowlist minus every credential, plus telemetry off. The key
  * reaches Claude Code through apiKeyHelper instead (runner.ts). */
 export function builderEnv(env: Readonly<Record<string, string | undefined>> = process.env): Record<string, string> {
-  const out = executorEnv(env);
+  const out = baseChildEnv(env);
   for (const k of CREDENTIAL_ENV) delete out[k];
   return { ...out, DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" };
 }
