@@ -10,7 +10,8 @@ import { join } from "node:path";
 import { generateNeutralWeek } from "../../fixtures/gen-neutral.ts";
 import { writeFixture, type FixtureDay } from "../../fixtures/gen.ts";
 import { createBrain, type Brain } from "../../src/api/server.ts";
-import { result, stubProbes, type MethodProbe } from "../../src/connectors/chain.ts";
+import { ApiProbe } from "../../src/connectors/api.ts";
+import { result, stubProbes, type FetchLike, type MethodProbe } from "../../src/connectors/chain.ts";
 import { ScriptedPlanner, type ComputerTask } from "../../src/connectors/computer/claude.ts";
 import { StubDriver, type MouseButton, type StubElement } from "../../src/connectors/computer/driver.ts";
 import type { Method } from "../../src/connectors/link.ts";
@@ -256,6 +257,8 @@ export interface WorldOptions {
   composio?: ProbeMode;
   /** Readers to replace (the default computer reader is the real screen reader on the in-memory driver). */
   readers?: Partial<Record<Method, SourceReader>>;
+  /** Use the real direct-API probe (connectors.json `apis`) with this fake fetch; no network. */
+  apiFetch?: FetchLike;
 }
 
 export function world(o: WorldOptions = {}): World {
@@ -274,7 +277,12 @@ export function world(o: WorldOptions = {}): World {
     chain: {
       computer: { driver, planner },
       always: true,
-      probes: probesFor({ mcp: o.mcp ?? "ok", composio: o.composio ?? "ok" }),
+      probes: (() => {
+        const p = probesFor({ mcp: o.mcp ?? "ok", composio: o.composio ?? "ok" });
+        if (o.apiFetch !== undefined) p.set("api", new ApiProbe());
+        return p;
+      })(),
+      ...(o.apiFetch === undefined ? {} : { deps: { fetch: o.apiFetch } }),
       readers: { mcp: mcpReader, composio: composioReader, ...(o.readers ?? {}) },
     },
     log: () => {},
