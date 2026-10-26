@@ -43,7 +43,9 @@ struct S25LocateTests {
     let exists: (String) -> Bool = { $0 == "/r/brain/src/cli.ts" || $0 == "/other/brain/src/cli.ts" }
     let exec: (String) -> Bool = { $0 == "/u/.bun/bin/bun" }
     let up = BrainLaunch.locate(bundleURL: repoApp, environment: [:], userHome: "/u", exists: exists, isExecutable: exec)
-    #expect(up == BrainLocation(bun: URL(fileURLWithPath: "/u/.bun/bin/bun"), root: URL(fileURLWithPath: "/r"), bundled: false))
+    #expect(up?.bun.path == "/u/.bun/bin/bun")
+    #expect(up?.root.path == "/r")
+    #expect(up?.bundled == false)
     let env = BrainLaunch.locate(bundleURL: repoApp, environment: ["OFFLOAD_REPO": "/other"], userHome: "/u",
                                  exists: exists, isExecutable: exec)
     #expect(env?.root.path == "/other")
@@ -59,7 +61,9 @@ struct S25LocateTests {
     let exec: (String) -> Bool = { $0 == "/r/app/.build/Offload.app/Contents/Helpers/bun" || $0 == "/u/.bun/bin/bun" }
     let l = BrainLaunch.locate(bundleURL: repoApp, environment: ["OFFLOAD_BRAIN_SOURCE": "repo"], userHome: "/u",
                                exists: exists, isExecutable: exec)
-    #expect(l == BrainLocation(bun: URL(fileURLWithPath: "/u/.bun/bin/bun"), root: URL(fileURLWithPath: "/r"), bundled: false))
+    #expect(l?.bun.path == "/u/.bun/bin/bun")
+    #expect(l?.root.path == "/r")
+    #expect(l?.bundled == false)
   }
 
   @Test("STANDALONE: an installed app with no repo and no bun anywhere still finds its brain")

@@ -41,7 +41,7 @@ pinned="$(sed -n 's/^PINNED_BUN=\([0-9.]*\).*/\1/p' "$ROOT/app/build.sh" | head 
 [ -f "$R/brain/package.json" ] || fail "no brain/package.json in the bundle"
 [ -d "$R/schemas" ] || fail "no schemas/ in the bundle"
 [ -d "$R/brain/tests" ] && fail "brain tests were bundled"
-for d in typescript @types zod; do [ -e "$R/brain/node_modules/$d" ] && fail "devDependency $d bundled"; done
+for d in typescript @types bun-types; do [ -e "$R/brain/node_modules/$d" ] && fail "devDependency $d bundled"; done
 for d in @anthropic-ai/claude-agent-sdk @anthropic-ai/sdk @modelcontextprotocol/sdk; do
   [ -d "$R/brain/node_modules/$d" ] || fail "dependency $d missing from the bundle"
 done
@@ -72,6 +72,15 @@ g="$(cd "$T" && env -i HOME="$T/home" PATH="$STRIPPED_PATH" TMPDIR="$T/tmp" "$C/
   && echo "import graph resolves" || { echo "$g" | grep -iE "error|could not resolve" | head -10; fail "the bundled import graph does not resolve"; }
 rm -rf "$T/graph"
 
+echo "== SDKBIN (the Agent SDK's claude package path resolves to Helpers/claude inside the copy, and it runs)"
+arch="$(uname -m | sed 's/x86_64/x64/')"
+r="$(cd "$C/Contents/Resources/offload/brain" && env -i HOME="$T/home" PATH="$STRIPPED_PATH" TMPDIR="$T/tmp" \
+  "$C/Contents/Helpers/bun" -e "console.log(require('fs').realpathSync(require.resolve('@anthropic-ai/claude-agent-sdk-darwin-$arch/claude')))" 2>&1)"
+creal="$(cd "$C/Contents/Helpers" && pwd -P)/claude"
+[ "$r" = "$creal" ] && echo "SDK claude -> Helpers/claude" || fail "SDK claude resolves to '$r', not $creal"
+cv="$(env -i HOME="$T/home" PATH="$STRIPPED_PATH" TMPDIR="$T/tmp" "$C/Contents/Helpers/claude" --version 2>&1)" \
+  && echo "claude $cv" || fail "Helpers/claude --version failed: $cv"
+
 proof() {  # $1 label
   local out code
   env -i PATH="$STRIPPED_PATH" sh -c 'command -v bun' >/dev/null 2>&1 && fail "$1: bun is on the stripped PATH"
@@ -91,9 +100,14 @@ chmod -R u+w "$C"
 
 echo "== HARDENED (re-sign the copy: hardened runtime + app/brain.entitlements, ad hoc identity)"
 hs="$(OFFLOAD_SIGN_IDENTITY=- "$ROOT/app/build.sh" sign "$C" 2>&1)" || { echo "$hs" | tail -10; fail "build.sh sign exited non-zero"; }
-codesign -dv "$C/Contents/Helpers/bun" 2>&1 | grep -q "flags=0x1[0-9a-f]*(.*runtime" && echo "bun: hardened runtime" || fail "Helpers/bun is not signed with the hardened runtime"
-codesign -d --entitlements - "$C/Contents/Helpers/bun" 2>/dev/null | grep -q "com.apple.security.cs.allow-jit" && echo "bun: allow-jit entitlement" || fail "Helpers/bun lacks the allow-jit entitlement"
-codesign -dv "$C/Contents/MacOS/Offload" 2>&1 | grep -q "(.*runtime" && echo "app: hardened runtime" || fail "the app is not signed with the hardened runtime"
+# (captured first: grep -q closing the pipe early would make pipefail report SIGPIPE)
+sig_bun="$(codesign -dv "$C/Contents/Helpers/bun" 2>&1)"; ent_bun="$(codesign -d --entitlements - "$C/Contents/Helpers/bun" 2>/dev/null)"
+sig_app="$(codesign -dv "$C/Contents/MacOS/Offload" 2>&1)"
+echo "$sig_bun" | grep -qE "flags=0x[0-9a-f]+\([^)]*runtime" && echo "bun: hardened runtime" || fail "Helpers/bun is not signed with the hardened runtime"
+for e in allow-jit allow-unsigned-executable-memory; do
+  echo "$ent_bun" | grep -q "com.apple.security.cs.$e" && echo "bun: $e entitlement" || fail "Helpers/bun lacks the $e entitlement"
+done
+echo "$sig_app" | grep -qE "flags=0x[0-9a-f]+\([^)]*runtime" && echo "app: hardened runtime" || fail "the app is not signed with the hardened runtime"
 codesign --verify --strict --deep "$C" >/dev/null 2>&1 && echo "codesign verify ok (hardened)" || fail "codesign verify failed after hardened signing"
 chmod -R a-w "$C"
 proof HARDENED

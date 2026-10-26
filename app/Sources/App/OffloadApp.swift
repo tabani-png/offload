@@ -21,6 +21,12 @@ enum OffloadMain {
         exit(Snapshotter.run(into: URL(fileURLWithPath: args[i + 1], isDirectory: true), scale: scale))
       }
     }
+    // s25: start the brain the way the app does, answer GET /status, stop. Used by slices/s25-standalone-install.
+    if args.contains("--brain-check") {
+      let env = ProcessInfo.processInfo.environment
+      exit(BrainCheck.run(bundleURL: Bundle.main.bundleURL, environment: env,
+                          home: LaunchOptions.parse(arguments: args, environment: env).home))
+    }
     MainActor.assumeIsolated {
       let app = NSApplication.shared
       let delegate = AppDelegate()
@@ -35,7 +41,11 @@ enum OffloadMain {
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private let options = LaunchOptions.parse(arguments: CommandLine.arguments,
                                             environment: ProcessInfo.processInfo.environment)
-  private let repo = BrainLaunch.findRepo(bundleURL: Bundle.main.bundleURL, environment: ProcessInfo.processInfo.environment)
+  /// s25: the bundled brain first; the repo with an installed bun is a dev-only fallback.
+  private static let located = BrainLaunch.locate(bundleURL: Bundle.main.bundleURL, environment: ProcessInfo.processInfo.environment)
+  private let brain = AppDelegate.located
+  /// The folder that holds brain/src/cli.ts (the bundle's Resources/offload, or the repo in dev).
+  private let repo = AppDelegate.located?.root
   private let endpoint = BrainEndpointBox()
   private var supervisor: BrainSupervisor?
   private let token = BrainLaunch.newToken()
@@ -161,7 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   // MARK: brain + observer
 
   private func brainSpec(home: URL, demo: Bool = false) -> BrainLaunchSpec? {
-    guard let repo, let bun = BrainLaunch.findBun(environment: ProcessInfo.processInfo.environment) else { return nil }
+    guard let repo, let bun = brain?.bun else { return nil }
     let env = Self.environment(demo: demo || options.demo)
     try? FileManager.default.createDirectory(at: Self.brainLogFile.deletingLastPathComponent(), withIntermediateDirectories: true)
     return BrainLaunch.spec(bun: bun, repo: repo, home: home, token: token,
@@ -201,7 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// REVIEW-2: one `cli.ts purge` before serve, so expired days go even if serve never starts. Skipped when the
   /// brain has no purge command.
   private func purgeOnce(home: URL) {
-    guard let repo, let bun = BrainLaunch.findBun(environment: ProcessInfo.processInfo.environment),
+    guard let repo, let bun = brain?.bun,
           let args = BrainLaunch.purgeArguments(repo: repo, home: home) else { return }
     let p = Process()
     p.executableURL = bun
@@ -261,7 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     purgeOnce(home: home)
     guard let spec = brainSpec(home: home) else {
       endpoint.starting = false
-      NSLog("Offload: cannot start the brain (repo %@, bun not found or brain/src/cli.ts missing)", repo?.path ?? "none")
+      NSLog("Offload: cannot start the brain: no bundled brain in the app, and no repo with bun (dev fallback)")
       return
     }
     let s = BrainSupervisor(spec: spec, token: token, endpoint: endpoint, stderrLog: Self.brainLog) { [weak self] state in
@@ -421,8 +431,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   /// Seeds the fixture week into the demo home (never the real one) and points the brain at it.
   private func useDemoWeek() async -> String? {
-    guard let repo, let bun = BrainLaunch.findBun(environment: ProcessInfo.processInfo.environment) else {
-      return "The demo week needs the Offload source folder and bun. Run scripts/demo.sh instead."
+    guard let repo, let bun = brain?.bun else {
+      return "The demo week needs the brain, and it could not be found. Run scripts/demo.sh instead."
     }
     let appSupport = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
     let demo = DemoWeek.home(repo: repo, appSupport: appSupport)
