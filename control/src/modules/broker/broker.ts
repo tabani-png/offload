@@ -610,7 +610,11 @@ export function createBroker(deps: Deps): Broker {
   }
 
   async function policyChanged(tx: Tx, policyId: string, change: { narrowed: boolean; widened: boolean }): Promise<number> {
-    const n = change.narrowed ? await unlinkPolicy(tx, policyId, "policy changed") : 0;
+    // A widening edit restarts the dry-run nights (when the policy has any): what it approved before is not trusted
+    // through them either, so it goes back to a person like a narrowing edit's (Codex P1).
+    const [o] = await tx`select dry_run_nights from overnight_policies where id = ${policyId}`;
+    const restarts = change.widened && Number(o?.dry_run_nights ?? 0) > 0;
+    const n = change.narrowed || restarts ? await unlinkPolicy(tx, policyId, change.narrowed ? "policy changed" : "dry-run nights restarted") : 0;
     if (change.widened) {
       // Tonight already started under the old policy: the rest of it is a dry run, and it does not count.
       const night = nightOf(now(), await tenantTimezone(tx));
@@ -1043,6 +1047,16 @@ export function createBroker(deps: Deps): Broker {
         const pol = await overnightById(tx, tk.policy_id as string);
         if (pol?.state !== "active") {
           await unlinkPolicy(tx, tk.policy_id as string, `policy ${pol?.state ?? "gone"}`);
+          return { done: "waiting" as const };
+        }
+        // Nothing a policy approved goes out while it is in its dry-run nights, or on a night (tonight's or the one it
+        // was approved on) that is a dry run: the evaluator's decision is not the only guard (Codex P1).
+        const night = nightOf(now(), await tenantTimezone(tx));
+        const [dry] = await tx`select 1 from overnight_counters c where c.policy_id = ${pol.id} and c.dry_run
+          and (c.night = ${night}::date or c.night = (select i.policy_night from batch_items i where i.batch_hash = ${hash} and i.key = ${key}))
+          limit 1`;
+        if (pol.dryRunNightsDone < pol.dryRunNights || dry) {
+          await unlinkPolicy(tx, pol.id, "dry-run night");
           return { done: "waiting" as const };
         }
       }
