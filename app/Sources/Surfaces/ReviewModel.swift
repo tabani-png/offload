@@ -251,6 +251,11 @@ final class ReviewModel: ObservableObject {
       connectFirstMissing()
       return
     }
+    // s10f (M3): on a sample dry run the footer's primary is Run with my voice, on ⌘↩.
+    if key == .approve, case .reviewing = flow.phase, sheet == nil, dryRun?.isSample == true {
+      runWithVoice()
+      return
+    }
     // s10e (M8): in the review itself, while a step is blocked the footer's primary is Connect, on ⌘↩.
     if key == .approve, case .reviewing = flow.phase, sheet == nil, case .connect(let c) = ReviewPrimary.forWorkflow(workflow) {
       openConnect(c)
@@ -355,7 +360,14 @@ final class ReviewModel: ObservableObject {
     }
   }
 
-  private func rerun() {
+  /// s10f (M3): the sample run's primary. Runs the dry run again; if the brain still drafts with the offline sample
+  /// model, the bar says so instead of pretending the drafts are in your voice.
+  func runWithVoice() {
+    guard !runningDryRun else { return }
+    rerun(wantVoice: true)
+  }
+
+  private func rerun(wantVoice: Bool = false) {
     runningDryRun = true
     let id = workflow.id
     Task {
@@ -364,7 +376,7 @@ final class ReviewModel: ObservableObject {
         let d = try await client.dryRun(workflowId: id, limit: dryRunLimit)
         dryRun = d
         adoptBatchHash(from: d)
-        message = nil
+        message = wantVoice && d.isSample ? ReviewCopy.stillSample : nil
       } catch {
         message = ReviewMessages.dryRunFailed(error)
       }

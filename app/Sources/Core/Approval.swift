@@ -119,9 +119,12 @@ struct FirstRunPlan: Equatable, Sendable {
   /// Batch size, for when the brain has not picked the recipients yet.
   var batchSize: Int
 
-  /// "Send 8 emails to these recipients", or, before the brain has picked them, "Draft up to 8 emails".
+  /// s10f (DESIGN-REVIEW-4 M5): "First batch: 8 recipients (drafted, then held for you)", never "Send …" above a body
+  /// that says nothing sends. Before the brain has picked them, "Draft up to 8 emails".
   var headline: String {
-    sendCount > 0 ? "Send \(Self.emails(sendCount)) to these recipients" : "Draft up to \(Self.emails(batchSize))"
+    guard sendCount > 0 else { return "Draft up to \(Self.emails(batchSize))" }
+    let who = sendCount == 1 ? "1 recipient" : "\(sendCount) recipients"
+    return gated ? "First batch: \(who) (drafted, then held for you)" : "First batch: \(who)"
   }
 
   /// Said when the recipient list is still empty: who decides, and that you still see each one first.

@@ -117,7 +117,9 @@ export const understandingJudge = {
     }
     const external = writes.some((s) => TEMPLATED_REPLY_VERBS.has(s.verb) || s.verb === "write") && u.counterparts.length > 0;
     const risk = writes.length === 0 ? 0 : external ? 0.5 : 0.2;
-    if (writes.length > 0) reasons.push(external ? `replies to ${u.counterparts[0]}` : `writes to records in ${[...new Set(writes.map((s) => s.surface))].join(", ")}`);
+    // s22 bias audit: writing for someone (a post, a document) is not replying to them.
+    const replies = writes.some((s) => TEMPLATED_REPLY_VERBS.has(s.verb));
+    if (writes.length > 0) reasons.push(external ? `${replies ? "replies to" : "writes for"} ${u.counterparts[0]}` : `writes to records in ${[...new Set(writes.map((s) => s.surface))].join(", ")}`);
     const review = u.steps.filter((s) => REVIEW_VERBS.has(s.verb));
     if (review.length > 0) reasons.push(`a person still decides when they ${review[0]!.verb} the ${review[0]!.object}`);
     return { judgement: round2(clamp(j)), risk, reasons };

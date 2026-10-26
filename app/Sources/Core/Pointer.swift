@@ -228,7 +228,12 @@ enum PointerLabelPlacement {
   static let step: CGFloat = 2
 
   static func place(label size: CGSize, tip: CGPoint, arrow: CGSize, target: CGRect, obstacles: [CGRect],
-                    bounds: CGRect) -> Placement {
+                    bounds: CGRect, row: CGRect? = nil) -> Placement {
+    // s10f (DESIGN-REVIEW-4 P6): a target inside a table row puts its label below that row (above it when there is
+    // no room), never on the row, where it covered the row's other columns. Clamped inside the bounds.
+    if let row, !row.isNull, !row.isEmpty {
+      return placeOffRow(label: size, tip: tip, arrow: arrow, row: row, obstacles: obstacles, bounds: bounds)
+    }
     let arrowRect = CGRect(origin: tip, size: arrow)
     let blocked = [target, arrowRect] + obstacles.filter { !$0.isNull && !$0.isEmpty && !$0.contains(target) }
     let inner = bounds.insetBy(dx: inset, dy: inset)
@@ -284,5 +289,23 @@ enum PointerLabelPlacement {
     let fallback = CGRect(x: max(inner.minX, min(ax, inner.maxX - size.width)), y: busy.maxY + gap,
                           width: size.width, height: size.height)
     return Placement(rect: fallback, side: .below, collides: true)
+  }
+
+  private static func placeOffRow(label size: CGSize, tip: CGPoint, arrow: CGSize, row: CGRect, obstacles: [CGRect],
+                                  bounds: CGRect) -> Placement {
+    let inner = bounds.insetBy(dx: inset, dy: inset)
+    let busy = row.union(CGRect(origin: tip, size: arrow))
+    let x = max(inner.minX, min(tip.x + arrow.width * 0.5, inner.maxX - size.width))
+    let blocked = obstacles.filter { !$0.isNull && !$0.isEmpty && !row.contains($0) }
+    func hits(_ r: CGRect) -> Bool { blocked.contains { r.intersects($0.insetBy(dx: -gap, dy: -gap / 2)) } }
+    var candidates: [(CGRect, Side)] = []
+    var y = busy.maxY + gap
+    while y + size.height <= inner.maxY { candidates.append((CGRect(x: x, y: y, width: size.width, height: size.height), .below)); y += step }
+    y = row.minY - gap - size.height
+    while y >= inner.minY { candidates.append((CGRect(x: x, y: y, width: size.width, height: size.height), .above)); y -= step }
+    if let free = candidates.first(where: { !hits($0.0) }) { return Placement(rect: free.0, side: free.1, collides: false) }
+    if let any = candidates.first { return Placement(rect: any.0, side: any.1, collides: true) }
+    let r = CGRect(x: x, y: min(busy.maxY + gap, inner.maxY - size.height), width: size.width, height: size.height)
+    return Placement(rect: r, side: .below, collides: true)
   }
 }

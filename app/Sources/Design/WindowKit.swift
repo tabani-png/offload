@@ -142,6 +142,8 @@ struct DiffText: View {
   var marked = true
   /// s10d: the other side's words; a word it also uses is not marked.
   var other: Set<String>? = nil
+  /// s10f (M3): the segments are already contiguous spans (SentenceDiff); tint each changed run whole.
+  var spans = false
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
@@ -149,9 +151,9 @@ struct DiffText: View {
     var s = AttributedString()
     for seg in segments {
       // s10d: inside a changed run only the words that carry a claim are marked; "the", "our", "of" are not.
-      for token in seg.changed && marked ? DiffLite.tokens(seg.text) : [seg.text] {
+      for token in seg.changed && marked && !spans ? DiffLite.tokens(seg.text) : [seg.text] {
         var run = AttributedString(token)
-        let mark = seg.changed && marked && DiffEmphasis.marks(token, other: other)
+        let mark = seg.changed && marked && (spans || DiffEmphasis.marks(token, other: other))
         run.foregroundColor = mark ? p.ink1 : p.ink2
         // s10e (M2): a tint behind the changed claim words, never an underline (an underline reads as a link).
         if mark { run.backgroundColor = p.isDark ? Color.white.opacity(DiffTint.dark) : Color.black.opacity(DiffTint.light) }

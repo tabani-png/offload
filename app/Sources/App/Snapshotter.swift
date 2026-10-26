@@ -126,6 +126,14 @@ enum Snapshotter {
       _ = f.primary()
     }
     server.serverText = "https://mcp.linear.app/mcp"
+    // s10f: the run confirm before a command server is started.
+    let runConfirm = sheet("tk-linear") { f in
+      f.chooseNumber(3)
+      _ = f.primary()
+      f.serverText = "npx -y @linear/mcp-server"
+      _ = f.primary()
+    }
+    runConfirm.serverText = "npx -y @linear/mcp-server"
     let built = sheet("tk-linear") { f in
       f.signedIn()
       _ = f.primary()
@@ -134,10 +142,12 @@ enum Snapshotter {
     return [
       ("connections", scene(list(selected: "tk-linear"))),
       ("connections-search", scene(list("lin"))),
+      ("connections-search-tool", scene(list("invoice"))),
       ("connections-detail", scene(list(selected: "tk-linear", sheet: sheet("tk-linear")))),
       ("connections-key", scene(list(selected: "tk-linear", sheet: keyed))),
       ("connections-server", scene(list(selected: "tk-linear", sheet: server))),
       ("connections-built", scene(list(selected: "tk-linear", sheet: built))),
+      ("connections-run-confirm", scene(list(selected: "tk-linear", sheet: runConfirm))),
     ]
   }
 
@@ -318,7 +328,8 @@ enum Snapshotter {
                                          startedAt: reviewNow)
     let crm = MockBrainClient.dashboardAutomations.first { $0.state == .needsYou }!
     let rowTarget = DashboardModel.pointerTarget(for: crm)
-    let rowPointer = PointerRequest(targetId: rowTarget.id, originId: "lead.\(crm.id)", label: rowTarget.label, startedAt: reviewNow)
+    let rowPointer = PointerRequest(targetId: rowTarget.id, originId: "lead.\(crm.id)", label: rowTarget.label, startedAt: reviewNow,
+                                    rowId: "rowband.\(crm.id)")
     let holdAt = reviewNow.addingTimeInterval(1.4 + 1.5)
 
     func confirmScene(_ m: ReviewModel) -> AnyView {

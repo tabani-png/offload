@@ -303,7 +303,7 @@ struct S08PlanTests {
   @Test("says exactly how many emails go to whom, in order")
   func headline() {
     let p = FirstRunPlan(workflow: MockBrainClient.outreachWorkflow)
-    #expect(p.headline == "Send 8 emails to these recipients")
+    #expect(p.headline == "First batch: 8 recipients (drafted, then held for you)")
     #expect(p.recipients.map(\.email) == MockBrainClient.nextBatch.map(\.email))
     #expect(p.sendVia == "Gmail" && p.sendFrom == "muhammad@offload.so")
   }
@@ -313,7 +313,7 @@ struct S08PlanTests {
     var w = MockBrainClient.outreachWorkflow
     w.schedule.batchSize = 3
     let p = FirstRunPlan(workflow: w)
-    #expect(p.sendCount == 3 && p.headline == "Send 3 emails to these recipients")
+    #expect(p.sendCount == 3 && p.headline == "First batch: 3 recipients (drafted, then held for you)")
     #expect(FirstRunPlan.emails(1) == "1 email")
   }
 

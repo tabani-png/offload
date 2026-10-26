@@ -89,6 +89,9 @@ export interface Analysis {
   totalActiveMs: number;
   /** v2 only. */
   understanding?: UnderstandingInfo;
+  /** s22 (additive): tasks that repeat enough but the judge holds back (a person is at the keyboard, e.g. watching a
+   * coding agent). Not insights and not ranked; the solution designer still proposes setup or tool fixes for them. */
+  heldBack?: HeldBackTask[];
 }
 
 /** s20: what makes a task's saving low-confidence: its share, how many apps it spans, how much of it is only "looking". */
@@ -102,6 +105,8 @@ export function savingSignals(p: TaskProfile, share: number): SavingSignals {
   const readOnly = u.steps.length > 0 && u.steps.every((s) => stepClass(s) !== "text" && stepClass(s) !== "record");
   return { share, surfaces, genericShare: total === 0 ? 0 : generic / total, ...(readOnly ? { readOnly } : {}) };
 }
+
+export type HeldBackTask = Omit<Insight, "rank"> & { heldBack: { reason: string } };
 
 export const insightIdFor = (taskId: string) => `ins_${taskId.replace(/^t_/, "")}`;
 
@@ -137,12 +142,16 @@ export async function analyzeStore(store: StoreRead, opts: AnalyzeOptions = {}):
   }
 
   const candidates: Omit<Insight, "rank">[] = [];
+  const heldBack: HeldBackTask[] = [];
   for (const t of tasks) {
     const st = stats.get(t.id);
     if (st === undefined || st.instances.value < minInstances) continue;
     const verdict = await judge.judge({ profile: t.profile, sameness: st.sameness.value, ...(user === undefined ? {} : { user }) });
-    if (verdict.judgement >= maxJudgement) continue;
     const connectors = t.profile.understanding === undefined ? connectorsFor(t.profile) : connectorsForReach(t.profile.understanding.reach);
+    if (verdict.judgement >= maxJudgement) {
+      heldBack.push(heldBackTask(t, st, verdict, connectors, windowDays.length, opts.reviewSeconds));
+      continue;
+    }
     const factors: ScoreFactors = {
       volume: st.share.value,
       sameness: st.sameness.value,
@@ -174,7 +183,17 @@ export async function analyzeStore(store: StoreRead, opts: AnalyzeOptions = {}):
     insights: candidates.map((c, i) => ({ ...c, rank: i + 1 })),
     totalActiveMs: total,
     ...(understanding === undefined ? {} : { understanding }),
+    heldBack: heldBack.sort((a, b) => b.stats.activeMinutes.value - a.stats.activeMinutes.value || (a.id < b.id ? -1 : 1)),
   };
+}
+
+function heldBackTask(t: Task, st: TaskStats, verdict: JudgeResult, connectors: ConnectorMatch, windowDays: number, reviewSeconds: number | undefined): HeldBackTask {
+  const factors: ScoreFactors = { volume: st.share.value, sameness: st.sameness.value, reachability: connectors.reachability, judgement: verdict.judgement, risk: verdict.risk };
+  const saving = estimateSaving(
+    { instances: st.instances.value, daysActive: st.daysActive.value, windowDays: Math.max(1, windowDays), medianMinutes: st.medianMinutes.value, eventIds: st.instances.eventIds },
+    reviewSeconds === undefined ? {} : { reviewSeconds },
+  );
+  return { id: insightIdFor(t.id), taskId: t.id, label: t.label, profile: t.profile, stats: st, judge: verdict, connectors, score: { value: rankingScore(factors), factors }, saving, heldBack: { reason: verdict.reasons[0] ?? "needs a person" } };
 }
 
 export async function analyzeHome(home: string, opts: AnalyzeOptions = {}): Promise<Analysis> {

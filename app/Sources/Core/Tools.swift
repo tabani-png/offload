@@ -86,7 +86,11 @@ struct ToolsCopy: Equatable, Sendable {
     var detail: String
     var connected: Bool
     var chosen: Bool
+    /// s10f (DESIGN-REVIEW-4 M2): In use only on the tool that runs today; amber on a chosen tool that is not connected.
+    var mark: Mark = .none
   }
+
+  enum Mark: Equatable, Sendable { case none, inUse, chosenNeedsConnect }
 
   var stepId: String
   var suggestion: String
@@ -96,7 +100,11 @@ struct ToolsCopy: Equatable, Sendable {
   /// The chosen option's needs-you sentence (e.g. a Composio account that only reads), shown in amber.
   var needsYouLine: String?
 
+  /// "Recommended: built for sending 100+ a day": the reason only, never the card body or how it connects.
+  var recommended: String
+
   static let hint = "T to choose a tool, then ← → and ↩"
+  static let chosenNeedsConnect = "Chosen, connect to use"
   static let connectedChip = "Connected"
   static let inUse = "In use"
   static let changed = "Tool changed. Press R to run the dry run again with it."
@@ -104,16 +112,60 @@ struct ToolsCopy: Equatable, Sendable {
   init(_ t: StepTools, connectors: [Connector] = []) {
     stepId = t.stepId
     suggestion = PlainWords.clean(t.suggestion)
-    options = t.options.map {
+    // s10f (PR #13 review): the plan's `connected` was taken when the plan was drafted; the review's live connector
+    // state wins, so connecting Gmail mid-flow shows it Connected and In use at once.
+    let live = Self.live(t, connectors: connectors)
+    options = live.options.map {
       Option(id: $0.id, name: $0.name, why: PlainWords.clean($0.why), detail: "\(Self.setup($0.setup)) · \($0.cost)",
-             connected: $0.connected, chosen: $0.id == t.chosen)
+             connected: $0.connected, chosen: $0.id == t.chosen, mark: Self.mark($0, tools: live))
     }
+    recommended = t.chosenOption.map { "Recommended: " + Self.reason(PlainWords.clean($0.why)) } ?? ""
     needsYouLine = t.chosenOption?.needsYou.flatMap { $0.isEmpty ? nil : PlainWords.clean($0) }
-    if t.runsWith != t.chosen, let chosen = t.chosenOption {
+    // s10f: only when another tool really stands in (not the chosen tool under its connector id) and the chosen one
+    // is not connected yet.
+    if let chosen = live.chosenOption, t.runsWith != chosen.id, t.runsWith != chosen.connectorId, !chosen.connected {
       runsWithLine = "Sends through \(Self.name(t.runsWith, tools: t, connectors: connectors)) until \(chosen.name) is connected."
     } else {
       runsWithLine = nil
     }
+  }
+
+  /// The step's options with `connected` read from the live connectors (by connector id, else option id).
+  static func live(_ t: StepTools, connectors: [Connector]) -> StepTools {
+    var t = t
+    t.options = t.options.map { o in
+      var o = o
+      if let c = connectors.first(where: { $0.id == (o.connectorId ?? o.id) }) { o.connected = c.connected }
+      return o
+    }
+    return t
+  }
+
+  /// In use: the runner uses it today (runsWith is its id or its connector) and it is connected. Chosen but not
+  /// connected: amber "Chosen, connect to use". Anything else: no mark.
+  static func mark(_ o: ToolOption, tools t: StepTools) -> Mark {
+    let runs = o.id == t.runsWith || (o.connectorId != nil && o.connectorId == t.runsWith)
+    if runs && o.connected { return .inUse }
+    if o.id == t.chosen && !o.connected { return .chosenNeedsConnect }
+    return .none
+  }
+
+  /// The first clause of a why, lower-cased at the start: "Built for sending 100+ a day: campaigns…" → "built for
+  /// sending 100+ a day".
+  static func reason(_ why: String) -> String {
+    var cut = why
+    if let r = cut.rangeOfCharacter(from: CharacterSet(charactersIn: ":.;")) { cut = String(cut[..<r.lowerBound]) }
+    cut = cut.trimmingCharacters(in: .whitespaces)
+    guard let first = cut.first else { return cut }
+    // Keep a proper noun or an acronym ("Gmail", "CRM") as it is.
+    let second = cut.dropFirst().first
+    if first.isUppercase && !(second?.isUppercase ?? false) && !Self.properStart(cut) { return first.lowercased() + cut.dropFirst() }
+    return cut
+  }
+
+  private static func properStart(_ s: String) -> Bool {
+    let w = s.split(separator: " ").first.map(String.init) ?? ""
+    return ["Gmail", "Google", "Instantly", "HubSpot", "Attio", "Slack", "Offload"].contains(w)
   }
 
   static func setup(_ s: String) -> String {
@@ -144,7 +196,7 @@ struct ToolsCopy: Equatable, Sendable {
   }
 
   var allStrings: [String] {
-    [suggestion, runsWithLine ?? "", Self.hint, Self.connectedChip, Self.inUse, Self.changed]
+    [suggestion, recommended, runsWithLine ?? "", Self.hint, Self.connectedChip, Self.inUse, Self.chosenNeedsConnect, Self.changed]
       + options.flatMap { [$0.name, $0.why, $0.detail] }
   }
 }
@@ -152,6 +204,12 @@ struct ToolsCopy: Equatable, Sendable {
 extension MockBrainClient {
   /// Connector names the app knows without a brain, for "Sends through …".
   static let knownConnectors: [Connector] = [gmail, sheets, calendar, hubspot]
+}
+
+/// s10f (DESIGN-REVIEW-4 M2): keyboard focus is the getone focus ring, white at 40%, 2 pt. Never a state colour.
+enum FocusRing {
+  static let opacity: Double = 0.4
+  static let width: Double = 2
 }
 
 // MARK: model router (GET /status `models`)

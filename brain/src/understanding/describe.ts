@@ -2,9 +2,12 @@
 // Deterministic composition: frame notes (confidence-weighted vote) first, then focus/title/URL/input counts/OCR rules.
 // An optional DescriptionRefiner (a local or remote model) may reword activity/verb/object/step; it can never touch
 // identifiers, ids, times or counts, and anything malformed is ignored.
+// s18 (ADR 0010): person names in the description fields and the embedded text become <name>; the names are learned
+// from every span title of the run first (privacy/names.ts). The raw title stays local; identifiers stay record ids.
 import { categoryFor, isMailListView, WRITING_KEYS_PER_MINUTE } from "../grouping/group.ts";
 import { clusterTitles, extractEmails, maskText, tokenize, urlPattern } from "../grouping/normalize.ts";
 import type { Category, DayLabel, Span } from "../types.ts";
+import { maskNamesForStorage, NameMap } from "../privacy/names.ts";
 import type { FrameNote } from "./frames.ts";
 import { knownSurfaceAt, knownSurfaceIn, normalizeSurface, surfaceKeyOf, type KnownSurface } from "./surfaces.ts";
 import { baseVerb, isGenericVerb } from "./verbs.ts";
@@ -161,10 +164,10 @@ export function withoutGenericVerbs(text: string): string {
 /** The internal prompt that gets embedded. Identifiers and the counterpart vary per item, so they are left out.
  * s20: generic looking verbs (reviewing, viewing, reading, ...) carry no task signal, so they are left out too and
  * the surface and object lead (a small captioner says "reviewing" on 3 of 4 screens, which merged unrelated work). */
-export function descriptionText(d: Pick<SpanDescription, "activity" | "verb" | "object" | "surface" | "step" | "identifiers" | "counterpart">): string {
+export function descriptionText(d: Pick<SpanDescription, "activity" | "verb" | "object" | "surface" | "step" | "identifiers" | "counterpart">, names: NameMap = new NameMap()): string {
   const verb = isGenericVerb(d.verb) ? "" : `${d.verb} `;
   const raw = `${d.surface} ${d.object}. ${withoutGenericVerbs(d.activity)}. ${verb}${d.object} on ${d.surface}. ${withoutGenericVerbs(d.step)}`;
-  return maskText(stripAll(raw, [...d.identifiers, d.counterpart])).replace(/\s+/g, " ").trim();
+  return maskNamesForStorage(maskText(stripAll(raw, [...d.identifiers, d.counterpart])), names).replace(/\s+/g, " ").trim();
 }
 
 export interface DescribeOptions {
@@ -244,6 +247,9 @@ export function describeSpans(spans: readonly Span[], framesBySpan: ReadonlyMap<
   const tpl = templates(spans, opts.clusterThreshold);
   const standIn = standIns(spans, framesBySpan);
   const sorted = [...spans].sort((a, b) => a.start - b.start || (a.id < b.id ? -1 : 1));
+  const names = new NameMap();
+  for (const s of sorted) names.learn(s.title);
+  const noNames = (s: string) => maskNamesForStorage(s, names);
   return sorted.map((s) => {
     const path = urlPattern(s.url);
     const masked = maskText(s.title);
@@ -258,13 +264,13 @@ export function describeSpans(spans: readonly Span[], framesBySpan: ReadonlyMap<
     const rObject = DOC_EXT_RE.test(s.title.trim()) ? "document" : OBJECT_FOR[category];
     const rSurface = surfaceLabel(s.appName, s.host, template);
     // s20: gerunds become base verbs ("writing" -> "write") and surface names are normalised before the vote, so
-    // "Instagram" and "instagram.com" are one vote and one surface.
+    // "Instagram" and "instagram.com" are one vote and one surface. s22: names are masked.
     const verb = fv((f) => (f.verb === undefined ? undefined : baseVerb(f.verb))) || rVerb;
-    const object = fv((f) => f.object) || rObject;
-    const surface = fv((f) => (f.surface === undefined ? undefined : normalizeSurface(f.surface))) || rSurface;
-    const step = fv((f) => f.step) || `${verb} ${object}`;
-    const activity = fv((f) => f.activity) || `${verb} ${object} in ${rSurface}`;
-    const counterpart = fv((f) => f.counterpart);
+    const object = noNames(fv((f) => f.object) || rObject);
+    const surface = noNames(fv((f) => (f.surface === undefined ? undefined : normalizeSurface(f.surface))) || rSurface);
+    const step = noNames(fv((f) => f.step) || `${verb} ${object}`);
+    const activity = noNames(fv((f) => f.activity) || `${verb} ${object} in ${rSurface}`);
+    const counterpart = noNames(fv((f) => f.counterpart));
     const ids = new Set(ruleIdentifiers(s, own));
     for (const f of frames) for (const id of f.identifiers ?? []) if (!own.has(normId(id))) ids.add(normId(id));
     const identifiers = [...ids].filter((x) => x !== "").sort();
@@ -305,7 +311,7 @@ export function describeSpans(spans: readonly Span[], framesBySpan: ReadonlyMap<
       frameVerbs: [...new Set(frames.filter((f) => f.confidence >= RULES_CONFIDENCE && f.verb !== undefined).map((f) => baseVerb(f.verb!)))].sort(),
       text: "",
     };
-    d.text = descriptionText(d);
+    d.text = descriptionText(d, names);
     return d;
   });
 }
