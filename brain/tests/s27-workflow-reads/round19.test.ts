@@ -65,6 +65,8 @@ describe("s27 round 19: headers by structure, text-only tables", () => {
   });
   test("FETCH: the commit-screen parse reads word rows as typed values (learning and matching)", () => {
     expect(parseCommitValues(["Name | Country\nAlice | Canada"])).toEqual([["Name", "Alice"], ["Country", "Canada"]]);
+    // A word data row is never taken for a second header.
+    expect(parseCommitValues(["Name | Country\nAlice | Canada\nBob | Peru"])).toEqual([["Name", "Alice"], ["Country", "Canada"]]);
     expect(parseCommitRows(["Name | Country\nAlice | Canada\nBob | Peru"]).map((m) => [...m.entries()])).toEqual([[["Name", "Alice"], ["Country", "Canada"]], [["Name", "Bob"], ["Country", "Peru"]]]);
   });
   test("DRYRUN: a past instance with word values is matched to its source row", () => {

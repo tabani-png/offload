@@ -75,8 +75,19 @@ export function parseCommitValues(texts: readonly string[]): Array<[string, stri
       const head = cellsOf(lines[i]!);
       if (head !== null && head.length >= 2 && head.every((c) => plainLabel(c) !== null)) {
         const outer = outerPipes(lines[i]!);
-        const row = lines.slice(i + 1).map((l) => cellsOf(l, outer)).find((c) => c !== null && c.length === head.length && !c.every((x) => plainLabel(x) !== null));
-        if (row != null) head.forEach((h, k) => row[k] !== "" && !out.has(h) && out.set(h, row[k]!));
+        // The header is the first table line (structure); the next line with the header's width is data, whatever its
+        // cells look like (word values too, round 19).
+        // The whole table is consumed here (every delimited line after the header), so a data line is never taken
+        // for another header.
+        let j = i + 1;
+        let row: string[] | null = null;
+        for (; j < lines.length; j++) {
+          const c = cellsOf(lines[j]!, outer);
+          if (c === null) break;
+          if (row === null && c.length === head.length) row = c;
+        }
+        if (row !== null) head.forEach((h, k) => row![k] !== "" && !out.has(h) && out.set(h, row![k]!));
+        i = j - 1;
         continue;
       }
       const m = /^([A-Za-z][A-Za-z ]{0,39}):\s*(\S.*)$/.exec(lines[i]!.trim());
@@ -344,6 +355,10 @@ const cleanValue = (v: unknown): string | null => {
 
 /** s27 round 8 (I7): a key that appeared more than once with different values. Never picked from: a field holding
  * one makes its row ambiguous (skipped); a context key holding one counts every value as a declaration (I4). */
+/** s27 round 19: every object built from an answer has no prototype, so `__proto__`, `constructor` and `prototype` are
+ * plain data keys (their context is checked like any other) and nothing can change an object's prototype. */
+const dataObj = (): Record<string, unknown> => Object.create(null) as Record<string, unknown>;
+
 export class Repeated {
   constructor(readonly values: unknown[]) {}
 }
@@ -387,7 +402,7 @@ export function parseExact(t: string): unknown {
     const c = t[i];
     if (c === "{") {
       i += 1;
-      const o: Obj = {};
+      const o: Obj = dataObj();
       ws();
       if (t[i] === "}") {
         i += 1;
@@ -467,13 +482,13 @@ const TEXT_DECLARATIONS = ["report", "insight", "dashboard", "period", "date ran
 /** s27 round 15: a table row with the wrong number of cells: kept in place as a row that is skipped, with this reason. */
 const MALFORMED = Symbol("malformed row");
 const notARow = (n: number, e: unknown): Obj => {
-  const r: Obj = {};
+  const r: Obj = dataObj();
   (r as Record<symbol, string>)[MALFORMED] = `row ${n} is not a row (${e === null ? "null" : typeof e})`;
   return r;
 };
 
 function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): Obj {
-  const obj: Obj = {};
+  const obj: Obj = dataObj();
   const rows: Obj[] = [];
   // Every declaration and every field value is kept (a multimap, I4/I7): a repeat with another value is Repeated.
   const put = (k: string, v: string) => putKey(obj, normKey(k), v);
@@ -533,7 +548,8 @@ function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | 
       }
     }
   }
-  return rows.length > 0 ? { ...obj, rows } : obj;
+  if (rows.length > 0) putKey(obj, "rows", rows);
+  return obj;
 }
 
 
@@ -581,7 +597,7 @@ function tableRows(o: Obj): Obj[] | null {
   const unnamed = names.findIndex((n) => n === null || n.trim() === "");
   return body.rows.map((r, i) => {
     if (unnamed >= 0) {
-      const bad: Obj = {};
+      const bad: Obj = dataObj();
       for (const n of names) if (typeof n === "string" && n.trim() !== "") bad[n] = null;
       (bad as Record<symbol, string>)[MALFORMED] = `column ${unnamed + 1} of the table has no name`;
       return bad;
@@ -597,7 +613,7 @@ function tableRows(o: Obj): Obj[] | null {
  * later by the row pass (cleanValue), the same for both.
  */
 function tableRow(headers: readonly string[], cells: unknown, n: number): Obj {
-  const r: Obj = {};
+  const r: Obj = dataObj();
   // A row that cannot be read still shows which columns the table has (null), so the table is chosen by presence and
   // the row is skipped and named in the row pass, never dropped.
   const malformed = (why: string): Obj => {
@@ -619,6 +635,10 @@ function tableRow(headers: readonly string[], cells: unknown, n: number): Obj {
   const allowed = new Set(headers.map(normKey));
   const outside = Object.keys(cells).filter((k) => !allowed.has(normKey(k)));
   if (outside.length > 0) return malformed(`row ${n} has keys outside the columns: ${outside.join(", ")}`);
+  // The same scalar-cell rule as array rows (round 19): a nested object or list in a cell is skipped and named.
+  const isNested = (v: unknown): boolean => (v instanceof Repeated ? v.values.some(isNested) : v !== null && typeof v === "object");
+  const nestedKey = Object.entries(cells).find(([, v]) => isNested(v))?.[0];
+  if (nestedKey !== undefined) return malformed(`row ${n}, column ${nestedKey} holds a nested value`);
   for (const [k, v] of Object.entries(cells)) putKey(r, k, v);
   return r;
 }
@@ -922,7 +942,7 @@ export function parseCommitRows(texts: readonly string[]): Array<Map<string, str
         for (; j < lines.length; j++) {
           const cells = cellsOf(lines[j]!, outer);
           if (cells === null) break;
-          if (cells.length !== head.length || cells.every((x) => plainLabel(x) !== null)) continue;
+          if (cells.length !== head.length) continue;
           out.push(new Map(head.map((h, k) => [h, cells[k]!] as [string, string]).filter(([, v]) => v !== "")));
         }
         i = j - 1;
