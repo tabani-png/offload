@@ -7,7 +7,7 @@ import type { Tx } from "../../db/pool.ts";
 import { jcs, sha256Hex } from "../../schema/encoding.ts";
 import { forbidden, invalid } from "../../schema/http.ts";
 import {
-  MAX_ENVELOPE_BYTES, SENT_AT_WINDOW_MS, SIGNATURE_HEADER, badSignature, parseEnvelope, parseSignatureHeader, replay, verifyBytes,
+  SENT_AT_WINDOW_MS, SIGNATURE_HEADER, badSignature, parseEnvelope, parseSignatureHeader, readCapped, replay, verifyBytes,
 } from "./envelope.ts";
 
 /** The closed set of sync kinds (ADR 0103 §1) and the schema each object must match. */
@@ -80,8 +80,7 @@ export async function ingest(c: Context<AppEnv>, deps: Deps): Promise<Receipt> {
   if (p0.kind !== "device") throw forbidden("only devices post sync batches");
   const sig = parseSignatureHeader(c.req.header(SIGNATURE_HEADER));
   if (!sig) throw invalid(`missing or malformed ${SIGNATURE_HEADER} (keyid=<deviceId>, sig=<b64url>)`);
-  const bytes = new Uint8Array(await c.req.arrayBuffer());
-  if (bytes.byteLength > MAX_ENVELOPE_BYTES) throw invalid("envelope is over 1 MiB");
+  const bytes = await readCapped(c.req.raw);
   if (sig.keyid !== p0.deviceId) throw badSignature("keyid is not this device");
   const handlers = await siblingHandlers();
 
