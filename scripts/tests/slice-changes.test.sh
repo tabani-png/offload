@@ -85,6 +85,7 @@ SLICE_ROOT="$R" slice_changes "$BASE" >/dev/null 2>&1; eq "(d) exit 0" "0" "$?"
 
 echo "== (e) shallow clone: BASE missing"
 new_repo e-src
+EBASE="$BASE"
 g checkout -qb s99; edit slice/in.txt s1; commit "s99: first"; edit slice/in.txt s2; commit "s99: second"
 git clone -q --depth 1 --branch s99 "file://$R" "$TMP/e" 2>/dev/null
 out="$(SLICE_ROOT="$TMP/e" slice_changes "$BASE" 2>"$TMP/e.err")"; rc=$?
@@ -111,6 +112,70 @@ PBASE="$(g rev-parse HEAD)"
 g checkout -qb s99; edit slice/in.txt s1; commit "s99: first"
 eq "(g) net starts at BASE" "slice/in.txt" "$(net "$PBASE")"
 eq "(g) without BASE it includes the parent" "out/p.txt slice/in.txt" "$(net)"
+
+echo "== (h) rename out of scope: the deleted source path is reported"
+new_repo h
+g checkout -qb s99
+g mv out/x.txt slice/x.txt; commit "s99: move"
+eq "(h) net shows both sides of a rename" "out/x.txt slice/x.txt" "$(net "$BASE")"
+eq "(h) grep shows both sides of a rename" "out/x.txt slice/x.txt" "$(grepmode "$BASE")"
+
+echo "== (i) SLICE_GREP matches the subject line only"
+new_repo i
+g checkout -qb s99
+edit slice/in.txt s1; commit "s99: real slice commit"
+edit out/x.txt other; g commit -qm "s98: other slice" -m "s99 given/family lexicon wrapped onto a body line"
+eq "(i) body line starting with the prefix is not counted" "slice/in.txt" "$(grepmode "$BASE")"
+eq "(i) unanchored pattern still subject only" "slice/in.txt" "$(SLICE_GREP='s99' SLICE_ROOT="$R" slice_changes "$BASE" | join)"
+
+echo "== (j) missing BASE: callers fail unless they opt into a loud skip"
+SLICE_ROOT="$TMP/e" slice_files "$EBASE"; eq "(j) slice_files without --allow-skip returns 1" "1" "$?"
+case "$SLICE_ERROR" in *"not in history"*) ok "(j) error names the missing BASE";; *) bad "(j) error text" "not in history" "$SLICE_ERROR";; esac
+SLICE_ROOT="$TMP/e" slice_files --allow-skip "$EBASE"; eq "(j) slice_files --allow-skip returns 3" "3" "$?"
+SLICE_ROOT="$TMP/e" slice_files --allow-skip "$EBASE" -- brain/package.json; eq "(j) path-limited check skips too" "3" "$?"
+
+echo "== (k) detached checkout with no origin/main and no main"
+new_repo k
+g checkout -qb s99; edit slice/in.txt s1; commit "s99: first"
+g checkout -q --detach; g branch -q -D s99 main
+eq "(k) with BASE: falls back to BASE (superset, never hides)" "slice/in.txt" "$(net "$BASE" 2>/dev/null)"
+SLICE_ROOT="$R" slice_files; eq "(k) without BASE: error, rc 1" "1" "$?"
+SLICE_ROOT="$R" slice_files --allow-skip; eq "(k) --allow-skip does not hide a missing integration branch" "1" "$?"
+
+echo "== (l) git errors are errors"
+SLICE_ROOT="$TMP/does-not-exist" slice_files; eq "(l) not a repo: rc 1" "1" "$?"
+R="$TMP/c"; SLICE_ROOT="$R" slice_files -- ':(bogus)x'; eq "(l) bad pathspec: rc 1" "1" "$?"
+
+echo "== (m) git without --remerge-diff: SLICE_GREP fails loudly"
+mkdir -p "$TMP/fakebin"; REALGIT="$(command -v git)"
+printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = --remerge-diff ] && { echo "fatal: unrecognized argument: --remerge-diff" >&2; exit 128; }; done\nexec "%s" "$@"\n' "$REALGIT" > "$TMP/fakebin/git"; chmod +x "$TMP/fakebin/git"
+R="$TMP/c"; CBASE="$(g rev-list --max-parents=0 HEAD)"
+PATH="$TMP/fakebin:$PATH" SLICE_GREP='^s99' SLICE_ROOT="$R" slice_files "$CBASE"; eq "(m) rc 1" "1" "$?"
+case "$SLICE_ERROR" in *remerge-diff*) ok "(m) error names --remerge-diff";; *) bad "(m) error text" "remerge-diff" "$SLICE_ERROR";; esac
+PATH="$TMP/fakebin:$PATH" SLICE_ROOT="$R" slice_files "$CBASE"; eq "(m) default mode does not need it" "0" "$?"
+
+echo "== (n) paths with spaces and non-ASCII come out raw, one per line"
+new_repo n
+g checkout -qb s99; edit "slice/a b.txt" s1; edit "out/ü.txt" s1; commit "s99: odd names"
+SLICE_ROOT="$R" slice_files "$BASE"
+eq "(n) raw lines" "out/ü.txt|slice/a b.txt" "$(printf '%s' "$SLICE_FILES" | tr '\n' '|')"
+
+echo "== (o) S2-common callers fail on helper errors"
+R="$TMP/k"
+out="$(SLICE_ROOT="$R" bash -c '. "$1/../../slices/S2-common/verify-lib.sh"; s2_untouched main brain; s2_migrations_in 05 0500-0599; echo "fails=$S2_FAILS"' _ "$HERE" 2>&1)"
+case "$out" in *"fails=2"*) ok "(o) s2_untouched and s2_migrations_in both FAIL with no integration branch";; *) bad "(o) S2 callers" "fails=2" "$out";; esac
+R="$TMP/b"
+out="$(SLICE_ROOT="$R" bash -c '. "$1/../../slices/S2-common/verify-lib.sh"; s2_untouched main slice; s2_untouched main out; echo "fails=$S2_FAILS"' _ "$HERE" 2>&1)"
+case "$out" in *"fails=1"*) ok "(o) s2_untouched flags the slice path, not main's";; *) bad "(o) s2_untouched" "fails=1" "$out";; esac
+
+echo "== (p) every verify.sh caller checks the helper's return code"
+REPO="$(cd "$HERE/../.." && pwd)"
+hits="$(grep -nE '\$\((SLICE_[A-Z]+=[^ ]+ )?(slice_changes|s2_changed)|for m in \$\(' "$REPO"/slices/*/verify.sh "$REPO"/slices/S2-common/verify-lib.sh 2>/dev/null)"
+eq "(p) no caller reads the list from a command substitution (rc would be lost)" "" "$hits"
+for f in s12-understanding s14-any-task-workflows s18-name-masking s22-solution-designer; do
+  grep -q 'slice_files' "$REPO/slices/$f/verify.sh" && grep -qE '\*\) *fail ' "$REPO/slices/$f/verify.sh" \
+    && ok "(p) $f uses slice_files and fails on other codes" || bad "(p) $f" "slice_files + *) fail" "missing"
+done
 
 echo
 echo "$pass passed, $failn failed"
