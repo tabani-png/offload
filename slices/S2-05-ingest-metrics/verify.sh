@@ -8,9 +8,7 @@ s2_typecheck "$C"
 s2_suite "$C" tests/S2-05 70
 s2_tags "$C" tests/S2-05 VERIFY REPLAY CONSENT LEAK HOURS FLOOR PERSON EVIDENCE RECOMPUTE RLS
 # Migrations of this slice stay in its number range.
-for m in $(git -C "$ROOT" diff --name-only "${S2_BASE:-main}"...HEAD -- control/migrations 2>/dev/null); do
-  case "$(basename "$m")" in 05[0-9][0-9]_*) ;; *) fail "migration outside range 0500-0599: $m";; esac
-done
+s2_migrations_in 05 0500-0599
 s2_forbid "migrations must not bypass RLS" "BYPASSRLS|SECURITY DEFINER" "$C/migrations"
 # Core and earlier slices stay green.
 core="$(cd "$C" && bun test tests/S2-01 2>&1)"; echo "$core" | grep -qE "^ *0 fail$" || fail "S2-01 suite regressed"
