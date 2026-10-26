@@ -122,9 +122,9 @@ export async function timeBreakdown(a: Analysis, opts: TimeOptions = {}): Promis
     const freed = Math.min(observed, Math.max(0, Number.isFinite(estimate) ? estimate : 0));
     const hoursFreed = weeklyMetric(freed, taskMinutes.eventIds);
     const source = answer === null ? "estimate" : "best fix";
-    const arithmetic =
-      `${taskMinutes.display} in ${windowDays} ${windowDays === 1 ? "day" : "days"} × 7 / ${windowDays} = ${observedHoursPerWeek.display} a week observed; ` +
-      `${source} ${formatHours(Math.max(0, estimate))} a week, capped at the time observed: min(${observedHoursPerWeek.display}, ${formatHours(Math.max(0, estimate))}) = ${hoursFreed.display}`;
+    const est = formatHours(Math.max(0, estimate));
+    const seen = windowDays === 7 ? `${taskMinutes.display} in 7 days` : `${taskMinutes.display} in ${windowDays} ${windowDays === 1 ? "day" : "days"} × 7 / ${windowDays}`;
+    const arithmetic = `${seen} = ${observedHoursPerWeek.display} a week; ${source} ${est} a week; min(${observedHoursPerWeek.display}, ${est}) = ${hoursFreed.display}`;
     findings.push({
       id: `tf_${insight.id.replace(/^ins_/, "")}`,
       taskId: insight.taskId,

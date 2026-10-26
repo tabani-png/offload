@@ -11722,7 +11722,7 @@
      "01M534AY7MKJADMG656B2G8DCN"
     ]
    },
-   "arithmetic": "1.3 h in 7 days × 7 / 7 = 1.3 h a week observed; best fix 1.3 h a week, capped at the time observed: min(1.3 h, 1.3 h) = 1.3 h",
+   "arithmetic": "1.3 h in 7 days = 1.3 h a week; best fix 1.3 h a week; min(1.3 h, 1.3 h) = 1.3 h",
    "fixKind": "workflow",
    "workflowInsightId": "ins_18cc0d7d4149"
   },
@@ -12103,7 +12103,7 @@
      "01M5350XBM32KM9ESJHGMN2DBB"
     ]
    },
-   "arithmetic": "1.0 h in 7 days × 7 / 7 = 1.0 h a week observed; best fix 0.9 h a week, capped at the time observed: min(1.0 h, 0.9 h) = 0.9 h",
+   "arithmetic": "1.0 h in 7 days = 1.0 h a week; best fix 0.9 h a week; min(1.0 h, 0.9 h) = 0.9 h",
    "fixKind": "workflow",
    "workflowInsightId": "ins_5c60a5ab8998"
   },
@@ -12322,7 +12322,7 @@
      "01M52X0J7MYGV1Y7DE5NJW6C9G"
     ]
    },
-   "arithmetic": "0.7 h in 7 days × 7 / 7 = 0.7 h a week observed; best fix 0.7 h a week, capped at the time observed: min(0.7 h, 0.7 h) = 0.7 h",
+   "arithmetic": "0.7 h in 7 days = 0.7 h a week; best fix 0.7 h a week; min(0.7 h, 0.7 h) = 0.7 h",
    "fixKind": "workflow",
    "workflowInsightId": "ins_983d6aa63e29"
   },
@@ -12577,7 +12577,7 @@
      "01M534QRCMFEJVZWKPZKF6SWFA"
     ]
    },
-   "arithmetic": "0.9 h in 7 days × 7 / 7 = 0.9 h a week observed; best fix 0.0 h a week, capped at the time observed: min(0.9 h, 0.0 h) = 0.0 h",
+   "arithmetic": "0.9 h in 7 days = 0.9 h a week; best fix 0.0 h a week; min(0.9 h, 0.0 h) = 0.0 h",
    "fixKind": "leave_alone",
    "workflowInsightId": null
   },
@@ -13036,7 +13036,7 @@
      "01M5573S4MY6ADCBYCTGPGQKZ9"
     ]
    },
-   "arithmetic": "0.9 h in 7 days × 7 / 7 = 0.9 h a week observed; best fix 0.0 h a week, capped at the time observed: min(0.9 h, 0.0 h) = 0.0 h",
+   "arithmetic": "0.9 h in 7 days = 0.9 h a week; best fix 0.0 h a week; min(0.9 h, 0.0 h) = 0.0 h",
    "fixKind": "leave_alone",
    "workflowInsightId": null
   }
