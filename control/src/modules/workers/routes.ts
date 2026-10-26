@@ -1,7 +1,7 @@
 /** Cloud worker endpoints (API.md "Cloud workers"). Provisioning and deployment changes run right after the response. */
 import type { Context } from "hono";
 import type { App, AppEnv, Deps, Principal } from "../../app.ts";
-import { actorOf, tenantTx } from "../../app.ts";
+import { actorOf, principalOf, tenantTx } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
 import { isUuid } from "../../db/tenant.ts";
 import { conflict, forbidden, invalid, notFound, page, pageParams } from "../../schema/http.ts";
@@ -138,9 +138,9 @@ export function workerRoutes(app: App, deps: Deps, workers: () => Workers): void
     const id = idParam(c);
     const req = await readLocal<{ schedule?: Schedule | null; sessionBudgetCents?: number }>(c, WORKER_PATCH);
     scheduleOrThrow(req.schedule);
-    const { out, tenantId } = await tenantTx(c, deps, async (tx, p) => {
-      // It rewrites the deployment row a sync writes: the worker's sync lock first (lock order step 9, before rows).
-      await workers().lockWorkerSync(tx, id);
+    // It rewrites the deployment row a sync writes: it holds the worker's sync lease (taken before its transaction,
+    // so waiting for a running sync holds no pool connection).
+    const { out, tenantId } = await workers().withWorkerSync(principalOf(c).tenantId, id, () => tenantTx(c, deps, async (tx, p) => {
       const w = await visibleWorker(tx, p, id, true);
       if (w.state === "retired") throw conflict("this worker is retired");
       const t = new Date(deps.clock.now());
@@ -175,7 +175,7 @@ export function workerRoutes(app: App, deps: Deps, workers: () => Workers): void
         detail: { ...(req.schedule !== undefined ? { schedule: req.schedule } : {}), ...(req.sessionBudgetCents !== undefined ? { sessionBudgetCents: req.sessionBudgetCents } : {}) },
       });
       return { out: await dto(tx, id), tenantId: p.tenantId };
-    });
+    }));
     workers().dispatchReconcile(tenantId, id);
     return replyLocal(c, deps, 200, out, WORKER);
   });

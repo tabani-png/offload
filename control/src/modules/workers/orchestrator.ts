@@ -13,9 +13,11 @@
  * them, the tenant's audit-chain lock after them. Within step 9 every transaction here takes, in this order and
  * never back up it: the tenant's `offload_workers_budget:<tenant>` advisory lock (run admission: the monthly cap's
  * check and its reservation, the run insert, are one critical section; the run route takes it before its worker row),
- * the worker's `offload_worker_sync:<worker>` advisory lock (held over a sync's remote calls; then
- * `offload_worker_provision:<tenant>` while provisioning; ADR 0112 §13), the runner's `offload_cloud_device:<person>` advisory lock, then worker_runs rows, then workers rows, then
- * deployments rows; two rows of one table in id order. Audit events are written after the last row lock.
+ * a deployment run's `offload_deployment_run:<id>` advisory lock (its import, first), the runner's
+ * `offload_cloud_device:<person>` advisory lock, then worker_runs rows, then workers rows, then deployments rows; two
+ * rows of one table in id order. Audit events are written after the last row lock. A worker's sync and the tenant's
+ * provisioning are serialized by lease rows (`worker_locks`: `sync:<worker>`, then `provision`), claimed by short
+ * transactions before any of the above and held with no transaction open (ADR 0112 §22).
  * Broker calls made inside these transactions (loadBatch, dto, killSwitchActive) only read and queue no audit.
  *
  * DURABILITY. Nothing is marked done before the remote call succeeded: an interrupt is requested in the deciding
@@ -52,6 +54,15 @@ export const MAX_RECONNECTS = 5;
 export const FAILURES_TO_PAUSE = 2;
 /** A run whose session id is still unrecorded this long after it started is failed (the session, if any, is idle). */
 export const SESSION_RECORD_TIMEOUT_MS = 10 * 60_000;
+/** A lock lease (`worker_locks`) lasts this long unless renewed; its holder renews it every LOCK_RENEW_MS. */
+export const LOCK_LEASE_MS = 2 * 60_000;
+const LOCK_RENEW_MS = 30_000;
+/** How long a caller waits for a lock lease before giving up (the next reconcile tries again). */
+const LOCK_WAIT_MS = 10 * 60_000;
+/** Worker syncs running at once in this process: below the pool size, so syncs never take every connection. */
+export const SYNC_CONCURRENCY = 4;
+/** Sends that hold their run's row lock across the remote call (sendUnlessStopped, sendFirst), at most this many at once. */
+export const SEND_CONCURRENCY = 4;
 /** A consumer's claim on an event it is acting on expires after this long (a consumer that crashed mid-event). */
 export const EVENT_CLAIM_LEASE_MS = 5 * 60_000;
 /** A claim on reporting a run to its overnight policy expires after this long (a reporter that crashed). */
@@ -91,8 +102,11 @@ export interface Workers extends WorkersPort {
   recover(tenantId: string): Promise<void>;
   /** Run admission's tenant-wide lock (lock order step 9, first). Callers take it before any worker row. */
   lockBudget(tx: Tx): Promise<void>;
-  /** The worker's sync lock (lock order step 9, after the budget lock), for a transaction that rewrites its deployment. */
-  lockWorkerSync(tx: Tx, workerId: string): Promise<void>;
+  /**
+   * Runs `fn` holding the worker's sync lock (a lease row, `sync:<worker>`), for a transaction that rewrites its
+   * deployment. Take it before opening that transaction: waiting for it holds no pool connection.
+   */
+  withWorkerSync<T>(tenantId: string, workerId: string, fn: () => Promise<T>): Promise<T>;
   monthSpent(tx: Tx, excludeRunId?: string): Promise<{ spent: number; cap: number }>;
   idle(): Promise<void>;
   /** Stops every consumer (process exit, tests). Sessions keep running on the platform; resume re-attaches. */
@@ -197,6 +211,58 @@ export function createWorkers(deps: Deps): Workers {
     void q.finally(() => inflight.delete(q));
     return p;
   }
+
+  /**
+   * Runs `fn` holding the lease row `name` of the tenant. Claimed and released by short transactions and renewed
+   * while held, so no pool connection is held while waiting for it or while `fn` makes remote calls and opens its own
+   * short transactions. A holder that dies stops renewing; its lease expires after LOCK_LEASE_MS.
+   */
+  async function withLease<T>(tenantId: string, name: string, fn: () => Promise<T>): Promise<T> {
+    const holder = crypto.randomUUID();
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    for (;;) {
+      const [got] = await service(tenantId, (tx) => tx`insert into worker_locks (tenant_id, name, holder, until)
+          values (current_setting('app.tenant_id')::uuid, ${name}, ${holder}, ${new Date(now() + LOCK_LEASE_MS)})
+        on conflict (tenant_id, name) do update set holder = excluded.holder, until = excluded.until
+          where worker_locks.until < ${new Date(now())}
+        returning holder`);
+      if (got) break;
+      if (Date.now() > deadline) throw new Error(`lock ${name} is busy`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const renew = setInterval(() => {
+      void service(tenantId, (tx) => tx`update worker_locks set until = ${new Date(now() + LOCK_LEASE_MS)} where name = ${name} and holder = ${holder}`).catch(
+        (e) => console.error(`workers: renewing lock ${name}: ${(e as Error).message}`),
+      );
+    }, LOCK_RENEW_MS);
+    (renew as { unref?: () => void }).unref?.();
+    try {
+      return await fn();
+    } finally {
+      clearInterval(renew);
+      await service(tenantId, (tx) => tx`delete from worker_locks where name = ${name} and holder = ${holder}`);
+    }
+  }
+
+  /** A counting semaphore: at most `max` of `fn` at once; waiters hold no pool connection. */
+  function limiter(max: number): <T>(fn: () => Promise<T>) => Promise<T> {
+    let running = 0;
+    const queue: Array<() => void> = [];
+    return async (fn) => {
+      if (running >= max) await new Promise<void>((r) => queue.push(r));
+      running += 1;
+      try {
+        return await fn();
+      } finally {
+        running -= 1;
+        queue.shift()?.();
+      }
+    };
+  }
+  // Syncs in this process (each also holds its worker's lease), and sends that hold a pool connection across their
+  // remote call: both below the pool size, so they never take every connection.
+  const limitSync = limiter(SYNC_CONCURRENCY);
+  const limitSend = limiter(SEND_CONCURRENCY);
 
   function locked<T>(tenantId: string, fn: () => Promise<T>): Promise<T> {
     const prev = tenantLocks.get(tenantId) ?? Promise.resolve();
@@ -429,24 +495,23 @@ export function createWorkers(deps: Deps): Workers {
   }
 
   /**
-   * One worker's remote state, serialized: in this process per tenant (one pool connection waits at a time), across
-   * processes by the advisory lock `offload_worker_sync:<worker>` (lock order step 9, right after the budget lock),
-   * held over the remote calls; provisioning also takes `offload_worker_provision:<tenant>` (the tenant's one
-   * environment). Every path that syncs a deployment comes through here.
+   * One worker's remote state, serialized: in this process per tenant, across processes by the worker's lease
+   * `sync:<worker>` (worker_locks), held over the remote calls; provisioning also takes the tenant's lease `provision`
+   * (its one environment). No transaction is open across the remote calls or around provisionOne / syncDeployment's
+   * own short transactions, so a sync never holds one pool connection while it waits for another. At most
+   * SYNC_CONCURRENCY syncs run at once. Every path that syncs a deployment comes through here.
    */
   function syncWorker(tenantId: string, workerId: string, provision: boolean): Promise<void> {
     return locked(tenantId, () =>
-      service(tenantId, async (tx) => {
-        await tx`select pg_advisory_xact_lock(hashtext(${"offload_worker_sync:" + workerId}))`;
-        if (provision) {
-          const [x] = await tx`select state from workers where id = ${workerId}`;
-          if (x?.state === "provisioning") {
-            await tx`select pg_advisory_xact_lock(hashtext(${"offload_worker_provision:" + tenantId}))`;
-            await provisionOne(tenantId, workerId);
+      limitSync(() =>
+        withLease(tenantId, `sync:${workerId}`, async () => {
+          if (provision) {
+            const [x] = await service(tenantId, (tx) => tx`select state from workers where id = ${workerId}`);
+            if (x?.state === "provisioning") await withLease(tenantId, "provision", () => provisionOne(tenantId, workerId));
           }
-        }
-        await syncDeployment(tenantId, workerId);
-      }),
+          await syncDeployment(tenantId, workerId);
+        }),
+      ),
     );
   }
 
@@ -696,7 +761,7 @@ export function createWorkers(deps: Deps): Workers {
         if (ac.signal.aborted) return;
         if (first) {
           // Stopped while the stream opened: the first message is never sent; the log shows how the session idled.
-          if (!(await sendFirst(ctx, first)) && (await catchUp(ctx))) return;
+          if ((await sendFirst(ctx, first)) === "stopped" && (await catchUp(ctx))) return;
         } else {
           const pending = await pendingFirst(ctx);
           if (pending) await sendFirst(ctx, pending);
@@ -755,19 +820,29 @@ export function createWorkers(deps: Deps): Workers {
    * across the send, and every interrupt request updates that row: a request made first is seen here, one made during
    * the send waits for it and is delivered after it. So no work ever reaches a session after its interrupt.
    */
-  async function sendUnlessStopped(ctx: Ctx, events: UserEvent[] | [ReturnType<typeof runMessage>], after?: (tx: Tx) => Promise<unknown>): Promise<boolean> {
-    return service(ctx.tenantId, async (tx) => {
+  async function sendUnlessStopped(ctx: Ctx, events: UserEvent[]): Promise<boolean> {
+    return limitSend(() => service(ctx.tenantId, async (tx) => {
       const [r] = await tx`select interrupt_sent_at, ended_at from worker_runs where id = ${ctx.run.id} for update`;
       if (!r || r.interrupt_sent_at !== null || r.ended_at !== null) return false;
-      await api.sendEvents(ctx.sessionId, events as UserEvent[]);
-      if (after) await after(tx);
+      await api.sendEvents(ctx.sessionId, events);
       return true;
-    });
+    }));
   }
 
-  /** The run's first message, unless the run was stopped first. False when it was not sent. */
-  async function sendFirst(ctx: Ctx, first: ReturnType<typeof runMessage>): Promise<boolean> {
-    return sendUnlessStopped(ctx, [first], (tx) => tx`update worker_runs set first_sent_at = coalesce(first_sent_at, ${new Date(now())}) where id = ${ctx.run.id}`);
+  /**
+   * The run's first message, at most once: checked (`first_sent_at`, interrupt, end) and marked under the run's row
+   * lock in the same transaction as the send, so two consumers (two processes recovering one session) send it once.
+   * `stopped` when the run ended or its interrupt is requested; `already` when another consumer sent it.
+   */
+  async function sendFirst(ctx: Ctx, first: ReturnType<typeof runMessage>): Promise<"sent" | "stopped" | "already"> {
+    return limitSend(() => service(ctx.tenantId, async (tx) => {
+      const [r] = await tx`select interrupt_sent_at, ended_at, first_sent_at from worker_runs where id = ${ctx.run.id} for update`;
+      if (!r || r.interrupt_sent_at !== null || r.ended_at !== null) return "stopped";
+      if (r.first_sent_at !== null) return "already";
+      await api.sendEvents(ctx.sessionId, [first] as unknown as UserEvent[]);
+      await tx`update worker_runs set first_sent_at = ${new Date(now())} where id = ${ctx.run.id}`;
+      return "sent";
+    }));
   }
 
   /**
@@ -1581,8 +1656,8 @@ export function createWorkers(deps: Deps): Workers {
     retention,
     recover,
     lockBudget,
-    async lockWorkerSync(tx, workerId) {
-      await tx`select pg_advisory_xact_lock(hashtext(${"offload_worker_sync:" + workerId}))`;
+    withWorkerSync(tenantId, workerId, fn) {
+      return withLease(tenantId, `sync:${workerId}`, fn);
     },
     monthSpent,
     async idle() {

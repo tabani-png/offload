@@ -209,3 +209,16 @@ required, or treat a missing set as empty.
 | unsettled session (`session_unsettled`) | until confirmed | `sweep` and `recover` (`settleLost`) | no |
 The in-memory guards (`consuming`, `opening`) never block a retry: an attached consumer's session is caught up next
 to it, and a run being opened is left to `openSession`, which consumes it.
+
+## 22. No connection is held while waiting for another; every "once" is checked where it is set
+- A worker's sync lock and the tenant's provisioning lock are lease rows (`worker_locks`, migration 0910): claimed and
+  released by short transactions, renewed every 30 s, expiring 2 min after their holder dies. Waiting for one, and the
+  remote calls and short transactions made while holding one, hold no pool connection. `PATCH /v1/workers/:id` takes
+  the worker's lease before its transaction (it rewrites the deployment row a sync writes). At most 4 syncs run at once
+  per process.
+- Only two transactions stay open across a remote call, on purpose: `sendUnlessStopped` and `sendFirst` hold the
+  run's row lock across the send (§16, so no work reaches a session after its interrupt). Neither opens another
+  transaction, and at most 4 run at once per process, below the pool size.
+- `sendFirst` checks `first_sent_at` with the interrupt and the end, and sets it, under that row lock in the send's
+  transaction: two processes recovering one session send the first message once. The event-log check in
+  `pendingFirst` stays (a first message already in the log counts as sent).
