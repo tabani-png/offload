@@ -83,7 +83,8 @@ describe("s22 hand-off: workflow -> the drafter, the rest -> a draft brief", () 
     expect(token.length).toBeGreaterThan(30);
     // Only the token's sha256 is on disk.
     expect(readFileSync(join(home, "solutions", brief.id, "approval.json"), "utf8")).not.toContain(token);
-    expect(code(() => approveBrief(home, brief.id, brief.hash, NOW))).toBe("conflict");
+    // Approving the same exact brief again replaces the token (a lost token is not a dead end).
+    expect(approveBrief(home, brief.id, brief.hash, NOW).token).not.toBe(token);
   });
 
   test("BRIEF: hand-off returns the builder prompt once; a wrong token, a reuse or a draft brief is refused", () => {
