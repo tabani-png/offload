@@ -150,10 +150,18 @@ From a 7-day blind test on screenshot-only data (one synthetic app, captions fro
   observed time and `arithmetic` says "…, capped at the X h/wk observed". Additive `saving.confidence` =
   `{ level: "low", capped, observedWeeklyHours, reasons[] }`, present only on a low-confidence estimate (capped, < 5
   instances, one day, one task > 50% of all time across >= 4 apps, >= 50% of its time described only as looking).
+  A task whose every step only reads (no text or record write) claims no saving: `arithmetic` ends "… → every step
+  only reads, nothing is done for you = X h/wk → saves 0.0 h/wk (0%)", so it falls under the insight threshold and the
+  flat "read + approve" 87-90% figure is not shown.
 - Plan needs (`serve`): resolved through the connector chain (`plan/chain-resolver.ts`) instead of `pending`. A
   product a caption named that the catalog lacks tries a connector on this Mac, then Composio through its toolkit
   (s17 universe target), then its direct API, and only then computer use; `GET /connectors/:id` for such an app target
-  lists `methods: ["mcp","composio","api","computer"]`. Other app targets are unchanged.
+  lists `methods: ["mcp","composio","api","computer"]`. Other app targets are unchanged. A need is matched to what
+  each method advertises (`chain-resolver.ts serves`): the exact capability; computer use's `screen.read` for any read
+  and its gated commit for `ui.commit`; for an app's generic need (`screen.read`, `file.read`, `ui.commit`) any read /
+  write that a connector, Composio or the app's own API offers for that app. A specific catalog commit (`mail.send`,
+  ...) needs exactly that capability. A local document's `file.read` resolves with `method: "local"` ("reading the
+  file on this Mac") without probing the chain.
 
 ## GET /insights/:id/evidence → `EvidenceResponse`
 The proof behind every number: `figures.<name>.eventIds` (all figures plus `saving`), the task's `instances`
@@ -189,7 +197,10 @@ keeps it in memory only. A missing or failing observer is an error (sealing fail
 is NOT purged); there is no fallback to raw keys. `OFFLOAD_KEYS=file` (tests, fixtures only) keeps the s05b raw
 32-byte files in `$OFFLOAD_HOME/brain-keys/`. s20: with `OFFLOAD_KEYS` unset, a plain-mode home (day files
 `days/*.jsonl`, no `.jsonl.enc`, no `keys/` folder: written with `OFFLOAD_PLAIN=1` or by an importer) uses file keys
-too, since no observer Keychain stands behind it; `OFFLOAD_KEYS=keychain` forces the Keychain. Raw key files left from s05b are wrapped with the same bytes and deleted
+too, since no observer Keychain stands behind it; `OFFLOAD_KEYS=keychain` forces the Keychain. The mode a home
+settles on (file for a plain home, Keychain for one with `keys/` or `.jsonl.enc` days) is kept in
+`$OFFLOAD_HOME/brain-key-mode` (0600) and wins over the day files from then on, so purging day files never flips it;
+a home with no evidence yet is Keychain and is not marked. Raw key files left from s05b are wrapped with the same bytes and deleted
 when `serve` starts (and when a day with only a raw key is next used); a conflict is logged and the raw file kept.
 States: `drafting` → `ready_for_review` → (approve the dry-run batch) → `active` ⇄ `paused`; `needs_you` is shown on
 top of `active` when a batch waits or a connector is missing. Auto-run is off by default.

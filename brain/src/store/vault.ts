@@ -70,12 +70,52 @@ export function isPlainHome(home: string): boolean {
   return names.some((n) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)) && !names.some((n) => n.endsWith(".jsonl.enc"));
 }
 
-/** OFFLOAD_KEYS=file = raw key files; OFFLOAD_KEYS=keychain = Keychain-wrapped through the observer. Unset: file for a
- * plain-mode home (s20, isPlainHome), else Keychain. */
+/** True when the home shows observer evidence: a `keys/` folder or an encrypted day file. */
+function isObserverHome(home: string): boolean {
+  if (existsSync(join(home, "keys"))) return true;
+  try {
+    return readdirSync(join(home, "days")).some((n) => n.endsWith(".jsonl.enc"));
+  } catch {
+    return false;
+  }
+}
+
+/** s20 review: the key mode a home settled on, kept in $OFFLOAD_HOME/brain-key-mode ("file" or "keychain", 0600). The
+ * day files the mode is first read from expire after 7 days; the keys sealed under it (day keys, the sync device
+ * keys) do not, so the mode must never be re-derived from what retention left. */
+export const keyModePath = (home: string) => join(home, "brain-key-mode");
+
+function rememberedMode(home: string): BrainKeyMode | null {
+  try {
+    const v = readFileSync(keyModePath(home), "utf8").trim();
+    return v === "file" || v === "keychain" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberMode(home: string, mode: BrainKeyMode): void {
+  try {
+    writeAtomic(keyModePath(home), `${mode}\n`);
+  } catch {
+    // A home that cannot be written to cannot seal either; the mode is derived again next time.
+  }
+}
+
+/** OFFLOAD_KEYS=file = raw key files; OFFLOAD_KEYS=keychain = Keychain-wrapped through the observer. Unset: the mode
+ * the home remembered; else file for a plain-mode home (s20, isPlainHome) and Keychain for an observer home, either of
+ * which is then remembered (s20 review: a purge of day files never flips it); a home with no evidence yet is Keychain,
+ * not remembered. */
 export const brainKeyMode = (env: ObserverEnv = process.env, home?: string): BrainKeyMode => {
   if (env.OFFLOAD_KEYS === "file") return "file";
   if (env.OFFLOAD_KEYS === "keychain") return "keychain";
-  return home !== undefined && isPlainHome(home) ? "file" : "keychain";
+  if (home === undefined) return "keychain";
+  const kept = rememberedMode(home);
+  if (kept !== null) return kept;
+  const mode: BrainKeyMode | null = isPlainHome(home) ? "file" : isObserverHome(home) ? "keychain" : null;
+  if (mode === null) return "keychain";
+  rememberMode(home, mode);
+  return mode;
 };
 
 /** Raw key folder (OFFLOAD_KEYS=file, and s05b leftovers waiting for migration). */

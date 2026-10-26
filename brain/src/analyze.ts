@@ -11,6 +11,7 @@ import type { DayLabel, OffloadEvent, Span, Task, TaskLabel, TaskProfile, TaskSt
 import type { SpanDescription } from "./understanding/describe.ts";
 import { StubEmbedder, type Embedder } from "./understanding/embed.ts";
 import { isGenericVerb } from "./understanding/verbs.ts";
+import { stepClass } from "./plan/steps.ts";
 import { framesFromEvents, mergeFrames, type FrameNote } from "./understanding/frames.ts";
 import { understandingJudge } from "./understanding/labeler.ts";
 import { understandSpans } from "./understanding/pipeline.ts";
@@ -97,7 +98,9 @@ export function savingSignals(p: TaskProfile, share: number): SavingSignals {
   const total = u.steps.reduce((n, s) => n + s.activeMs, 0);
   const generic = u.steps.filter((s) => isGenericVerb(s.verb)).reduce((n, s) => n + s.activeMs, 0);
   const surfaces = new Set(u.surfaces.map((s) => `${s.app}|${s.host}`)).size;
-  return { share, surfaces, genericShare: total === 0 ? 0 : generic / total };
+  // s20 review: no text or record write anywhere = the plan can only read and ask (no saving is claimed for it).
+  const readOnly = u.steps.length > 0 && u.steps.every((s) => stepClass(s) !== "text" && stepClass(s) !== "record");
+  return { share, surfaces, genericShare: total === 0 ? 0 : generic / total, ...(readOnly ? { readOnly } : {}) };
 }
 
 export const insightIdFor = (taskId: string) => `ins_${taskId.replace(/^t_/, "")}`;

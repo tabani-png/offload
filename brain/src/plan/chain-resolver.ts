@@ -49,7 +49,29 @@ function appTarget(n: CapabilityNeedDTO): ChainTarget {
 /** What a universe toolkit is asked for in place of an app target's screen read / UI commit. */
 const genericOf = (capability: string, role: CapabilityNeedDTO["role"]) => (role === "read" || capability === SCREEN_READ || capability.endsWith(".read") ? GENERIC_READ : GENERIC_COMMIT);
 
-const offers = (s: MethodState, capability: string) => s.health === "ok" && (s.reads.includes(capability) || s.writes.includes(capability));
+/** s20 review: what a local document read is called (no account, nothing to set up: the file is on this Mac). */
+const LOCAL_FILE_READ = "file.read";
+const LOCAL_WORDS = "reading the file on this Mac";
+
+/**
+ * s20 review (Codex P2 on 497ffdf): a need is matched to what each METHOD advertises, not only by its exact name.
+ * - the exact capability always serves;
+ * - computer use reads any app on screen (`screen.read` serves every read need: mail.read, file.read, ...) and does
+ *   any UI commit (`ui.commit`): every computer target has the same gated commit tool (computer/executor.ts);
+ * - a generic need of an app (`screen.read`, `file.read`, `ui.commit`: "read / change what is in this app") is served
+ *   by any read / write a connector on this Mac, Composio or the app's own API advertises for that same app, and by a
+ *   universe toolkit's generic read / commit; each commit still waits for exact approval at the gate (ADR 0006);
+ * - a specific catalog commit (mail.send, accounting.bill, ...) is never served by a different write.
+ */
+export function serves(method: Method, s: Pick<MethodState, "health" | "reads" | "writes">, n: Pick<CapabilityNeedDTO, "capability" | "role">, asked: string = n.capability): boolean {
+  if (s.health !== "ok") return false;
+  if (s.reads.includes(asked) || s.writes.includes(asked)) return true;
+  const read = n.role === "read";
+  if (method === "computer") return read ? s.reads.includes(SCREEN_READ) : n.capability === UI_COMMIT;
+  const generic = read ? n.capability === SCREEN_READ || n.capability === LOCAL_FILE_READ : n.capability === UI_COMMIT;
+  if (!generic) return false;
+  return read ? s.reads.length > 0 : s.writes.length > 0;
+}
 
 export class ChainCapabilityResolver implements CapabilityResolver {
   constructor(
@@ -83,8 +105,13 @@ export class ChainCapabilityResolver implements CapabilityResolver {
       const k = `${n.target}\u0000${n.capability}`;
       if (seen.has(k)) continue;
       seen.add(k);
+      // A local document is read from disk first: no method has to be set up for it (the s14 `local` tool option).
+      if (n.via === "local_file" && n.role === "read" && n.capability === LOCAL_FILE_READ) {
+        out.push({ target: n.target, capability: n.capability, status: "resolved", method: "local", reason: `${n.targetName}: by ${LOCAL_WORDS}.` });
+        continue;
+      }
       const tried = await this.attempts(n);
-      const pick = tried.find((a) => offers(a.state, a.capability));
+      const pick = tried.find((a) => serves(a.method, a.state, n, a.capability));
       const before = pick === undefined ? tried : tried.slice(0, tried.indexOf(pick));
       const why = before.map((a) => `${METHOD_WORDS[a.method]}: ${a.state.reason ?? "it cannot do this"}`).join(" ");
       out.push(
