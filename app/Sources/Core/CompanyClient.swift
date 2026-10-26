@@ -460,12 +460,13 @@ struct CompanyGlance: Equatable, Sendable {
 // MARK: errors and copy
 
 enum CompanyError: Error, Equatable {
-  case noticeFirst, noticeUnknown, noNotice, notConnected, unsafeURL, signInTimedOut, revoked, changedSincePreview, badHash
+  case noticeFirst, noticeUnknown, noNoticePublished, noNotice, notConnected, unsafeURL, signInTimedOut, revoked, changedSincePreview, badHash
 
   var userMessage: String {
     switch self {
     case .noticeFirst: return "Read your company's notice first. Nothing is shared before you acknowledge it."
     case .noticeUnknown: return "Offload is still checking your company's notice. Nothing is shared until you read it."
+    case .noNoticePublished: return "Your company hasn't published a notice yet. Nothing is shared until it does and you read it."
     case .noNotice: return "Your company has no notice for you to acknowledge right now."
     case .notConnected: return "Connect to your company first."
     case .unsafeURL: return "That sign-in page is not your company's address. Do not sign in there; Offload stopped waiting."
@@ -607,21 +608,34 @@ actor CompanyService {
 
   /// Bumped before and after every request that changes sync state (pause, resume, ack): a status read that was in
   /// flight across one is stale and is dropped, so a 30 s poll can never undo Pause on screen.
+  /// Mutations can overlap (an ack and a pause), so freshness is two numbers: how many are in flight, and a
+  /// generation that only grows. A read is fresh only if it started and ended with none in flight and the same
+  /// generation; anything else is dropped and the cached status (the mutations' own results) stands.
   private var generation = 0
+  private var inFlight = 0
 
   @discardableResult
-  func refresh() async throws -> CompanyStatus {
+  func refresh() async throws -> CompanyStatus { try await read().status }
+
+  /// The background read for the app: the status, and whether it is fresh. The model applies only fresh reads.
+  func readQuietly() async -> (status: CompanyStatus, fresh: Bool) {
+    if let s = status, s.isConnected, s.notice == nil { try? await api.refreshConfig() }
+    do { return try await read() } catch { return (status ?? .empty, false) }
+  }
+
+  private func read() async throws -> (status: CompanyStatus, fresh: Bool) {
     let started = generation
+    let clean = inFlight == 0
     let s = try await api.status()
-    // Odd = a mutation was in flight when the read started; changed = one ran across it. Either way it is stale.
-    if started != generation || started % 2 == 1, let current = status { return current }
+    guard clean, inFlight == 0, started == generation else { return (status ?? s, false) }
     status = s
-    return s
+    return (s, true)
   }
 
   private func mutate<T>(_ body: () async throws -> T) async rethrows -> T {
+    inFlight += 1
     generation += 1
-    defer { generation += 1 }
+    defer { inFlight -= 1; generation += 1 }
     return try await body()
   }
 
@@ -630,10 +644,7 @@ actor CompanyService {
   ///
   /// While connected with the notice unknown, it first nudges the brain to read the config, so the first-run notice
   /// shows up without waiting for the brain's next flush.
-  func statusQuietly() async -> CompanyStatus {
-    if let s = status, s.isConnected, s.notice == nil { try? await api.refreshConfig() }
-    do { return try await refresh() } catch { return status ?? .empty }
-  }
+  func statusQuietly() async -> CompanyStatus { await readQuietly().status }
 
   /// After sign-in: the brain has not read the device config yet, so ask it to, and poll a few times for the notice.
   private func settleNotice(_ connected: CompanyStatus) async -> CompanyStatus {
@@ -727,6 +738,7 @@ actor CompanyService {
   private func gate(_ a: CompanyGate.Action, _ s: CompanyStatus) throws {
     guard CompanyGate.allows(a, status: s) else {
       if s.waitingForNotice { throw CompanyError.noticeFirst }
+      if s.isConnected, s.noticeState == .noneRequired { throw CompanyError.noNoticePublished }
       if s.checkingNotice { throw CompanyError.noticeUnknown }
       throw CompanyError.notConnected
     }
