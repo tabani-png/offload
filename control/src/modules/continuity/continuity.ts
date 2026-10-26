@@ -285,12 +285,27 @@ export function createContinuity(deps: Deps): Continuity {
     return rows.map((r) => r.id);
   }
 
+  /**
+   * Every workflow the person's work depends on: the registry's (role workflows of the job roles they hold, their own
+   * proposals) and every workflow they ran, from the run records: broker batches they ran or sent as (S2-07) and run
+   * outcomes their devices synced (S2-05). That covers a dept lead who runs without holding the role and a person whose
+   * role was removed before offboarding. Only role workflows get a hand-over (the caller checks).
+   */
+  async function workflowsToHandOver(tx: Tx, personId: string): Promise<string[]> {
+    const ids = new Set(await deps.ports.registry.workflowsOf(tx, personId));
+    const ran = (await tx`select workflow_id::text as id from batches
+        where runner_person_id = ${personId} or (identity_type = 'person' and identity_id::text = ${personId})
+      union select workflow_id::text from run_outcomes where person_id = ${personId}`) as Array<{ id: string }>;
+    for (const r of ran) if (isUuid(r.id)) ids.add(r.id);
+    return [...ids].sort();
+  }
+
   /** One hand-over per role workflow the person runs or owns (unpromoted proposals stay with the registry, ADR 0107 §7). */
   async function openHandovers(tx: Tx, personId: string, removed: string[], actor: Actor): Promise<number> {
     const reg = deps.ports.registry as Partial<RegistryApi>;
     if (typeof reg.getVersion !== "function") throw new Error("continuity: the S2-06 registry port is not loaded");
     let opened = 0;
-    for (const workflowId of await deps.ports.registry.workflowsOf(tx, personId)) {
+    for (const workflowId of await workflowsToHandOver(tx, personId)) {
       // Job role and department are the workflow's, the same at every version; version 1 exists for every role workflow.
       const v = await reg.getVersion(tx, workflowId, 1);
       if (!v || v.state !== "role") continue;
@@ -656,9 +671,13 @@ export function createContinuity(deps: Deps): Continuity {
     const due = await sys(async (tx) => tx`select id from people where state = 'leaving' and leaving_on is not null
       and leaving_on <= ${await tenantToday(tx, now())}::date order by id`);
     for (const r of due as Array<{ id: string }>) {
-      const done = await sys((tx) =>
-        freezeWith(tx, r.id, { reason: "end_date", source: "admin", detail: "end_date", actor: SYSTEM, requestedBy: null }),
-      );
+      const done = await sys(async (tx) => {
+        // Re-read under the person lock: an end date postponed or cleared since the list above is honoured.
+        const [p] = await tx`select state = 'leaving' and leaving_on is not null and leaving_on <= ${await tenantToday(tx, now())}::date as due
+          from people where id = ${r.id} for update`;
+        if (!p?.due) return false;
+        return freezeWith(tx, r.id, { reason: "end_date", source: "admin", detail: "end_date", actor: SYSTEM, requestedBy: null });
+      });
       if (done) out.frozen++;
     }
     // 3. People given an end date elsewhere (PATCH /v1/people/:id leavingOn): open their hand-overs early.

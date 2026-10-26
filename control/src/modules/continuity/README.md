@@ -20,7 +20,8 @@ Offboarding (ADR 0107, amendments ADR 0113). Tables: `migrations/1000_continuity
 ## Freeze (one transaction)
 Lock the person (row + `continuity:<id>` advisory lock), lock the person's active overnight policies (broker lock order
 step 2), mark `frozen`, revoke sessions and devices (`revokeAccess`), delete (or erase, ADR 0113 §2) personal
-connections, record the offboarding, open one hand-over per role workflow (registry `workflowsOf` + `getVersion`), then
+connections, record the offboarding, open one hand-over per role workflow the person holds, proposed or ran (registry `workflowsOf`, broker `batches`, S2-05
+`run_outcomes`; `getVersion` keeps role workflows), then
 pause the person's active policies and `broker.revokeTokensFor` (which flushes its audit events, taking the audit-chain
 lock) LAST, then S2-10's own audit events, which were queued until then. After commit: `WorkersPort.pauseFor`
 (advisory lock + `pause_pending`, with a timeout, retried by the sweep).
@@ -41,7 +42,8 @@ The freeze transaction does only database work: it pauses the leaver's active ov
 tokens (`broker.revokeTokensFor`), the same as `broker.stopRunsFor` without its workers call. The workers pause
 (`WorkersPort.pauseFor`, a remote service) runs only after commit, from the durable `offboardings.pause_pending` marker
 (`pausePending`), bounded by `pauseTimeoutMs` (30 s), and is retried by every sweep until delivered
-(`person.workers_paused`). Registry calls (`workflowsOf`, `getVersion`) are in-process reads without locks.
+(`person.workers_paused`). Registry calls (`workflowsOf`, `getVersion`) and the run-record reads are in-process reads without locks. The
+end-date sweep re-reads the end date under the person lock before it freezes.
 
 ## Gate
 Mounting routes wraps `registry.isRunnableBy` and `broker.proposeBatch` (ADR 0113 §1). A test or wiring that overrides
