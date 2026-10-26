@@ -435,7 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       return "The demo week needs the brain, and it could not be found. Run scripts/demo.sh instead."
     }
     let appSupport = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-    let demo = DemoWeek.home(repo: repo, appSupport: appSupport)
+    let demo = DemoWeek.home(location: brain, appSupport: appSupport)
     guard DemoWeek.isSafeDemoHome(demo, realHome: options.home) || options.demo else {
       return "Offload is already pointed at a demo folder."
     }

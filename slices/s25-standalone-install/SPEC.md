@@ -5,7 +5,7 @@ depends_on: [s09a (BrainSupervisor), s24-brief-runner (builder runs bun subproce
 parallel_safe: true
 human_gated: false (Developer ID signing and notarization run only when the operator sets the env vars)
 verify: bash slices/s25-standalone-install/verify.sh
-paths_in_scope: [app/build.sh, app/brain.entitlements, app/Sources/Core/BrainSupervisor.swift, app/Sources/Core/BrainCheck.swift, app/Sources/App/OffloadApp.swift, app/README.md, slices/s25-standalone-install/**, plan/adr/0013-*.md, LAUNCH.md]
+paths_in_scope: [app/build.sh, app/brain.entitlements, app/Sources/Core/BrainSupervisor.swift, app/Sources/Core/BrainCheck.swift, app/Sources/Core/Onboarding.swift (DemoWeek.home), app/Sources/App/OffloadApp.swift, app/README.md, slices/s25-standalone-install/**, plan/adr/0013-*.md, LAUNCH.md]
 paths_out_of_scope: [brain/**, engine/**, control/**, web/**, schemas/**, packages/**]
 ---
 

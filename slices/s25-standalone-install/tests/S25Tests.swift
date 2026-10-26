@@ -98,4 +98,15 @@ struct S25LocateTests {
     #expect(BrainCheck.sourceLine(dev) == "brain source: repo /u/.bun/bin/bun /r")
     #expect(BrainCheck.sourceLine(nil) == "brain source: none")
   }
+
+  @Test("BUNDLED: the demo week never writes into the app bundle; a repo brain keeps scratch/demo (dev)")
+  func demoHome() {
+    let support = URL(fileURLWithPath: "/u/Library/Application Support")
+    let bundled = BrainLocation(bun: URL(fileURLWithPath: bunInApp),
+                                root: URL(fileURLWithPath: "/Applications/Offload.app/Contents/Resources/offload"), bundled: true)
+    #expect(DemoWeek.home(location: bundled, appSupport: support).path == "/u/Library/Application Support/Offload Demo")
+    let dev = BrainLocation(bun: URL(fileURLWithPath: "/u/.bun/bin/bun"), root: URL(fileURLWithPath: "/r"), bundled: false)
+    #expect(DemoWeek.home(location: dev, appSupport: support).path == "/r/scratch/demo")
+    #expect(DemoWeek.home(location: nil, appSupport: support).path == "/u/Library/Application Support/Offload Demo")
+  }
 }
