@@ -15,7 +15,7 @@ import { createGate, type GateDecisionLog } from "./gate.ts";
 import { parseFacts } from "./facts.ts";
 import { observedInstances } from "./observed.ts";
 import { ensureDir, gateLogPath, readText, readWorkflow, saveBatch, updateWorkflow, workflowDir } from "./store.ts";
-import { generalDryRun } from "../plan/dryrun.ts";
+import { generalDryRun, producesNothing } from "../plan/dryrun.ts";
 import type { GeneralDryRunDTO } from "../api/s14-types.ts";
 import type { UserContext } from "../types.ts";
 import { readUserContext } from "../context/store.ts";
@@ -130,8 +130,15 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
 
   const timed = general !== null ? general.general.instances.map((i) => i.estimate.observedMinutes) : out.map((i) => i.estimate.observedMinutes);
   const observedMinutes = round1(timed.reduce((n, m) => n + m, 0));
-  const reviewMinutes = round1((timed.length * wf.reviewSecondsPerItem) / 60);
-  const savedMinutes = Math.max(0, round1(observedMinutes - reviewMinutes));
+  // s26: a general instance the workflow cannot fill at all saves nothing; only the ones it can do count.
+  const doable = general !== null ? general.general.instances.filter((i) => !producesNothing(general.general.outputType, i.ours)).map((i) => i.estimate.observedMinutes) : timed;
+  const doableMinutes = round1(doable.reduce((n, m) => n + m, 0));
+  const reviewMinutes = round1((doable.length * wf.reviewSecondsPerItem) / 60);
+  const savedMinutes = Math.max(0, round1(doableMinutes - reviewMinutes));
+  const arithmetic =
+    doable.length === timed.length
+      ? `you spent ${observedMinutes.toFixed(1)} min on these ${timed.length} → review ${timed.length} × ${wf.reviewSecondsPerItem} s = ${reviewMinutes.toFixed(1)} min → saves ${savedMinutes.toFixed(1)} min`
+      : `you spent ${observedMinutes.toFixed(1)} min on these ${timed.length} → ${doable.length} of ${timed.length} can be done from what was on screen (${doableMinutes.toFixed(1)} min) → review ${doable.length} × ${wf.reviewSecondsPerItem} s = ${reviewMinutes.toFixed(1)} min → saves ${savedMinutes.toFixed(1)} min`;
   const res: DryRunResult = {
     version: API_VERSION,
     workflowId: wf.id,
@@ -145,7 +152,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
       observedMinutes,
       reviewMinutes,
       savedMinutes,
-      arithmetic: `you spent ${observedMinutes.toFixed(1)} min on these ${timed.length} → review ${timed.length} × ${wf.reviewSecondsPerItem} s = ${reviewMinutes.toFixed(1)} min → saves ${savedMinutes.toFixed(1)} min`,
+      arithmetic,
     },
     gateLog: gateLog.map((d) => ({ at: d.at, tool: d.tool, toolClass: d.toolClass, decision: d.decision, reason: d.reason, ...(d.itemKey === undefined ? {} : { itemKey: d.itemKey }) })),
     warnings,

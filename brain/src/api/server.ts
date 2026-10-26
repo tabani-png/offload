@@ -21,6 +21,7 @@ import { s14Route } from "./s14-routes.ts";
 import { ChainCapabilityResolver, observedTargets } from "../plan/chain-resolver.ts";
 import { solutionsRoute } from "../solutions/routes.ts";
 import { withSolutions } from "../solutions/service.ts";
+import { leftAloneTasks } from "../solutions/left-alone.ts";
 import { timeBreakdown } from "../time/breakdown.ts";
 import { syncRoute } from "./sync-routes.ts";
 import { SyncClient, type SyncDeps } from "../sync/client.ts";
@@ -369,7 +370,7 @@ export function createBrain(opts: BrainOptions): Brain {
       if (review === "invalid") return error(400, "bad_request", "reviewSeconds must be a number in (0, 600]");
       // s22: plus `solutions` per insight and `heldBack[]` (additive; rules only, no model call).
       const a = await analysis(review);
-      return json(200, withSolutions(a, toInsights(a)));
+      return json(200, withSolutions(a, toInsights(a), leftAloneTasks(opts.home)));
     }
     const ev = /^\/insights\/([A-Za-z0-9_-]+)\/evidence$/.exec(path);
     if (ev?.[1] !== undefined) {

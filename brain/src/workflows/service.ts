@@ -1,4 +1,5 @@
 // Read models for the API and CLI: workflow summaries and details, connector status, measured saving, dashboard.
+import { leftAloneTasks } from "../solutions/left-alone.ts";
 import type { Analysis } from "../analyze.ts";
 import {
   API_VERSION,
@@ -215,6 +216,8 @@ export function dashboard(a: Analysis, home: string, env: Env, now: number = Dat
   const running = automations.filter((x) => x.state === "active" || x.state === "needs_you");
   const measuredOnes = running.filter((x) => x.measuredHoursSavedPerWeek !== null);
   const automated = new Set(automations.map((x) => x.insightId));
+  // s26: tasks the person chose to leave alone are not suggested again.
+  const left = leftAloneTasks(home);
   return {
     version: API_VERSION,
     automations,
@@ -223,7 +226,7 @@ export function dashboard(a: Analysis, home: string, env: Env, now: number = Dat
       measuredHoursSavedPerWeek: measuredOnes.length === 0 ? null : r1(measuredOnes.reduce((n, x) => n + (x.measuredHoursSavedPerWeek ?? 0), 0)),
     },
     suggestions: a.insights
-      .filter((i) => !automated.has(i.id))
+      .filter((i) => !automated.has(i.id) && !left.has(i.taskId))
       .slice(0, 3)
       .map((i) => ({ insightId: i.id, name: i.label.name, weeklyHoursSaved: i.saving.weeklyHoursSaved })),
   };

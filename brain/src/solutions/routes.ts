@@ -17,6 +17,7 @@ import { buildRoute, type BuildContext } from "../builder/routes.ts";
 import { withBuildCosts } from "../builder/record.ts";
 import { approveBrief, BRIEF_ID_RE, BriefError, handOffBrief, readBrief } from "./brief.ts";
 import { ChooseError, chooseSolution, designSolutions, parseKind } from "./service.ts";
+import { clearLeftAlone, markLeftAlone } from "./left-alone.ts";
 
 export interface SolutionsContext {
   home: string;
@@ -82,7 +83,14 @@ export async function solutionsRoute(req: Request, path: string, ctx: SolutionsC
       const a = await ctx.analysis();
       const { set } = await designSolutions({ analysis: a, ref: ins[1]!, model: ctx.model, models: modelsOf(ctx), ...(user === undefined ? {} : { user }) });
       if (kind === null) return json(200, withBuildCosts(ctx.home, set));
+      // s26: leave it alone = nothing is built; the choice is remembered and the task is not suggested again.
+      if (kind === "leave_alone") {
+        if (!set.options.some((o) => o.kind === "leave_alone")) return error(409, "conflict", "no leave_alone option");
+        const leftAlone = markLeftAlone(ctx.home, set.taskId, set.subjectId, ctx.now());
+        return json(200, { kind: "leave_alone", leftAlone, message: "Left alone: nothing is built and Offload will not suggest this task again. Choose another fix for it to take it back." });
+      }
       const r = await chooseSolution({ home: ctx.home, analysis: a, set, kind, model: ctx.model, models: modelsOf(ctx), now: ctx.now, ...(user === undefined ? {} : { user }) });
+      clearLeftAlone(ctx.home, set.taskId);
       if (r.kind === "workflow") return json(r.created ? 201 : 200, { kind: "workflow", workflow: detailOf(ctx.home, r.workflow, connectorStatus(ctx.home, ctx.env, ctx.modelLabel === "stub"), ctx.now()) });
       return json(r.created ? 201 : 200, { kind: r.kind, brief: r.brief });
     } catch (err) {

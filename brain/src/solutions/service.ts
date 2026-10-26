@@ -79,12 +79,14 @@ export async function chooseSolution(o: { home: string; analysis: Analysis; set:
 /** The short form on each insight of GET /insights (rules only, no model call). */
 export interface SolutionsSummaryDTO {
   top: SolutionKind;
+  /** s26: the person chose to leave this task alone (left-alone.json); it is not suggested again. */
+  leftAlone: boolean;
   observedWeeklyHours: number;
   options: Array<{ kind: SolutionKind; what: string; weeklyHoursSaved: number; effort: string; confidence: string }>;
 }
 
-export function solutionsSummary(set: SolutionSet): SolutionsSummaryDTO {
-  return { top: set.top, observedWeeklyHours: set.observedWeeklyHours, options: set.options.map((x) => ({ kind: x.kind, what: x.what, weeklyHoursSaved: x.weeklyHoursSaved, effort: x.effort.level, confidence: x.confidence.level })) };
+export function solutionsSummary(set: SolutionSet, leftAlone = false): SolutionsSummaryDTO {
+  return { top: set.top, leftAlone, observedWeeklyHours: set.observedWeeklyHours, options: set.options.map((x) => ({ kind: x.kind, what: x.what, weeklyHoursSaved: x.weeklyHoursSaved, effort: x.effort.level, confidence: x.confidence.level })) };
 }
 
 export interface HeldBackDTO {
@@ -101,11 +103,11 @@ export interface HeldBackDTO {
 }
 
 /** GET /insights plus, additively, `solutions` on each insight and `heldBack[]`. toInsights itself is unchanged. */
-export function withSolutions(a: Analysis, body: InsightsResponse): InsightsResponse & { heldBack: HeldBackDTO[] } {
+export function withSolutions(a: Analysis, body: InsightsResponse, left: ReadonlySet<string> = new Set()): InsightsResponse & { heldBack: HeldBackDTO[] } {
   const byId = new Map<string, Insight>(a.insights.map((i) => [i.id, i]));
   const insights = body.insights.map((dto) => {
     const i = byId.get(dto.id);
-    return i === undefined ? dto : { ...dto, solutions: solutionsSummary(solutionsFor(a, i)) };
+    return i === undefined ? dto : { ...dto, solutions: solutionsSummary(solutionsFor(a, i), left.has(i.taskId)) };
   });
   const heldBack = (a.heldBack ?? []).map((h) => ({
     id: h.id,
@@ -117,7 +119,7 @@ export function withSolutions(a: Analysis, body: InsightsResponse): InsightsResp
     reason: h.heldBack.reason,
     activeMinutes: h.stats.activeMinutes.value,
     instances: h.stats.instances.value,
-    solutions: solutionsSummary(solutionsFor(a, h)),
+    solutions: solutionsSummary(solutionsFor(a, h), left.has(h.taskId)),
   }));
   return { ...body, insights, heldBack };
 }
