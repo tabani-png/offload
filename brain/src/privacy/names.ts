@@ -21,12 +21,21 @@ const PERSON_LIKE_RE = /<\s*person\s*:[^\n>]{0,40}>+/gi;
 export const NAME_TOKEN = "<name>";
 
 export interface NameMapOptions {
-  /** Names known to be people (contacts): matched wherever they appear, any case. */
+  /** Names known to be people (contacts): every part (full, first, last) is matched wherever it appears, any case,
+   * from the first call on; the full name does not have to appear. */
   known?: readonly string[];
+  /** Contacts with separate fields (a recipient list): first, last, full name and the email's local part. */
+  contacts?: readonly ContactEntry[];
   /** The user's own name(s), e.g. "Muhammad Ali" (placeholder <person:me>). */
   self?: readonly string[];
   /** true = the user's own name is sent as written and never masked. Default false (masked, restored locally). */
   keepSelf?: boolean;
+}
+
+export interface ContactEntry {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
 }
 
 type Part = "full" | "first" | "last" | "email";
@@ -195,8 +204,6 @@ export class NameMap {
   private readonly people: Person[] = [];
   /** Candidate surfaces (exact text) -> the person and part they name. */
   private readonly surfaces = new Map<string, { person: Person; part: Part }>();
-  /** Contacts not met yet: lower-case full name -> the name as written. */
-  private readonly known = new Map<string, string>();
   private readonly toPlaceholder = new Map<string, string>();
   private readonly toSurface = new Map<string, string>();
   private readonly kept = new Set<string>();
@@ -207,10 +214,6 @@ export class NameMap {
   private readonly tag = [...randomBytes(4)].map((b) => String.fromCharCode(97 + (b % 26))).join("");
 
   constructor(o: NameMapOptions = {}) {
-    for (const k of o.known ?? []) {
-      const t = k.replace(/\s+/g, " ").trim();
-      if (t.split(" ").some(trustedPart)) this.known.set(t.toLowerCase(), t);
-    }
     const self = (o.self ?? []).map((s) => s.replace(/\s+/g, " ").trim()).filter((s) => s.length >= 2);
     if (self.length > 0) {
       if (o.keepSelf === true) {
@@ -225,6 +228,26 @@ export class NameMap {
         for (const s of self) this.attach(me, s.split(" "), true);
       }
     }
+    // Contacts register every trusted part up front (round 3: "Ask Zorblax" with no "Zorblax Quux" in the text, or a
+    // recipient JSON with lower-case firstName / lastName fields, must not reach the model readable).
+    const contacts: ContactEntry[] = [...(o.known ?? []).map((k) => ({ firstName: k })), ...(o.contacts ?? [])];
+    for (const c of contacts) {
+      const tokens = `${c.firstName ?? ""} ${c.lastName ?? ""}`.replace(/\s+/g, " ").trim().split(" ").filter((t) => t !== "");
+      const usable = tokens.filter(trustedPart);
+      const email = c.email?.trim();
+      const local = email === undefined || !email.includes("@") ? "" : email.slice(0, email.indexOf("@"));
+      const localOk = local.length >= 3 && !ROLE_MAILBOXES.has(local.toLowerCase()) && !COMMON.has(local.toLowerCase()) && !this.isKept(local);
+      if (usable.length === 0 && !localOk) continue;
+      if (tokens.length > 0 && tokens.every((t) => this.isKept(t))) continue;
+      const p = usable.length > 0 ? this.personFor(tokens, true) : this.newPerson();
+      if (localOk && !this.surfaces.has(local)) this.surfaces.set(local, { person: p, part: "email" });
+    }
+  }
+
+  private newPerson(): Person {
+    const p: Person = { id: "", bareUsed: false };
+    this.people.push(p);
+    return p;
   }
 
   /** People this map has placeholders for. */
@@ -364,11 +387,6 @@ export class NameMap {
     // Full names before lone names, so "Amara" after "Amara Okafor" is the same person.
     for (const f of found.filter((x) => x.name.length > 1)) this.personFor(f.name, f.cued);
     for (const f of found.filter((x) => x.name.length === 1)) if (!this.surfaces.has(f.name[0]!)) this.personFor(f.name, f.cued);
-    // Contacts and names already known that appear in this text, any case.
-    for (const [lower, written] of this.known) {
-      if ([...this.people].some((p) => p.full?.toLowerCase() === lower || (p.full === undefined && p.first?.toLowerCase() === lower))) continue;
-      if (surfaceRegex(written, written.includes(" ")).test(text)) this.personFor(written.split(" "), true);
-    }
     for (const m of text.matchAll(EMAIL_RE)) this.learnEmail(m[0]);
   }
 
@@ -377,13 +395,16 @@ export class NameMap {
     if (ROLE_MAILBOXES.has(local.toLowerCase()) || this.isKept(local)) return;
     const segs = local.split(/[._+-]/).filter((s) => s !== "" && !/^\d+$/.test(s));
     if (segs.length === 0 || segs.length > 3) return;
+    // Parts compare without case or accents: "xantippe.dovrel@" is the user "Xantippe Dovrél".
     const knownParts = new Map<string, Person>();
-    for (const [s, v] of this.surfaces) if (v.part !== "email" && !s.includes(" ")) knownParts.set(s.toLowerCase(), v.person);
-    const ok = segs.every((s) => s.length === 1 || GIVEN.has(s.toLowerCase()) || FAMILY.has(s.toLowerCase()) || knownParts.has(s.toLowerCase()));
-    const anchor = segs.find((s) => knownParts.has(s.toLowerCase()) || GIVEN.has(s.toLowerCase()));
+    for (const [s, v] of this.surfaces) if (v.part !== "email" && !s.includes(" ")) knownParts.set(foldPart(s), v.person);
+    const own = segs.map(foldPart).find((s) => knownParts.has(s));
+    // A segment that names a known person makes the whole local part theirs; otherwise every segment must be a name.
+    const ok = own !== undefined || segs.every((s) => s.length === 1 || GIVEN.has(s.toLowerCase()) || FAMILY.has(s.toLowerCase()));
+    const anchor = own ?? segs.find((s) => GIVEN.has(s.toLowerCase()));
     if (!ok || anchor === undefined || segs.some((s) => ROLE_MAILBOXES.has(s.toLowerCase()))) return;
     if (this.surfaces.has(local)) return;
-    const person = knownParts.get(segs.map((s) => s.toLowerCase()).find((s) => knownParts.has(s)) ?? "") ?? this.personFor([cap(anchor)]);
+    const person = (own === undefined ? undefined : knownParts.get(own)) ?? this.personFor([cap(anchor)]);
     this.surfaces.set(local, { person, part: "email" });
   }
 
@@ -437,6 +458,9 @@ export class NameMap {
     return text.replace(PERSON_PLACEHOLDER_RE, (ph) => this.toSurface.get(ph) ?? ph);
   }
 }
+
+/** A name part compared without case or accents ("Dovrél" = "dovrel"). */
+const foldPart = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 
