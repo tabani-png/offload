@@ -42,7 +42,9 @@ struct S213NoticeStateTests {
     #expect(!CompanyGate.allows(.resume, status: s), "\(kind): resume allowed")
     let state = CompanySyncState(s)
     #expect(state.role != .done, "\(kind): green")
-    #expect(state.label() == "Checking your company's notice…", "\(kind): \(state.label())")
+    // Round 4: none published says so; only an unknown notice is "checking".
+    let label = kind == "unknown" ? "Checking your company's notice…" : "Your company hasn't published a notice yet"
+    #expect(state.label() == label, "\(kind): \(state.label())")
     #expect(state.detail(s) != "Up to date.", "\(kind): says up to date")
     // Pause and the self-view stay available (round 2).
     #expect(CompanyControls.pauseEnabled(s))
@@ -134,12 +136,12 @@ struct S213StaleTests {
     #expect(await svc.status?.paused == true)
   }
 
-  @Test("STALE: Pause/Resume ignores a second press while the first is in flight")
+  @Test("STALE: Pause/Resume ignores a second press of itself while the first is in flight (its own flag, round 4)")
   func busyGuard() throws {
     let model = S213Source.code(S213Source.read(S213Source.app.appendingPathComponent("Surfaces/Company/CompanyModel.swift")))
     let body = try #require(S213Source.body(of: "togglePause", in: model))
-    let guarded = body.contains("guard !busy") && body.contains("busy = true")
-    #expect(guarded, "togglePause has no busy guard")
+    let guarded = body.contains("guard !pausing") && body.contains("pausing = true")
+    #expect(guarded, "togglePause has no guard of its own")
   }
 }
 
