@@ -72,7 +72,14 @@ only saving was the typing.
    pause and delete abort it; the dry run answers 409 and nothing else is tried). A direct connection's read
    operations (configured reads and OpenAPI GETs) come from ONE resolver, `apiReadOperations`, used by the probe, the
    gate policies and the reader; read tools are recognised with the same naming as the probe (dotted operation ids).
-9. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+9. **Round 3 (PR #35 review).** A direct read fills its path arguments (`{report}`) from the learned query and sends
+   only the other arguments as the query string; a path argument Offload has not learned refuses that way plainly
+   (no empty segment) and the chain moves on. Answers are read through their envelopes (up to 4 levels: data.results,
+   items, data.rows, a single object, `columns` + `rows` tables); with several lists the one whose keys match the
+   most fields wins (ties: shallower, then key order); camelCase keys match; a null is missing, never a value. An
+   answer that says it has more pages (`next`, `next_cursor`, `has_more`, `links.next`, ...) is flagged: live items
+   carry a warning and "nothing new" says only the first page was read. Following later pages is not built.
+10. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)

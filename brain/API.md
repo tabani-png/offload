@@ -531,6 +531,9 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
     run with 409 "stopped before reading <source>: ..." and no other method is tried.
   - Round 2: a pause or delete during a dry run's read answers 409 the same way. Direct-connection reads include the
     GET operations of the connection's OpenAPI file (one resolver for the probe, the gate and the reader).
+  - Round 3: direct reads fill `{path}` arguments from the learned query (the rest go in the query string; a missing
+    one refuses that way). Answers are read through nested envelopes and `columns` + `rows` tables; an answer with
+    more pages is flagged on the items and in "nothing new".
 
 ## s19: messaging playbook (additive, ADR 0011)
 A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,

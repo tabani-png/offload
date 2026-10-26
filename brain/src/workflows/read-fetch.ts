@@ -7,7 +7,7 @@
 import type { ReadSourceDTO, ReadStatusDTO } from "../api/s14-types.ts";
 import { scrubLogText } from "../log.ts";
 import { apiServer } from "../connectors/api.ts";
-import { apiReadOperations, buildRequest } from "../connectors/api.ts";
+import { apiReadOperations, buildRequest, pathParams } from "../connectors/api.ts";
 import type { ChainResolver, FetchLike, MethodState } from "../connectors/chain.ts";
 import { COMPOSIO_CLI_SERVER } from "../connectors/composio.ts";
 import type { ComputerDriver } from "../connectors/computer/driver.ts";
@@ -47,7 +47,7 @@ export class ReadRefused extends Error {}
 export class ReadCancelled extends Error {}
 
 export type FetchResult =
-  | { ok: true; via: Method; rows: Array<Array<[string, string]>>; message: string }
+  | { ok: true; via: Method; rows: Array<Array<[string, string]>>; message: string; /** The answer says it has more pages; only the first was read. */ more?: true }
   | { ok: false; status: "refused" | "not_read" | "cancelled"; via: null; message: string };
 
 export interface FetchOptions {
@@ -191,13 +191,13 @@ export class ChainSourceFetcher implements SourceFetcher {
         why.push(`${VIA_WORDS[state.method]}: ${src.targetName} answered with more than Offload reads at once`);
         continue;
       }
-      const { rows, missing } = readValues(text, src.fields);
+      const { rows, missing, more } = readValues(text, src.fields);
       if (rows.length === 0) {
         why.push(`${VIA_WORDS[state.method]}: ${src.targetName} did not show ${missing.join(", ")}`);
         continue;
       }
       // Done rows are dropped first; the batch size is applied later, to what is left (never the other way round).
-      return { ok: true, via: state.method, rows: f.keep === undefined ? rows : rows.filter(f.keep), message: `Read from ${src.targetName} ${VIA_WORDS[state.method]}.` };
+      return { ok: true, via: state.method, rows: f.keep === undefined ? rows : rows.filter(f.keep), message: `Read from ${src.targetName} ${VIA_WORDS[state.method]}.`, ...(more === true ? { more } : {}) };
     }
     return { ok: false, status: "not_read", via: null, message: why.length === 0 ? `no way to read ${src.targetName} is set up on this Mac yet.` : `${why.join("; ")}.` };
   }
@@ -316,12 +316,18 @@ export class ApiSourceReader implements SourceReader {
     // The same resolver the probe advertised it from (configured reads and OpenAPI GETs).
     const op = entry === undefined ? undefined : apiReadOperations(entry).find((x) => x.operationId === parts?.tool);
     if (tool === null || entry === undefined || op === undefined) throw new Error("no direct read for this app");
+    // The learned arguments fill the path first ({report}); a path argument Offload did not learn is a plain refusal
+    // of this way (never an empty path segment); only the arguments left go in the query string.
+    const text = (v: unknown) => (Array.isArray(v) ? v.map(String).join(",") : v === null || v === undefined ? "" : String(v));
+    const params = pathParams(op.path);
+    const lacking = params.filter((k) => text(job.args[k]).trim() === "");
+    if (lacking.length > 0) throw new Error(`the direct read needs ${lacking.join(", ")}, which Offload has not seen you use`);
     return job.call(tool, job.args, async () => {
       const secret = entry.auth === null ? null : await this.o.secrets.read(entry.auth.secret);
-      const built = buildRequest(entry, { method: "GET", path: op.path, body: "none" }, {}, secret);
-      // The learned query goes in the query string: Offload's own view of the data (report, fields, filters).
+      const built = buildRequest(entry, { method: "GET", path: op.path, body: "none" }, Object.fromEntries(params.map((k) => [k, text(job.args[k])])), secret);
+      // Offload's own view of the data (report, fields, filters): the arguments not in the path, as the query string.
       const u = new URL(built.url);
-      for (const [k, v] of Object.entries(job.args)) u.searchParams.set(k, Array.isArray(v) ? v.join(",") : String(v));
+      for (const [k, v] of Object.entries(job.args)) if (!params.includes(k)) u.searchParams.set(k, text(v));
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), this.o.timeoutMs ?? 15_000);
       const onAbort = () => ac.abort();

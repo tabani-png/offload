@@ -108,10 +108,15 @@ export function gmailRaw(to: string, subject: string, body: string): string {
   return b64url(Buffer.from(mime, "utf8"));
 }
 
+const PATH_PARAM_RE = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+/** s27: the `{name}` arguments a path needs, in order (buildRequest fills them; the rest of the args are not in the path). */
+export const pathParams = (path: string): string[] => [...path.matchAll(PATH_PARAM_RE)].map((m) => m[1]!);
+
 /** The HTTP request for one operation. The secret goes only into the auth header. */
 export function buildRequest(entry: ApiEntry, op: Pick<ApiOperation, "method" | "path" | "body">, args: Record<string, unknown>, secret: string | null): { url: string; init: RequestInit } {
   const used = new Set<string>();
-  const path = op.path.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, k: string) => {
+  const path = op.path.replace(PATH_PARAM_RE, (_, k: string) => {
     used.add(k);
     return encodeURIComponent(String(args[k] ?? ""));
   });

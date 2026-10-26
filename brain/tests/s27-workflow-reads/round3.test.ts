@@ -16,7 +16,7 @@ const F = [
   { label: "Signups", sourceLabel: "Signups" },
   { label: "Active", sourceLabel: "Active users" },
 ];
-const ONE = [[["Signups", "352"], ["Active", "2410"]]];
+const ONE: Array<Array<[string, string]>> = [[["Signups", "352"], ["Active", "2410"]]];
 
 describe("s27 round 3: reading real answers", () => {
   test("FETCH: nested envelopes are walked to the rows: data.results, items, data.rows, a single object", () => {

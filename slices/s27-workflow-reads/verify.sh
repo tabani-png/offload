@@ -7,7 +7,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BRAIN="$ROOT/brain"
 BASE=0abc4e0   # origin/main when this slice started
-MIN_TESTS=28
+MIN_TESTS=34
 TAGS="SOURCE STEP GATE FETCH DRYRUN LIVE EXECUTE METRIC"
 fails=0
 fail() { echo "FAIL $*"; fails=$((fails + 1)); }
@@ -42,9 +42,14 @@ echo "== s26 suite (the items.csv path is unchanged)"
 s26="$(cd "$BRAIN" && env -u OFFLOAD_BUILDER_ENABLED bun test tests/s26-automation-e2e 2>&1)" || { echo "$s26" | grep -E "\(fail\)" | head -10; fail "s26 suite failed"; }
 
 echo "== full brain suite"
-all="$(cd "$BRAIN" && bun test 2>&1)"; acode=$?
-echo "$all" | grep -E "^\s*[0-9]+ (pass|fail|skip)$|^Ran [0-9]+ tests" || true
-[ $acode -eq 0 ] || { echo "$all" | grep -E "\(fail\)" | head -20; fail "full brain suite exited $acode"; }
+if [ "${S27_SKIP_FULL_SUITE:-}" = "1" ]; then
+  # Only when the coordinator runs the full suite separately (shared /tmp collisions); never a silent pass.
+  echo "full brain suite: SKIPPED (S27_SKIP_FULL_SUITE=1): run it separately before merging"
+else
+  all="$(cd "$BRAIN" && bun test 2>&1)"; acode=$?
+  echo "$all" | grep -E "^\s*[0-9]+ (pass|fail|skip)$|^Ran [0-9]+ tests" || true
+  [ $acode -eq 0 ] || { echo "$all" | grep -E "\(fail\)" | head -20; fail "full brain suite exited $acode"; }
+fi
 
 echo "== builder stays off by default"
 grep -q 'process.env.OFFLOAD_BUILDER_ENABLED !== "1"' "$BRAIN/src/builder/runner.ts" || fail "builder/runner.ts no longer refuses without OFFLOAD_BUILDER_ENABLED=1"

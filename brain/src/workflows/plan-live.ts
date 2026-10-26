@@ -108,7 +108,7 @@ export function planLiveItems(o: {
   done: ReadonlySet<string>;
   ledger: ReadonlySet<string>;
   /** s27: rows read from the workflow's source (read step); without them the person's list is read. */
-  read?: { rows: ItemRow[]; name: string; line: string };
+  read?: { rows: ItemRow[]; name: string; line: string; /** The source has more pages than the one read. */ more?: boolean };
   /** s27: a plain warning on every item (the source could not be read; these values are from the list). */
   warning?: string;
 }): BatchItem[] {
@@ -134,7 +134,13 @@ export function planLiveItems(o: {
     });
     if (items.length >= o.wf.batchSize) break;
   }
-  if (items.length === 0) throw new PlanLiveError(o.read !== undefined ? `nothing new at ${o.read.name} since the last run: every row it shows now is done` : `every row in ${file} is done; add new rows to do more`, "conflict");
+  const pages = (name: string) => `${name} has more pages than the first one Offload reads; rows on later pages are not read yet`;
+  if (items.length === 0)
+    throw new PlanLiveError(
+      o.read === undefined ? `every row in ${file} is done; add new rows to do more` : o.read.more === true ? `nothing new on the first page Offload reads from ${o.read.name}: ${pages(o.read.name)}` : `nothing new at ${o.read.name} since the last run: every row it shows now is done`,
+      "conflict",
+    );
+  if (o.read?.more === true) for (const i of items) i.warnings.push(pages(o.read.name));
   // The done log starts with its header, so its first entry is read back as an entry.
   const log = join(workflowDir(o.home, o.wf.id), o.wf.inputs.crmLog);
   if (!existsSync(log)) writePrivate(log, CRM_HEADER + "\n");

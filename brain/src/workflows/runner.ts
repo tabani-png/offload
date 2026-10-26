@@ -260,7 +260,7 @@ export async function prepareLiveBatch(o: PrepareOptions): Promise<Batch> {
     if (isPlanWorkflow(wf)) {
       const list = wf.inputs.list;
       let source: RunSourceDTO = { kind: "list", name: list, via: null, message: NO_SOURCE_WORDS(list) };
-      let read: { rows: ItemRow[]; name: string; line: string } | undefined;
+      let read: { rows: ItemRow[]; name: string; line: string; more?: boolean } | undefined;
       if (wf.read !== undefined) {
         const name = wf.read.targetName;
         if (o.read === undefined) {
@@ -285,7 +285,7 @@ export async function prepareLiveBatch(o: PrepareOptions): Promise<Batch> {
           recordRead(o.home, wf.id, r, now);
           if (r.ok) {
             source = { kind: "read", name, via: r.via, message: r.message };
-            read = { rows: r.rows.map((fields, i) => ({ line: i + 1, fields })), name, line: `${r.message.replace(/\.$/, "")}: ${queryText(wf.read)}.` };
+            read = { rows: r.rows.map((fields, i) => ({ line: i + 1, fields })), name, line: `${r.message.replace(/\.$/, "")}: ${queryText(wf.read)}.`, ...(r.more === true ? { more: true } : {}) };
           } else {
             source = { kind: "list", name: list, via: null, message: `Could not read ${name}: ${r.message} These values are from your list ${list}.` };
           }

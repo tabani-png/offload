@@ -303,7 +303,13 @@ export function withReadStep(plan: WorkflowPlanDTO, src: ReadSourceDTO): Workflo
 
 // ---------- what a source shows -> rows ----------
 
-const normKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+/** "activeUsers", "active_users", "Active users" -> "active users". */
+const normKey = (s: string) =>
+  s
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 const cleanValue = (v: unknown): string | null => {
   if (typeof v === "number" && Number.isFinite(v)) return String(v);
   if (typeof v === "boolean") return String(v);
@@ -327,13 +333,64 @@ function flat(o: Record<string, unknown>, depth = 0): Map<string, unknown> {
   return out;
 }
 
-function objectsOf(v: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(v)) return v.filter((x): x is Record<string, unknown> => x !== null && typeof x === "object" && !Array.isArray(x));
-  if (v === null || typeof v !== "object") return [];
-  const o = v as Record<string, unknown>;
-  // An answer that wraps its rows ({ results: [...] }, { data: [...] }): the one list of objects inside.
-  const lists = Object.values(o).filter((x) => Array.isArray(x) && x.length > 0 && x.every((y) => y !== null && typeof y === "object" && !Array.isArray(y)));
-  return lists.length === 1 ? objectsOf(lists[0]) : [o];
+type Obj = Record<string, unknown>;
+const isObj = (x: unknown): x is Obj => x !== null && typeof x === "object" && !Array.isArray(x);
+/** How deep an answer's envelopes are walked ({ data: { results: [...] } } is 2). */
+const MAX_DEPTH = 4;
+
+/** A table answer: { columns: [names | {name}], rows | data: [[...], ...] } -> one object per row. */
+function tableRows(o: Obj): Obj[] | null {
+  const cols = o.columns;
+  const rows = Array.isArray(o.rows) ? o.rows : Array.isArray(o.data) ? o.data : null;
+  if (!Array.isArray(cols) || rows === null || rows.length === 0 || !rows.every(Array.isArray)) return null;
+  const names = cols.map((c) => (typeof c === "string" ? c : isObj(c) && typeof c.name === "string" ? c.name : null));
+  if (names.some((n) => n === null)) return null;
+  return (rows as unknown[][]).map((r) => Object.fromEntries(names.map((n, i) => [n as string, r[i]])));
+}
+
+/** Pagination markers: a non-empty next link or cursor, or has_more true. Only page one was read. */
+function morePages(o: Obj): boolean {
+  for (const [k, v] of Object.entries(o)) {
+    const n = normKey(k);
+    if ((n === "next" || n === "next cursor" || n === "next page token" || n === "next page" || n === "cursor") && v !== null && v !== "" && v !== undefined && v !== false) return true;
+    if ((n === "has more" || n === "has next page" || n === "more") && v === true) return true;
+    if (n === "links" && isObj(v) && morePages(v)) return true;
+    if (n === "pagination" && isObj(v) && morePages(v)) return true;
+  }
+  return false;
+}
+
+/**
+ * The rows of an answer: every list of objects (or table) inside its envelopes up to MAX_DEPTH, and the answer itself
+ * as one object; the candidate whose keys match the most fields wins (ties: shallower, then first in key order).
+ */
+function objectsOf(v: unknown, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): { objects: Obj[]; more: boolean } {
+  const wanted = fields.map((f) => [normKey(f.sourceLabel), normKey(f.label)]);
+  const score = (o: Obj | undefined) => {
+    if (o === undefined) return 0;
+    const keys = new Set(flat(o).keys());
+    return wanted.filter(([a, b]) => keys.has(a!) || keys.has(b!)).length;
+  };
+  const cands: Array<{ objects: Obj[]; depth: number; score: number }> = [];
+  let more = false;
+  const walk = (x: unknown, depth: number) => {
+    if (depth > MAX_DEPTH) return;
+    if (Array.isArray(x)) {
+      const objs = x.filter(isObj);
+      if (objs.length > 0) cands.push({ objects: objs, depth, score: score(objs[0]) });
+      return;
+    }
+    if (!isObj(x)) return;
+    if (morePages(x)) more = true;
+    const t = tableRows(x);
+    if (t !== null) cands.push({ objects: t, depth, score: score(t[0]) });
+    cands.push({ objects: [x], depth, score: score(x) });
+    for (const k of Object.keys(x)) walk(x[k], depth + 1);
+  };
+  walk(v, 0);
+  let best: (typeof cands)[number] | undefined;
+  for (const c of cands) if (c.score > 0 && (best === undefined || c.score > best.score || (c.score === best.score && c.depth < best.depth))) best = c;
+  return { objects: best?.objects ?? [], more };
 }
 
 /**
@@ -341,7 +398,7 @@ function objectsOf(v: unknown): Array<Record<string, unknown>> {
  * the commit label), or screen text ("Signups 352" lines; accessibility outlines too). A row missing a field is not a
  * row: the missing labels are returned, never guessed. Values are copied by code (ADR 0005).
  */
-export function readValues(text: string, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): { rows: Array<Array<[string, string]>>; missing: string[] } {
+export function readValues(text: string, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): { rows: Array<Array<[string, string]>>; missing: string[]; more?: true } {
   const missing = new Set<string>();
   const rows: Array<Array<[string, string]>> = [];
   let json: unknown;
@@ -353,7 +410,8 @@ export function readValues(text: string, fields: readonly Pick<ReadFieldDTO, "la
     isJson = false;
   }
   if (isJson) {
-    for (const o of objectsOf(json)) {
+    const found = objectsOf(json, fields);
+    for (const o of found.objects) {
       const f = flat(o);
       const row: Array<[string, string]> = [];
       for (const fd of fields) {
@@ -363,7 +421,7 @@ export function readValues(text: string, fields: readonly Pick<ReadFieldDTO, "la
       }
       if (row.length === fields.length) rows.push(row);
     }
-    return { rows, missing: rows.length > 0 ? [] : [...missing] };
+    return { rows, missing: rows.length > 0 ? [] : [...missing], ...(found.more ? { more: true as const } : {}) };
   }
   const lines = text
     .split("\n")
