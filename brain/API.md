@@ -457,7 +457,7 @@ check script exits 0, never "the model says done".
   try. Caps: 3 tries, $1, 30 turns per try, 10 min. DRY RUN: files stay in the workspace (`artifactPath`);
   installing them is a separate approval, not offered here.
 - `GET /builds/:runId` -> `RunRecord`: `{version, id, briefId, briefHash, checkHash, checkFile, dryRun: true,
-  models {checkWriter, builder, reported[]}, versions {sdk, claudeCode}, profile {mode, containerSandbox, tools,
+  models {checkWriter, builder, reported[]}, versions {sdk, claudeCode}, profile {mode, containerSandbox, sandbox, tools,
   disallowedTools, bashAllow, limits}, tries[{n, result, turns, costUsd, tokens, checkExit, checkOutput (last 4k),
   checkHashOk, ms}], totals {costUsd, tokens, turns}, startedAt, wallMs, outcome: PASS|FAIL|CAP|TAMPER, reason,
   artifactPath, denials[]}`. Records are written once (`builds/<run_id>.json`) plus a line in `builds/runs.jsonl`.
@@ -468,6 +468,13 @@ check script exits 0, never "the model says done".
   --home DIR [--max-tries N] [--max-usd X]` (exit 0 only on PASS); `build record --run run_ID --home DIR`.
 - Env: `OFFLOAD_BUILDER_SANDBOX=container` allows bypass mode (inside a throwaway container only). Claude Code
   subprocesses get `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`.
+- Isolation: builder Bash commands and the acceptance check run under an OS sandbox (macOS `sandbox-exec`,
+  deny-default: workspace read-write, `accept/` and the frozen check copy at `builds/<run>/frozen/` read-only,
+  toolchain read-only, no network) via `env -i` with only PATH, HOME=workspace, LANG, TMPDIR=workspace/.tmp. The
+  frozen check is hashed before and after every run. No usable sandbox and no container profile = 403 / exit 2
+  before the approval is used (fail closed). Check output is secret-redacted before it is stored or re-prompted.
+  Limits must be finite and positive (whole numbers for tries); bad values are refused (400 / exit 2) before the
+  token is consumed.
 
 ## Company sync (S2-02, ADR 0103)
 The brain's sync client (`src/sync/`) connects this Mac to the company control plane (`OFFLOAD_CONTROL_URL`, https;

@@ -23,13 +23,13 @@ const SENTINEL_OAUTH = "sk-ant-oat01-OAUTHSENTINELoauthsentinel0123456789";
 const PARENT_ENV = { ...process.env, ANTHROPIC_API_KEY: SENTINEL_KEY, CLAUDE_CODE_OAUTH_TOKEN: SENTINEL_OAUTH, GITHUB_TOKEN: "ghp_PARENTSENTINEL0123456789abcdefghijklmn" };
 
 let outside: string;
-let server: ReturnType<typeof Bun.listen>;
+let server: { port: number; stop: (closeActive?: boolean) => void };
 let connections = 0;
 
 beforeAll(() => {
   outside = join(tmp("offload-s24-outside-"), "secret.txt");
   writeFileSync(outside, "OUTSIDE-SECRET-CONTENT\n");
-  server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { open() { connections++; }, data() {} } });
+  server = Bun.listen<undefined>({ hostname: "127.0.0.1", port: 0, socket: { open() { connections++; }, data() {} } }) as unknown as typeof server;
 });
 afterAll(() => server.stop(true));
 
@@ -75,12 +75,32 @@ describe("s24 OS sandbox", () => {
     expect(connections).toBe(0);
     expect(existsSync(outside + ".written")).toBe(false);
     const envLine = out.split("\n").find((l) => l.startsWith("ENV "))!;
-    expect(envLine.split(" ").slice(1).sort()).toEqual(["HOME", "LANG", "PATH", "TMPDIR"]);
+    // __CF_USER_TEXT_ENCODING is set by macOS CoreFoundation in every process, not passed by us.
+    expect(envLine.split(" ").slice(1).filter((k) => k !== "__CF_USER_TEXT_ENCODING").sort()).toEqual(["HOME", "LANG", "PATH", "TMPDIR"]);
     expect(out).not.toContain("SENTINEL");
     expect(out).not.toContain(SENTINEL_KEY);
     expect(rec.tries[0]!.checkHashOk).toBe(true);
     expect(rec.outcome).toBe("PASS");
     expect(JSON.stringify(rec)).not.toContain("SENTINEL");
+  }, 30_000);
+
+  test("SAFETY: a bun test check runs in the same sandbox (outside read and env blocked, workspace readable)", async () => {
+    const content = [
+      'import { expect, test } from "bun:test";',
+      'import { existsSync, readFileSync } from "node:fs";',
+      `test("outside is blocked", () => { expect(() => readFileSync(${JSON.stringify(outside)}, "utf8")).toThrow(); });`,
+      'test("no secrets in env", () => { expect(JSON.stringify(process.env)).not.toContain("SENTINEL"); });',
+      'test("built", () => { expect(existsSync("slug.py")).toBe(true); });',
+      "",
+    ].join("\n");
+    const b = briefHome();
+    const { model } = fakeRouted(b.home, JSON.stringify({ file: "accept.test.ts", content }));
+    const c = await writeChecks({ home: b.home, briefId: b.briefId, model, models: DEFAULT_MODELS, modelLabel: "router:build_checks", now: NOW });
+    const { token } = approveBuild(b.home, b.briefId, b.briefHash, c.set.sha256, NOW);
+    const f = fakeQuery([{ act: writeSlug("good") }]);
+    const rec = await runBuild({ home: b.home, briefId: b.briefId, token, query: f.query, profile: ALLOW, env: PARENT_ENV });
+    expect(rec.tries[0]!.checkOutput).toContain("3 pass");
+    expect(rec.outcome).toBe("PASS");
   }, 30_000);
 
   test("SAFETY: the builder's Bash commands are rewritten to run inside the OS sandbox with a clean env (canUseTool and the PreToolUse hook)", async () => {
@@ -95,8 +115,8 @@ describe("s24 OS sandbox", () => {
           writeFileSync(join(ws, "evil.py"), `import os\ntry:\n    print('ESCAPED ' + open(${JSON.stringify(outside)}).read())\nexcept Exception as e:\n    print('BLOCKED read-outside')\nprint('ENVVALS ' + ' '.join(os.environ.values()))\n`);
           const opts = { signal: new AbortController().signal, toolUseID: "t1" } as never;
           const r = await o.canUseTool!("Bash", { command: "python3 evil.py" }, opts);
-          expect(r.behavior).toBe("allow");
-          const cmd = String((r as { updatedInput: { command: string } }).updatedInput.command);
+          expect(r?.behavior).toBe("allow");
+          const cmd = String((r as unknown as { updatedInput: { command: string } }).updatedInput.command);
           expect(cmd).toMatch(/^\/usr\/bin\/sandbox-exec /);
           expect(cmd).toContain("/usr/bin/env -i");
           expect(cmd).not.toContain("SENTINEL");
@@ -108,8 +128,8 @@ describe("s24 OS sandbox", () => {
           hookCmd = String(h.hookSpecificOutput?.updatedInput?.command ?? "");
           // Re-checking an already wrapped command keeps one wrap (the hook runs before canUseTool).
           const again = await o.canUseTool!("Bash", { command: cmd }, opts);
-          expect(again.behavior).toBe("allow");
-          expect((again as { updatedInput: { command: string } }).updatedInput.command).toBe(cmd);
+          expect(again?.behavior).toBe("allow");
+          expect((again as unknown as { updatedInput: { command: string } }).updatedInput.command).toBe(cmd);
         },
       },
     ]);

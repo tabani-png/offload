@@ -3,8 +3,17 @@
 // ours: a small tool set with no network tools, a Bash allowlist with no shell operators, every path inside the
 // workspace, and the frozen check folder (accept/) read-only. On a user Mac the mode is "default" with this allowlist
 // as canUseTool; bypassPermissions is refused unless the profile says it runs in a container sandbox.
+//
+// The allowlist alone does not contain a subprocess (codex review of 72cd137): `python3 file.py` can do anything. So
+// every piece of builder-controlled code - the builder's Bash commands and the frozen acceptance check - runs under a
+// REAL OS sandbox: macOS sandbox-exec with a deny-default profile (workspace read-write, toolchain read-only, the
+// frozen check folder read-only, accept/ read-only, no network) and `env -i` with an explicit allow-list env, so the
+// SDK auth in the Claude Code process never reaches a child. In a declared container the container is the sandbox
+// (env -i still applies). With neither, the run is refused (fail closed) before the approval is used.
 import type { HookCallback, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
-import { isAbsolute, relative, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { executorEnv } from "../workflows/executor.ts";
 
 /** Built-in tools the builder gets. No WebFetch, WebSearch, Task or MCP. */
@@ -41,13 +50,36 @@ export function builderEnv(env: Readonly<Record<string, string | undefined>> = p
   return { ...out, DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" };
 }
 
-const SHELL_OPS = /[;&|`$<>(){}\\\n\r*?!~]/;
+const SHELL_OPS = /[;&|`$<>(){}\\\n\r*?!~'"#]/;
 
-/** The path, resolved against the workspace, or null when it leaves the workspace. */
+/** realpath of p, or of its nearest existing ancestor with the rest appended (for files not written yet). */
+function realish(p: string): string {
+  let cur = resolve(p);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(cur), ...rest.reverse());
+    } catch {
+      const up = dirname(cur);
+      if (up === cur) return resolve(p);
+      rest.push(basename(cur));
+      cur = up;
+    }
+  }
+}
+
+const within = (root: string, p: string) => {
+  const rel = relative(root, p);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+};
+
+/** The path, resolved against the workspace, or null when it leaves the workspace - lexically or through a symlink
+ * (the SDK's Read/Write/Edit run in the unsandboxed Claude Code process, so a symlink planted by sandboxed code must
+ * not let them reach outside). */
 export function insideWorkspace(ws: string, p: string): string | null {
   const abs = resolve(ws, p);
-  const rel = relative(ws, abs);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)) ? abs : null;
+  if (!within(ws, abs)) return null;
+  return within(realish(ws), realish(abs)) ? abs : null;
 }
 
 const inCheckDir = (ws: string, abs: string) => {
@@ -94,28 +126,178 @@ export function decideTool(ws: string, tool: string, input: Record<string, unkno
 
 export interface BuilderPermissions {
   canUseTool: (tool: string, input: Record<string, unknown>) => Promise<PermissionResult>;
-  /** Runs in every mode, bypass included: the last line that keeps the check folder read-only. */
+  /** Runs in every mode, bypass included: the last line that keeps the check folder read-only, and the place a Bash
+   * command is rewritten into the OS sandbox (hooks run before the permission check, for every call). */
   preToolUse: HookCallback;
   denials: Array<{ tool: string; reason: string }>;
 }
 
-export function builderPermissions(ws: string): BuilderPermissions {
+/** Wraps a plain command so it runs in the OS sandbox with a clean env. `unwrap` recognises an already wrapped one. */
+export interface CommandWrapper {
+  wrap: (command: string) => string;
+  unwrap: (command: string) => string | null;
+}
+
+export function builderPermissions(ws: string, wrapper?: CommandWrapper): BuilderPermissions {
   const denials: BuilderPermissions["denials"] = [];
-  const check = (tool: string, input: Record<string, unknown>) => {
-    const d = decideTool(ws, tool, input);
-    if (!d.allow) denials.push({ tool, reason: d.reason });
-    return d;
+  const check = (tool: string, input: Record<string, unknown>): ToolDecision & { input: Record<string, unknown> } => {
+    let cur = input;
+    if (tool === "Bash" && wrapper !== undefined && typeof input.command === "string") {
+      const inner = wrapper.unwrap(input.command.trim());
+      if (inner !== null) cur = { ...input, command: inner };
+    }
+    const d = decideTool(ws, tool, cur);
+    if (!d.allow) {
+      denials.push({ tool, reason: redactSecrets(d.reason) });
+      return { ...d, input: cur };
+    }
+    if (tool === "Bash" && wrapper !== undefined) return { ...d, input: { ...cur, command: wrapper.wrap(String(cur.command).trim()) } };
+    return { ...d, input: cur };
   };
   return {
     denials,
     canUseTool: async (tool, input) => {
       const d = check(tool, input);
-      return d.allow ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: d.reason };
+      return d.allow ? { behavior: "allow", updatedInput: d.input } : { behavior: "deny", message: d.reason };
     },
     preToolUse: async (input) => {
       if (input.hook_event_name !== "PreToolUse") return {};
       const d = check(input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>);
-      return d.allow ? {} : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: d.reason } };
+      if (!d.allow) return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: d.reason } };
+      // Bash: the same allow decision canUseTool would make, with the sandboxed command.
+      if (input.tool_name === "Bash" && wrapper !== undefined) return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "allowlisted command, run in the OS sandbox", updatedInput: d.input } };
+      return {};
     },
   };
+}
+
+// ---------- the OS sandbox ----------
+
+export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
+const ENV_BIN = "/usr/bin/env";
+
+/** Where builder code may execute: macOS sandbox-exec, or a declared container. */
+export type SandboxRuntime = { kind: "sandbox-exec"; bin: string } | { kind: "container" };
+
+const probed = new Map<string, boolean>();
+function sandboxExecWorks(bin: string): boolean {
+  if (!probed.has(bin)) {
+    let ok = false;
+    if (process.platform === "darwin" && existsSync(bin)) {
+      const r = spawnSync(bin, ["-p", "(version 1)(deny default)(allow process-exec)(allow process-fork)(allow file-read*)(allow sysctl-read)(allow mach-lookup)", "/usr/bin/true"], { env: { PATH: "/usr/bin:/bin" }, timeout: 10_000 });
+      ok = r.status === 0;
+    }
+    probed.set(bin, ok);
+  }
+  return probed.get(bin)!;
+}
+
+/** The OS sandbox to run builder code in, or UnsafeProfileError (fail closed: nothing executes unsandboxed). */
+export function resolveSandbox(p: ExecutionProfile, bin: string = SANDBOX_EXEC): SandboxRuntime {
+  if (p.containerSandbox) return { kind: "container" };
+  if (sandboxExecWorks(bin)) return { kind: "sandbox-exec", bin };
+  throw new UnsafeProfileError(`no OS sandbox: ${bin} is not usable on this machine (${process.platform}) and the profile is not a container; refusing to run builder code unsandboxed`);
+}
+
+function which(cmd: string, env: Readonly<Record<string, string | undefined>>): string | null {
+  for (const d of (env.PATH ?? "/usr/bin:/bin").split(delimiter)) {
+    if (d === "" || !isAbsolute(d)) continue;
+    const f = join(d, cmd);
+    if (existsSync(f)) return f;
+  }
+  return null;
+}
+
+/** The toolchain the sandbox may read and run: python3, node and this bun, resolved from the parent PATH. */
+export function toolchain(env: Readonly<Record<string, string | undefined>> = process.env): { pathDirs: string[]; readOnly: string[] } {
+  const bins = [which("python3", env), which("node", env), process.execPath].filter((b): b is string => b !== null);
+  const pathDirs = [...new Set([...bins.map((b) => dirname(b)), "/usr/bin", "/bin"])];
+  const home = env.HOME === undefined ? null : realish(env.HOME);
+  const readOnly = new Set(["/usr", "/bin", "/sbin", "/System", "/Library/Apple", "/Library/Developer/CommandLineTools", "/private/var/db/dyld", "/private/var/db/timezone", "/dev"]);
+  for (const r of ["/opt/homebrew", "/usr/local"]) if (existsSync(r)) readOnly.add(r);
+  for (const b of bins) {
+    for (const x of [b, realish(b)]) {
+      // The binary's install prefix (bin/..), never the home folder or / itself.
+      const prefix = dirname(dirname(x));
+      readOnly.add(prefix !== "/" && prefix !== home && prefix !== "/Users" ? prefix : dirname(x));
+    }
+  }
+  return { pathDirs, readOnly: [...readOnly].map(realish) };
+}
+
+/** The env every builder-controlled process gets: an explicit allow-list, never copied from process.env. */
+export function checkEnv(ws: string, env: Readonly<Record<string, string | undefined>> = process.env): Record<string, string> {
+  const lang = env.LANG !== undefined && /^[A-Za-z0-9_.@-]{1,40}$/.test(env.LANG) ? env.LANG : "en_US.UTF-8";
+  return { PATH: toolchain(env).pathDirs.join(":"), HOME: ws, LANG: lang, TMPDIR: join(ws, ".tmp") };
+}
+
+const sbStr = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+
+/** Deny-default sandbox-exec profile: workspace read-write (accept/ read-only), frozen checks and toolchain read-only,
+ * no network, no other files. */
+export function sandboxProfile(o: { ws: string; frozenDir: string; readOnly: readonly string[] }): string {
+  const ws = realish(o.ws);
+  return [
+    "(version 1)",
+    "(deny default)",
+    "(allow process-fork)",
+    "(allow process-exec)",
+    "(allow signal (target same-sandbox))",
+    "(allow sysctl-read)",
+    "(allow file-read-metadata)",
+    `(allow file-read* (literal "/") ${o.readOnly.map((r) => `(subpath ${sbStr(r)})`).join(" ")})`,
+    `(allow file-read* (subpath ${sbStr(realish(o.frozenDir))}))`,
+    `(allow file-read* file-write* (subpath ${sbStr(ws)}))`,
+    `(deny file-write* (subpath ${sbStr(join(ws, CHECK_DIR))}) (subpath ${sbStr(realish(o.frozenDir))}))`,
+    '(allow file-write* file-ioctl (literal "/dev/null") (literal "/dev/tty"))',
+    '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))',
+    "(deny network*)",
+    "",
+  ].join("\n");
+}
+
+const shq = (s: string) => (/^[A-Za-z0-9_./:=@%+,-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
+
+/** argv prefix that runs a program in the sandbox with exactly `env`. */
+export function sandboxArgv(rt: SandboxRuntime, profilePath: string, env: Record<string, string>): string[] {
+  const envArgs = [ENV_BIN, "-i", ...Object.entries(env).map(([k, v]) => `${k}=${v}`)];
+  return rt.kind === "sandbox-exec" ? [rt.bin, "-f", profilePath, ...envArgs] : envArgs;
+}
+
+export function commandWrapper(rt: SandboxRuntime, profilePath: string, env: Record<string, string>): CommandWrapper {
+  const prefix = sandboxArgv(rt, profilePath, env).map(shq).join(" ") + " ";
+  return { wrap: (c) => prefix + c, unwrap: (c) => (c.startsWith(prefix) ? c.slice(prefix.length) : null) };
+}
+
+// ---------- secret redaction ----------
+
+const SECRET_PATTERNS: RegExp[] = [
+  /sk-ant-[A-Za-z0-9_-]{8,}/g,
+  /\bsk-[A-Za-z0-9_-]{20,}/g,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
+  /\bxox[abposr]-[A-Za-z0-9-]{10,}/g,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/g,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+];
+const BEARER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi;
+const KV = /\b([A-Za-z0-9_]*(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH)[A-Za-z0-9_]*)\s*[=:]\s*["']?([^\s"']{8,})/gi;
+
+/** Values of secret-named variables in an env (for exact-value redaction). */
+export function secretValues(env: Readonly<Record<string, string | undefined>>): string[] {
+  return Object.entries(env)
+    .filter(([k, v]) => v !== undefined && v.length >= 8 && /KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL/i.test(k))
+    .map(([, v]) => v!);
+}
+
+/** Text with secret-shaped strings and the given exact values replaced by [REDACTED]. For anything persisted or fed
+ * back into a prompt. */
+export function redactSecrets(text: string, known: readonly string[] = []): string {
+  let out = text;
+  for (const v of [...known].filter((x) => x.length >= 8).sort((a, b) => b.length - a.length)) out = out.split(v).join("[REDACTED]");
+  for (const re of SECRET_PATTERNS) out = out.replace(re, "[REDACTED]");
+  out = out.replace(BEARER, (_m, kind: string) => `${kind} [REDACTED]`);
+  out = out.replace(KV, (m, _k: string, v: string) => (v === "[REDACTED]" ? m : m.replace(v, "[REDACTED]")));
+  return out;
 }

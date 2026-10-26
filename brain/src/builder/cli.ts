@@ -51,8 +51,18 @@ export async function buildCommand(argv: readonly string[]): Promise<number> {
     return 0;
   }
   if (sub === "run") {
-    const num = (k: string) => (f.has(k) ? Number(f.get(k)) : undefined);
-    const limits = { ...(num("max-tries") === undefined ? {} : { maxTries: num("max-tries")! }), ...(num("max-usd") === undefined ? {} : { maxUsd: num("max-usd")! }) };
+    // Validated here (and again in runBuild) before the single-use token is touched: NaN / Infinity / negative would
+    // disable a cap.
+    const num = (k: string, whole: boolean): number | undefined => {
+      const raw = f.get(k);
+      if (raw === undefined) return undefined;
+      const n = (whole ? /^[0-9]{1,6}$/ : /^[0-9]{1,6}(\.[0-9]{1,6})?$/).test(raw) ? Number(raw) : Number.NaN;
+      if (!Number.isFinite(n) || n <= 0) throw new BuildUsageError(`--${k} must be ${whole ? "a whole number of at least 1" : "a number above 0"} (got ${raw})`);
+      return n;
+    };
+    const tries = num("max-tries", true);
+    const usd = num("max-usd", false);
+    const limits = { ...(tries === undefined ? {} : { maxTries: tries }), ...(usd === undefined ? {} : { maxUsd: usd }) };
     const r = await runBuild({ home, briefId: need(f, "brief", sub), token: need(f, "token", sub), query: await builderQuery(), profile: profileFromEnv(), limits });
     if (json) console.log(JSON.stringify(r, null, 2));
     else console.log(`${r.outcome} after ${r.tries.length} tr${r.tries.length === 1 ? "y" : "ies"}, $${r.totals.costUsd.toFixed(2)}${r.reason === null ? "" : ` (${r.reason})`}\n  run: ${r.id}\n  dry run, nothing installed. files: ${r.artifactPath}`);

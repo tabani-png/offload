@@ -45,7 +45,7 @@ export interface RunRecord {
   dryRun: true;
   models: { checkWriter: string; builder: string; reported: string[] };
   versions: { sdk: string; claudeCode: string | null };
-  profile: { mode: ExecutionMode; containerSandbox: boolean; tools: string[]; disallowedTools: string[]; bashAllow: string[]; limits: BuildLimits };
+  profile: { mode: ExecutionMode; containerSandbox: boolean; /** The OS sandbox builder code ran in. */ sandbox: "sandbox-exec" | "container"; tools: string[]; disallowedTools: string[]; bashAllow: string[]; limits: BuildLimits };
   tries: TryRecord[];
   totals: { costUsd: number; tokens: { input: number; output: number; cacheRead: number }; turns: number };
   startedAt: number;
