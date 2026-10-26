@@ -43,10 +43,21 @@ export function profileFromEnv(env: Readonly<Record<string, string | undefined>>
   return { mode, containerSandbox: env.OFFLOAD_BUILDER_SANDBOX === "container" };
 }
 
-/** Env for the Claude Code subprocess and the check run: the executor's allowlist plus telemetry off. */
+/** Credentials that must never sit in a process environment during a build: same-user processes, sandboxed builder
+ * code included, can read any process's environment through sysctl KERN_PROCARGS2 (the sandbox does not filter it,
+ * and `delete process.env.X` does not erase the original). */
+export const CREDENTIAL_ENV = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"] as const;
+
+/** Names of credentials present in an environment. */
+export function credentialsInEnv(env: Readonly<Record<string, string | undefined>>): string[] {
+  return CREDENTIAL_ENV.filter((k) => (env[k] ?? "").trim() !== "");
+}
+
+/** Env for the Claude Code subprocess: the executor's allowlist minus every credential, plus telemetry off. The key
+ * reaches Claude Code through apiKeyHelper instead (runner.ts). */
 export function builderEnv(env: Readonly<Record<string, string | undefined>> = process.env): Record<string, string> {
   const out = executorEnv(env);
-  for (const k of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]) if (env[k]) out[k] = env[k]!;
+  for (const k of CREDENTIAL_ENV) delete out[k];
   return { ...out, DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" };
 }
 
@@ -348,6 +359,20 @@ const SECRET_PATTERNS: RegExp[] = [
 ];
 const BEARER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi;
 const KV = /\b([A-Za-z0-9_]*(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH)[A-Za-z0-9_]*)\s*[=:]\s*["']?([^\s"']{8,})/gi;
+
+/** The first secret in a text: an exact known value, or a secret-shaped string (keys, tokens, private keys). Used to
+ * scan artifacts, so the loose NAME=value pattern of redactSecrets is not applied (it would flag ordinary code). */
+export function findSecret(text: string, known: readonly string[] = []): string | null {
+  for (const v of known) if (v.length >= 8 && text.includes(v)) return "a known secret value";
+  for (const re of SECRET_PATTERNS) {
+    re.lastIndex = 0;
+    if (re.test(text)) {
+      re.lastIndex = 0;
+      return "a secret-shaped string";
+    }
+  }
+  return null;
+}
 
 /** Values of secret-named variables in an env (for exact-value redaction). */
 export function secretValues(env: Readonly<Record<string, string | undefined>>): string[] {

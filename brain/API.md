@@ -549,6 +549,18 @@ check script exits 0, never "the model says done".
   be impersonated. No secret or socket path is in any argv. Per try: sweep, hash, check, sweep, hash; both hashes
   must match (a check must not change the workspace) and the final double hash must match too. No /tmp/ofl-* folder
   outlives a run.
+  Credentials: no key or token is in any process environment during a build. Claude Code gets the key through
+  `apiKeyHelper` (a script in `builds/<run>/cred/`, 0700, outside every sandbox read path, removed after the run;
+  it prints a 0600 key file from the run's env object, or reads the Keychain item named by
+  OFFLOAD_ANTHROPIC_KEYCHAIN). A brain started with ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN /
+  ANTHROPIC_AUTH_TOKEN in its own environment refuses to build (403 / exit 2): use the Keychain. Before any PASS
+  and in `verifyArtifact`, every workspace file (outside accept/, .tmp, __pycache__) is scanned for exact known
+  secret values and secret-shaped strings; a hit is FAIL "artifact contains a secret", never PASS.
+  Residual (routed to S2-12): macOS lets any same-user process read another non-platform process's argv and
+  environment (sysctl KERN_PROCARGS2); the sandbox does not filter it and unsetting a variable does not erase it.
+  Builds keep nothing secret in argv or environment, but any OTHER same-user process that holds a credential in its
+  environment (for example a terminal where the user exported ANTHROPIC_API_KEY) is readable by sandboxed builder
+  code. The artifact scan catches a copied known value; an unknown secret from another process is not known.
   Background Bash and timeouts above the run's wall cap are denied. Bun checks run the frozen copy with their module
   resolution root outside the workspace; any module whose resolved path is in the workspace is refused, and checks
   that import non-builtin bare specifiers are refused when written. No usable sandbox and no container profile = 403 / exit 2

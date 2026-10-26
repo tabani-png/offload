@@ -8,7 +8,7 @@ import { briefIdFor } from "../solutions/brief.ts";
 import type { SolutionSet } from "../solutions/types.ts";
 import { ensureDir } from "../workflows/store.ts";
 import type { CheckFile } from "./checks.ts";
-import type { ExecutionMode } from "./sandbox.ts";
+import { findSecret, secretValues, type ExecutionMode } from "./sandbox.ts";
 
 export const RUN_ID_RE = /^run_[a-z0-9]{12,40}$/;
 export type BuildOutcome = "PASS" | "FAIL" | "CAP" | "TAMPER";
@@ -87,11 +87,37 @@ export function artifactDigest(ws: string): string {
   return h.digest("hex");
 }
 
-/** True when the run's workspace is byte-for-byte what it was at the verdict. Install must check this first. */
-export function verifyArtifact(home: string, runId: string): boolean {
+const MAX_SCAN_BYTES = 16 * 1024 * 1024;
+
+/** The first workspace file holding a secret (exact known value or secret-shaped string), as "path: what", or null. */
+export function scanArtifactForSecrets(ws: string, known: readonly string[] = []): string | null {
+  const walk = (dir: string, rel: string): string | null => {
+    for (const name of readdirSync(dir).sort()) {
+      const abs = join(dir, name);
+      const r = rel === "" ? name : `${rel}/${name}`;
+      const st = lstatSync(abs);
+      if (st.isDirectory()) {
+        // accept/ is the frozen, approved check (not builder output); .tmp and caches are not the artifact.
+        if (SKIP_DIRS.has(name) || r === "accept") continue;
+        const hit = walk(abs, r);
+        if (hit !== null) return hit;
+      } else if (st.isFile()) {
+        const buf = readFileSync(abs);
+        const what = findSecret(buf.subarray(0, MAX_SCAN_BYTES).toString("latin1"), known);
+        if (what !== null) return `${r}: ${what}`;
+      }
+    }
+    return null;
+  };
+  return walk(ws, "");
+}
+
+/** True when the run's workspace is byte-for-byte what it was at the verdict and holds no secret. Install must check
+ * this first. */
+export function verifyArtifact(home: string, runId: string, known: readonly string[] = secretValues(process.env)): boolean {
   const r = readRunRecord(home, runId);
   if (r === null || typeof r.artifactSha256 !== "string" || !existsSync(r.artifactPath)) return false;
-  return artifactDigest(r.artifactPath) === r.artifactSha256;
+  return artifactDigest(r.artifactPath) === r.artifactSha256 && scanArtifactForSecrets(r.artifactPath, known) === null;
 }
 
 export function truncateOutput(s: string, max = MAX_CHECK_OUTPUT): string {

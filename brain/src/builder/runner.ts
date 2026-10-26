@@ -21,12 +21,13 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync,
 import { join, resolve } from "node:path";
 import { TIER_MODELS } from "../models/router.ts";
 import { BriefError, type SolutionBrief } from "../solutions/brief.ts";
+import { resolveAnthropicKey } from "../vision/claude.ts";
 import { ensureDir } from "../workflows/store.ts";
 import { claimBuildApproval, peekBuildApproval } from "./approval.ts";
 import { GUARD_TS, HARNESS_PY } from "./harness.ts";
 import { startSupervisor, supervisorSocket, type Supervisor } from "./supervisor.ts";
 import { checkSha, identityMask, type CheckFile, type Mask } from "./checks.ts";
-import { artifactDigest, buildsDir, DEFAULT_LIMITS, truncateOutput, writeRunRecord, type BuildLimits, type BuildOutcome, type RunRecord, type TryRecord } from "./record.ts";
+import { artifactDigest, buildsDir, scanArtifactForSecrets, DEFAULT_LIMITS, truncateOutput, writeRunRecord, type BuildLimits, type BuildOutcome, type RunRecord, type TryRecord } from "./record.ts";
 import {
   assertSafeExecutionProfile,
   BASH_ALLOW,
@@ -36,6 +37,7 @@ import {
   CHECK_DIR,
   checkEnv,
   commandWrapper,
+  credentialsInEnv,
   DISALLOWED_TOOLS,
   harnessArgv,
   sweepMode,
@@ -211,6 +213,37 @@ export interface RunBuildOptions {
   now?: () => number;
 }
 
+/** The apiKeyHelper for Claude Code: prints the credential when Claude Code calls it. From the run's env object (API
+ * route / tests): a 0600 file next to the 0700 helper; from the Keychain reference: `security` reads it at call time.
+ * Both live in builds/<run>/cred/, which no sandbox profile can read; removed at the end of the run. */
+export function writeCredentialHelper(dir: string, env: Readonly<Record<string, string | undefined>>): { helper: string; value: string | null } | null {
+  const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+  const direct = (env.ANTHROPIC_API_KEY ?? "").trim() || (env.CLAUDE_CODE_OAUTH_TOKEN ?? "").trim();
+  let body: string;
+  let value: string | null = null;
+  if (direct !== "") {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, "key"), direct, { mode: 0o600 });
+    body = `exec /bin/cat ${q(join(dir, "key"))}`;
+    value = direct;
+  } else {
+    const ref = (env.OFFLOAD_ANTHROPIC_KEYCHAIN ?? "").trim();
+    const [service, account] = ref.split("/", 2);
+    if (service === undefined || account === undefined || !/^[\w .@-]{1,120}$/.test(service) || !/^[\w .@-]{1,120}$/.test(account)) return null;
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    body = `exec /usr/bin/security find-generic-password -s ${q(service)} -a ${q(account)} -w`;
+    // Known to the artifact scan (in memory only).
+    try {
+      value = resolveAnthropicKey({ OFFLOAD_ANTHROPIC_KEYCHAIN: ref }).key;
+    } catch {
+      value = null;
+    }
+  }
+  const helper = join(dir, "key-helper.sh");
+  writeFileSync(helper, `#!/bin/sh\n${body}\n`, { mode: 0o700 });
+  return { helper, value };
+}
+
 const round = (n: number) => Math.round(n * 1e6) / 1e6;
 /** Rounds DOWN to a micro-dollar: a budget handed to the SDK never exceeds what is left. */
 const floorUsd = (n: number) => Math.max(0, Math.floor(n * 1e6 + 1e-6) / 1e6);
@@ -236,6 +269,13 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   // Absolute before any path is derived: workspace, profile and check paths are used with cwd = workspace.
   const home = resolve(o.home);
   const parentEnv = o.env ?? process.env;
+  // A credential in this process's own environment is readable by every same-user process (sysctl KERN_PROCARGS2,
+  // which the sandbox does not filter; deleting it from process.env does not erase it). Refuse rather than build.
+  const exposed = credentialsInEnv(process.env);
+  if (exposed.length > 0)
+    throw new UnsafeProfileError(
+      `the brain was started with ${exposed.join(", ")} in its environment, which sandboxed builder code can read (sysctl KERN_PROCARGS2); put the key in the Keychain and start the brain with OFFLOAD_ANTHROPIC_KEYCHAIN instead`,
+    );
   const tc = toolchain(parentEnv);
   if (!tc.pathDirs.some((d) => existsSync(join(d, "python3")))) throw new UnsafeProfileError("python3 is required for the sandbox harness (it stops every builder process); refusing to run");
   // The gate first: the token is verified (not used) before anything exists on disk; it is claimed after setup.
@@ -247,6 +287,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   const profilePath = join(runDir, "sandbox.sb");
   const harnessPath = join(frozenDir, "harness.py");
   let claimed: ReturnType<typeof claimBuildApproval>;
+  let credential: { helper: string; value: string | null } | null = null;
   const sock = supervisorSocket();
   let sup: Supervisor | null = null;
   const childEnv = checkEnv(ws, parentEnv);
@@ -265,15 +306,27 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
     writeFileSync(join(frozenDir, "bunfig.toml"), `preload = [${guard}]\n\n[test]\npreload = [${guard}]\n`, { mode: 0o444 });
     writeFileSync(profilePath, sandboxProfile({ ws, frozenDir, readOnly: tc.readOnly, socket: sock.socket }), { mode: 0o444 });
     // One supervisor per run: every builder command runs as its child, in one sandbox instance it can sweep.
+    // The key reaches Claude Code only through apiKeyHelper: a script in a 0700 folder outside every sandbox read
+    // path, called by Claude Code itself; no credential is in any process environment or argv.
+    credential = writeCredentialHelper(join(runDir, "cred"), parentEnv);
     // Nothing secret and no socket path in its argv (argv is readable by same-user processes).
     sup = await startSupervisor({ argv: [...harnessArgv(rt, profilePath, childEnv, harnessPath), "serve", sweepMode(rt), ws], cwd: ws, env: childEnv, dir: sock.dir, socket: sock.socket, ws });
     // Last: use the single-use approval (atomic claim). The inputs are re-verified against what was written above.
     claimed = claimBuildApproval(home, o.briefId, o.token, now());
     if (claimed.checks.sha256 !== c0.sha256 || claimed.content !== content0) throw new BriefError("the check script changed during setup", "conflict");
   } catch (err) {
-    if (sup !== null) await sup.stop();
+    // Every cleanup step on its own: one failing (e.g. a path that is not a folder) must not skip the others.
+    const quietly = (f: () => unknown) => {
+      try {
+        f();
+      } catch {
+        // best effort
+      }
+    };
     rmSync(sock.dir, { recursive: true, force: true });
-    rmSync(runDir, { recursive: true, force: true });
+    if (sup !== null) await sup.stop().catch(() => {});
+    quietly(() => rmSync(join(runDir, "cred"), { recursive: true, force: true }));
+    quietly(() => rmSync(runDir, { recursive: true, force: true }));
     throw err;
   }
   const supervisor: Supervisor = sup!;
@@ -283,7 +336,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   const frozenPath = join(frozenDir, checks.file);
   const harness = harnessArgv(rt, profilePath, childEnv, harnessPath);
   const sweep = sweepMode(rt);
-  const known = secretValues(parentEnv);
+  const known = [...secretValues(parentEnv), ...secretValues(process.env), ...(credential?.value ? [credential.value] : [])];
   const scrub = (t: string) => redactSecrets(t, known);
   // accept/ is locked as a whole: exactly the check file, nothing added (a module there would shadow the check's
   // imports), nothing swapped for a link.
@@ -346,6 +399,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         permissionMode: bypass ? "bypassPermissions" : "default",
         ...(bypass ? { allowDangerouslySkipPermissions: true } : { canUseTool: perms.canUseTool }),
         hooks: { PreToolUse: [{ hooks: [perms.preToolUse] }] },
+        ...(credential === null ? {} : { settings: { apiKeyHelper: credential.helper } }),
         maxTurns: limits.maxTurns,
         maxBudgetUsd: floorUsd(limits.maxUsd - spent),
         env,
@@ -448,6 +502,12 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
       // An exit 0 without a valid proof (or that changed the artifact) is recorded as "did not complete" (null).
       rec.checkExit = c.exit === 0 && (!proof.ok || changed) ? null : c.exit;
       tries.push(rec);
+      const leak = c.exit === 0 && proof.ok && !changed ? scanArtifactForSecrets(ws, known) : null;
+      if (leak !== null) {
+        outcome = "FAIL";
+        reason = `artifact contains a secret (${leak})`;
+        break;
+      }
       if (c.exit === 0 && proof.ok && !changed) {
         outcome = "PASS";
         reason = null;
@@ -473,9 +533,16 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
     } else if (outcome === "PASS" && (d1 !== artifactSha256 || artifactSha256 !== passedSha)) {
       outcome = "FAIL";
       reason = "the workspace was still changing after the check";
+    } else if (outcome === "PASS") {
+      const leak = scanArtifactForSecrets(ws, known);
+      if (leak !== null) {
+        outcome = "FAIL";
+        reason = `artifact contains a secret (${leak})`;
+      }
     }
   } finally {
     await supervisor.stop();
+    rmSync(join(runDir, "cred"), { recursive: true, force: true });
   }
 
   const totals = tries.reduce(
