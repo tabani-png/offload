@@ -246,9 +246,8 @@ describe("s20 SAVING: the saving can never exceed the task's own observed time",
     const { toInsights } = await import("../../src/api/dto.ts");
     const { a } = await blind();
     const dto = toInsights(a).insights;
-    // Looking-only tasks are flagged, write tasks with enough instances are not.
-    const looking = dto.find((d) => d.understanding?.steps.every((s) => s.verb === "reviewing"));
-    expect(looking?.saving.confidence?.level).toBe("low");
+    // Looking-only tasks claim no saving and are not offered (review round); write tasks with enough instances carry no flag.
+    expect(dto.filter((d) => d.understanding?.steps.every((s) => s.verb === "reviewing"))).toEqual([]);
     const granola = dto.find((d) => d.understanding?.surfaces.some((s) => s.appName === "Granola"));
     expect(granola?.saving.confidence).toBeUndefined();
     const merged = estimateSaving({ instances: 300, daysActive: 7, windowDays: 7, medianMinutes: 2, eventIds: [], activeMinutes: 600, signals: { share: 0.79, surfaces: 7 } });
