@@ -2,6 +2,15 @@
 
 This is a test build. It needs a Mac with Apple silicon (M1 or later) and macOS 14 or later.
 
+## Your Claude key
+
+Offload uses your own Claude account. Your key stays in your Mac's Keychain.
+
+1. Get a Claude API key at console.anthropic.com.
+2. Paste it in Offload's first screen.
+
+You can replace or remove it later in Offload's Settings (Dashboard, Observing).
+
 ## Install
 
 1. Open the `.dmg` file.
@@ -42,6 +51,7 @@ your Claude account. Keys you paste into Offload go into your Mac's Keychain.
 ```
 rm -rf ~/Library/Application\ Support/Offload ~/Library/Logs/Offload
 rm -f ~/Library/LaunchAgents/ai.offload.observer.plist
+security delete-generic-password -s offload.anthropic -a api-key
 ```
 
 4. Optional: remove Offload from the three lists in **Privacy & Security** (select it, then click the minus button).

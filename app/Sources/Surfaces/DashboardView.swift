@@ -149,6 +149,8 @@ struct DashboardDetail: View {
           TimelineSection(model: model, data: d, now: now, tracked: copy.tracked).id("section.timeline")
         case .observing:
           ObservingSection(model: model, observing: d.observing, now: now)
+          // s29: the Claude API key (Key set (…ABCD), Replace key, Remove key).
+          if let k = model.claudeKey { ClaudeKeySettingsSection(model: k) }
           KeptFilesSection(model: model)
         }
       } else if let problem = model.problem {
@@ -157,6 +159,11 @@ struct DashboardDetail: View {
       } else {
         EmptyState(title: "No automations yet.", message: "When you approve a workflow it shows up here\nwith the hours it saves.")
           .padding(.top, Tokens.Space.s48)
+      }
+      // s29 review round 2: the key needs no brain, and a bad or missing key may be why the brain is down.
+      if model.data == nil, DashboardKeyPlacement.showsKeySettings(section: model.section, dataLoaded: false),
+         let k = model.claudeKey {
+        OfflineSettingsSection(model: model, key: k)
       }
     }
     .frame(maxWidth: ReviewView.contentWidth, alignment: .leading)

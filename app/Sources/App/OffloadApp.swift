@@ -25,7 +25,8 @@ enum OffloadMain {
     if args.contains("--brain-check") {
       let env = ProcessInfo.processInfo.environment
       exit(BrainCheck.run(bundleURL: Bundle.main.bundleURL, environment: env,
-                          home: LaunchOptions.parse(arguments: args, environment: env).home))
+                          home: LaunchOptions.parse(arguments: args, environment: env).home,
+                          keyStatus: ClaudeKeychain().status()))
     }
     MainActor.assumeIsolated {
       let app = NSApplication.shared
@@ -77,6 +78,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var lastProbe: OllamaProbeResult?
   /// The brain runs on the demo week's folder (seeded from onboarding): no captioner or v2 flags there.
   private var demoActive = false
+  /// s29: the person's own Claude API key, in the login Keychain (never the real Keychain under --mock).
+  private lazy var claudeKey = ClaudeKeyModel(store: isMock ? MemoryClaudeKeyStore() : ClaudeKeychain())
 
   override init() {
     let env = ProcessInfo.processInfo.environment
@@ -141,6 +144,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     dashboardModel.onOpenURL = { NSWorkspace.shared.open($0) }
     wireCompany()
     dashboardModel.claudeVision = ClaudeVisionSetting.load(.standard).enabled
+    dashboardModel.claudeKey = claudeKey
+    dashboardModel.claudeKeyNotice = claudeKey.status.notice
+    claudeKey.onChange = { [weak self] status in self?.claudeKeyChanged(status) }
     dashboardModel.onClaudeVision = { [weak self] on in self?.setClaudeVision(on) }
     dashboardModel.onReveal = { path in
       let url = URL(fileURLWithPath: path)
@@ -172,7 +178,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func brainSpec(home: URL, demo: Bool = false) -> BrainLaunchSpec? {
     guard let repo, let bun = brain?.bun else { return nil }
-    let env = Self.environment(demo: demo || options.demo)
+    // s29: the Keychain item's NAME only (the brain reads the key itself); never the key.
+    let env = BrainLaunch.claudeKeyEnvironment(Self.environment(demo: demo || options.demo), status: claudeKey.status)
     try? FileManager.default.createDirectory(at: Self.brainLogFile.deletingLastPathComponent(), withIntermediateDirectories: true)
     return BrainLaunch.spec(bun: bun, repo: repo, home: home, token: token,
                             baseEnvironment: env, observer: observer.binary,
@@ -361,7 +368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     if let o = onboarding { o.show(); return }
     let m = OnboardingModel(readPermissions: { [weak self] in
       await self?.observerReport()?.permissionRows() ?? PermissionState.unknownRows
-    })
+    }, claudeKey: claudeKey)
     m.onFinish = { [weak self] in
       UserDefaults.standard.set(true, forKey: OnboardingGate.defaultsKey)
       self?.onboarding?.window.close()
@@ -382,6 +389,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       for _ in 1..<max(1, n) { m.next() }
     }
     qaRecord("onboarding", c.window)
+  }
+
+  /// s29: a key was saved or removed. The notice follows at once; a brain the app supervises on your own folder
+  /// restarts so it reads the Keychain item (or stops being told about it). Otherwise it applies the next launch.
+  private func claudeKeyChanged(_ status: ClaudeKeyStatus) {
+    dashboardModel.claudeKeyNotice = status.notice
+    guard options.brain == .spawn, !options.demo, !demoActive, let s = supervisor, let spec = brainSpec(home: home) else { return }
+    NSLog("Offload: restarting the brain for the Claude key (%@)", status.checkLine)
+    s.restart(home: home, spec: spec)
   }
 
   /// s14: the Claude captioner opt-in. Saved at once; the brain restarts with the new flag when the app supervises
