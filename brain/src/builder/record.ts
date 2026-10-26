@@ -2,6 +2,8 @@
 // builds/runs.jsonl. No prompt and no key is stored; check output is truncated. The latest run of a brief feeds the
 // additive `build` field of its solution option (hours saved vs cost).
 import { createHash } from "node:crypto";
+import { open } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import { appendFileSync, closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { briefIdFor } from "../solutions/brief.ts";
@@ -100,6 +102,110 @@ function fileSha(path: string): string {
   return h.digest("hex");
 }
 
+/** The whole workspace above this is not inspected: the run fails closed ("workspace too large"). */
+export const MAX_ARTIFACT_BYTES = 256 * 1024 * 1024;
+
+/** Sizes the workspace from metadata only (lstat; no file is read): a file over the scan cap, a sparse file (huge
+ * logical length, few real blocks) or a workspace over the total cap is a problem, returned as text; else null. */
+export function checkArtifactLimits(ws: string): string | null {
+  let total = 0;
+  const walk = (dir: string, rel: string): string | null => {
+    for (const name of readdirSync(dir).sort()) {
+      const abs = join(dir, name);
+      const r = rel === "" ? name : `${rel}/${name}`;
+      const st = lstatSync(abs);
+      if (st.isDirectory()) {
+        if (SKIP_DIRS.has(name)) continue;
+        const hit = walk(abs, r);
+        if (hit !== null) return hit;
+      } else if (st.isFile()) {
+        if (st.size > 4 * 1024 * 1024 && st.blocks * 512 < st.size / 4) return `${r}: sparse file (${Math.ceil(st.size / (1024 * 1024))} MB logical, ${Math.ceil((st.blocks * 512) / (1024 * 1024))} MB on disk)`;
+        if (st.size > MAX_SCAN_BYTES) return `${r}: too large to scan (${Math.ceil(st.size / (1024 * 1024))} MB, limit ${MAX_SCAN_BYTES / (1024 * 1024)} MB)`;
+        total += st.size;
+        if (total > MAX_ARTIFACT_BYTES) return `workspace too large (over ${MAX_ARTIFACT_BYTES / (1024 * 1024)} MB)`;
+      }
+    }
+    return null;
+  };
+  return walk(ws, "");
+}
+
+async function eachChunk(path: string, deadline: number, fn: (b: Buffer) => boolean | void): Promise<void> {
+  const fh = await open(path, "r");
+  try {
+    const buf = Buffer.allocUnsafe(1 << 20);
+    for (;;) {
+      if (Date.now() > deadline) throw new Error("ran out of time reading the artifact");
+      const { bytesRead } = await fh.read(buf, 0, buf.length, null);
+      if (bytesRead === 0) return;
+      if (fn(buf.subarray(0, bytesRead)) === true) return;
+    }
+  } finally {
+    await fh.close();
+  }
+}
+
+async function eachFile(ws: string, fn: (abs: string, rel: string, st: Stats) => Promise<string | null> | string | null, skipRel: ReadonlySet<string> = new Set()): Promise<string | null> {
+  const walk = async (dir: string, rel: string): Promise<string | null> => {
+    for (const name of readdirSync(dir).sort()) {
+      const abs = join(dir, name);
+      const r = rel === "" ? name : `${rel}/${name}`;
+      const st = lstatSync(abs);
+      if (st.isDirectory()) {
+        if (SKIP_DIRS.has(name) || skipRel.has(r)) continue;
+        const hit = await fn(abs, r, st);
+        if (hit !== null) return hit;
+        const sub = await walk(abs, r);
+        if (sub !== null) return sub;
+      } else {
+        const hit = await fn(abs, r, st);
+        if (hit !== null) return hit;
+      }
+    }
+    return null;
+  };
+  return walk(ws, "");
+}
+
+/** artifactDigest, read asynchronously in chunks (never blocks the event loop), stopping at the deadline. Same value. */
+export async function artifactDigestAsync(ws: string, deadline: number): Promise<string> {
+  const h = createHash("sha256");
+  await eachFile(ws, async (abs, r, st) => {
+    if (st.isDirectory()) h.update(`d\0${r}\n`);
+    else if (st.isSymbolicLink()) h.update(`l\0${r}\0${readlinkSync(abs)}\n`);
+    else if (st.isFile()) {
+      const fh = createHash("sha256");
+      await eachChunk(abs, deadline, (b) => void fh.update(b));
+      h.update(`f\0${r}\0${fh.digest("hex")}\n`);
+    } else h.update(`o\0${r}\n`);
+    return null;
+  });
+  return h.digest("hex");
+}
+
+/** scanArtifactForSecrets, read asynchronously in overlapping chunks, stopping at the deadline. */
+export async function scanArtifactForSecretsAsync(ws: string, known: readonly string[], deadline: number): Promise<string | null> {
+  const overlap = Math.max(4096, ...known.map((k) => k.length));
+  return eachFile(
+    ws,
+    async (abs, r, st) => {
+    if (!st.isFile()) return null;
+    if (st.size > MAX_SCAN_BYTES) return `${r}: too large to scan`;
+    let carry = "";
+    let what: string | null = null;
+    await eachChunk(abs, deadline, (b) => {
+      const text = carry + b.toString("latin1");
+      what = findSecret(text, known);
+      carry = text.slice(-overlap);
+      return what !== null;
+    });
+    return what === null ? null : `${r}: ${what}`;
+    },
+    // accept/ is the frozen, approved check (not builder output).
+    new Set(["accept"]),
+  );
+}
+
 /** Files above this are not scanned: the run fails closed ("too large to scan"). */
 export const MAX_SCAN_BYTES = 64 * 1024 * 1024;
 const SCAN_CHUNK = 1 << 20;
@@ -151,6 +257,7 @@ export function scanArtifactForSecrets(ws: string, known: readonly string[] = []
 export function verifyArtifact(home: string, runId: string, known: readonly string[] = secretValues(process.env)): boolean {
   const r = readRunRecord(home, runId);
   if (r === null || typeof r.artifactSha256 !== "string" || !existsSync(r.artifactPath)) return false;
+  if (checkArtifactLimits(r.artifactPath) !== null) return false;
   return artifactDigest(r.artifactPath) === r.artifactSha256 && scanArtifactForSecrets(r.artifactPath, known) === null;
 }
 

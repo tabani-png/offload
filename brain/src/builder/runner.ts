@@ -27,7 +27,7 @@ import { claimBuildApproval, peekBuildApproval } from "./approval.ts";
 import { GUARD_TS, HARNESS_PY } from "./harness.ts";
 import { startSupervisor, supervisorSocket, type Supervisor } from "./supervisor.ts";
 import { checkSha, identityMask, type CheckFile, type Mask } from "./checks.ts";
-import { artifactDigest, buildsDir, scanArtifactForSecrets, DEFAULT_LIMITS, truncateOutput, writeRunRecord, type BuildLimits, type BuildOutcome, type RunRecord, type TryRecord } from "./record.ts";
+import { artifactDigestAsync, buildsDir, checkArtifactLimits, scanArtifactForSecretsAsync, DEFAULT_LIMITS, truncateOutput, writeRunRecord, type BuildLimits, type BuildOutcome, type RunRecord, type TryRecord } from "./record.ts";
 import {
   assertSafeExecutionProfile,
   BASH_ALLOW,
@@ -388,16 +388,33 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   // Hashing and scanning read every workspace file; builder code can make one unreadable (chmod 0). That is a
   // recorded FAIL, never an escape from the run's cleanup.
   class ArtifactUnreadable extends Error {}
-  const hash = () => {
+  class ArtifactRejected extends Error {}
+  // Sized from metadata first (no reads): a sparse file, a file over the scan cap or a workspace over the total cap
+  // fails closed. Then read asynchronously in chunks, bounded by the wall budget plus a short grace for the verdict.
+  // Real clock (an injected `now` is for records and tests, not for bounding I/O).
+  const realStart = Date.now();
+  const inspectDeadline = () => realStart + limits.wallMs + 30_000;
+  const sized = () => {
+    let problem: string | null;
     try {
-      return artifactDigest(ws);
+      problem = checkArtifactLimits(ws);
+    } catch (err) {
+      throw new ArtifactUnreadable(String((err as Error)?.message ?? err));
+    }
+    if (problem !== null) throw new ArtifactRejected(problem);
+  };
+  const hash = async () => {
+    sized();
+    try {
+      return await artifactDigestAsync(ws, inspectDeadline());
     } catch (err) {
       throw new ArtifactUnreadable(String((err as Error)?.message ?? err));
     }
   };
-  const scan = () => {
+  const scan = async () => {
+    sized();
     try {
-      return scanArtifactForSecrets(ws, known);
+      return await scanArtifactForSecretsAsync(ws, known, inspectDeadline());
     } catch (err) {
       throw new ArtifactUnreadable(String((err as Error)?.message ?? err));
     }
@@ -515,7 +532,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         break;
       }
       // The artifact going in: sweep -> hash -> check -> sweep -> hash; both hashes must match for a PASS.
-      const before = hash();
+      const before = await hash();
       const nonce = randomBytes(16).toString("hex");
       // bun runs the frozen copy (resolution root outside the workspace); python runs accept/<file> (cwd workspace).
       const c = await runCheck({ ws, file: checks.file, checkPath: checks.file === "accept.py" ? checkPath : frozenPath, frozenDir, env: childEnv, harness, sweep, nonce, timeoutMs: Math.min(120_000, left), signal: abort.signal });
@@ -545,12 +562,12 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         reason = `builder processes could not be stopped after the check (${after.why ?? "sweep not clean"})`;
         break;
       }
-      const changed = hash() !== before;
+      const changed = (await hash()) !== before;
       if (changed && c.exit === 0 && proof.ok) rec.checkOutput = truncateOutput(`${rec.checkOutput}\n[not a pass: the workspace changed while the check ran; write fixtures and outputs to a temporary folder]`);
       // An exit 0 without a valid proof (or that changed the artifact) is recorded as "did not complete" (null).
       rec.checkExit = c.exit === 0 && (!proof.ok || changed) ? null : c.exit;
       tries.push(rec);
-      const leak = c.exit === 0 && proof.ok && !changed ? scan() : null;
+      const leak = c.exit === 0 && proof.ok && !changed ? await scan() : null;
       if (leak !== null) {
         outcome = "FAIL";
         reason = leakReason(leak);
@@ -570,9 +587,9 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
 
     // The artifact at the verdict: sweep once more, then hash twice with a gap; any change means something still writes.
     const fin = await supervisor.sweep();
-    const d1 = hash();
+    const d1 = await hash();
     await new Promise((r) => setTimeout(r, 150));
-    artifactSha256 = hash();
+    artifactSha256 = await hash();
     if (outcome === "PASS" && !fin.clean) {
       outcome = "FAIL";
       reason = `builder processes could not be stopped after the check (${fin.why ?? "sweep not clean"})`;
@@ -580,7 +597,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
       outcome = "FAIL";
       reason = "the workspace was still changing after the check";
     } else if (outcome === "PASS") {
-      const leak = scan();
+      const leak = await scan();
       if (leak !== null) {
         outcome = "FAIL";
         reason = leakReason(leak);
@@ -590,7 +607,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
     // Any error after setup is a recorded FAIL; the run record below is always written.
     outcome = "FAIL";
     const msg = scrub(String((err as Error)?.message ?? err)).slice(0, 300);
-    reason = err instanceof ArtifactUnreadable ? `artifact unreadable (${msg})` : `the run stopped on an error: ${msg}`;
+    reason = err instanceof ArtifactRejected ? `artifact rejected (${msg})` : err instanceof ArtifactUnreadable ? `artifact unreadable (${msg})` : `the run stopped on an error: ${msg}`;
   } finally {
     clearTimeout(timer);
     for (const s of SIGNALS) process.off(s, onSignal);

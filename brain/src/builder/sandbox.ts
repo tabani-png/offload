@@ -281,7 +281,9 @@ function sandboxExecWorks(bin: string): boolean {
 
 /** The OS sandbox to run builder code in, or UnsafeProfileError (fail closed: nothing executes unsandboxed). */
 export function resolveSandbox(p: ExecutionProfile, bin: string = SANDBOX_EXEC): SandboxRuntime {
-  if (p.containerSandbox) return { kind: "container" };
+  // A "container" here would run builder code as the same user on the same filesystem without the profile: it could
+  // rewrite ../frozen/harness.py or read ../cred/. Not supported until runner, harness and credentials live outside it.
+  if (p.containerSandbox) throw new UnsafeProfileError("container mode is not supported yet (builder code would share the user and filesystem with the harness and credentials); builds run on macOS under sandbox-exec");
   if (sandboxExecWorks(bin)) return { kind: "sandbox-exec", bin };
   throw new UnsafeProfileError(`no OS sandbox: ${bin} is not usable on this machine (${process.platform}) and the profile is not a container; refusing to run builder code unsandboxed`);
 }
