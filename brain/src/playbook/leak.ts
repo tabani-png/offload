@@ -1,7 +1,7 @@
 // De-personalisation check, fail closed: a playbook (or a notes edit, or a model's wording) that still holds a
 // person's name, an address, a phone, a link, a figure that is not one of the playbook's own counts, or the author's
 // name or company is refused. Findings carry the kind and the field path, never the value.
-import { EMAIL_RE, HOST_RE, identityBase, inIdentity, isCap, PHONE_RE, plainWord, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
+import { EMAIL_RE, HOST_RE, identityBase, inIdentity, isCap, isPlaceholder, PHONE_RE, plainWord, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
 import type { Playbook } from "./types.ts";
 
 export type LeakKind = "author" | "company" | "name" | "email" | "phone" | "link" | "number";
@@ -24,7 +24,7 @@ const LOCAL = new Set(["playbook.json", "playbook.md", "facts.md", "skill.md"]);
 /** Every word written in lower case in these texts: the vocabulary a capitalised word may come from. */
 export function lowerWords(texts: readonly string[]): Set<string> {
   const out = new Set<string>();
-  for (const t of texts) for (const w of t.match(TOKEN_RE) ?? []) if (!w.startsWith("[") && !w.startsWith("{") && !isCap(w)) out.add(identityBase(w));
+  for (const t of texts) for (const w of t.match(TOKEN_RE) ?? []) if (!isPlaceholder(w) && !isCap(w)) out.add(identityBase(w));
   return out;
 }
 
@@ -42,7 +42,8 @@ export function findTextLeaks(text: string, id: Identity, allowedNumbers: Readon
   if ((text.match(PHONE_RE) ?? []).some((p) => p.replace(/\D/g, "").length >= 9)) add("phone");
   for (const n of text.match(NUM_RE) ?? []) if (!allowedNumbers.has(n)) add("number");
   for (const w of text.match(TOKEN_RE) ?? []) {
-    if (w.startsWith("[") || w.startsWith("{")) continue;
+    // Only the defined placeholders are skipped: a word in any other brackets ("{northzone}") is checked as text.
+    if (isPlaceholder(w)) continue;
     const b = identityBase(w);
     if (inIdentity(id, "author", b)) add("author");
     else if (inIdentity(id, "company", b)) add("company");

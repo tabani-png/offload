@@ -3,7 +3,7 @@
 // links and figures. The playbook keeps patterns; these never leave this file unmasked. Pure string code.
 import { createHash } from "node:crypto";
 import { cleanEmail } from "../tone/clean.ts";
-import type { PlaybookMessage } from "./types.ts";
+import { SLOTS, type PlaybookMessage } from "./types.ts";
 
 export interface Identity {
   /** The author's names (lower case): sign names, the signature's name line, facts `sign:`. */
@@ -100,8 +100,21 @@ const HOST_RE = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}\b/gi;
 const PHONE_RE = /\+?\d[\d ().-]{6,}\d/g;
 const NUMBER_RE = /[$£€#]?\b[\w-]*\d[\w-]*(?:[.,]\d[\w-]*)*%?/g;
 const LOCAL_FILES = new Set(["recipients.csv", "facts.md", "workflow.json", "skill.md", "playbook.json", "playbook.md"]);
-/** A placeholder this module writes, or a word. */
-const TOKEN_RE = /\[[a-z_]+\]|\{[a-z_]+\}|\p{L}[\p{L}\p{M}'’-]*/gu;
+/** The placeholders Offload writes, exactly: what masking writes ([email] ... {their_org}), the template slots
+ * ({greeting} ... {sign_off}) and the skeleton brackets ([hook], [proof], [ask], [thanks] ...). Only these are exempt
+ * from masking and from the leak check; any other word in brackets ("{northzone}", "[priya]") is read as plain text. */
+export const PLACEHOLDERS: ReadonlySet<string> = new Set([
+  ...["email", "link", "phone", "number", "name", "thanks", ...SLOTS].map((w) => `[${w}]`),
+  ...["sender", "company", "first", "their_org", ...SLOTS].map((w) => `{${w}}`),
+]);
+const esc = (s: string) => s.replace(/[[\]{}]/g, "\\$&");
+/** A defined placeholder (exact list), or a word. A bracket around any other word is not part of the token, so the
+ * word inside is masked and checked like the rest of the text. */
+const TOKEN_RE = new RegExp(`${[...PLACEHOLDERS].map(esc).join("|")}|\\p{L}[\\p{L}\\p{M}'’-]*`, "gu");
+/** Is this token one of the defined placeholders? */
+export const isPlaceholder = (w: string) => PLACEHOLDERS.has(w);
+/** "{{company}}" or "[[name]]": a bracketed word masked to a placeholder, kept as the placeholder alone. */
+const NESTED_RE = /[[{](\[[a-z_]+\]|\{[a-z_]+\})[\]}]/g;
 
 export const emptyIdentity = (): Identity => ({ author: new Set(), company: new Set(), people: new Set(), orgs: new Set(), words: new Set() });
 
@@ -113,7 +126,7 @@ const plainWord = (b: string) => GENERIC.has(b) || COMMON.has(b) || /^i['’]/.t
 /** Does this text start with a capitalised word that is not a plain word (an unmasked name)? */
 export function startsUnmasked(text: string): boolean {
   const w = text.match(TOKEN_RE)?.[0];
-  return w !== undefined && !w.startsWith("[") && !w.startsWith("{") && isCap(w) && [...w].length >= 2 && !plainWord(base(w));
+  return w !== undefined && !isPlaceholder(w) && isCap(w) && [...w].length >= 2 && !plainWord(base(w));
 }
 
 /** Address -> person name parts and organisation stem ("anna.weber@northzone.com" -> [anna, weber], northzone). */
@@ -205,11 +218,11 @@ export function buildIdentity(messages: readonly PlaybookMessage[], facts = ""):
   // Contacts are masked first, so the local part of an address is not a lower-case word.
   const lower = new Set<string>();
   const masked = cores.map(maskContacts);
-  for (const t of masked) for (const w of t.match(TOKEN_RE) ?? []) if (!isCap(w)) lower.add(base(w));
+  for (const t of masked) for (const w of t.match(TOKEN_RE) ?? []) if (!isPlaceholder(w) && !isCap(w)) lower.add(base(w));
   for (const t of masked) {
     for (const mm of t.matchAll(TOKEN_RE)) {
       const w = mm[0];
-      if (w.startsWith("[") || w.startsWith("{") || !isCap(w) || [...w].length < 2) continue;
+      if (isPlaceholder(w) || !isCap(w) || [...w].length < 2) continue;
       const b = base(w);
       if (GENERIC.has(b) || /^i['’]/.test(b)) continue;
       if (!initialAt(t, mm.index ?? 0) || (!COMMON.has(b) && !lower.has(b))) id.words.add(b);
@@ -252,8 +265,8 @@ export function maskText(text: string, id: Identity, scope: MaskScope = {}): str
   const t = maskContacts(text);
   const first = scope.first == null ? null : base(scope.first);
   const org = scope.org == null ? null : scope.org.toLowerCase();
-  return t.replace(TOKEN_RE, (w, offset: number) => {
-    if (w.startsWith("[") || w.startsWith("{")) return w;
+  const out = t.replace(TOKEN_RE, (w, offset: number) => {
+    if (isPlaceholder(w)) return w;
     const b = base(w);
     if (inIdentity(id, "author", b)) return "{sender}";
     if (inIdentity(id, "company", b)) return "{company}";
@@ -272,6 +285,7 @@ export function maskText(text: string, id: Identity, scope: MaskScope = {}): str
     if (!initialAt(t, offset)) return "[name]";
     return COMMON.has(b) || id.vocab?.has(b) === true ? w : "[name]";
   });
+  return out.replace(NESTED_RE, (m, p: string) => (isPlaceholder(p) ? p : m));
 }
 
 /** The masked core of one message (greeting, sign-off, quotes and signature removed) and its greeting name. */
