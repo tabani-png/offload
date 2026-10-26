@@ -141,6 +141,29 @@ The proof behind every number: `figures.<name>.eventIds` (all figures plus `savi
 ## GET /timeline?day=YYYY-MM-DD → `TimelineResponse`
 That day's spans in time order, each with its `taskId`, plus `byTask` minutes (sums to `activeMinutes`).
 
+## GET /time[?day=YYYY-MM-DD][&window=week] → `TimeBreakdownResponse` (s23)
+Where the time goes, then what could be faster (`brain/src/time/`). No `day`: the store's 7-day window; `day=`: that
+stored day only (400 malformed, 404 not stored). `window` other than `week` is 400. GET only (405). Reads spans, never
+content (ADR 0003); every number is code and carries its event ids (ADR 0005); no model call; drafts nothing (ADR 0006).
+- `total`: active minutes of every span in the window (sessionized as `analyze.ts` does); `eventIds` = the events
+  behind those spans.
+- `byTask` (one row per task, `unsorted` for spans in no task), `byApp` (per app bundle id, `name` the app name) and
+  `byKind` (fixed ids `code docs meeting sheet email chat browse other`, from the app bundle id, host and URL path)
+  each partition the spans: a row's `minutes` is the sum of its spans, its `eventIds` the union of their events,
+  `share` = minutes / total. Rows sort by minutes, most first, ties by id. Two tasks with one label name are told
+  apart by their masked title template.
+- `findings`: the analysis's insights (same ids and task ids), most hours freed first. `taskMinutes` = the task's
+  row (same value and display); `observedHoursPerWeek` = task minutes / 60 × 7 / window days; `hoursFreed` =
+  min(observed, the fix's estimate): s22's top option `weeklyHoursSaved` (the same `top` as
+  `GET /insights/:id/solutions`, rules only) when `brain/src/solutions/` is present, else the s04 estimate
+  (`saving.weeklyHoursSaved`). Never above observed. `arithmetic` shows the inputs and ends with `hoursFreed.display`.
+  No percentage, range or review chain.
+- Fix-kind fallback: `fixKind` is the s22 top kind (`workflow | tool | setup | remove_step | leave_alone`), or `fixKind: null`
+  when s22 is absent or answered a kind outside the five (never guessed); `fixKinds` says `"s22"` or `"absent"`.
+  `workflowInsightId` = `insightId` only when `fixKind` is null or `workflow`, else null. No workflow list of its own.
+- Rounding (`rounding: "tenths-half-up"`, one rule for brain and app): tenths = floor(hours × 10 + 0.5 + 1e-9),
+  display `"<tenths/10 with 1 decimal> h"`; minutes are shown as hours. 1479 min (24.65 h) → `24.7 h`.
+
 ## GET /dashboard → `DashboardResponse`
 `automations`: one per workflow. Existing fields are unchanged (`status` keeps its 4 legacy values: draft, dry_run,
 approved, paused). Added: `state` (`drafting | ready_for_review | active | paused | needs_you`), `needsYou[]` (plain
