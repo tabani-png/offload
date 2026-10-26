@@ -42,7 +42,25 @@ export function labelOnLine(line: string, value: string): string | null {
   return plainLabel(line.slice(0, m.index).replace(/[\s:=|\-–]+$/, ""));
 }
 
-const cellsOf = (line: string): string[] | null => (line.includes("|") ? line.split("|") : line.includes("\t") ? line.split("\t") : null)?.map((c) => c.trim()) ?? null;
+/** s27 round 10 (I8): a line that is only table formatting (Markdown delimiters `---` / `:---:`, `+---+` and `|===|`
+ * borders, box-drawing lines): never data. */
+export const isFormattingLine = (line: string): boolean => /^[\s\-=_:+|.*~\u2500-\u257F]+$/u.test(line) && /[-=_+\u2500-\u257F]/u.test(line);
+
+/** True when a table line has outer borders (`| a | b |`, `│ a │ b │`): then its rows have them too. */
+const outerPipes = (line: string): boolean => /^[|│┃║┆┊╎╏]/.test(line.trim());
+
+/** The cells of a table line: split on | (box-drawing verticals count as |) or on tabs; trimmed. `outer` (from the
+ * header): drop the outer borders. Without outer borders a trailing | is an empty last cell, never dropped. */
+const cellsOf = (line: string, outer: boolean = outerPipes(line)): string[] | null => {
+  const l = line.replace(/[│┃║┆┊╎╏]/g, "|").trim();
+  if (l.includes("|")) {
+    let t = l;
+    if (outer && t.startsWith("|")) t = t.slice(1);
+    if (outer && t.endsWith("|")) t = t.slice(0, -1);
+    return t.split("|").map((c) => c.trim());
+  }
+  return line.includes("\t") ? line.split("\t").map((c) => c.trim()) : null;
+};
 
 /**
  * The values typed on a commit screen, from its masked OCR: a table header of plain-word labels with the row under it
@@ -51,11 +69,13 @@ const cellsOf = (line: string): string[] | null => (line.includes("|") ? line.sp
 export function parseCommitValues(texts: readonly string[]): Array<[string, string]> {
   const out = new Map<string, string>();
   for (const t of texts) {
-    const lines = t.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+    // I8: formatting lines (table delimiters, borders) are never data, here either.
+    const lines = t.split("\n").map((l) => l.trim()).filter((l) => l !== "" && !isFormattingLine(l));
     for (let i = 0; i < lines.length; i++) {
       const head = cellsOf(lines[i]!);
       if (head !== null && head.length >= 2 && head.every((c) => plainLabel(c) !== null)) {
-        const row = lines.slice(i + 1).map(cellsOf).find((c) => c !== null && c.length === head.length && !c.every((x) => plainLabel(x) !== null));
+        const outer = outerPipes(lines[i]!);
+        const row = lines.slice(i + 1).map((l) => cellsOf(l, outer)).find((c) => c !== null && c.length === head.length && !c.every((x) => plainLabel(x) !== null));
         if (row != null) head.forEach((h, k) => row[k] !== "" && !out.has(h) && out.set(h, row[k]!));
         continue;
       }
@@ -318,7 +338,8 @@ const cleanValue = (v: unknown): string | null => {
   if (typeof v === "boolean") return String(v);
   if (typeof v !== "string") return null;
   const t = v.trim();
-  return t === "" || t.length > MAX_VALUE || /[\r\n]/.test(t) ? null : t;
+  // I8: a cell of only punctuation, dashes or box characters is formatting, not a value (its row is never a row).
+  return t === "" || t.length > MAX_VALUE || /[\r\n]/.test(t) || /^[\p{P}\p{S}\p{Z}\u2500-\u257F]+$/u.test(t) ? null : t;
 };
 
 /** s27 round 8 (I7): a key that appeared more than once with different values. Never picked from: a field holding
@@ -455,7 +476,7 @@ function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | 
     const ax = parseAxLine(l);
     if (ax !== null && ax.value !== null) put(ax.label, ax.value);
     else if (ax !== null) lines.push(ax.label.trim());
-    else if (l.trim() !== "") lines.push(l.trim());
+    else if (l.trim() !== "" && !isFormattingLine(l)) lines.push(l.trim());
   }
   const words = [...new Set([...fields.flatMap((f) => [f.sourceLabel, f.label]), ...TEXT_DECLARATIONS])].sort((a, b) => b.length - a.length);
   for (let i = 0; i < lines.length; i++) {
@@ -465,7 +486,7 @@ function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | 
       // A table: every following line with the same number of cells is a row; cells kept exactly.
       let j = i + 1;
       for (; j < lines.length; j++) {
-        const raw = lines[j]!.includes("|") ? lines[j]!.split("|") : lines[j]!.includes("\t") ? lines[j]!.split("\t") : null;
+        const raw = cellsOf(lines[j]!, outerPipes(line));
         if (raw === null || raw.length !== head.length) break;
         const r: Obj = {};
         head.forEach((h, k) => putKey(r, normKey(h), raw[k]!.trim()));

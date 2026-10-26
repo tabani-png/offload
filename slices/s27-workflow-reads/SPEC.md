@@ -131,7 +131,12 @@ only saving was the typing.
     sandbox env by design; reported). Composio answers reach the shared exact parser as the CLI's raw text (no
     JSON.parse/stringify round trip). Reader audit: MCP returns the tool's text content as sent, the direct API
     returns `res.text()`, the screen returns the accessibility text; none re-encodes values.
-17. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+17. **Round 10 (PR #35 review): I8 formatting is never data.** Table delimiter and border lines (Markdown `---`,
+    `:---:`, `|---|`, ASCII `+---+` and `|===|`, box-drawing lines) are dropped before parsing, in the read step and in
+    the commit-screen parse; Markdown tables with or without outer pipes, ASCII boxes and box-drawing tables are read
+    (outer borders are dropped only when the header has them, so a trailing `|` stays an empty cell); a cell of only
+    punctuation, dashes or box characters is not a value, so such a row is never a row (it is skipped, named).
+18. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)
