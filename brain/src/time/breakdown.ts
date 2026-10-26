@@ -145,7 +145,7 @@ export async function timeBreakdown(a: Analysis, opts: TimeOptions = {}): Promis
     const source = answer === null ? "the estimate" : "the best fix";
     const capped = freed.capped ? ` · ${source} says ${formatHours(Math.max(0, estimate))}, capped to leave the checking` : "";
     const arithmetic = freed.hours > 0
-      ? `${now} · about ${freed.leftDisplay} left for checking${capped} · frees ${hoursFreed.display}`
+      ? `${now} · about ${freed.leftDisplay} ${freed.capped ? "left for checking" : "still yours"}${capped} · frees ${hoursFreed.display}`
       : `${now} · no change worth making yet · frees ${hoursFreed.display}`;
     findings.push({
       id: `tf_${insight.id.replace(/^ins_/, "")}`,
