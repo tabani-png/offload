@@ -119,7 +119,8 @@ struct S213PrivacyTests {
       // See what my company sees: whenever connected, computed from the status alone (no request first).
       #expect((CompanySelfView.url(s) != nil) == s.isConnected, "self-view \(tag)")
       // Resume and share: the only controls that wait for the ack.
-      #expect(CompanyControls.resumeEnabled(s) == (s.isConnected && paused && !s.waitingForNotice), "resume \(tag)")
+      // Round 3: an unknown notice (or none published) fails closed; only an acknowledged required notice resumes.
+      #expect(CompanyControls.resumeEnabled(s) == (s.isConnected && paused && s.notice != nil && s.noticeAcknowledged), "resume \(tag)")
     }
   }
 
