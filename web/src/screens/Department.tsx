@@ -3,29 +3,30 @@ import type { AdoptionReport, Department, HoursSavedReport, Person, Workflow, Wo
 import { isSuppressed } from "../api/types.ts";
 import { Card, FeatureOffPanel, GradeSplit, Row, Section, StatHero, SuppressedCell, Table } from "../design/components.tsx";
 import { hoursText, minutesText, pct } from "../lib/format.ts";
-import { Load, useFeature, useGet, useList } from "../app/data.tsx";
+import { Load, periodPath, useFeature, useGet, useList, usePeriod } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
-import { ChildHoursCell, GradeCell, PERIOD, confidenceChip, finalChip } from "./Overview.tsx";
+import { ChildHoursCell, GradeCell, confidenceChip, finalChip } from "./Overview.tsx";
 
 export function DepartmentScreen() {
   const { id = "" } = useParams({ strict: false }) as { id?: string };
   const depts = useList<Department>("/v1/departments");
   const dept = depts.data?.find((d) => d.id === id);
-  const report = useGet<HoursSavedReport>(`/v1/metrics/hours-saved?scope=department:${id}&from=${PERIOD.from}&to=${PERIOD.to}`);
-  const adoption = useGet<AdoptionReport>(`/v1/metrics/adoption?scope=department:${id}&from=${PERIOD.from}&to=${PERIOD.to}`);
+  const period = usePeriod();
+  const report = useGet<HoursSavedReport>(periodPath(`/v1/metrics/hours-saved?scope=department:${id}`, period));
+  const adoption = useGet<AdoptionReport>(periodPath(`/v1/metrics/adoption?scope=department:${id}`, period));
   const workflows = useList<Workflow>(`/v1/workflows?departmentId=${id}`);
   const people = useList<Person>("/v1/people");
   const headcount = people.data?.filter((p) => p.departmentId === id && p.state !== "departed").length;
   // Under the floor, run-level evidence would describe fewer than 5 people, so the link is not offered here.
   const floor = report.data !== undefined && isSuppressed(report.data.total);
   const wt = useFeature("working_time");
-  const wtReport = useGet<WorkingTimeReport>(wt.on ? `/v1/metrics/working-time?scope=department:${id}&from=${PERIOD.from}&to=${PERIOD.to}` : null);
+  const wtReport = useGet<WorkingTimeReport>(wt.on ? periodPath(`/v1/metrics/working-time?scope=department:${id}`, period) : null);
 
   return (
     <Page title={dept?.name ?? "Department"} subtitle="Department">
       <Load q={report} label="Loading hours saved">
         {(r) => (
-          <Section title="Hours saved" aside={`${PERIOD.label}${headcount !== undefined ? ` · ${headcount} people` : ""}`}>
+          <Section title="Hours saved" aside={`${period?.label ?? ""}${headcount !== undefined ? ` · ${headcount} people` : ""}`}>
             <Card className="card-hero">
               {isSuppressed(r.total) ? (
                 <div className="stack">

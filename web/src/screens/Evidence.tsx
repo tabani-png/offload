@@ -1,10 +1,27 @@
+import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import type { ApiClient } from "../api/client.ts";
 import type { HoursSavedEvidence, Workflow } from "../api/types.ts";
 import { Card, Chip, GRADE_WORDS, Section, Segmented, StateTag, Table } from "../design/components.tsx";
 import { hoursText, minutesText, timeText } from "../lib/format.ts";
-import { Load, useGet } from "../app/data.tsx";
+import { Load, periodPath, useDeps, useGet, usePeriod } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
+
+/** Pages through the evidence run list (`page.nextCursor`) so the table holds every run behind the total. */
+export async function evidenceAll(api: ApiClient, path: string, pageSize = 200, maxPages = 50): Promise<HoursSavedEvidence> {
+  let first: HoursSavedEvidence | null = null;
+  const runs: HoursSavedEvidence["runs"] = [];
+  let cursor: string | null = null;
+  for (let i = 0; i < maxPages; i++) {
+    const e: HoursSavedEvidence = await api.get<HoursSavedEvidence>(`${path}&limit=${pageSize}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+    first ??= e;
+    runs.push(...e.runs);
+    cursor = e.page.nextCursor;
+    if (cursor === null) break;
+  }
+  return { ...first!, runs, page: { nextCursor: cursor } };
+}
 
 const SOURCE_WORDS = {
   observed: "Observed on employees' Macs",
@@ -22,11 +39,15 @@ export function EvidenceScreen() {
   useEffect(() => {
     if (wq.data && version === null) setVersion(wq.data.latestVersion);
   }, [wq.data, version]);
-  const ev = useGet<HoursSavedEvidence>(version ? `/v1/metrics/hours-saved/evidence?workflowId=${id}&version=${version}` : null);
+  // The same period as the overview, so the runs listed here add up to the hours shown there.
+  const period = usePeriod();
+  const { api } = useDeps();
+  const path = version ? periodPath(`/v1/metrics/hours-saved/evidence?workflowId=${id}&version=${version}`, period) : null;
+  const ev = useQuery({ queryKey: ["evidence", path], queryFn: () => evidenceAll(api, path!), enabled: path !== null });
   const w = wq.data;
 
   return (
-    <Page title={w ? `Evidence: ${w.name}` : "Evidence"} subtitle="How the hours were worked out">
+    <Page title={w ? `Evidence: ${w.name}` : "Evidence"} subtitle={period ? `How the hours were worked out · ${period.label}` : "How the hours were worked out"}>
       {w && (
         <div className="spread">
           <Segmented<string> label="Version" value={String(version)} onChange={(x) => setVersion(Number(x))}

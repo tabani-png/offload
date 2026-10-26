@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { Digest, KillSwitch, OvernightPolicy, Workflow } from "../api/types.ts";
 import { Button, Card, Chip, ErrorNote, Field, Row, Section, Sheet, StateTag } from "../design/components.tsx";
 import { dayText, timeText, usd } from "../lib/format.ts";
-import { Load, useDeps, useGet, useList } from "../app/data.tsx";
+import { Load, useDeps, useGet, useList, usePeriod } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
 
 const OUTCOME = {
@@ -14,7 +14,8 @@ const OUTCOME = {
 
 export function DigestScreen() {
   const navigate = useNavigate();
-  const q = useGet<Digest>("/v1/me/digest?day=2026-10-25");
+  const period = usePeriod();
+  const q = useGet<Digest>(period ? `/v1/me/digest?day=${period.today}` : null);
   const workflows = useList<Workflow>("/v1/workflows");
   const policies = useList<OvernightPolicy>("/v1/overnight-policies");
   const switches = useList<KillSwitch>("/v1/kill-switches");

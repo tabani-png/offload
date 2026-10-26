@@ -17,6 +17,17 @@ The mock API and its invented fixtures exist only in dev and tests, and in the r
 Mock switches for review: `?features=per_person_views,working_time` turns the sensitive features on (they are off by
 default), `?theme=light` shows the light palette.
 
+## On the real API (S2-11)
+`vite build` output is served by the control plane (`control/src/modules/web`, ADR 0113): `/` and every client route
+get `index.html` with a strict CSP (`default-src 'self'`, no inline script or style), hashed `/assets/*` are cached
+immutable, API paths are untouched. `VITE_API=real bun run dev` points the dev server's screens at the control plane.
+The reporting period is this month so far in the tenant's timezone (`src/lib/period.ts`).
+
+`tests/S2-11/` renders the app against the real control plane: `real.tsx` starts
+`control/tests/S2-11/fixture-server.ts` (the real app on a seeded Postgres schema, over HTTP, plus a loopback test
+channel for the clock and the seeded Macs) and uses the production `createHttpClient`. Needs the control Postgres
+(`cd ../control && docker compose up -d --wait`). Tags FLOOR, GATED, EVIDENCE, NORANK, REAL.
+
 ## Layout
 - `src/design/tokens.ts`: mirror of `app/Sources/Core/Tokens.swift` and `Theme.swift` (spacing, radii 24/16/12, type
   scale, durations, `cubic-bezier(0.16, 1, 0.3, 1)`, state colours). `tokenCss()` writes them as CSS variables.

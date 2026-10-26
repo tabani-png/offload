@@ -3,7 +3,8 @@
 import { QueryClient, useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 import { ApiError, listAll, type ApiClient } from "../api/client.ts";
-import type { FeatureEnablement, SensitiveFeature, Session } from "../api/types.ts";
+import type { FeatureEnablement, SensitiveFeature, Session, Tenant } from "../api/types.ts";
+import { periodAt, type Period } from "../lib/period.ts";
 import { ErrorNote, Loading } from "../design/components.tsx";
 
 export interface AppDeps {
@@ -62,6 +63,22 @@ export function Load<T>(props: { q: UseQueryResult<T>; label?: string; children:
 
 export function useSession() {
   return useGet<Session>("/auth/session");
+}
+
+/**
+ * The reporting period (this month so far) in the tenant's reporting timezone, from the clock in deps. Null until the
+ * tenant is loaded, so screens never ask for a period in the wrong timezone.
+ */
+export function usePeriod(): Period | null {
+  const { now } = useDeps();
+  const tenant = useGet<Tenant>("/v1/tenant");
+  return tenant.data ? periodAt(now(), tenant.data.reportingTimezone) : null;
+}
+
+/** A metrics path for the period, or null while the period is unknown. */
+export function periodPath(base: string, p: Period | null): string | null {
+  if (!p) return null;
+  return `${base}${base.includes("?") ? "&" : "?"}from=${p.from}&to=${p.to}`;
 }
 
 /** A sensitive feature counts as on only when an enablement exists, is not disabled, and its notice period passed. */
