@@ -29,7 +29,7 @@ export interface PersonColumn {
   shownIn: Section | null;
   reason?: string;
   /** Set for another wave-B slice's table, which a tree without that slice does not have yet. */
-  slice?: "S2-05" | "S2-06" | "S2-07" | "S2-09";
+  slice?: "S2-05" | "S2-06" | "S2-07" | "S2-09" | "S2-10";
 }
 
 export const PERSON_COLUMNS: readonly PersonColumn[] = [
@@ -141,6 +141,24 @@ export const PERSON_COLUMNS: readonly PersonColumn[] = [
   {
     table: "worker_cloud_devices", column: "person_id", shownIn: null, slice: "S2-09",
     reason: "the revoked, keyless device my cloud run outcomes are recorded under; it is listed under devices",
+  },
+  // S2-10 continuity (migration 1000). The leaver is the subject of every row; each row is mirrored by an audit event
+  // with them as subject (the frozen self-view schema has no continuity field), so it shows in their access log.
+  { table: "handovers", column: "person_id", shownIn: "accessLog", slice: "S2-10" },
+  { table: "handovers", column: "successor_person_id", shownIn: "accessLog", slice: "S2-10" },
+  { table: "offboardings", column: "person_id", shownIn: "accessLog", slice: "S2-10" },
+  { table: "removed_connections", column: "person_id", shownIn: "accessLog", slice: "S2-10" },
+  {
+    table: "handovers", column: "assigned_by", shownIn: null, slice: "S2-10",
+    reason: "identifies the actor, not you: the admin, owner or dept lead who assigned the successor; the act is in my access log as handover.assigned",
+  },
+  {
+    table: "handovers", column: "closed_by", shownIn: null, slice: "S2-10",
+    reason: "identifies the actor, not you: the admin, owner or dept lead who closed the hand-over; the act is in my access log as handover.closed",
+  },
+  {
+    table: "offboardings", column: "requested_by", shownIn: null, slice: "S2-10",
+    reason: "identifies the actor, not you: the admin or owner who offboarded me; the act is in my access log as person.offboard",
   },
 ];
 

@@ -394,6 +394,9 @@ interface RunBinding {
   runnerPersonId: string;
 }
 
+/** The continuity hold of a workflow, or null. Reads only (handovers, people): no lock, so any lock-order step. */
+type HoldCheck = (tx: Tx, workflowId: string) => Promise<string | null>;
+
 /**
  * Who a run sends as, through what and for which job role (Codex round 3). Holds at propose, at approval and again
  * before every call, read from the tables as they are now:
@@ -403,10 +406,12 @@ interface RunBinding {
  *   - a company connection sends only as a role identity of the run's job role that names this connection, and the
  *     connection is not bound to another job role.
  */
-async function runRefusal(tx: Tx, r: RunBinding, conn: ConnRow): Promise<string | null> {
+async function runRefusal(tx: Tx, r: RunBinding, conn: ConnRow, hold: HoldCheck): Promise<string | null> {
   const [wf] = await tx`select w.job_role_id, w.state from workflows w where w.id = ${r.workflowId}
     and exists (select 1 from workflow_versions v where v.tenant_id = w.tenant_id and v.workflow_id = w.id and v.version = ${r.version})`;
   if (!wf || wf.state !== "role" || wf.job_role_id !== r.jobRoleId) return "the run's job role does not own a live version of this workflow";
+  // S2-10 hand-over hold (a leaver's workflow waits for its successor): at propose, approval and before every call.
+  if ((await hold(tx, r.workflowId)) !== null) return "the workflow is held for a hand-over (continuity)";
   const [runner] = await tx`select p.state, p.access_role, p.dept_lead_of, j.department_id from people p
     left join job_roles j on j.tenant_id = p.tenant_id and j.id = ${r.jobRoleId} where p.id = ${r.runnerPersonId}`;
   if (!runner || !LIVE_STATES.includes(runner.state as string)) return "the runner is not active (frozen or offboarded)";
@@ -454,6 +459,12 @@ export async function cleanConflict<T>(p: Promise<T>, uniqueAs?: string): Promis
 }
 
 export function createBroker(deps: Deps): Broker {
+  /** S2-10's hand-over hold through the continuity port, when that module is loaded (duck-typed: the frozen
+   * ContinuityPort names only `freeze`). Approved cross-slice change, PR #16. */
+  const holdOf: HoldCheck = async (tx, workflowId) => {
+    const c = deps.ports.continuity as { held?: (tx: Tx, workflowId: string) => Promise<string | null> };
+    return typeof c.held === "function" ? c.held(tx, workflowId) : null;
+  };
   const now = () => deps.clock.now();
   // Audit events are queued per transaction and written after its last row lock (lock order step 10): writing one
   // takes the tenant's audit-chain lock until commit, and no transaction may wait for a row while holding it.
@@ -631,7 +642,7 @@ export function createBroker(deps: Deps): Broker {
     const refusal = bindingRefusal(conn);
     if (refusal) return { ok: false, r: reject("forbidden_binding", refusal) };
     // Identity, runner, job role and workflow: never send as anyone else (ADR 0106 §6, ADR 0107).
-    const who = await runRefusal(tx, { ...run, identityType: run.identity.type, identityId: run.identity.id }, conn);
+    const who = await runRefusal(tx, { ...run, identityType: run.identity.type, identityId: run.identity.id }, conn, holdOf);
     if (who) return { ok: false, r: reject("forbidden_binding", who) };
     const items: BatchItem[] = [];
     const keys = new Set<string>();
@@ -1008,7 +1019,7 @@ export function createBroker(deps: Deps): Broker {
     // The runner and the sending identity as they are now (Codex round 3): a freeze after propose revoked the tokens,
     // and a new approval must not mint one for a frozen or offboarded runner.
     const bconn = await connectionOf(tx, b.connectionId);
-    const refused = bconn ? await runRefusal(tx, b, bconn) : "the connection is gone";
+    const refused = bconn ? await runRefusal(tx, b, bconn, holdOf) : "the connection is gone";
     if (refused) throw new HttpError(409, "forbidden_binding", refused);
     b.state = await recompute(tx, hash);
     if (b.state === "rejected") throw conflict(b.rejectedReason === "edited" ? "this batch was edited: approve the new one" : "this batch was rejected");
@@ -1354,7 +1365,7 @@ export function createBroker(deps: Deps): Broker {
       // Runner lifecycle, identity ownership, job role and workflow as they are now (Codex round 3): a freeze, an
       // offboarding, a re-pointed role identity or a retired workflow takes the approval back.
       if (conn0 !== null) {
-        const refused = await runRefusal(tx, b, conn0);
+        const refused = await runRefusal(tx, b, conn0, holdOf);
         if (refused) {
           await revokeBatch(tx, hash, "run binding: " + refused.slice(0, 120));
           await audit(tx, { actor: SERVICE, action: "batch.run_refused", subjectPersonId: b.runnerPersonId, resource: { type: "batch", id: hash }, detail: { item: itemRef(b.workflowId, key), reason: refused } });

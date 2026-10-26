@@ -1,6 +1,6 @@
 import type { App, Deps } from "../../app.ts";
 import { actorOf, body, principalOf, reply, tenantTx } from "../../app.ts";
-import { personById, personSummary, selectPeople, type PersonDto } from "../../db/people.ts";
+import { lockOwners, personById, personSummary, selectPeople, type PersonDto } from "../../db/people.ts";
 import { conflict, forbidden, invalid, notFound, page, pageParams } from "../../schema/http.ts";
 import { afterCursor, allow, ensureDepartments, idParam } from "./util.ts";
 
@@ -78,7 +78,7 @@ export function peopleRoutes(app: App, deps: Deps): void {
     const patch = await body<PersonPatch>(c, deps, "offload/control/person-patch.json");
     const out = await tenantTx(c, deps, async (tx, p) => {
       // Serialise owner changes so two concurrent demotions cannot remove the last owner.
-      await tx`select pg_advisory_xact_lock(hashtextextended('owners:' || current_setting('app.tenant_id'), 0))`;
+      await lockOwners(tx);
       const cur = await personById(tx, id);
       if (!cur) throw notFound();
       const role = patch.accessRole;

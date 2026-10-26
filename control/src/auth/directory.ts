@@ -1,5 +1,6 @@
 import type { App, Deps } from "../app.ts";
 import type { Tx } from "../db/pool.ts";
+import { lockOwners } from "../db/people.ts";
 import { withLookup, withTenant } from "../db/tenant.ts";
 import { invalid, unauthorized } from "../schema/http.ts";
 import { verifyWebhook } from "./webhook.ts";
@@ -37,6 +38,8 @@ function displayName(u: DirectoryUser, email: string): string {
 }
 
 async function upsertUser(tx: Tx, deps: Deps, u: DirectoryUser, deleted: boolean): Promise<void> {
+  // A deactivation may freeze an owner: the owners lock comes before any row lock (same key as people PATCH).
+  if (deleted || (u.state !== undefined && u.state !== "active")) await lockOwners(tx);
   const email = primaryEmail(u);
   const [existing] = await tx`select id, access_role, state from people
     where directory_user_id = ${u.id} or (directory_user_id is null and ${email}::text is not null and lower(email) = lower(${email}))
@@ -62,6 +65,13 @@ async function upsertUser(tx: Tx, deps: Deps, u: DirectoryUser, deleted: boolean
       returning id`;
     personId = p!.id;
   }
+  const inactive = deleted || (u.state !== undefined && u.state !== "active");
+  const [now] = await tx`select state from people where id = ${personId}`;
+  if (inactive && now && (now.state === "active" || now.state === "leaving")) {
+    await deps.ports.continuity.freeze(tx, personId, { source: "directory", detail: deleted ? "deleted" : "inactive" });
+  }
+  // After the freeze: writing an audit event takes the tenant's audit-chain lock, which stays last (lock order,
+  // modules/broker/broker.ts); the freeze takes row locks through the broker.
   await deps.ports.audit.write(tx, {
     actor: SYSTEM,
     action: "person.directory_sync",
@@ -69,11 +79,6 @@ async function upsertUser(tx: Tx, deps: Deps, u: DirectoryUser, deleted: boolean
     resource: { type: "person", id: personId },
     detail: { directoryUserId: u.id, state: u.state ?? null, deleted },
   });
-  const inactive = deleted || (u.state !== undefined && u.state !== "active");
-  const [now] = await tx`select state from people where id = ${personId}`;
-  if (inactive && now && (now.state === "active" || now.state === "leaving")) {
-    await deps.ports.continuity.freeze(tx, personId, { source: "directory", detail: deleted ? "deleted" : "inactive" });
-  }
 }
 
 async function groupMembership(tx: Tx, deps: Deps, u: DirectoryUser, g: DirectoryGroup, added: boolean): Promise<void> {
