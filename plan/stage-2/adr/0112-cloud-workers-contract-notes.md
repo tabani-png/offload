@@ -176,3 +176,11 @@ always sends them. Each item carries its run, workflow, text and time so a chat 
 The time is `worker_runs.question_asked_at` (migration 0907), written by the same statement as `questions`, in the
 same order. `offload_need_human` tells the agent a person will see the question only after that statement stored it;
 the 21st question of a run is not stored and the agent is told so (`limit_reached`).
+
+## 19. No trusted recipients is the empty set (fail closed)
+Every run has a recipient input set, never a missing one: a manual run's is its `inputs.recipients` or `[]`, a
+scheduled run's is `[]` (its overnight allowlist, if a policy is active, is the only other source). `propose` always
+passes it to the broker, and `worker_runs.input_recipients` is `NOT NULL DEFAULT '[]'` (migration 0908). The broker
+skips its recipient check when `ProposeRun.inputRecipients` is undefined (broker.ts, out of S2-09's scope), so a
+missing set would let a worker propose an address it read in fetched content. Broker-side follow-up: make that field
+required, or treat a missing set as empty.

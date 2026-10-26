@@ -496,7 +496,8 @@ export function createWorkers(deps: Deps): Workers {
     const runner = w.identityType === "person" ? w.identityId : o.runnerPersonId;
     const policyId = o.trigger === "schedule" ? await overnightPolicyFor(tx, w, runner) : null;
     // ADR 0105 §7: recipients come from the run's input set; a scheduled run's only set is its overnight allowlist.
-    const recipients = o.trigger === "schedule" ? (policyId ? [] : null) : (o.inputs?.recipients ?? null);
+    // Fail closed: no trusted recipients is the empty set, never a missing one (the broker skips a missing set).
+    const recipients: string[] = o.trigger === "schedule" ? [] : (o.inputs?.recipients ?? []);
     const ended = o.state !== undefined && o.state !== "running";
     const [r] = await tx`insert into worker_runs (tenant_id, id, worker_id, trigger, runner_person_id, input_recipients, overnight,
         overnight_policy_id, started_at, ended_at, state, stop_reason, error_code, budget_cents, session_ref, deployment_run_ref, deployment_id)
@@ -1005,7 +1006,8 @@ export function createWorkers(deps: Deps): Workers {
       connectionId: w.commitConnectionId,
       overnight: r.overnight,
       ...(r.overnightPolicyId ? { overnightPolicyId: r.overnightPolicyId } : {}),
-      ...(r.inputRecipients !== null ? { inputRecipients: r.inputRecipients } : {}),
+      // Always a set (empty when nothing is trusted): a missing set would turn the broker's recipient check off.
+      inputRecipients: r.inputRecipients,
       templateHash: w.templateHash,
     };
     const res = await broker().proposeBatch(ctx.tenantId, run, items);

@@ -54,7 +54,8 @@ export interface RunRow {
   workerId: string;
   trigger: "manual" | "schedule";
   runnerPersonId: string;
-  inputRecipients: string[] | null;
+  /** The run's trusted recipients (ADR 0105 §7); empty when none. Never missing: the broker reads a missing set as "no check". */
+  inputRecipients: string[];
   overnight: boolean;
   overnightPolicyId: string | null;
   startedAt: number;
@@ -122,7 +123,7 @@ export function runRow(r: Row): RunRow {
     workerId: r.worker_id as string,
     trigger: r.trigger as RunRow["trigger"],
     runnerPersonId: r.runner_person_id as string,
-    inputRecipients: (r.input_recipients as string[] | null) ?? null,
+    inputRecipients: (r.input_recipients as string[] | null) ?? [],
     overnight: r.overnight as boolean,
     overnightPolicyId: (r.overnight_policy_id as string | null) ?? null,
     startedAt: msNN(r.started_at as Date),
