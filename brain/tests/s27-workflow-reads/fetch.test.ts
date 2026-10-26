@@ -62,14 +62,16 @@ describe("s27 fetch through the chain", () => {
     expect(w.driver.pressed[0]!.form.map((f) => f.value)).toEqual(["43", "352", "2410", "3"]);
   });
 
-  test("FETCH: values the source does not show are never invented: a dashboard missing a number reads as a plain failure, not a guess", async () => {
+  // Round 7: screen text goes through the same outcome pipeline as JSON: a screen showing some fields but not all is a
+  // read with that row SKIPPED (named), not a guess and not a fall back to a stale list (round 6 rule).
+  test("FETCH: values the source does not show are never invented: a dashboard missing a number is a skipped row, named, never a guess", async () => {
     w = world({ mcp: "none", composio: "none" });
     const { id, dir } = await activeMetricsWorkflow(w);
     w.driver.dash = { week: "44", signups: "", active: "2455", churn: "2" };
     const r = await w.call(`/workflows/${id}/run`, "POST", {});
     expect(r.status).toBe(409);
-    expect(r.body.message).toMatch(/Signups/);
-    expect(r.body.message).toMatch(/items\.csv/);
+    expect(r.body.message).toMatch(/1 row at PostHog was skipped: Signups/);
+    expect(r.body.message).not.toMatch(/items\.csv/);
     expect(w.driver.pressed).toHaveLength(0);
     const log = readFileSync(join(dir, "gate-log.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((l) => l.mode === "read");
     expect(log.every((l) => l.decision === "allow" && /__read$/.test(l.tool))).toBe(true);

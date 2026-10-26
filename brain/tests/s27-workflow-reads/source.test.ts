@@ -89,6 +89,8 @@ describe("s27 read source", () => {
     expect(rv('{"week": 43, "active_users": "2410", "other": 1}', fields)).toEqual({ kind: "ok", rows: [[["Week", "43"], ["Active", "2410"]]], skipped: [] });
     expect(rv('[{"week": 43, "active_users": 2410}, {"week": 44, "active_users": 2455}]', fields).rows).toHaveLength(2);
     expect(rv('AXStaticText "Week 43"\nAXStaticText "Active users 2410"', fields)).toEqual({ kind: "ok", rows: [[["Week", "43"], ["Active", "2410"]]], skipped: [] });
-    expect(rv("Week 43", fields)).toEqual({ kind: "unreadable", reason: "did not show Active", missing: ["Active"] });
+    // Round 7: text goes through the same pipeline: a partial row is skipped (named); text with none of the fields is unreadable.
+    expect(rv("Week 43", fields)).toEqual({ kind: "ok", rows: [], skipped: [{ missing: ["Active"] }] });
+    expect(rv("Nothing here\nat all", fields)).toEqual({ kind: "unreadable", reason: "did not show Week, Active", missing: ["Week", "Active"] });
   });
 });
