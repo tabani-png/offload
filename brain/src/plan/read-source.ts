@@ -806,8 +806,9 @@ function errorSignalOf(o: Obj, wanted: ReadonlySet<string> = new Set()): string 
 
 /**
  * s27 round 20 (I5b): an error signal anywhere in an answer (every envelope object at any depth, in any part),
- * collected in the same first pass as the context. Elements of a list are rows (data: a row's own "status: failed" is a
- * value); objects inside them that are not list elements are envelopes again.
+ * collected in the same first pass as the context. Elements of a list, and objects that directly hold a wanted field,
+ * are rows (data: a row's own "status: failed" is a value); objects inside them without a wanted field are envelopes
+ * again, and an envelope above a row still makes the answer unreadable.
  */
 function errorSignal(v: unknown, wanted: ReadonlySet<string>, depth = 0, row = false): string | null {
   if (depth > MAX_DECLARATION_DEPTH) return null;
@@ -826,7 +827,10 @@ function errorSignal(v: unknown, wanted: ReadonlySet<string>, depth = 0, row = f
     return null;
   }
   if (!isObj(v)) return null;
-  if (!row) {
+  // Round 21: an object that directly holds a wanted field is a row (like a list item): its status / ok / error keys
+  // are data. An object without one is an envelope: its error keys are signals, at any depth.
+  const isRow = row || Object.keys(v).some((k) => wanted.has(normKey(k)));
+  if (!isRow) {
     const e = errorSignalOf(v, wanted);
     if (e !== null) return e;
   }

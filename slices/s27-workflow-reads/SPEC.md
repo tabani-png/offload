@@ -189,7 +189,10 @@ only saving was the typing.
     makes the answer unreadable (the chain moves on); rows next to an error are not trusted. Elements of a list are
     rows: their own fields (a "status: failed" column) are data, and so is any field the read asks for (an "Errors"
     metric).
-28. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+28. **Round 21 (PR #35 review).** Rows vs envelopes for error signals, at every depth: an object that directly holds
+    a wanted field is a row (its status / ok / error keys are data, like a list item's); an object without one is an
+    envelope (its error keys are signals). An envelope error above a row still makes the answer unreadable.
+29. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)
