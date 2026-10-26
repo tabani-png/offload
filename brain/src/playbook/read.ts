@@ -4,7 +4,7 @@ import { TIER_MODELS } from "../models/router.ts";
 import type { Model } from "../models/model.ts";
 import { untrustedBlock } from "../workflows/untrusted.ts";
 import { findTextLeaks } from "./leak.ts";
-import { maskedCore, maskText, type Identity } from "./mask.ts";
+import { maskedCore, maskText, startsUnmasked, type Identity } from "./mask.ts";
 import {
   AUDIENCES, CTAS, HOOKS, INTENTS, MOVES, OBJECTIONS, OPENERS, PROOFS,
   type Audience, type Cta, type Hook, type Intent, type MessageRead, type Move, type Objection, type Opener, type Outcome, type PlaybookMessage, type Proof, type Role, type Shape,
@@ -196,7 +196,9 @@ export function ruleRead(core: string, raw: string, ctx: { id: string; threadKey
   if (ctx.role === "follow_up" && objections.length === 0) objections.push("plain_bump");
   const fixes = proof.includes("specific_fix") || moves.includes("apology");
   const intent: Intent = fixes ? "resolve_issue" : cta === "meeting" ? "book_meeting" : cta === "confirm" ? "confirm_details" : cta === "resource" || moves.includes("attachment") && cta === "none" ? "share_resource" : "get_reply";
-  const claimS = ss.find((s) => /\{company\}/.test(s) && CLAIM_RE.test(s)) ?? ss.find((s) => CLAIM_RE.test(s) && !/\?$/.test(s));
+  // Never a sentence that starts with an unmasked capitalised word: that word may be a name the masker missed.
+  const claims = ss.filter((s) => CLAIM_RE.test(s) && !startsUnmasked(s));
+  const claimS = claims.find((s) => /\{company\}/.test(s)) ?? claims.find((s) => !/\?$/.test(s));
   return {
     id: ctx.id,
     threadKey: ctx.threadKey,

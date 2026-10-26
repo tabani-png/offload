@@ -1,7 +1,7 @@
 // De-personalisation check, fail closed: a playbook (or a notes edit, or a model's wording) that still holds a
 // person's name, an address, a phone, a link, a figure that is not one of the playbook's own counts, or the author's
 // name or company is refused. Findings carry the kind and the field path, never the value.
-import { EMAIL_RE, GENERIC, HOST_RE, identityBase, isCap, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
+import { EMAIL_RE, HOST_RE, identityBase, inIdentity, isCap, PHONE_RE, plainWord, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
 import type { Playbook } from "./types.ts";
 
 export type LeakKind = "author" | "company" | "name" | "email" | "phone" | "link" | "number";
@@ -21,8 +21,17 @@ export class PlaybookLeakError extends Error {
 const NUM_RE = /\d+(?:\.\d+)?/g;
 const LOCAL = new Set(["playbook.json", "playbook.md", "facts.md", "skill.md"]);
 
-/** Leaks in one text field. */
-export function findTextLeaks(text: string, id: Identity, allowedNumbers: ReadonlySet<string>, path: string): Leak[] {
+/** Every word written in lower case in these texts: the vocabulary a capitalised word may come from. */
+export function lowerWords(texts: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const t of texts) for (const w of t.match(TOKEN_RE) ?? []) if (!w.startsWith("[") && !w.startsWith("{") && !isCap(w)) out.add(identityBase(w));
+  return out;
+}
+
+/** Leaks in one text field. A name is a word of the identity (plain or hashed), or any capitalised word that is not
+ * generic, not common and not written in lower case anywhere in `vocab` or this text: a name the identity set never
+ * saw (one a model added, or one from mail no longer here) is caught too. */
+export function findTextLeaks(text: string, id: Identity, allowedNumbers: ReadonlySet<string>, path: string, vocab: ReadonlySet<string> = lowerWords([text])): Leak[] {
   const out: Leak[] = [];
   const add = (kind: LeakKind) => {
     if (!out.some((l) => l.kind === kind)) out.push({ kind, path });
@@ -34,9 +43,9 @@ export function findTextLeaks(text: string, id: Identity, allowedNumbers: Readon
   for (const w of text.match(TOKEN_RE) ?? []) {
     if (w.startsWith("[") || w.startsWith("{")) continue;
     const b = identityBase(w);
-    if (id.author.has(b)) add("author");
-    else if (id.company.has(b)) add("company");
-    else if (isCap(w) && !GENERIC.has(b) && (id.people.has(b) || id.orgs.has(b) || id.words.has(b))) add("name");
+    if (inIdentity(id, "author", b)) add("author");
+    else if (inIdentity(id, "company", b)) add("company");
+    else if (isCap(w) && [...w].length >= 2 && !plainWord(b) && (inIdentity(id, "names", b) || !vocab.has(b))) add("name");
   }
   return out;
 }
@@ -72,7 +81,9 @@ export function textFields(pb: Pick<Playbook, "message" | "rules" | "templates" 
 /** All leaks of a playbook against an identity set. Empty = clean. */
 export function checkDepersonalised(pb: Playbook, id: Identity): Leak[] {
   const nums = allowedNumbers(pb);
-  return textFields(pb).flatMap(([path, text]) => findTextLeaks(text, id, nums, path));
+  const fields = textFields(pb);
+  const vocab = lowerWords(fields.map(([, t]) => t));
+  return fields.flatMap(([path, text]) => findTextLeaks(text, id, nums, path, vocab));
 }
 
 /** Throws PlaybookLeakError on any leak (fail closed). */
