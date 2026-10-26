@@ -103,6 +103,9 @@ export function sys<T>(h: Harness, fn: (tx: Tx) => Promise<T>, tenant: SeededTen
  */
 export const INGEST_TABLES = listMigrations().some((m) => /CREATE TABLE run_outcomes\b/.test(m.sql));
 
+/** Whether this tree carries S2-05's run ownership claims (migration 0505). */
+export const RUN_OWNERS = listMigrations().some((m) => /CREATE TABLE run_owners\b/.test(m.sql));
+
 
 export interface IngestRow {
   table: string;
@@ -128,11 +131,17 @@ export async function seedIngest(
   for (const n of ages.runs ?? []) {
     const at = now - n * DAY_MS;
     const id = ulid(at);
+    const runId = ulid(at);
     await m`insert into run_outcomes (tenant_id, device_id, run_id, object_id, person_id, seq, created_at_ms, workflow_id,
         version, runtime, started_at_ms, ended_at_ms, outcome, items_total, items_sent, items_failed_before_send,
         items_unknown, items_pending, batch_hash, approver_kind, overnight_policy_id, cost_cents, error_code, overnight, received_at)
-      values (${tenantId}, ${deviceId}, ${ulid(at)}, ${id}, ${personId}, 1, ${at}, ${wf}, 1, 'mac', ${at - 60_000}, ${at},
+      values (${tenantId}, ${deviceId}, ${runId}, ${id}, ${personId}, 1, ${at}, ${wf}, 1, 'mac', ${at - 60_000}, ${at},
         'success', 3, 3, 0, 0, 0, ${SHA}, 'person', null, 12, null, false, now())`;
+    // S2-05's store claims each run id for the first device that stored it (migration 0505); hs-1 reads owned runs only.
+    if (RUN_OWNERS) {
+      await m`insert into run_owners (tenant_id, run_id, device_id, person_id) values (${tenantId}, ${runId}, ${deviceId}, ${personId})
+        on conflict do nothing`;
+    }
     out.push({ table: "run_outcomes", objectId: id });
   }
   for (const n of ages.reviews ?? []) {

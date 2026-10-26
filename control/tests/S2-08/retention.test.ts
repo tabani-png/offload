@@ -15,6 +15,7 @@ const dayAgo = (n: number) => new Date(h.clock.now() - n * DAY_MS).toISOString()
 /** Ages, in days, of the rows seeded per tenant. Retention defaults: 90 days per person, 30 days working time. */
 const AGES = { runs: [120, 10], reviews: [100, 10], baselines: [100, 10], daily: [100, 91, 89, 10], workingTime: [40, 31, 29, 10] };
 const PAST = {
+  run_owners: 1,
   run_outcomes: 1,
   review_events: 1,
   baseline_sample_instances: 2,
@@ -46,7 +47,7 @@ beforeAll(async () => {
 afterAll(() => h.close());
 
 describe("RETENTION", () => {
-  test("RETENTION: the job prunes exactly S2-05's seven per-person tables, children before their parents", () => {
+  test("RETENTION: the job prunes exactly S2-05's eight per-person tables, children before their parents", () => {
     expect(RETENTION_TABLES.map((t) => t.table)).toEqual(Object.keys(PAST));
     expect(RETENTION_TABLES.find((t) => t.table === "working_time_aggregates")!.kind).toBe("working_time");
     expect(RETENTION_TABLES.filter((t) => t.kind === "working_time").length).toBe(1);
@@ -56,6 +57,8 @@ describe("RETENTION", () => {
     const run = await runRetention(h.deps, h.a.id);
     expect(run.deleted).toEqual(PAST);
     expect(await count("run_outcomes", h.a.id)).toBe(1);
+    // The claim of the pruned run goes with it (its foreign key would otherwise block the delete); the recent one stays.
+    expect(await count("run_owners", h.a.id)).toBe(1);
     expect(await count("review_events", h.a.id)).toBe(1);
     expect(await count("baseline_samples", h.a.id)).toBe(1);
     expect(await count("baseline_sample_instances", h.a.id)).toBe(2);
