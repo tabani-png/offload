@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { cleanEmail } from "../tone/clean.ts";
 import { AMBIGUOUS_GIVEN, FAMILY, GIVEN } from "../privacy/lexicon.ts";
 import { COMMON_WORDS_TEXT } from "./wordlist/common-words.ts";
+import { PROPER_WORDS_TEXT } from "./wordlist/proper-words.ts";
 import { SUPPLEMENT_WORDS } from "./wordlist/supplement.ts";
 import type { ContactEntry } from "../privacy/names.ts";
 import { SLOTS, type PlaybookMessage } from "./types.ts";
@@ -358,11 +359,14 @@ export function knownWord(b: string): boolean {
 /** Handles, snake_case names and paths: "@priyaraman", "priya_raman", "[link]/in/priya-raman", "and/or". Placeholders
  * ({sign_off}, [link]) are not touched. Shared by masking (maskContacts) and the leak check (handleLeaks). */
 const HANDLE_RE = /(?<![\p{L}\p{N}.])@[\p{L}\p{N}_.-]*[\p{L}\p{N}]/gu;
+/** A spelled-out address: "priya at acme dot com", "priya (at) acme (dot) com", "priya [at] acme [dot] io". */
+const SPELLED_EMAIL_RE = /[\p{L}\p{N}._'-]+(?:[ \t]+at[ \t]+|[ \t]*[([]at[)\]][ \t]*)[\p{L}\p{N}-]+(?:(?:[ \t]+dot[ \t]+|[ \t]*[([]dot[)\]][ \t]*)[\p{L}\p{N}-]+)+/giu;
 const SNAKE_RE = /(?<![{[\p{L}\p{N}_])[\p{L}\p{N}]+(?:_[\p{L}\p{N}]+)+(?![}\]\p{L}\p{N}_])/gu;
 const PATH_RE = /[^\s,;()<>"'`]*(?:[\p{L}\p{N}\]]\/|\/[\p{L}\p{N}])[^\s,;()<>"'`]*/gu;
 const trimPath = (m: string) => m.replace(/[.!?:]+$/, "");
 function maskHandles(text: string): string {
   return text
+    .replace(SPELLED_EMAIL_RE, "[email]")
     .replace(HANDLE_RE, "[name]")
     .replace(SNAKE_RE, "[name]")
     .replace(PATH_RE, (m) => {
@@ -372,7 +376,7 @@ function maskHandles(text: string): string {
 }
 /** The handles, snake_case names and paths of a text (the leak check's view of maskHandles). */
 export function handleLeaks(text: string): string[] {
-  return [...(text.match(HANDLE_RE) ?? []), ...(text.match(SNAKE_RE) ?? []), ...(text.match(PATH_RE) ?? []).map(trimPath)];
+  return [...(text.match(SPELLED_EMAIL_RE) ?? []), ...(text.match(HANDLE_RE) ?? []), ...(text.match(SNAKE_RE) ?? []), ...(text.match(PATH_RE) ?? []).map(trimPath)];
 }
 
 /** May this capitalised word stand unmasked mid-sentence? The allow list and "I" and its contractions. A month only
@@ -418,6 +422,53 @@ function neighbourIsName(text: string, n: { w: string; at: number } | null, id?:
 }
 const nextIsName = (text: string, end: number, id?: Identity) => neighbourIsName(text, nextWord(text, end), id);
 
+/** A given or family name of the s18 lexicon, ambiguous or not ("frank", "rose", "will"). */
+const lexName = (b: string) => GIVEN.has(b) || FAMILY.has(b) || AMBIGUOUS_GIVEN.has(b);
+/** Dictionary words SCOWL also lists as proper nouns ("baker", "king", "young"): names in lower case next to a person
+ * or a cue, like lexicon names (not capitalised-anywhere: "Long story short" stays). Common and generator words
+ * ("more", "short") are left out: "ask more" is wording. */
+const PROPER_WORDS: ReadonlySet<string> = new Set(PROPER_WORDS_TEXT.split("\n").filter((w) => !ordinaryWord(w)));
+const personWord = (b: string) => lexName(b) || PROPER_WORDS.has(b);
+/** Modal verbs that are also given names: in lower case they are the verb ("we will", "it may"), a cue, never a name. */
+const MODALS = new Set(["will", "may"]);
+/** Words that announce a person right after them ("thanks rose", "loop in june", "my colleague frank"). */
+const CUE_BEFORE = new Set("hi hey dear thanks thank cc to with ask from met intro introduce introducing ping colleague colleagues cofounder co-founder boss manager wife husband partner".split(" "));
+const CUE_BEFORE_2 = /(?:^|[^\p{L}])(?:spoke[ \t]+with|loop[ \t]+in)[ \t]+$/iu;
+/** Words that follow a person ("parker said", "frank will", "rose is my"). */
+const CUE_AFTER = new Set("said says wrote replied called will".split(" "));
+const CUE_AFTER_2 = /^[ \t]+is[ \t]+my(?![\p{L}])/iu;
+/** Does this neighbour stand for a person: a [name] placeholder, a lexicon name (not a lower-case modal), or a word
+ * that reads as a name on its own (neighbourIsName)? */
+function personNeighbour(text: string, n: { w: string; at: number } | null, id: Identity): boolean {
+  if (n === null) return false;
+  const b = base(n.w);
+  if (n.w !== "[name]" && personWord(b) && !(MODALS.has(b) && !isCap(n.w))) return true;
+  return neighbourIsName(text, n, id);
+}
+/** A lower-case lexicon name is a name next to another person ("frank baker"), after "and"/"or" that follows one
+ * ("hunter and mason", "sue or pat"), after a cue ("thanks rose") or before one ("parker said", "rose is my"). */
+function lowerLexName(text: string, w: string, offset: number, id: Identity): boolean {
+  const prev = prevWord(text, offset);
+  const next = nextWord(text, offset + w.length);
+  if (personNeighbour(text, prev, id) || personNeighbour(text, next, id)) return true;
+  if (prev !== null && CUE_BEFORE.has(prev.w.toLowerCase())) return true;
+  if (CUE_BEFORE_2.test(text.slice(Math.max(0, offset - 16), offset))) return true;
+  if (next !== null && CUE_AFTER.has(next.w.toLowerCase())) return true;
+  if (CUE_AFTER_2.test(text.slice(offset + w.length))) return true;
+  const joins = (x: { w: string } | null) => x !== null && /^(?:and|or|&)$/i.test(x.w);
+  if (joins(prev) && personNeighbour(text, prevWord(text, prev!.at), id)) return true;
+  if (joins(next) && personNeighbour(text, nextWord(text, next!.at + next!.w.length), id)) return true;
+  return false;
+}
+/** "john at acme." / "[name] at acme": the word after "at" that follows a person, at the end of a clause, is the
+ * organisation of an address. */
+function addressOrg(text: string, w: string, offset: number, id: Identity): boolean {
+  const prev = prevWord(text, offset);
+  if (prev === null || prev.w.toLowerCase() !== "at") return false;
+  if (!/^[ \t]*(?:[.,;:!?)\n]|$)/.test(text.slice(offset + w.length))) return false;
+  return personNeighbour(text, prevWord(text, prev.at), id);
+}
+
 /** What a word of a text is, for masking and for the leak check alike (one decision, so the two can never disagree):
  * the author, their company, this recipient ({first}, {their_org}), another person or proper noun ("name"), or null
  * (a known word, kept).
@@ -443,6 +494,16 @@ export function identityHit(text: string, w: string, offset: number, id: Identit
   if (!isCap(w) && org !== null && b === org) return "their_org";
   if (isCap(w) && org !== null && b.length >= 3 && (b === org || org.startsWith(b))) return "their_org";
   if ([...w].length < 2) return null;
+  // A lexicon name (s18 GIVEN, FAMILY or ambiguous): capitalised anywhere (a month only outside a date; the
+  // generator's own sentence openers stay), or in lower case next to a person or a cue word.
+  if (lexName(b) && isCap(w)) {
+    const initial = initialAt(text, offset);
+    if (MONTHS.has(b)) return monthKept(text, w, offset) ? null : "name";
+    // "Will you", "May I": a modal opening a question is the verb.
+    const modalQuestion = MODALS.has(b) && initial && /^[ \t]+(?:i|you|we|they|he|she|it|this|that|there)(?![\p{L}])/iu.test(text.slice(offset + w.length));
+    if (!modalQuestion && !(GENERATOR_OPENERS.has(b) && initial)) return "name";
+  } else if (personWord(b) && !isCap(w) && !MODALS.has(b) && lowerLexName(text, w, offset, id)) return "name";
+  if (addressOrg(text, w, offset, id)) return "name";
   if (!knownWord(b)) return "name";
   const adjacent = () => (GIVEN.has(b) || AMBIGUOUS_GIVEN.has(b)) && (nextIsName(text, offset + w.length, id) || neighbourIsName(text, prevWord(text, offset), id));
   if (!isCap(w)) {

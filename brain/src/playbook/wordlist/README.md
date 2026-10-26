@@ -9,6 +9,8 @@ http://wordlist.aspell.net/ (download: sourceforge.net/projects/wordlist, `scowl
   which are not used); possessives (`'s`) dropped. 63900 words.
 - `supplement.ts`: a short hand-reviewed list of everyday business and software words SCOWL 2020 lacks (app, signup,
   onboarding, saas, ...). Never names, products or companies.
+- `proper-words.ts`: the dictionary words SCOWL also lists capitalised as proper nouns (`*-upper`, `*-proper-names`,
+  same levels and variants; 917 words such as baker, king, young). Used only for lower-case names next to a person or a cue.
 - At load, mask.ts also drops every unambiguous given or family name of the s18 lexicon (`privacy/lexicon.ts`).
 - Licence: permissive (use, copy, modify, distribute and sell, with the notice kept): `SCOWL-Copyright.txt`.
 

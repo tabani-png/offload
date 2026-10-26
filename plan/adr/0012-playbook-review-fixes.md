@@ -109,3 +109,18 @@ expired was checked against facts.md only while reporting "re-checked"; and that
     Accepted cost: lower-case names that are dictionary words ("will", "grace", "mark"; surnames such as "smith" and
     "lee" are stripped from the list) stay when used alone as plain words; jargon, typos and new words outside the list are masked
     (`[name]`), and "and/or" style tokens become `[name]`.
+
+## Fix round 8 (independent review of be859cf)
+16. **Lexicon names in any case (narrows the cost of 15).** A given or family name of the s18 lexicon, ambiguous or
+    not, is a name when capitalised anywhere ("Frank called", "Mark and Grace"), except a month in a date, a modal
+    opening a question ("Will you", "May I") and the generator's own sentence openers. In lower case it, or a dictionary
+    word SCOWL also lists as a proper noun (`wordlist/proper-words.ts`, common and generator words left out), is a
+    name next to another person or masked token ("frank baker", "king young", "[name] baker"), after "and"/"or" that
+    follows one ("hunter and mason"), after a cue (hi, hey, dear, thanks, cc, to, with, ask, from, met, spoke with,
+    loop in, intro, ping, colleague, cofounder, boss, manager, wife, husband, partner) or before one (said, says,
+    wrote, replied, called, will, is my). Lower-case "will" and "may" are the verbs. A spelled-out address ("priya at
+    acme dot com", "(at)/(dot)") is masked whole, and "X at Y" at the end of a clause after a person masks Y. Same
+    decision in `findTextLeaks` through `identityHit`.
+    Accepted cost now: only a lone lower-case dictionary-word name with no cue and no neighbouring name stays ("bill me
+    later" is kept, and so would "grace" alone be). Over-masking: a lexicon word after a cue used as a plain word
+    ("to mark", "with grace"), and the capitalised word before a name at a sentence start ("The young king").
