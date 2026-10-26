@@ -53,6 +53,43 @@ export function credentialsInEnv(env: Readonly<Record<string, string | undefined
   return CREDENTIAL_ENV.filter((k) => (env[k] ?? "").trim() !== "");
 }
 
+const SECRET_NAME = [/(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|SECRET_?KEY|AUTH)(_|$)/i, /PASSWORD|PASSWD|SECRET/i, /_KEY$/i];
+/** Names that look secret but are not, or that a build tolerates:
+ * - TERM_SESSION_ID, SECURITYSESSIONID: terminal / login session ids.
+ * - SSH_AUTH_SOCK: a socket path; the sandbox denies connecting to any unix socket but the runner's own.
+ * - OFFLOAD_TOKEN: the brain's per-launch bearer for its 127.0.0.1 API, set by the app; sandboxed code has no network,
+ *   and its value is a known secret for the artifact scan (secretValues), so copying it fails the build. */
+export const SECRET_NAME_ALLOW = new Set(["TERM_SESSION_ID", "SECURITYSESSIONID", "SSH_AUTH_SOCK", "OFFLOAD_TOKEN"]);
+
+/** Names of secret-bearing variables in an environment: a secret-looking name, or a secret-shaped value. */
+export function secretEnvNames(env: Readonly<Record<string, string | undefined>>): string[] {
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(env)) {
+    if (SECRET_NAME_ALLOW.has(k) || v === undefined || v === "") continue;
+    if (SECRET_NAME.some((re) => re.test(k)) || findSecret(v) !== null) out.push(k);
+  }
+  return out.sort();
+}
+
+/** This process's ORIGINAL environment as other same-user processes see it (sysctl KERN_PROCARGS2, via `ps -E`):
+ * unsetting a variable later does not remove it there. Falls back to process.env if ps cannot answer. */
+export function readLaunchEnv(): Record<string, string> {
+  const r = spawnSync("/bin/ps", ["-wwE", "-o", "command=", "-p", String(process.pid)], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
+  if (r.status !== 0 || typeof r.stdout !== "string" || r.stdout.trim() === "") return Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined));
+  const line = r.stdout.replace(/\n$/, "");
+  const starts = [...line.matchAll(/(?:^| )([A-Za-z_][A-Za-z0-9_]*)=/g)];
+  const env: Record<string, string> = {};
+  starts.forEach((m, i) => {
+    const from = m.index! + m[0].length;
+    const to = i + 1 < starts.length ? starts[i + 1]!.index! : line.length;
+    env[m[1]!] = line.slice(from, to);
+  });
+  return env;
+}
+
+/** Test seam: tests run in shells that carry unrelated tokens and give the preflight a clean launch environment. */
+export const launchEnv = { read: readLaunchEnv };
+
 /** Env for the Claude Code subprocess: the executor's allowlist minus every credential, plus telemetry off. The key
  * reaches Claude Code through apiKeyHelper instead (runner.ts). */
 export function builderEnv(env: Readonly<Record<string, string | undefined>> = process.env): Record<string, string> {

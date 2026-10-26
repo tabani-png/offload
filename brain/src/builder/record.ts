@@ -2,7 +2,7 @@
 // builds/runs.jsonl. No prompt and no key is stored; check output is truncated. The latest run of a brief feeds the
 // additive `build` field of its solution option (hours saved vs cost).
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { briefIdFor } from "../solutions/brief.ts";
 import type { SolutionSet } from "../solutions/types.ts";
@@ -79,7 +79,7 @@ export function artifactDigest(ws: string): string {
         h.update(`d\0${r}\n`);
         walk(abs, r);
       } else if (st.isSymbolicLink()) h.update(`l\0${r}\0${readlinkSync(abs)}\n`);
-      else if (st.isFile()) h.update(`f\0${r}\0${createHash("sha256").update(readFileSync(abs)).digest("hex")}\n`);
+      else if (st.isFile()) h.update(`f\0${r}\0${fileSha(abs)}\n`);
       else h.update(`o\0${r}\n`);
     }
   };
@@ -87,7 +87,42 @@ export function artifactDigest(ws: string): string {
   return h.digest("hex");
 }
 
-const MAX_SCAN_BYTES = 16 * 1024 * 1024;
+/** sha256 of a file, read in chunks (never the whole file in memory). */
+function fileSha(path: string): string {
+  const h = createHash("sha256");
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.allocUnsafe(1 << 20);
+    for (let n = readSync(fd, buf, 0, buf.length, null); n > 0; n = readSync(fd, buf, 0, buf.length, null)) h.update(buf.subarray(0, n));
+  } finally {
+    closeSync(fd);
+  }
+  return h.digest("hex");
+}
+
+/** Files above this are not scanned: the run fails closed ("too large to scan"). */
+export const MAX_SCAN_BYTES = 64 * 1024 * 1024;
+const SCAN_CHUNK = 1 << 20;
+
+/** Scans a whole file in overlapping chunks (overlap >= the longest known secret and any secret shape's prefix). */
+function scanFile(path: string, size: number, known: readonly string[]): string | null {
+  if (size > MAX_SCAN_BYTES) return `too large to scan (${Math.ceil(size / (1024 * 1024))} MB, limit ${MAX_SCAN_BYTES / (1024 * 1024)} MB)`;
+  const overlap = Math.max(4096, ...known.map((k) => k.length));
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.allocUnsafe(SCAN_CHUNK);
+    let carry = "";
+    for (let n = readSync(fd, buf, 0, buf.length, null); n > 0; n = readSync(fd, buf, 0, buf.length, null)) {
+      const text = carry + buf.subarray(0, n).toString("latin1");
+      const what = findSecret(text, known);
+      if (what !== null) return what;
+      carry = text.slice(-overlap);
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return null;
+}
 
 /** The first workspace file holding a secret (exact known value or secret-shaped string), as "path: what", or null. */
 export function scanArtifactForSecrets(ws: string, known: readonly string[] = []): string | null {
@@ -102,8 +137,7 @@ export function scanArtifactForSecrets(ws: string, known: readonly string[] = []
         const hit = walk(abs, r);
         if (hit !== null) return hit;
       } else if (st.isFile()) {
-        const buf = readFileSync(abs);
-        const what = findSecret(buf.subarray(0, MAX_SCAN_BYTES).toString("latin1"), known);
+        const what = scanFile(abs, st.size, known);
         if (what !== null) return `${r}: ${what}`;
       }
     }

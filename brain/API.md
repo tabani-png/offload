@@ -552,10 +552,16 @@ check script exits 0, never "the model says done".
   Credentials: no key or token is in any process environment during a build. Claude Code gets the key through
   `apiKeyHelper` (a script in `builds/<run>/cred/`, 0700, outside every sandbox read path, removed after the run;
   it prints a 0600 key file from the run's env object, or reads the Keychain item named by
-  OFFLOAD_ANTHROPIC_KEYCHAIN). A brain started with ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN /
-  ANTHROPIC_AUTH_TOKEN in its own environment refuses to build (403 / exit 2): use the Keychain. Before any PASS
-  and in `verifyArtifact`, every workspace file (outside accept/, .tmp, __pycache__) is scanned for exact known
-  secret values and secret-shaped strings; a hit is FAIL "artifact contains a secret", never PASS.
+  OFFLOAD_ANTHROPIC_KEYCHAIN). A brain whose ORIGINAL (launch) environment holds any secret-bearing variable
+  refuses to build (403 / exit 2; the message names the variables, never the values): a name like *_TOKEN,
+  *_SECRET*, *PASSWORD*, *PASSWD*, *_CREDENTIAL(S), *_API_KEY, *_ACCESS_KEY, *_KEY, *_AUTH_*, or a secret-shaped
+  value. Allowed look-alikes: TERM_SESSION_ID, SECURITYSESSIONID, SSH_AUTH_SOCK (a socket the sandbox cannot reach)
+  and OFFLOAD_TOKEN (the app's 127.0.0.1 bearer; no network in the sandbox, and a known value for the artifact scan).
+  The launch environment is read as other processes see it (`ps -E`), so unsetting a variable does not help. Start
+  Offload from the app (Finder) or keep secrets out of the shell that starts the brain. Before any PASS and in
+  `verifyArtifact`, every byte of every workspace file (outside accept/, .tmp, __pycache__) is scanned in overlapping
+  chunks for exact known secret values and secret-shaped strings; a hit is FAIL "artifact contains a secret", and a
+  file over 64 MB fails closed ("artifact file too large to scan").
   Every exit path (PASS, FAIL, CAP, TAMPER, an error, an unreadable artifact, SIGTERM/SIGINT/SIGHUP to the brain)
   releases the supervisor (it sweeps its sandbox instance first), the command socket and its /tmp/ofl-* folder, and
   `cred/`; any error after setup is a recorded FAIL (an unreadable workspace file: "artifact unreadable"). A check's

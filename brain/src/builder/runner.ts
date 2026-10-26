@@ -37,8 +37,9 @@ import {
   CHECK_DIR,
   checkEnv,
   commandWrapper,
-  credentialsInEnv,
   DISALLOWED_TOOLS,
+  launchEnv,
+  secretEnvNames,
   harnessArgv,
   sweepMode,
   UnsafeProfileError,
@@ -255,6 +256,7 @@ export function writeCredentialHelper(dir: string, env: Readonly<Record<string, 
   return { helper, value };
 }
 
+const leakReason = (leak: string) => (leak.includes("too large to scan") ? `artifact file too large to scan (${leak})` : `artifact contains a secret (${leak})`);
 const round = (n: number) => Math.round(n * 1e6) / 1e6;
 /** Rounds DOWN to a micro-dollar: a budget handed to the SDK never exceeds what is left. */
 const floorUsd = (n: number) => Math.max(0, Math.floor(n * 1e6 + 1e-6) / 1e6);
@@ -280,12 +282,13 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   // Absolute before any path is derived: workspace, profile and check paths are used with cwd = workspace.
   const home = resolve(o.home);
   const parentEnv = o.env ?? process.env;
-  // A credential in this process's own environment is readable by every same-user process (sysctl KERN_PROCARGS2,
+  // Any secret in this process's ORIGINAL environment is readable by every same-user process (sysctl KERN_PROCARGS2,
   // which the sandbox does not filter; deleting it from process.env does not erase it). Refuse rather than build.
-  const exposed = credentialsInEnv(process.env);
+  // Names only in the message, never values.
+  const exposed = secretEnvNames(launchEnv.read());
   if (exposed.length > 0)
     throw new UnsafeProfileError(
-      `the brain was started with ${exposed.join(", ")} in its environment, which sandboxed builder code can read (sysctl KERN_PROCARGS2); put the key in the Keychain and start the brain with OFFLOAD_ANTHROPIC_KEYCHAIN instead`,
+      `the brain was started with secret-bearing variables in its environment (${exposed.join(", ")}), which sandboxed builder code can read (sysctl KERN_PROCARGS2). Start Offload from the app (Finder), or remove them from the shell that starts the brain; keep the Claude key in the Keychain (OFFLOAD_ANTHROPIC_KEYCHAIN)`,
     );
   const tc = toolchain(parentEnv);
   if (!tc.pathDirs.some((d) => existsSync(join(d, "python3")))) throw new UnsafeProfileError("python3 is required for the sandbox harness (it stops every builder process); refusing to run");
@@ -550,7 +553,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
       const leak = c.exit === 0 && proof.ok && !changed ? scan() : null;
       if (leak !== null) {
         outcome = "FAIL";
-        reason = `artifact contains a secret (${leak})`;
+        reason = leakReason(leak);
         break;
       }
       if (c.exit === 0 && proof.ok && !changed) {
@@ -580,7 +583,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
       const leak = scan();
       if (leak !== null) {
         outcome = "FAIL";
-        reason = `artifact contains a secret (${leak})`;
+        reason = leakReason(leak);
       }
     }
   } catch (err) {
