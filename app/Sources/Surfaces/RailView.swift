@@ -10,6 +10,9 @@ struct RailView: View {
   var onMic: () -> Void = {}
   var onMore: () -> Void = {}
   var onHoverStatus: (Bool) -> Void = { _ in }
+  /// S2-13: company sync state, only once a company is in play (`CompanyEntry.railState`); nil shows nothing.
+  var company: CompanySyncState? = nil
+  var onCompany: () -> Void = {}
   @Environment(\.colorScheme) private var scheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -46,9 +49,15 @@ struct RailView: View {
           .onHover { onHoverStatus($0) }
           .alignmentGuide(.statusCenter) { $0[VerticalAlignment.center] }
         tools(p)
+        if let company {
+          CompanyRailMark(state: company, action: onCompany)
+            .help("\(company.label()) · Company")
+            .transition(.scale.combined(with: .opacity))
+        }
       }
     }
     .animation(Motion.outExpo(), value: hoveringStatus)
+    .animation(Motion.outExpo(), value: company)
   }
 
   private func inbox(_ p: Palette) -> some View {
@@ -145,7 +154,9 @@ struct LiveRail: View {
              onPause: { model.togglePause() },
              onMic: { model.micRecording.toggle() },
              onMore: onMore,
-             onHoverStatus: { model.hoveringStatus = $0 })
+             onHoverStatus: { model.hoveringStatus = $0 },
+             company: model.companyRail,
+             onCompany: { model.onOpenCompany?() })
   }
 }
 
