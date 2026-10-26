@@ -70,7 +70,7 @@ export function parseCommitValues(texts: readonly string[]): Array<[string, stri
   const out = new Map<string, string>();
   for (const t of texts) {
     // I8: formatting lines (table delimiters, borders) are never data, here either.
-    const lines = t.split("\n").map((l) => l.trim()).filter((l) => l !== "" && !isFormattingLine(l));
+    const lines = t.split("\n").map((l) => l.replace(/\r$/, "")).filter((l) => l.trim() !== "" && !isFormattingLine(l));
     for (let i = 0; i < lines.length; i++) {
       const head = cellsOf(lines[i]!);
       if (head !== null && head.length >= 2 && head.every((c) => plainLabel(c) !== null)) {
@@ -79,7 +79,7 @@ export function parseCommitValues(texts: readonly string[]): Array<[string, stri
         if (row != null) head.forEach((h, k) => row[k] !== "" && !out.has(h) && out.set(h, row[k]!));
         continue;
       }
-      const m = /^([A-Za-z][A-Za-z ]{0,39}):\s*(\S.*)$/.exec(lines[i]!);
+      const m = /^([A-Za-z][A-Za-z ]{0,39}):\s*(\S.*)$/.exec(lines[i]!.trim());
       if (m !== null && plainLabel(m[1]!) !== null && !out.has(m[1]!.trim())) out.set(m[1]!.trim(), m[2]!.trim());
     }
   }
@@ -464,6 +464,9 @@ const TEXT_DECLARATIONS = ["report", "insight", "dashboard", "period", "date ran
  * for the wanted fields and the context words become one object; a table (header of labels, cells split by | or
  * tabs) becomes its rows. Values are kept exactly as shown.
  */
+/** s27 round 15: a table row with the wrong number of cells: kept in place as a row that is skipped, with this reason. */
+const MALFORMED = Symbol("malformed row");
+
 function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): Obj {
   const obj: Obj = {};
   const rows: Obj[] = [];
@@ -476,20 +479,34 @@ function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | 
     const ax = parseAxLine(l);
     if (ax !== null && ax.value !== null) put(ax.label, ax.value);
     else if (ax !== null) lines.push(ax.label.trim());
-    else if (l.trim() !== "" && !isFormattingLine(l)) lines.push(l.trim());
+    // Round 15: lines are kept as they are (only a trailing \r dropped): a table row is split into cells BEFORE any
+    // trimming, so an empty first or last cell keeps its place.
+    else if (l.trim() !== "" && !isFormattingLine(l)) lines.push(l.replace(/\r$/, ""));
   }
   const words = [...new Set([...fields.flatMap((f) => [f.sourceLabel, f.label]), ...TEXT_DECLARATIONS])].sort((a, b) => b.length - a.length);
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    const head = cellsOf(line);
-    if (head !== null && head.length >= 2 && head.every((c) => plainLabel(c) !== null)) {
-      // A table: every following line with the same number of cells is a row; cells kept exactly.
+    const raw0 = lines[i]!;
+    const line = raw0.trim();
+    const head = cellsOf(raw0);
+    // A header: plain-word labels, at least two of them (an unnamed first column is allowed).
+    if (head !== null && head.filter((c) => c !== "").length >= 2 && head.every((c) => c === "" || plainLabel(c) !== null)) {
+      // A table: every following line with a cell delimiter is a row, cells split before trimming and kept exactly.
+      // A row with the wrong number of cells is skipped and named (never ends the table); only a line without any
+      // delimiter ends it.
+      const outer = outerPipes(raw0);
       let j = i + 1;
+      let n = 0;
       for (; j < lines.length; j++) {
-        const raw = cellsOf(lines[j]!, outerPipes(line));
-        if (raw === null || raw.length !== head.length) break;
+        const cells = cellsOf(lines[j]!, outer);
+        if (cells === null) break;
+        n += 1;
         const r: Obj = {};
-        head.forEach((h, k) => putKey(r, normKey(h), raw[k]!.trim()));
+        if (cells.length !== head.length) {
+          (r as Record<symbol, string>)[MALFORMED] = `row ${n} has ${cells.length} cell${cells.length === 1 ? "" : "s"}, the table has ${head.length}`;
+          rows.push(r);
+          continue;
+        }
+        head.forEach((h, k) => putKey(r, normKey(h), cells[k]!.trim()));
         rows.push(r);
       }
       i = j - 1;
@@ -630,6 +647,8 @@ export interface SkippedRow {
   missing: string[];
   /** Fields shown with two different values in this row (I7). */
   ambiguous?: string[];
+  /** Why a row could not be read at all (a table row with the wrong number of cells). */
+  reason?: string;
 }
 
 export type ValueRow = Array<[string, string]>;
@@ -770,7 +789,12 @@ export function readValueParts(parts: readonly AnswerPart[], fields: readonly Pi
   // 4. each row: complete = row (I2), values exactly as shown (I6); else skipped with what it lacks (I3).
   const rows: ValueRow[] = [];
   const skipped: SkippedRow[] = [];
-  for (const f of best.flats) {
+  for (const [ri, f] of best.flats.entries()) {
+    const bad = (best.c.rows[ri] as Record<symbol, unknown> | undefined)?.[MALFORMED];
+    if (typeof bad === "string") {
+      skipped.push({ missing: [], reason: bad });
+      continue;
+    }
     const row: ValueRow = [];
     const lacks: string[] = [];
     const unsure: string[] = [];

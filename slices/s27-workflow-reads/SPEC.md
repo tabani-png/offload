@@ -161,7 +161,11 @@ only saving was the typing.
     answers). A collection is chosen by field PRESENCE (a key that is there counts even when null); validity is the
     row pass's job, so rows of nulls are skipped rows (I3), not unreadable. The order is always: collect every
     declaration of every part -> check context -> collect and pick the collection -> check each row.
-22. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+22. **Round 15 (PR #35 review).** Table rows are split into cells before anything is trimmed (empty first, last and
+    middle cells keep their place; a header may have an unnamed first column). A row with empty field cells is a
+    skipped row; a row with the wrong number of cells is skipped and named ("row 2 has 3 cells, the table has 2") and
+    never ends the table; only a line with no cell delimiter ends it. The commit-screen parse splits before trimming too.
+23. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)
