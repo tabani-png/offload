@@ -87,6 +87,8 @@ struct CompanyView: View {
         Spacer(minLength: Tokens.Space.s12)
         if let title = primaryTitle {
           PrimaryButton(title: title, key: "⌘↩") { model.primary() }
+        } else if state == .connecting, model.signInURL != nil {
+          SecondaryButton(title: CompanyCopy.reopenSignIn) { model.reopenSignIn() }
         }
       }
     }
@@ -139,8 +141,10 @@ struct CompanyView: View {
       if let m = model.message {
         Text(m).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.statusInk(.needsYou)).lineLimit(2)
       }
-      SecondaryButton(title: model.syncState == .paused ? CompanyCopy.resume : CompanyCopy.pause) { model.togglePause() }
-        .disabled(model.status.waitingForNotice)
+      // Pause never waits for the notice; only Resume does.
+      let paused = CompanyControls.isPaused(model.status)
+      SecondaryButton(title: paused ? CompanyCopy.resume : CompanyCopy.pause) { model.togglePause() }
+        .disabled(paused ? !CompanyControls.resumeEnabled(model.status) : !CompanyControls.pauseEnabled(model.status))
     }
   }
 }

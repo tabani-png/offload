@@ -25,6 +25,8 @@ final class CompanyModel: ObservableObject {
   @Published private(set) var busy = false
   @Published private(set) var message: String?
   @Published private(set) var workflows: [Automation] = []
+  /// The pending sign-in page, while waiting: "Open sign-in page again" reopens it only when the person asks.
+  @Published private(set) var signInURL: URL?
 
   /// Opens a link in the browser (the self-view). Never the sign-in page: the brain opens that itself.
   var onOpenURL: ((URL) -> Void)?
@@ -89,15 +91,23 @@ final class CompanyModel: ObservableObject {
       guard let self else { return }
       do {
         // The brain opened the sign-in page when it started the flow; here we only wait for it to finish.
-        self.status = try await self.service.connect()
+        let pending: @Sendable (URL) -> Void = { url in Task { @MainActor in self.signInURL = url } }
+        self.status = try await self.service.connect(onPending: pending)
+        self.signInURL = nil
         self.connect = .idle
         await self.reloadWorkflows()
         if self.status.waitingForNotice { self.sheet = .notice }
       } catch {
+        self.signInURL = nil
         self.connect = .failed(CompanyError.message(for: error))
         self.status = (try? await self.service.refresh()) ?? self.status
       }
     }
+  }
+
+  /// The person closed the sign-in tab: open the same pending page again (the brain does not reopen a running flow).
+  func reopenSignIn() {
+    if connect == .waiting, let url = signInURL { onOpenURL?(url) }
   }
 
   func openNotice() {
@@ -168,7 +178,7 @@ final class CompanyModel: ObservableObject {
   }
 
   func togglePause() {
-    let pause = syncState != .paused
+    let pause = !CompanyControls.isPaused(status)
     Task {
       do { status = try await service.setPaused(pause) } catch { message = CompanyError.message(for: error) }
     }
@@ -177,8 +187,9 @@ final class CompanyModel: ObservableObject {
   // MARK: snapshots
 
   func preview(status: CompanyStatus, connect: Connect = .idle, sheet: Sheet? = nil, showSource: Bool = false,
-               queued: Bool = false, workflows: [Automation] = []) {
+               queued: Bool = false, workflows: [Automation] = [], signIn: URL? = nil) {
     self.status = status
+    self.signInURL = signIn
     self.connect = connect
     self.sheet = sheet
     self.showSource = showSource

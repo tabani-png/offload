@@ -401,6 +401,15 @@ enum CompanyEntry {
   static func showsOnDashboard(_ s: CompanySyncState) -> Bool { s != .notSetUp }
 }
 
+/// The privacy controls and when they work. Pause and "see what my company sees" never wait for acknowledging new
+/// terms and are decided from the status alone (no request first); only Resume (and sharing) wait for the ack.
+/// There is no disconnect or consent-withdrawal control: the brain has no such route (brain/API.md, S2-02).
+enum CompanyControls {
+  static func isPaused(_ s: CompanyStatus) -> Bool { s.paused || s.phase == .paused }
+  static func pauseEnabled(_ s: CompanyStatus) -> Bool { s.isConnected && !isPaused(s) }
+  static func resumeEnabled(_ s: CompanyStatus) -> Bool { s.isConnected && isPaused(s) && !s.waitingForNotice }
+}
+
 /// What the dashboard's company row needs: the status (tenant, queue) and the state the Company window shows.
 struct CompanyGlance: Equatable, Sendable {
   var status: CompanyStatus
@@ -437,6 +446,7 @@ enum CompanyCopy {
   static let connect = "Connect to company"
   static let connectNote = "Opens your company's sign-in page in your browser. Offload never sees your password."
   static let waiting = "Finish signing in in your browser"
+  static let reopenSignIn = "Open sign-in page again"
   static let readNotice = "Read the notice"
   static let acknowledge = "I have read it"
   static let noticeLater = "Later"
@@ -533,6 +543,9 @@ actor CompanyService {
   let connectTimeout: Double
   private let sleep: @Sendable (Double) async -> Void
   private(set) var status: CompanyStatus?
+  /// The sign-in page of the flow this Mac is waiting on, so the person can open it again if they closed the tab
+  /// (the brain does not reopen it for a flow that is already running). Nil when not waiting.
+  private(set) var pendingSignIn: URL?
 
   init(api: CompanyAPI, pollInterval: Double = 1, connectTimeout: Double = 300,
        sleep: @escaping @Sendable (Double) async -> Void = { s in try? await Task.sleep(nanoseconds: UInt64(s * 1_000_000_000)) }) {
@@ -563,17 +576,35 @@ actor CompanyService {
   /// Starts the brain's PKCE loopback sign-in, then polls the status until this Mac is connected (or revoked, or the
   /// wait times out). The brain opens the sign-in page itself (one tab for its one loopback listener); the app never
   /// opens the URL it gets back, it only checks it is the control plane's `/auth/login` and stops waiting if not.
-  func connect() async throws -> CompanyStatus {
+  ///
+  /// What the wait can see mid-flow, and what it does:
+  /// - `connecting`: keep waiting. `connected`/`paused`: done.
+  /// - `revoked` when this Mac started revoked: keep waiting (the brain keeps the revoked flag until the new
+  ///   enrollment lands); a new "connect failed" error from the brain ends it. `revoked` otherwise: revoked.
+  /// - `not_connected`/`not_configured` after the first poll: the brain's flow ended without enrolling.
+  /// - a failed read (brain error, 404, brain restarting or down): keep polling; only the timeout ends it.
+  func connect(onPending: @escaping @Sendable (URL) -> Void = { _ in }) async throws -> CompanyStatus {
     let s = try await current()
     guard CompanyGate.allows(.connect, status: s) else { return s }
     let url = try await api.connect()
     guard CompanyAuthorize.isSafe(url, control: s.controlURL) else { throw CompanyError.unsafeURL }
+    pendingSignIn = url
+    onPending(url)
+    defer { pendingSignIn = nil }
+    let startedRevoked = s.phase == .revoked
+    let errorBefore = s.lastError
     var waited = 0.0
     while true {
-      let now = try await refresh()
-      if now.isConnected { return now }
-      if now.phase == .revoked { throw CompanyError.revoked }
-      if now.phase != .connecting && waited > 0 { throw CompanyError.signInTimedOut }
+      if let now = try? await refresh() {
+        if now.isConnected { return now }
+        if now.lastError != errorBefore, now.lastError?.hasPrefix("connect failed") == true { throw CompanyError.signInTimedOut }
+        switch now.phase {
+        case .connecting: break
+        case .revoked where startedRevoked: break
+        case .revoked: throw CompanyError.revoked
+        default: if waited > 0 { throw CompanyError.signInTimedOut }
+        }
+      }
       if waited >= connectTimeout { throw CompanyError.signInTimedOut }
       await sleep(pollInterval)
       waited += max(pollInterval, 0.001)
@@ -586,7 +617,12 @@ actor CompanyService {
       throw s.isConnected ? CompanyError.noNotice : CompanyError.notConnected
     }
     try await api.acknowledge(noticeVersionId: notice.noticeVersionId)
-    return try await refresh()
+    // The ack landed; a failed read after it must not report it as failed.
+    if let now = try? await refresh() { return now }
+    var acked = s
+    acked.noticeAcknowledged = true
+    status = acked
+    return acked
   }
 
   func sharePreview(workflowId: String) async throws -> SharePreview {

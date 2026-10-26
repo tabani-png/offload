@@ -104,7 +104,8 @@ enum Snapshotter {
                source: Bool = false, queued: Bool = false) -> CompanyModel {
       let m = CompanyModel(service: CompanyService(api: api))
       m.preview(status: status, connect: connect, sheet: sheet, showSource: source, queued: queued,
-                workflows: status.isConnected ? CompanySamples.workflows : [])
+                workflows: status.isConnected ? CompanySamples.workflows : [],
+                signIn: connect == .waiting ? CompanySamples.control.appendingPathComponent("auth/login") : nil)
       return m
     }
     func scene(_ m: CompanyModel, height: CGFloat = 640) -> AnyView {
