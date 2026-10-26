@@ -60,14 +60,21 @@ function rowsOf(spans: readonly Span[], total: number, keyOf: (s: Span) => strin
 
 /** Task names for the rows. Two tasks with one label name ("Calls in Google Chrome") are told apart by their masked
  * title template ("Calls in Google Chrome · Meet - Design review"), which is metadata the grouping already uses. */
-function taskNames(a: Analysis): Map<string, string> {
+export function taskNames(tasks: ReadonlyArray<Pick<Analysis["tasks"][number], "id" | "label" | "profile">>): Map<string, string> {
   const count = new Map<string, number>();
-  for (const t of a.tasks) count.set(t.label.name, (count.get(t.label.name) ?? 0) + 1);
-  return new Map(a.tasks.map((t) => {
+  for (const t of tasks) count.set(t.label.name, (count.get(t.label.name) ?? 0) + 1);
+  const out = new Map<string, string>();
+  const used = new Set<string>();
+  for (const t of tasks) {
     const name = t.label.name;
     const template = t.profile.template.trim();
-    return [t.id, (count.get(name) ?? 0) > 1 && template !== "" && !name.includes(template) ? `${name} · ${template}` : name];
-  }));
+    let shown = (count.get(name) ?? 0) > 1 && template !== "" && !name.includes(template) ? `${name} · ${template}` : name;
+    // Still taken (same label, no template or the same template): a short number tells them apart, in task order.
+    for (let n = 2; used.has(shown); n++) shown = `${name} · ${n}`;
+    used.add(shown);
+    out.set(t.id, shown);
+  }
+  return out;
 }
 
 /**
@@ -77,10 +84,13 @@ function taskNames(a: Analysis): Map<string, string> {
  * capped to that. Shown digits add up by hand: left = observed - freed in tenths, and freed always shows below observed.
  */
 export function honestFreed(observed: number, estimate: number, lowPct: number): { hours: number; capped: boolean; leftDisplay: string } {
-  const ceiling = Math.max(0, observed * Math.min(1, Math.max(0, lowPct)));
-  const want = Math.max(0, estimate);
+  // Non-finite inputs free nothing (never NaN on screen).
+  const obs = Number.isFinite(observed) ? Math.max(0, observed) : 0;
+  const pct = Number.isFinite(lowPct) ? Math.min(1, Math.max(0, lowPct)) : 0;
+  const ceiling = obs * pct;
+  const want = Number.isFinite(estimate) ? Math.max(0, estimate) : 0;
   let hours = Math.min(ceiling, want);
-  const obsT = hoursTenths(observed);
+  const obsT = hoursTenths(obs);
   if (hoursTenths(hours) >= obsT) hours = Math.max(0, obsT - 1) / 10;
   const leftT = Math.max(0, obsT - hoursTenths(hours));
   return { hours, capped: want > hours + 1e-9, leftDisplay: `${(leftT / 10).toFixed(1)} h` };
@@ -112,7 +122,7 @@ export async function timeBreakdown(a: Analysis, opts: TimeOptions = {}): Promis
   const totalMinutes = spans.reduce((n, s) => n + s.activeMs, 0) / 60_000;
   const total = minutesMetric(totalMinutes, spans.flatMap((s) => s.eventIds));
 
-  const taskName = taskNames(a);
+  const taskName = taskNames(a.tasks);
   const byTask = rowsOf(spans, totalMinutes, (s) => a.taskOfSpan.get(s.id) ?? UNSORTED_ID, (id) => taskName.get(id) ?? UNSORTED_NAME);
   const byApp = rowsOf(spans, totalMinutes, (s) => s.app, (_id, first) => first.appName || first.app);
   const byKind = rowsOf(spans, totalMinutes, (s) => kindOfSpan(s), (id) => WORK_KIND_NAMES[id as (typeof WORK_KINDS)[number]]);
