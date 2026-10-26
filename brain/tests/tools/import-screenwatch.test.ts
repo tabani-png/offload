@@ -352,6 +352,50 @@ describe("v2: regrouping spans by captioned task", () => {
     expect(spans.map((s) => [s.start / 1000 - BASE, s.end / 1000 - BASE])).toEqual([[0, 30], [30, 90], [90, 600]]);
   });
 
+  test("import -> regroup -> re-import with extra rows -> regroup keeps the new activity", () => {
+    const root = tmp();
+    const src = join(root, "days", DAY);
+    const home = join(root, "home");
+    const work = join(root, "work");
+    mkdirSync(src, { recursive: true });
+    const thumbs = new Map<string, Uint8Array>();
+    const lines: string[] = [];
+    const addRows = (from: number, n: number, pattern: number) => {
+      for (let i = 0; i <= n; i++) {
+        const sec = from + i * 5;
+        const img = i % 6 === 0;
+        lines.push(row(sec, img));
+        if (img) {
+          const p = join(src, `${stamp(sec)}.webp`);
+          writeFileSync(p, Buffer.from(`fake ${sec}`));
+          thumbs.set(p, thumb(pattern));
+        }
+      }
+      writeFileSync(join(src, "log.jsonl"), lines.join("\n") + "\n");
+    };
+    const note = (m: ManifestFrame) => buildNote({ frameId: m.frameId, ts: m.ts, day: DAY, width: 1, height: 1, bytes: 1, maskedRegions: 0 }, { activity: "Writing a reply", verb: "writing", object: "reply", surface: "Helpdesk - Inbox", confidence: 0.9 }, "claude:test");
+    const captionAll = () => {
+      const manifest = readFileSync(join(work, "manifest", `${DAY}.jsonl`), "utf8").trim().split("\n").map((l) => JSON.parse(l) as ManifestFrame);
+      mkdirSync(join(work, "notes-cache"), { recursive: true });
+      writeFileSync(join(work, "notes-cache", `${DAY}.jsonl`), manifest.map((m) => JSON.stringify({ frameId: m.frameId, ok: true, note: note(m), ms: 1 })).join("\n") + "\n");
+    };
+    const liveSpans = () => sessionize(readFileSync(join(home, "days", `${DAY}.jsonl`), "utf8").trim().split("\n").map((l) => JSON.parse(l) as OffloadEvent), DAY, DEFAULT_SESSION_OPTIONS);
+
+    addRows(0, 72, 1);
+    importDay(src, DAY, home, work, DEFAULT_SELECT, { thumb: (p) => thumbs.get(p)! });
+    captionAll();
+    regroupDay(home, work, DAY);
+    expect(liveSpans().map((s) => [s.start / 1000 - BASE, s.end / 1000 - BASE])).toEqual([[0, 360]]);
+
+    // the archive grows: a second activity run after an idle gap
+    addRows(1000, 60, 3);
+    importDay(src, DAY, home, work, DEFAULT_SELECT, { thumb: (p) => thumbs.get(p)! });
+    captionAll();
+    const r = regroupDay(home, work, DAY);
+    expect(liveSpans().map((s) => [s.start / 1000 - BASE, s.end / 1000 - BASE])).toEqual([[0, 360], [1000, 1300]]);
+    expect(r.spansBefore).toBeGreaterThan(r.spansAfter);
+  });
+
   test("regroupDay rewrites the day from the original events, so running it twice gives the same file", () => {
     const root = tmp();
     const home = join(root, "home");

@@ -329,8 +329,12 @@ export function importDay(srcDay: string, day: string, home: string, work: strin
   }
   const { kept, threshold } = selectFrames(cands, runs, opts);
   const events = buildEvents(day, runs, kept);
+  const eventLines = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
   mkdirSync(join(home, "days"), { recursive: true, mode: 0o700 });
-  writeFileSync(join(home, "days", `${day}.jsonl`), events.map((e) => JSON.stringify(e)).join("\n") + "\n", { mode: 0o600 });
+  writeFileSync(join(home, "days", `${day}.jsonl`), eventLines, { mode: 0o600 });
+  // The regroup source: rewritten on every import so it always pairs with this manifest (never a stale earlier import).
+  mkdirSync(join(work, "events-orig"), { recursive: true, mode: 0o700 });
+  writeFileSync(join(work, "events-orig", `${day}.jsonl`), eventLines, { mode: 0o600 });
   const manifest: ManifestFrame[] = kept.map((k) => {
     const src = join(srcDay, `${k.t}.webp`);
     const buf = readFileSync(src);
@@ -593,7 +597,8 @@ const readJsonl = <T>(path: string): T[] =>
         .map((l) => JSON.parse(l) as T)
     : [];
 
-/** Regroups one day in place from the original import events (kept once in <work>/events-orig/<day>.jsonl). */
+/** Regroups one day in place from the original import events (<work>/events-orig/<day>.jsonl, written by importDay;
+ * for a day imported before that, the live file is snapshotted there on the first regroup). */
 export function regroupDay(home: string, work: string, day: string): DayRegroup {
   const live = join(home, "days", `${day}.jsonl`);
   const origDir = join(work, "events-orig");
