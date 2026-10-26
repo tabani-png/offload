@@ -29,9 +29,11 @@ lock) LAST, then S2-10's own audit events, which were queued until then. After c
 ## Lock order (with the broker's, control/src/modules/broker/broker.ts)
 S2-10's rows come before the broker's step 1, in this order, and no path goes back up:
 0. the tenant's owners lock (`lockOwners`, db/people.ts: the same key and hash as people PATCH and directory
-   deactivation), taken by POST /v1/people/:id/offboard, so the last-owner check cannot race;
+   deactivation), taken by POST /v1/people/:id/offboard and by the sweep's end-date freeze, so the last-owner check
+   cannot race (the sweep keeps a due last owner `leaving` and records `person.freeze_deferred`, once per tenant day);
 1. the leaver's `people` row (`FOR UPDATE`): freeze, depart, every sweep step, and every hand-over route (`lockHandover`,
-   before the hand-over); then a person successor's row `FOR SHARE` (assign, accept);
+   before the hand-over). Assign and accept also hold a person successor's / the acceptor's row `FOR SHARE`; the two
+   people rows are taken in id order (`lockHandover`), so reciprocal successors cannot deadlock;
 2. the advisory lock `continuity:<person>` (freeze, and its after-commit worker pause);
 3. `handovers` rows, by id;
 4. `offboardings` row;

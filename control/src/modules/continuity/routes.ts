@@ -22,8 +22,8 @@ function idParam(c: Context<AppEnv>, name = "id"): string {
 }
 
 /** A hand-over in the caller's scope (Dp: the workflow's department is one they lead); otherwise 404. */
-async function scopedHandover(c: Context<AppEnv>, tx: Tx, p: Principal, id: string, cont: Continuity): Promise<HandoverRow> {
-  const h = await cont.lockHandover(tx, id);
+async function scopedHandover(c: Context<AppEnv>, tx: Tx, p: Principal, id: string, cont: Continuity, successorId: string | null = null): Promise<HandoverRow> {
+  const h = await cont.lockHandover(tx, id, successorId);
   if (!h) throw notFound();
   if (c.get("scope") === "Dp" && !p.departmentScope.includes(h.department_id)) throw notFound();
   return h;
@@ -91,7 +91,12 @@ export function continuityRoutes(app: App, deps: Deps, get: () => Continuity): v
     const id = idParam(c);
     const input = await readLocal<{ successor: Successor; inFlight?: InFlight; inboxStep?: InboxStep | null }>(c, ASSIGN);
     const out = await tenantTx(c, deps, async (tx, p) =>
-      get().assign(tx, await scopedHandover(c, tx, p, id, get()), { personId: p.personId, actor: actorOf(p) }, input),
+      get().assign(
+        tx,
+        await scopedHandover(c, tx, p, id, get(), input.successor.type === "person" ? input.successor.personId : null),
+        { personId: p.personId, actor: actorOf(p) },
+        input,
+      ),
     );
     return reply(c, deps, 200, out, HANDOVER);
   });
@@ -100,7 +105,7 @@ export function continuityRoutes(app: App, deps: Deps, get: () => Continuity): v
     const id = idParam(c);
     const input = await readLocal<{ reviewedHandoverMessage?: boolean }>(c, ACCEPT);
     const out = await tenantTx(c, deps, async (tx, p) => {
-      const h = await get().lockHandover(tx, id);
+      const h = await get().lockHandover(tx, id, p.personId);
       // Only the named person successor may accept (any access role: S in every person column); to anyone else the hand-over does not exist (S scope).
       if (!h || h.successor_type !== "person" || h.successor_person_id !== p.personId) throw notFound();
       return get().accept(tx, h, { personId: p.personId, actor: actorOf(p) }, input);

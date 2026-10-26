@@ -4,6 +4,7 @@
  */
 import type { Deps } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
+import { lockOwners } from "../../db/people.ts";
 import { isUuid, withTenant } from "../../db/tenant.ts";
 import type { AuditInput } from "../../audit/audit.ts";
 import { revokeAccess, type ContinuityPort, type FreezeReason } from "../../ports.ts";
@@ -98,8 +99,11 @@ export interface Continuity extends ContinuityPort {
   assign(tx: Tx, h: HandoverRow, by: { personId: string; actor: Actor }, input: { successor: Successor; inFlight?: InFlight; inboxStep?: InboxStep | null }): Promise<HandoverDto>;
   accept(tx: Tx, h: HandoverRow, by: { personId: string; actor: Actor }, input: { reviewedHandoverMessage?: boolean }): Promise<HandoverDto>;
   close(tx: Tx, h: HandoverRow, by: { personId: string; actor: Actor }): Promise<HandoverDto>;
-  /** Locks the hand-over's leaver (people row), then the hand-over; null when there is none. */
-  lockHandover(tx: Tx, id: string): Promise<HandoverRow | null>;
+  /**
+   * Locks the hand-over's leaver (people row, FOR UPDATE) and, when given, the other person the call reads (a person
+   * successor or the acceptor, FOR SHARE), both in id order; then the hand-over. Null when there is none.
+   */
+  lockHandover(tx: Tx, id: string, otherPersonId?: string | null): Promise<HandoverRow | null>;
   /** One pass for one tenant: departures, end dates, early hand-overs for leavers, pending worker pauses. */
   sweep(tenantId: string): Promise<SweepResult>;
   /** Resolves when every after-commit follow-up started so far has finished (tests, shutdown). */
@@ -568,7 +572,8 @@ export function createContinuity(deps: Deps): Continuity {
     }
     if (s.type === "person") {
       if (s.personId === h.person_id) throw conflict("the leaver cannot be their own successor");
-      // FOR SHARE: a concurrent freeze of the successor waits (lock order: the leaver's row, then the successor's).
+      // The successor's row is already held FOR SHARE (`lockHandover`, people rows in id order): a concurrent freeze of
+      // the successor waits. Re-taking it here is a no-op.
       const [p] = await tx`select p.state, exists (select 1 from job_role_holders j where j.person_id = p.id
           and j.job_role_id = ${h.job_role_id}) as holds
         from people p where p.id = ${s.personId} for share of p`;
@@ -609,6 +614,7 @@ export function createContinuity(deps: Deps): Continuity {
     if (h.in_flight === "handover_message" && input.reviewedHandoverMessage !== true) {
       throw conflict("review the one-time hand-over message first (reviewedHandoverMessage: true)");
     }
+    // Already held FOR SHARE by `lockHandover` (people rows in id order); re-taking it here is a no-op.
     const [p] = await tx`select p.state, exists (select 1 from job_role_holders j where j.person_id = p.id
         and j.job_role_id = ${h.job_role_id}) as holds
       from people p where p.id = ${by.personId} for share of p`;
@@ -648,12 +654,18 @@ export function createContinuity(deps: Deps): Continuity {
    * S2-10 lock order (before the broker's step 1, see broker.ts): the leaver's people row, then `continuity:<person>`
    * (freeze only), then hand-over rows (by id), then offboardings; the broker's rows next; the audit-chain lock last.
    * Locks the hand-over's leaver, then the hand-over, so a close (which may depart the leaver) never holds a hand-over
-   * while waiting for a person a freeze holds.
+   * while waiting for a person a freeze holds. Two people rows (the leaver FOR UPDATE, a successor or acceptor FOR SHARE)
+   * are always taken in id order: two leavers named as each other's successors at once cannot deadlock.
    */
-  async function lockHandover(tx: Tx, id: string): Promise<HandoverRow | null> {
+  async function lockHandover(tx: Tx, id: string, otherPersonId: string | null = null): Promise<HandoverRow | null> {
     const [r] = await tx`select person_id from handovers where id = ${id}`;
     if (!r) return null;
-    await tx`select 1 from people where id = ${r.person_id as string} for update`;
+    const leaver = (r.person_id as string).toLowerCase();
+    const other = otherPersonId !== null && isUuid(otherPersonId) ? otherPersonId.toLowerCase() : null;
+    for (const personId of [...new Set([leaver, ...(other ? [other] : [])])].sort()) {
+      if (personId === leaver) await tx`select 1 from people where id = ${personId} for update`;
+      else await tx`select 1 from people where id = ${personId} for share`;
+    }
     return handoverById(tx, id, true);
   }
 
@@ -680,10 +692,33 @@ export function createContinuity(deps: Deps): Continuity {
       and leaving_on <= ${await tenantToday(tx, now())}::date order by id`);
     for (const r of due as Array<{ id: string }>) {
       const done = await sys(async (tx) => {
+        // The owners lock first (lock order step 0), as the offboard endpoint: two owners whose end dates were both
+        // accepted (each saw the other as live) are frozen one at a time, and the last live owner is never frozen.
+        await lockOwners(tx);
         // Re-read under the person lock: an end date postponed or cleared since the list above is honoured.
-        const [p] = await tx`select state = 'leaving' and leaving_on is not null and leaving_on <= ${await tenantToday(tx, now())}::date as due
+        const day = await tenantToday(tx, now());
+        const [p] = await tx`select access_role, state = 'leaving' and leaving_on is not null and leaving_on <= ${day}::date as due
           from people where id = ${r.id} for update`;
         if (!p?.due) return false;
+        if (p.access_role === "owner") {
+          const [other] = await tx`select 1 from people where access_role = 'owner' and state in ('active', 'leaving') and id <> ${r.id} limit 1`;
+          if (!other) {
+            // Stays leaving (still an owner, still signs in); the freeze is retried by every sweep until another owner
+            // exists. Recorded once per tenant day, not once per sweep.
+            const [seen] = await tx`select 1 from audit_events where subject_person_id = ${r.id}
+              and action = 'person.freeze_deferred' and detail->>'on' = ${day} limit 1`;
+            if (!seen) {
+              await deps.ports.audit.write(tx, {
+                actor: SYSTEM,
+                action: "person.freeze_deferred",
+                subjectPersonId: r.id,
+                resource: { type: "person", id: r.id },
+                detail: { reason: "last_owner", on: day },
+              });
+            }
+            return false;
+          }
+        }
         return freezeWith(tx, r.id, { reason: "end_date", source: "admin", detail: "end_date", actor: SYSTEM, requestedBy: null });
       });
       if (done) out.frozen++;
