@@ -7,7 +7,7 @@ import { connectorById } from "../connectors/catalog.ts";
 import type { TaskLabel, TaskProfile, UnderstandingStep } from "../types.ts";
 import { surfaceReach } from "./reach.ts";
 import { knownSurfaceAt } from "./surfaces.ts";
-import { baseVerb, IRREVERSIBLE_VERBS, isReadOnlyBase, isWriteBase, TEXT_VERBS } from "./verbs.ts";
+import { baseVerb, IRREVERSIBLE_VERBS, isMoneyApproval, isReadOnlyBase, isWriteBase, TEXT_VERBS } from "./verbs.ts";
 
 const slug = (s: string) =>
   s
@@ -106,9 +106,11 @@ export const understandingJudge = {
     const total = u.steps.reduce((n, s) => n + s.activeMs, 0);
     if (total === 0) return heuristicJudge.judge(input);
     let j = u.steps.reduce((n, s) => n + verbJudgement(s.verb, input.sameness) * s.activeMs, 0) / total;
-    const writes = u.steps.filter((s) => isWriteVerb(s.verb));
+    // s20 review 5: approving money is a write (and irreversible) even though "approve" alone is a judgement.
+    const money = (s: { verb: string; object: string }) => isMoneyApproval(baseVerb(s.verb), s.object);
+    const writes = u.steps.filter((s) => isWriteVerb(s.verb) || money(s));
     // s20 review 3: a step whose verb is neither a known write nor a known read may change something.
-    const unknown = u.steps.filter((s) => !isWriteVerb(s.verb) && !isReadOnlyVerb(s.verb));
+    const unknown = u.steps.filter((s) => !isWriteVerb(s.verb) && !money(s) && !isReadOnlyVerb(s.verb));
     const reasons: string[] = [];
     if (writes.length === 0 && unknown.length === 0) {
       j = Math.max(j, 0.6);
@@ -122,7 +124,7 @@ export const understandingJudge = {
     // s20 review 4: any text to a person (post, message, comment, ...) is external; money, deletion and publishing
     // cannot be taken back: both are risk 0.5.
     const external = writes.some((s) => TEXT_VERBS.has(baseVerb(s.verb))) && u.counterparts.length > 0;
-    const irreversible = writes.some((s) => IRREVERSIBLE_VERBS.has(baseVerb(s.verb)));
+    const irreversible = writes.some((s) => IRREVERSIBLE_VERBS.has(baseVerb(s.verb)) || money(s));
     const risk = writes.length === 0 ? (unknown.length === 0 ? 0 : 0.2) : external || irreversible ? 0.5 : 0.2;
     if (writes.length === 0 && unknown.length > 0) reasons.push(`what "${unknown[0]!.verb}" changes in ${unknown[0]!.surface} is not known`);
     // s22 bias audit: writing for someone (a post, a document) is not replying to them.

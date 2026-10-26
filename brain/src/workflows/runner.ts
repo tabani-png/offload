@@ -343,8 +343,9 @@ export function declaredActions(wf: WorkflowJson): GateAction[] {
   const out: GateAction[] = [];
   for (const s of wf.steps) {
     if (!s.sideEffect || s.connector === null) continue;
-    if (s.type === "send") out.push({ role: "send", connector: s.connector });
-    else if (s.type === "log") out.push({ role: "log", connector: s.connector });
+    // s20 review 5: a UI commit (method computer) is declared as such: the gate lets only computer use do it.
+    if (s.type === "send") out.push({ role: "send", connector: s.connector, ...(s.method === "computer" ? { method: "computer" as const } : {}) });
+    else if (s.type === "log") out.push({ role: "log", connector: s.connector, ...(s.method === "computer" ? { method: "computer" as const } : {}) });
   }
   return out;
 }

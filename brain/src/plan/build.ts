@@ -116,11 +116,13 @@ export function legacySteps(v: PlanVariantDTO): WorkflowStep[] {
   const out: WorkflowStep[] = [];
   let commits = 0;
   for (const s of v.steps) {
-    // s20 review 4: a UI commit on a catalog app is done on screen, never through that app's connector send.
-    const connector = s.capability !== null && s.capability.via === "catalog" && s.capability.capability !== "ui.commit" ? s.capability.target : null;
+    const connector = s.capability !== null && s.capability.via === "catalog" ? s.capability.target : null;
     if (s.type === "commit") {
       if (commits === 0) out.push({ ...GATE_STEP });
-      out.push({ id: s.id, type: commits === 0 ? "send" : "log", title: s.title, detail: s.detail, connector, sideEffect: true });
+      // s20 review 5: a UI commit keeps its target and is marked computer: the gate lets only computer use do it and
+      // the chain routes it to computer use (never the app's connector send).
+      const ui = s.capability?.capability === "ui.commit";
+      out.push({ id: s.id, type: commits === 0 ? "send" : "log", title: s.title, detail: s.detail, connector: ui ? s.capability!.target : connector, sideEffect: true, ...(ui ? { method: "computer" as const } : {}) });
       commits += 1;
       continue;
     }

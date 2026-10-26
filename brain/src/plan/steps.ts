@@ -8,7 +8,7 @@
 import type { CapabilityNeedDTO, OutputType, PlanStepDTO, PlanVariantDTO } from "../api/s14-types.ts";
 import type { TaskUnderstanding, UnderstandingStep } from "../types.ts";
 import type { FrameNote } from "../understanding/frames.ts";
-import { ACTION_VERBS, baseVerb, JUDGE_VERBS, READ_VERBS, RECORD_VERBS, TEXT_VERBS } from "../understanding/verbs.ts";
+import { ACTION_VERBS, baseVerb, isMoneyApproval, JUDGE_VERBS, READ_VERBS, RECORD_VERBS, TEXT_VERBS } from "../understanding/verbs.ts";
 import { commitCapability, readCapability, targetOf, type StepTarget } from "./capabilities.ts";
 
 // s20 review 4: ONE verb table for plan, judge and saving (understanding/verbs.ts); re-exported for s14 callers.
@@ -41,6 +41,8 @@ export function isReadOnlyStep(s: Pick<UnderstandingStep, "verb" | "object">): b
 
 /** The verb class of a step: its verb's class, except that typing a text object is a text write. */
 export function stepClass(s: Pick<UnderstandingStep, "verb" | "object">): VerbClass {
+  // s20 review 5: approving a payment / expense / invoice / refund is a commit (irreversible), not a judgement.
+  if (isMoneyApproval(baseVerb(s.verb), s.object)) return "record";
   const c = verbClass(s.verb);
   return c === "record" && TYPED_TEXT_VERBS.has(baseVerb(s.verb)) && TEXT_OBJECT_RE.test(s.object) ? "text" : c;
 }
@@ -173,7 +175,7 @@ export function skeleton(input: PlanInput, opts: { coreOnly: boolean }): PlanSte
       type: "commit",
       title: cls === "text" ? (textWord(s) === verb ? `Send the ${verb} to the ${s.object} in ${t.targetName}` : `${sendsMail ? "Send" : "Save"} the ${s.object} in ${t.targetName}`) : `${verb.charAt(0).toUpperCase()}${verb.slice(1)} the ${s.object} in ${t.targetName}`,
       detail: `${outs.length > 0 ? `Saves ${outs.join(" and ")}. ` : ""}Waits for your approval of this exact item; nothing is written before.`,
-      capability: need(t, cls === "text" ? (textWord(s) === verb ? `send ${verb} to ${s.object} in ${t.targetName}` : `${sendsMail ? "send" : "save"} ${s.object} in ${t.targetName}`) : `${verb} ${s.object} in ${t.targetName}`, commitCapability(t, commitVerb), role),
+      capability: need(t, cls === "text" ? (textWord(s) === verb ? `send ${verb} to ${s.object} in ${t.targetName}` : `${sendsMail ? "send" : "save"} ${s.object} in ${t.targetName}`) : `${verb} ${s.object} in ${t.targetName}`, commitCapability(t, commitVerb, s.object), role),
       ...base,
       gated: true,
     });

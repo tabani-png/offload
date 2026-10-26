@@ -82,13 +82,34 @@ export const CAPABILITY_VERBS: Readonly<Record<string, ReadonlySet<string>>> = {
   "outreach.resume_lead": new Set(["resume"]),
 };
 
+/** s20 review 5: verbs that say only "change something" (add, create, record, ...): they map to a catalog commit only
+ * when the step's object is what that commit makes ("create the invoice" = a bill; "create the contact" is not). */
+export const BROAD_VERBS: ReadonlySet<string> = new Set(["add", "create", "record", "update", "log", "enter", "key in", "fill in", "file", "edit"]);
+/** What each catalog commit makes or changes (matched on the step's object for a broad verb). */
+export const CAPABILITY_OBJECTS: Readonly<Record<string, RegExp>> = {
+  "mail.send": /\b(e-?mails?|mails?|messages?|repl(y|ies)|drafts?)\b/i,
+  "chat.post": /\b(messages?|posts?|repl(y|ies)|comments?|threads?)\b/i,
+  "ticket.reply": /\b(tickets?|repl(y|ies)|cases?|conversations?|comments?)\b/i,
+  "crm.note": /\b(notes?|comments?|activit(y|ies))\b/i,
+  "crm.task": /\b(tasks?|to-?dos?|follow-?ups?|reminders?)\b/i,
+  "accounting.bill": /\b(bills?|invoices?|expenses?|receipts?|claims?)\b/i,
+  "sheet.append": /\b(rows?|lines?|entr(y|ies)|leads?|records?|sheets?|logs?)\b/i,
+  "table.create_record": /\b(records?|rows?|entr(y|ies)|items?)\b/i,
+  // Greenhouse "update candidate record" moving its stage is pinned by s14 (plan.test.ts), so candidates count.
+  "ats.move_stage": /\b(stages?|status|applications?|candidates?)\b/i,
+  "outreach.add_lead": /\b(leads?|prospects?|contacts?)\b/i,
+  "outreach.resume_lead": /\b(leads?|sequences?)\b/i,
+};
+
 /** Canonical commit capability: the catalog target's allowlisted commit (s13 targets.ts, from the s16 policies) whose
- * verbs include the step's verb, else ui.commit (computer use, gated like every commit). Never another write. */
-export function commitCapability(t: StepTarget, verb: string): string {
+ * verbs include the step's verb, and for a broad verb whose object is the step's object (when the caller knows it),
+ * else ui.commit (computer use, gated like every commit). Never another write. */
+export function commitCapability(t: StepTarget, verb: string, object?: string): string {
   if (t.connectorId === null) return "ui.commit";
   const ct = catalogTarget(t.connectorId);
   const v = baseVerb(verb);
-  return [...(ct?.sends ?? []), ...(ct?.logs ?? [])].find((c) => CAPABILITY_VERBS[c]?.has(v) === true) ?? "ui.commit";
+  const fits = (c: string) => CAPABILITY_VERBS[c]?.has(v) === true && (object === undefined || !BROAD_VERBS.has(v) || CAPABILITY_OBJECTS[c]?.test(object) === true);
+  return [...(ct?.sends ?? []), ...(ct?.logs ?? [])].find(fits) ?? "ui.commit";
 }
 
 /** The chain's answer for every need. */

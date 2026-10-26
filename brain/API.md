@@ -158,7 +158,9 @@ From a 7-day blind test on screenshot-only data (one synthetic app, captions fro
   with a gated commit; a verb no table knows is `unknown`: it is planned as a read (no unasked commit) but never makes
   a task read-only, and the judge gives it risk 0.2 instead of "reading only". One verb table
   (`understanding/verbs.ts`) serves the plan, the judge and the saving. In a phrase of several verbs a write wins
-  ("reading and replying" = reply); sign in / up / out, log in / out and share screen are reads. The judge gives risk
+  ("reading and replying" = reply), the most dangerous one first (irreversible > action > other writes: "update the
+  sheet and pay the invoice" = pay); sign in / up / out, log in / out and share screen are reads ("log in the call"
+  logs the call). Approving a payment, expense, invoice or refund is an irreversible commit, not a judgement. The judge gives risk
   0.5 to any text to a person and to irreversible actions (pay, refund, delete, publish, deploy, ...).
 - Plan needs (`serve`): resolved through the connector chain (`plan/chain-resolver.ts`) instead of `pending`. A
   product a caption named that the catalog lacks tries a connector on this Mac, then Composio through its toolkit
@@ -170,7 +172,14 @@ From a 7-day blind test on screenshot-only data (one synthetic app, captions fro
   Composio toolkit's generic commit, never by a write of another name. A specific catalog commit (`mail.send`, ...)
   needs exactly that capability, and a step's commit capability must match its verb (`plan/capabilities.ts
   CAPABILITY_VERBS`): "delete the email" in Gmail or "pay the invoice" in Xero is `ui.commit` (gated, on screen), never
-  `mail.send` / `accounting.bill`; such a commit names no connector in the legacy steps and requires none. A local document's `file.read` resolves with `method: "local"` ("reading the
+  `mail.send` / `accounting.bill`. A broad verb (add, create, record, update, log, enter, ...) maps to a catalog commit
+  only when the step's object is what it makes (`CAPABILITY_OBJECTS`: "create the invoice" in Xero = `accounting.bill`,
+  "create the contact" = `ui.commit`). A `ui.commit` commit keeps its target in the legacy steps with
+  `method: "computer"`: it is declared to the gate as a computer-use action (only computer-use tools may do it, never
+  the app's connector send), the chain is built with computer use only, and it requires no connector. A log step runs
+  only after its item's send went through (`sent`); after a failed or unknown send it is refused.
+  Open items: a Composio toolkit's generic commit still serves `ui.commit` (exact approval of the call the agent
+  picks); "typing a reply" in Gmail commits as `mail.send` (a new message), not a threaded reply. A local document's `file.read` resolves with `method: "local"` ("reading the
   file on this Mac") without probing the chain. An app's identity for the chain (bundle ids, hosts) comes from what
   was observed first (the current analysis' steps), then the app target stored from the insights, and only then the
   product table, which otherwise only gives name and toolkit; a catalog app's observed host goes before its catalog

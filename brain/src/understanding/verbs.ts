@@ -32,6 +32,11 @@ export const TEXT_VERBS: ReadonlySet<string> = new Set(["reply", "answer", "resp
 /** Irreversible or money-moving actions: risk 0.5 in the judge, like writing to a person. */
 export const IRREVERSIBLE_VERBS: ReadonlySet<string> = new Set(["pay", "refund", "transfer", "buy", "purchase", "order", "delete", "remove", "publish", "deploy", "merge", "push", "sign"]);
 
+/** s20 review 5: approving money (a payment, an expense, an invoice, a refund) in an app is an irreversible commit, not a
+ * judgement read. */
+export const MONEY_OBJECT_RE = /\b(payments?|expenses?|invoices?|refunds?|bills?|payouts?|transfers?|reimbursements?|purchase orders?)\b/i;
+export const isMoneyApproval = (base: string, object: string) => base === "approve" && MONEY_OBJECT_RE.test(object);
+
 /** A base verb that changes something (text, record or action). */
 export const isWriteBase = (b: string) => TEXT_VERBS.has(b) || RECORD_VERBS.has(b) || ACTION_VERBS.has(b);
 /** A base verb that positively only reads or judges. */
@@ -97,18 +102,27 @@ export function baseVerb(verb: string): string {
   // first. Only clause heads count, so an object ("reviewing the post") is never taken for a verb.
   const clauses = v.split(/\s*(?:,|&|\/|\bthen\b|\band\b)\s*/).filter((c) => c !== "");
   if (clauses.length > 1) {
-    const bases = clauses.map(phraseBase);
-    return bases.find(isWriteBase) ?? bases[0]!;
+    // s20 review 5: the most dangerous verb names the step: irreversible > action > any other write; a bare "close"
+    // ("open and close") is not a write without its object.
+    const bases = clauses.map((c) => ({ b: phraseBase(c), bare: !c.includes(" ") }));
+    const write = (x: { b: string; bare: boolean }) => isWriteBase(x.b) && !(x.bare && x.b === "close");
+    return (bases.find((x) => IRREVERSIBLE_VERBS.has(x.b)) ?? bases.find((x) => ACTION_VERBS.has(x.b)) ?? bases.find(write) ?? bases[0]!).b;
   }
   return phraseBase(v);
 }
+
+const SIGN_IN = new Set(["sign in", "sign up", "sign out", "log in", "log out"]);
+const SIGN_IN_NEXT = new Set(["to", "into", "with", "on", "at", "account", "app", "portal", "again"]);
 
 function phraseBase(v: string): string {
   if (PHRASES[v] !== undefined) return PHRASES[v]!;
   const words = v.split(" ");
   if (words.length > 1) {
     const two = `${words[0]} ${words[1]}`;
-    if (PHRASES[two] !== undefined) return PHRASES[two]!;
+    // s20 review 5: "log in" / "sign in" is signing in only on its own or before a sign-in object ("log in to the
+    // portal"); "log in the call" logs the call.
+    const signIn = PHRASES[two] !== undefined && SIGN_IN.has(PHRASES[two]!);
+    if (PHRASES[two] !== undefined && (!signIn || words.length === 2 || SIGN_IN_NEXT.has(words[2]!))) return PHRASES[two]!;
     const first = baseOfWord(words[0]!);
     if (KNOWN.has(first) || KEEP.has(first)) return PHRASES[first] ?? first;
     return v;
