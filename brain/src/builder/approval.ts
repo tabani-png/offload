@@ -3,7 +3,7 @@
 // stored). A build consumes the token once, before any workspace exists. A redrafted brief or a rewritten check
 // script makes the stored approval stale.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { briefHash, BriefError, readBrief, solutionsDir, type SolutionBrief } from "../solutions/brief.ts";
 import { writePrivate } from "../workflows/store.ts";
@@ -19,6 +19,8 @@ interface BuildApprovalFile {
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const approvalPath = (home: string, id: string) => join(solutionsDir(home), id, "build-approval.json");
+/** Created with O_EXCL by the one consumer that wins: the cross-process single-use claim. */
+const claimPath = (home: string, id: string) => join(solutionsDir(home), id, "build-approval.claim");
 
 /** The brief and its frozen checks, both intact on disk, or a refusal. */
 export function currentBuildInputs(home: string, id: string): { brief: SolutionBrief; checks: CheckSet; content: string } {
@@ -39,11 +41,14 @@ export function approveBuild(home: string, id: string, briefHashIn: string, chec
   const token = randomBytes(32).toString("base64url");
   const rec: BuildApprovalFile = { briefHash: brief.hash, checkHash: checks.sha256, tokenSha256: sha(token), approvedAt: now, usedAt: null };
   writePrivate(approvalPath(home, id), JSON.stringify(rec, null, 2) + "\n");
+  // A new approval starts unclaimed (the old token is void: its hash is no longer stored).
+  rmSync(claimPath(home, id), { force: true });
   return { briefHash: brief.hash, checkHash: checks.sha256, token };
 }
 
-/** Consumes the build token once for the exact brief + check hash. Returns what the build may use. */
-export function consumeBuildApproval(home: string, id: string, token: string, now: number): { brief: SolutionBrief; checks: CheckSet; content: string } {
+/** Verifies the build token for the exact brief + check hash WITHOUT using it (the runner checks first, sets up, and
+ * claims last, so a setup failure does not burn the approval). */
+export function peekBuildApproval(home: string, id: string, token: string): { brief: SolutionBrief; checks: CheckSet; content: string } {
   const cur = currentBuildInputs(home, id);
   const p = approvalPath(home, id);
   const rec = existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as Partial<BuildApprovalFile>) : null;
@@ -53,6 +58,25 @@ export function consumeBuildApproval(home: string, id: string, token: string, no
   const want = Buffer.from(rec.tokenSha256, "hex");
   const got = Buffer.from(sha(typeof token === "string" ? token : ""), "hex");
   if (want.length !== got.length || !timingSafeEqual(want, got)) throw new BriefError("wrong build token", "forbidden");
-  writePrivate(p, JSON.stringify({ ...rec, usedAt: now }, null, 2) + "\n");
+  if (existsSync(claimPath(home, id))) throw new BriefError("this build approval was already used", "conflict");
   return cur;
+}
+
+/** Uses the token: re-verifies, then claims it atomically (O_EXCL create; a second claimant, in any process, fails). */
+export function claimBuildApproval(home: string, id: string, token: string, now: number): { brief: SolutionBrief; checks: CheckSet; content: string } {
+  const cur = peekBuildApproval(home, id, token);
+  try {
+    writeFileSync(claimPath(home, id), `${sha(token)} ${now}\n`, { flag: "wx", mode: 0o600 });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") throw new BriefError("this build approval was already used", "conflict");
+    throw err;
+  }
+  const p = approvalPath(home, id);
+  writePrivate(p, JSON.stringify({ ...(JSON.parse(readFileSync(p, "utf8")) as BuildApprovalFile), usedAt: now }, null, 2) + "\n");
+  return cur;
+}
+
+/** Consumes the build token once for the exact brief + check hash. Returns what the build may use. */
+export function consumeBuildApproval(home: string, id: string, token: string, now: number): { brief: SolutionBrief; checks: CheckSet; content: string } {
+  return claimBuildApproval(home, id, token, now);
 }

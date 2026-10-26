@@ -240,13 +240,16 @@ export function toolchain(env: Readonly<Record<string, string | undefined>> = pr
   const bins = [which("python3", env), which("node", env), process.execPath].filter((b): b is string => b !== null);
   const pathDirs = [...new Set([...bins.map((b) => dirname(b)), "/usr/bin", "/bin"])];
   const home = env.HOME === undefined ? null : realish(env.HOME);
-  const readOnly = new Set(["/usr", "/bin", "/sbin", "/System", "/Library/Apple", "/Library/Developer/CommandLineTools", "/private/var/db/dyld", "/private/var/db/timezone", "/dev"]);
-  for (const r of ["/opt/homebrew", "/usr/local"]) if (existsSync(r)) readOnly.add(r);
+  // System dirs by name (not all of /usr: /usr/local is a package prefix with config and data).
+  const readOnly = new Set(["/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share", "/bin", "/sbin", "/System", "/Library/Apple", "/Library/Developer/CommandLineTools", "/private/var/db/dyld", "/private/var/db/timezone", "/dev"]);
+  // Package prefixes: binaries, kegs and libraries only - never etc/ or var/ (configs, databases, keys).
+  for (const r of ["/opt/homebrew", "/usr/local"]) for (const sub of ["bin", "Cellar", "opt", "lib", "Frameworks"]) if (existsSync(join(r, sub))) readOnly.add(join(r, sub));
+  const prefixRoots = new Set(["/", "/usr", "/usr/local", "/opt/homebrew", "/Users", home ?? "/"]);
   for (const b of bins) {
     for (const x of [b, realish(b)]) {
-      // The binary's install prefix (bin/..), never the home folder or / itself.
+      // The binary's own install prefix (bin/..), never a package root, the home folder or / itself.
       const prefix = dirname(dirname(x));
-      readOnly.add(prefix !== "/" && prefix !== home && prefix !== "/Users" ? prefix : dirname(x));
+      readOnly.add(prefixRoots.has(prefix) ? dirname(x) : prefix);
     }
   }
   return { pathDirs, readOnly: [...readOnly].map(realish) };
@@ -264,6 +267,9 @@ const sbStr = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"
  * no network, no other files. */
 export function sandboxProfile(o: { ws: string; frozenDir: string; readOnly: readonly string[] }): string {
   const ws = realish(o.ws);
+  // Directory listings (names only) of the workspace's ancestors: bun walks up from cwd and refuses to start without.
+  const ancestors: string[] = [];
+  for (let d = dirname(ws); d !== dirname(d); d = dirname(d)) ancestors.push(d);
   return [
     "(version 1)",
     "(deny default)",
@@ -280,6 +286,10 @@ export function sandboxProfile(o: { ws: string; frozenDir: string; readOnly: rea
     "(deny file-write-create (vnode-type SYMLINK))",
     "(deny file-link)",
     '(allow file-write* file-ioctl (literal "/dev/null") (literal "/dev/tty"))',
+    // A process may reopen its own already-open descriptors (bun writes its JUnit report to the harness pipe).
+    '(allow file-read* file-write* (regex #"^/dev/fd/[0-9]+$"))',
+    ...(ancestors.length > 0 ? [`(allow file-read-data ${ancestors.map((a) => `(literal ${sbStr(a)})`).join(" ")})`] : []),
+    "(deny file-write-create (vnode-type FIFO))",
     '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))',
     "(deny network*)",
     "",
@@ -294,8 +304,15 @@ export function sandboxArgv(rt: SandboxRuntime, profilePath: string, env: Record
   return rt.kind === "sandbox-exec" ? [rt.bin, "-f", profilePath, ...envArgs] : envArgs;
 }
 
-export function commandWrapper(rt: SandboxRuntime, profilePath: string, env: Record<string, string>): CommandWrapper {
-  const prefix = sandboxArgv(rt, profilePath, env).map(shq).join(" ") + " ";
+/** argv prefix for a builder command: the sandbox, then the trusted harness, which sweeps every process the command
+ * left behind (harness.ts) when it ends. */
+export function harnessArgv(rt: SandboxRuntime, profilePath: string, env: Record<string, string>, harnessPath: string): string[] {
+  return [...sandboxArgv(rt, profilePath, env), "python3", "-I", harnessPath];
+}
+export const sweepMode = (rt: SandboxRuntime) => (rt.kind === "sandbox-exec" ? "sweep" : "nosweep");
+
+export function commandWrapper(rt: SandboxRuntime, profilePath: string, env: Record<string, string>, harnessPath: string): CommandWrapper {
+  const prefix = [...harnessArgv(rt, profilePath, env, harnessPath), "run", sweepMode(rt), "--"].map(shq).join(" ") + " ";
   return { wrap: (c) => prefix + c, unwrap: (c) => (c.startsWith(prefix) ? c.slice(prefix.length) : null) };
 }
 

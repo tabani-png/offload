@@ -1,7 +1,8 @@
 // s24 run records: append-only. Each build writes builds/<run_id>.json once (never overwritten) and one line in
 // builds/runs.jsonl. No prompt and no key is stored; check output is truncated. The latest run of a brief feeds the
 // additive `build` field of its solution option (hours saved vs cost).
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { briefIdFor } from "../solutions/brief.ts";
 import type { SolutionSet } from "../solutions/types.ts";
@@ -55,10 +56,43 @@ export interface RunRecord {
   reason: string | null;
   /** The workspace holding the built files. Nothing is installed: applying it is a separate approval. */
   artifactPath: string;
+  /** sha256 over the workspace (paths, types, content; .tmp and __pycache__ left out) taken at the verdict, after every
+   * builder process was stopped. A later install step must refuse when verifyArtifact() is false. */
+  artifactSha256: string;
   denials: Array<{ tool: string; reason: string }>;
 }
 
 export const buildsDir = (home: string) => join(home, "builds");
+
+const SKIP_DIRS = new Set([".tmp", "__pycache__"]);
+
+/** Deterministic digest of a workspace tree. */
+export function artifactDigest(ws: string): string {
+  const h = createHash("sha256");
+  const walk = (dir: string, rel: string) => {
+    for (const name of readdirSync(dir).sort()) {
+      const abs = join(dir, name);
+      const r = rel === "" ? name : `${rel}/${name}`;
+      const st = lstatSync(abs);
+      if (st.isDirectory()) {
+        if (SKIP_DIRS.has(name)) continue;
+        h.update(`d\0${r}\n`);
+        walk(abs, r);
+      } else if (st.isSymbolicLink()) h.update(`l\0${r}\0${readlinkSync(abs)}\n`);
+      else if (st.isFile()) h.update(`f\0${r}\0${createHash("sha256").update(readFileSync(abs)).digest("hex")}\n`);
+      else h.update(`o\0${r}\n`);
+    }
+  };
+  walk(ws, "");
+  return h.digest("hex");
+}
+
+/** True when the run's workspace is byte-for-byte what it was at the verdict. Install must check this first. */
+export function verifyArtifact(home: string, runId: string): boolean {
+  const r = readRunRecord(home, runId);
+  if (r === null || typeof r.artifactSha256 !== "string" || !existsSync(r.artifactPath)) return false;
+  return artifactDigest(r.artifactPath) === r.artifactSha256;
+}
 
 export function truncateOutput(s: string, max = MAX_CHECK_OUTPUT): string {
   return s.length <= max ? s : `…[${s.length - max} chars cut]\n${s.slice(s.length - max)}`;

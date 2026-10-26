@@ -1,26 +1,31 @@
 // s24 brief runner: the outcome loop the Cindy eval asked for (EVAL.md "BORROW"). After the exact single-use build
 // approval (approval.ts), each try is one Agent SDK query() (ADR 0004) in a fresh workspace with the builder prompt;
-// then the RUNNER, not the model, verifies the frozen check's sha256 and runs it. Exit 0 = PASS. A failure feeds the
+// then the RUNNER, not the model, verifies the frozen check's sha256 and runs it. PASS = exit 0 AND the trusted
+// harness's completion proof carrying this run's nonce (harness.ts); exit 0 alone never passes. A failure feeds the
 // exact (truncated) check output into the next try. Caps: tries, USD, turns per try, wall time. DRY RUN: the files
 // stay in the workspace; installing them on the user's system is a separate approval (not here).
 // Isolation: the frozen master lives OUTSIDE the workspace (builds/<run>/frozen/). The check executes as
 // workspace/accept/<file>, which the OS sandbox makes read-only and which is hash-checked against the master right
-// before and after every run, so the built artifact's imports resolve from the workspace (python: -I, workspace last
-// on sys.path; bun: relative imports, no builder bunfig/.env). It runs async in its own process group, bounded by the
-// remaining wall budget and killed by the wall abort; a result after the deadline never counts. Builder Bash
-// commands are rewritten into the same sandbox. No usable sandbox = UnsafeProfileError before the approval is consumed. Check output is
+// before and after every run. The check never loads builder code into its own process (it runs the built tool as a
+// subprocess with cwd = workspace); the harness refuses such imports and, when the check or any builder command ends,
+// kills every process left in that sandbox instance (fork + setsid daemons included). The check runs async, bounded
+// by the remaining wall budget and stopped by the wall abort; a result after the deadline never counts. The
+// workspace is hashed at the verdict (record.artifactSha256, verifyArtifact). The approval is verified first and
+// claimed atomically LAST, after setup, so a setup failure does not burn it. Builder Bash commands are rewritten
+// into the same sandbox + harness. No usable sandbox = UnsafeProfileError before the approval is consumed. Check output is
 // secret-redacted before it is stored or fed into the next prompt. Limits are validated before the approval is used.
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { TIER_MODELS } from "../models/router.ts";
 import { BriefError, type SolutionBrief } from "../solutions/brief.ts";
 import { ensureDir } from "../workflows/store.ts";
-import { consumeBuildApproval } from "./approval.ts";
+import { claimBuildApproval, peekBuildApproval } from "./approval.ts";
+import { GUARD_TS, HARNESS_PY } from "./harness.ts";
 import { checkSha, identityMask, type CheckFile, type Mask } from "./checks.ts";
-import { buildsDir, DEFAULT_LIMITS, truncateOutput, writeRunRecord, type BuildLimits, type BuildOutcome, type RunRecord, type TryRecord } from "./record.ts";
+import { artifactDigest, buildsDir, DEFAULT_LIMITS, truncateOutput, writeRunRecord, type BuildLimits, type BuildOutcome, type RunRecord, type TryRecord } from "./record.ts";
 import {
   assertSafeExecutionProfile,
   BASH_ALLOW,
@@ -31,10 +36,12 @@ import {
   checkEnv,
   commandWrapper,
   DISALLOWED_TOOLS,
+  harnessArgv,
+  sweepMode,
+  UnsafeProfileError,
   redactSecrets,
   resolveSandbox,
   SANDBOX_EXEC,
-  sandboxArgv,
   sandboxProfile,
   secretValues,
   toolchain,
@@ -76,90 +83,107 @@ export function tryPrompt(b: SolutionBrief, file: CheckFile, prior: { n: number;
 export interface CheckRun {
   exit: number | null;
   output: string;
+  /** The harness's JSON completion proof (fd 3), if it wrote one. */
+  proof?: string;
 }
 export interface CheckRunArgs {
   ws: string;
   file: CheckFile;
   /** The check to execute: workspace/accept/<file>. Read-only at the OS level (sandbox deny + 0444) and byte-identical
-   * to the frozen master (hash-checked right before and after), so relative imports resolve against the workspace. */
+   * to the frozen master (hash-checked right before and after). */
   checkPath: string;
-  /** The frozen dir outside the workspace (holds the master copy and an empty bunfig.toml for --config). */
+  /** The frozen dir outside the workspace: master copy, harness.py, guard.ts, bunfig.toml. */
   frozenDir: string;
   /** The allow-list env (checkEnv), never process.env. */
   env: Record<string, string>;
-  /** argv prefix that puts the process in the OS sandbox with exactly `env` (sandboxArgv). */
-  sandbox: string[];
+  /** argv prefix: OS sandbox with exactly `env`, then `python3 -I <frozen>/harness.py` (harnessArgv). */
+  harness: string[];
+  /** "sweep" under sandbox-exec, "nosweep" in a declared container. */
+  sweep: "sweep" | "nosweep";
+  /** Random per check run; only the harness gets it (fd 4) and must echo it in the proof (fd 3). */
+  nonce: string;
   /** Never above the remaining wall budget. */
   timeoutMs: number;
-  /** The run's wall-time abort: kills the check when it fires. */
+  /** The run's wall-time abort: stops the check when it fires. */
   signal?: AbortSignal;
 }
 export type CheckRunner = (a: CheckRunArgs) => CheckRun | Promise<CheckRun>;
 
-/** Python start-up for the check: `-I` (no PYTHON* env, no user site, no script dir or cwd on sys.path) so builder
- * files such as sitecustomize.py never run first; then the check's own folder first and the workspace LAST on
- * sys.path, so the built module imports from the workspace but cannot shadow the standard library. */
-export const PY_BOOT = "import os, runpy, sys; p, w = sys.argv[1], sys.argv[2]; sys.argv = [p]; sys.path = [os.path.dirname(p)] + sys.path + [w]; runpy.run_path(p, run_name='__main__')";
+export function checkArgv(a: Pick<CheckRunArgs, "ws" | "file" | "checkPath" | "frozenDir" | "harness" | "sweep">): string[] {
+  return a.file === "accept.py" ? [...a.harness, "check-py", a.sweep, a.checkPath, a.ws] : [...a.harness, "check-bun", a.sweep, a.checkPath, a.ws, join(a.frozenDir, "bunfig.toml"), process.execPath];
+}
 
-export function checkArgv(a: Pick<CheckRunArgs, "ws" | "file" | "checkPath" | "frozenDir">): string[] {
-  // bun: --config points at an empty bunfig outside the workspace (no builder preload) and --no-env-file skips a
-  // builder .env; the test file sits in accept/, so `../x.ts` is the workspace.
-  return a.file === "accept.py" ? ["python3", "-I", "-c", PY_BOOT, a.checkPath, a.ws] : [process.execPath, "test", `--config=${join(a.frozenDir, "bunfig.toml")}`, "--no-env-file", a.checkPath];
+/** The proof is valid only for this nonce, status "pass", a finished check and a clean sweep. */
+export function proofPasses(proof: string | undefined, nonce: string): { ok: boolean; why: string } {
+  if (proof === undefined || proof.trim() === "") return { ok: false, why: "no completion proof from the harness" };
+  let v: { nonce?: unknown; status?: unknown; completed?: unknown; why?: unknown; sweep?: { clean?: unknown } };
+  try {
+    v = JSON.parse(proof.trim().split("\n")[0]!);
+  } catch {
+    return { ok: false, why: "unreadable completion proof" };
+  }
+  if (v.nonce !== nonce) return { ok: false, why: "completion proof for another run" };
+  if (v.sweep?.clean !== true) return { ok: false, why: "builder processes could not be stopped" };
+  if (v.status !== "pass" || v.completed !== true) return { ok: false, why: typeof v.why === "string" ? v.why : "the check did not complete" };
+  return { ok: true, why: "completed" };
 }
 
 const MAX_OUT = 4 * 1024 * 1024;
 
-/** Runs the check (cwd = workspace) inside the OS sandbox, asynchronously, in its own process group: the timeout or
- * the run's abort kills the whole group, so a check (or a child it started) cannot outlive the wall cap. */
+/** Runs the check (cwd = workspace) through the sandboxed harness, async, in its own process group. On the timeout or
+ * the run's abort: SIGTERM first (the harness then sweeps its sandbox), SIGKILL 300 ms later. */
 export const runCheckProcess: CheckRunner = (a) =>
   new Promise<CheckRun>((done) => {
-    const argv = [...a.sandbox, ...checkArgv(a)];
+    const argv = checkArgv(a);
     let out = "";
+    let proof = "";
     let finished = false;
     let killed: string | null = null;
-    const child = spawn(argv[0]!, argv.slice(1), { cwd: a.ws, env: a.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(argv[0]!, argv.slice(1), { cwd: a.ws, env: a.env, detached: true, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] });
     const add = (b: Buffer) => {
       if (out.length < MAX_OUT) out += b.toString("utf8");
     };
     child.stdout!.on("data", add);
     child.stderr!.on("data", add);
-    const killGroup = (why: string) => {
-      if (killed === null) killed = why;
+    const proofIn = child.stdio[3] as NodeJS.ReadableStream | null;
+    proofIn?.on("data", (b: Buffer) => {
+      if (proof.length < 64 * 1024) proof += b.toString("utf8");
+    });
+    proofIn?.on("error", () => {});
+    const nonceOut = child.stdio[4] as NodeJS.WritableStream | null;
+    nonceOut?.on("error", () => {});
+    nonceOut?.end(a.nonce);
+    const signalGroup = (sig: NodeJS.Signals) => {
       try {
-        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+        if (child.pid !== undefined) process.kill(-child.pid, sig);
       } catch {
-        child.kill("SIGKILL");
+        // already gone
       }
+    };
+    const stop = (why: string) => {
+      if (killed === null) killed = why;
+      signalGroup("SIGTERM");
+      setTimeout(() => signalGroup("SIGKILL"), 300);
     };
     const finish = (exit: number | null, extra = "") => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
       a.signal?.removeEventListener("abort", onAbort);
-      child.stdout!.destroy();
-      child.stderr!.destroy();
-      done({ exit: killed === null ? exit : null, output: out + extra + (killed === null ? "" : `\n[check stopped: ${killed}]`) });
+      for (const s of [child.stdout, child.stderr, proofIn as unknown as { destroy?: () => void } | null]) (s as { destroy?: () => void } | null)?.destroy?.();
+      done({ exit: killed === null ? exit : null, output: out + extra + (killed === null ? "" : `\n[check stopped: ${killed}]`), proof });
     };
-    const onAbort = () => killGroup("wall time");
-    const timer = setTimeout(() => killGroup(`timeout ${a.timeoutMs} ms`), Math.max(0, a.timeoutMs));
-    if (a.signal?.aborted) killGroup("wall time");
+    const onAbort = () => stop("wall time");
+    const timer = setTimeout(() => stop(`timeout ${a.timeoutMs} ms`), Math.max(0, a.timeoutMs));
+    if (a.signal?.aborted) stop("wall time");
     else a.signal?.addEventListener("abort", onAbort, { once: true });
     child.on("error", (err) => finish(null, `\n${err.message}`));
     child.on("exit", (code) => {
-      // Children left in the group die with it; give the pipes a moment to drain, never longer.
-      reapGroup(child.pid);
+      signalGroup("SIGKILL");
       setTimeout(() => finish(code), 100);
     });
     child.on("close", (code) => finish(code));
   });
-
-function reapGroup(pid: number | undefined) {
-  try {
-    if (pid !== undefined) process.kill(-pid, "SIGKILL");
-  } catch {
-    // the group is already gone
-  }
-}
 
 function sdkVersion(): string {
   try {
@@ -210,29 +234,46 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   const runCheck = o.runCheck ?? runCheckProcess;
   // Absolute before any path is derived: workspace, profile and check paths are used with cwd = workspace.
   const home = resolve(o.home);
-  // The gate first: nothing exists on disk for a run that is not approved.
-  const { brief, checks, content } = consumeBuildApproval(home, o.briefId, o.token, now());
-  const startedAt = now();
+  const parentEnv = o.env ?? process.env;
+  const tc = toolchain(parentEnv);
+  if (!tc.pathDirs.some((d) => existsSync(join(d, "python3")))) throw new UnsafeProfileError("python3 is required for the sandbox harness (it stops every builder process); refusing to run");
+  // The gate first: the token is verified (not used) before anything exists on disk; it is claimed after setup.
+  const { checks: c0, content: content0 } = peekBuildApproval(home, o.briefId, o.token);
   const id = `run_${randomBytes(8).toString("hex")}`;
   const runDir = join(buildsDir(home), id);
   const ws = join(runDir, "workspace");
-  ensureDir(join(ws, CHECK_DIR));
-  mkdirSync(join(ws, ".tmp"), { recursive: true, mode: 0o700 });
-  // The builder reads accept/<file>; the runner executes the frozen copy outside the workspace.
-  const checkPath = join(ws, CHECK_DIR, checks.file);
-  writeFileSync(checkPath, content, { mode: 0o444 });
-  chmodSync(checkPath, 0o444);
   const frozenDir = join(runDir, "frozen");
-  ensureDir(frozenDir);
-  const frozenPath = join(frozenDir, checks.file);
-  writeFileSync(frozenPath, content, { mode: 0o444 });
-  chmodSync(frozenPath, 0o444);
-  writeFileSync(join(frozenDir, "bunfig.toml"), "", { mode: 0o444 });
-  const parentEnv = o.env ?? process.env;
   const profilePath = join(runDir, "sandbox.sb");
-  writeFileSync(profilePath, sandboxProfile({ ws, frozenDir, readOnly: toolchain(parentEnv).readOnly }), { mode: 0o444 });
+  const harnessPath = join(frozenDir, "harness.py");
+  let claimed: ReturnType<typeof claimBuildApproval>;
+  try {
+    ensureDir(join(ws, CHECK_DIR));
+    mkdirSync(join(ws, ".tmp"), { recursive: true, mode: 0o700 });
+    ensureDir(frozenDir);
+    // The builder reads accept/<file>; the check executes there (read-only); the master stays outside the workspace.
+    for (const f of [join(ws, CHECK_DIR, c0.file), join(frozenDir, c0.file)]) {
+      writeFileSync(f, content0, { mode: 0o444 });
+      chmodSync(f, 0o444);
+    }
+    writeFileSync(harnessPath, HARNESS_PY, { mode: 0o444 });
+    writeFileSync(join(frozenDir, "guard.ts"), GUARD_TS, { mode: 0o444 });
+    const guard = JSON.stringify(join(frozenDir, "guard.ts"));
+    writeFileSync(join(frozenDir, "bunfig.toml"), `preload = [${guard}]\n\n[test]\npreload = [${guard}]\n`, { mode: 0o444 });
+    writeFileSync(profilePath, sandboxProfile({ ws, frozenDir, readOnly: tc.readOnly }), { mode: 0o444 });
+    // Last: use the single-use approval (atomic claim). The inputs are re-verified against what was written above.
+    claimed = claimBuildApproval(home, o.briefId, o.token, now());
+    if (claimed.checks.sha256 !== c0.sha256 || claimed.content !== content0) throw new BriefError("the check script changed during setup", "conflict");
+  } catch (err) {
+    rmSync(runDir, { recursive: true, force: true });
+    throw err;
+  }
+  const { brief, checks } = claimed;
+  const startedAt = now();
+  const checkPath = join(ws, CHECK_DIR, checks.file);
+  const frozenPath = join(frozenDir, checks.file);
   const childEnv = checkEnv(ws, parentEnv);
-  const sandbox = sandboxArgv(rt, profilePath, childEnv);
+  const harness = harnessArgv(rt, profilePath, childEnv, harnessPath);
+  const sweep = sweepMode(rt);
   const known = secretValues(parentEnv);
   const scrub = (t: string) => redactSecrets(t, known);
   // accept/ is locked as a whole: exactly the check file, nothing added (a module there would shadow the check's
@@ -254,7 +295,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
 
   // SDK auth stays in the Claude Code process env; every Bash child it starts is wrapped in `env -i` + the sandbox.
   const env = builderEnv(parentEnv);
-  const perms = builderPermissions(ws, commandWrapper(rt, profilePath, childEnv));
+  const perms = builderPermissions(ws, commandWrapper(rt, profilePath, childEnv, harnessPath));
   const bypass = o.profile.mode === "bypass";
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(new Error("wall time")), limits.wallMs);
@@ -352,8 +393,11 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         reason = `wall time ${limits.wallMs} ms reached`;
         break;
       }
-      const c = await runCheck({ ws, file: checks.file, checkPath, frozenDir, env: childEnv, sandbox, timeoutMs: Math.min(120_000, left), signal: abort.signal });
-      rec.checkOutput = truncateOutput(scrub(c.output));
+      const nonce = randomBytes(16).toString("hex");
+      const c = await runCheck({ ws, file: checks.file, checkPath, frozenDir, env: childEnv, harness, sweep, nonce, timeoutMs: Math.min(120_000, left), signal: abort.signal });
+      // Exit 0 is only half: the harness must prove the check's own code completed (and nothing survived it).
+      const proof = proofPasses(c.proof, nonce);
+      rec.checkOutput = truncateOutput(scrub(c.exit === 0 && !proof.ok ? `${c.output}\n[not a pass: ${proof.why}]` : c.output));
       rec.ms = now() - t0;
       // And after: a check that changed while it ran proves nothing.
       if (!intact()) {
@@ -369,9 +413,10 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         reason = `wall time ${limits.wallMs} ms reached during the check`;
         break;
       }
-      rec.checkExit = c.exit;
+      // An exit 0 without a valid proof is recorded as "did not complete" (null), never as 0.
+      rec.checkExit = c.exit === 0 && !proof.ok ? null : c.exit;
       tries.push(rec);
-      if (c.exit === 0) {
+      if (c.exit === 0 && proof.ok) {
         outcome = "PASS";
         reason = null;
         break;
@@ -404,6 +449,8 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
     outcome,
     reason,
     artifactPath: ws,
+    // Taken at the verdict, after the harness stopped every builder process.
+    artifactSha256: artifactDigest(ws),
     denials: perms.denials.slice(0, 50),
   };
   writeRunRecord(home, record);

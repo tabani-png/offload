@@ -464,7 +464,7 @@ check script exits 0, never "the model says done".
   models {checkWriter, builder, reported[]}, versions {sdk, claudeCode}, profile {mode, containerSandbox, sandbox, tools,
   disallowedTools, bashAllow, limits}, tries[{n, result, turns, costUsd, tokens, checkExit, checkOutput (last 4k),
   checkHashOk, ms}], totals {costUsd, tokens, turns}, startedAt, wallMs, outcome: PASS|FAIL|CAP|TAMPER, reason,
-  artifactPath, denials[]}`. Records are written once (`builds/<run_id>.json`) plus a line in `builds/runs.jsonl`.
+  artifactPath, artifactSha256, denials[]}`. Records are written once (`builds/<run_id>.json`) plus a line in `builds/runs.jsonl`.
 - `GET /insights/:id/solutions`: each built brief option gains, additively, `build {runId, outcome, costUsd, tries,
   totalCostUsd}` (hours saved vs cost).
 - CLI: `build --solution N|ins_ID|held:N --option n --home DIR [--model stub|real] [--json]` (brief + checks, prints both
@@ -477,7 +477,13 @@ check script exits 0, never "the model says done".
   toolchain read-only, no network) via `env -i` with only PATH, HOME=workspace, LANG, TMPDIR=workspace/.tmp. The
   check executes as `workspace/accept/<file>` (so artifact imports resolve from the workspace) and is hashed against
   the frozen master before and after every run; it gets only the remaining wall budget and a result after the
-  deadline is CAP, never PASS. No usable sandbox and no container profile = 403 / exit 2
+  deadline is CAP, never PASS. PASS needs exit 0 AND a completion proof from the trusted harness
+  (`builds/<run>/frozen/harness.py`) carrying a per-run nonce: the check never loads builder code into its own
+  process (it runs the built tool as a subprocess; workspace imports are refused), and when the check or any builder
+  command ends the harness stops every process left in that sandbox instance (fork + setsid daemons included).
+  `RunRecord.artifactSha256` is the workspace hash at the verdict; an install step must refuse when
+  `verifyArtifact(home, runId)` is false. The approval is verified first and claimed atomically (O_EXCL
+  `build-approval.claim`) after setup, so a failed setup keeps it. No usable sandbox and no container profile = 403 / exit 2
   before the approval is used (fail closed). Check output is secret-redacted before it is stored or re-prompted.
   Limits must be finite and positive (whole numbers for tries); bad values are refused (400 / exit 2) before the
   token is consumed.
