@@ -134,6 +134,8 @@ export function workerRoutes(app: App, deps: Deps, workers: () => Workers): void
     const req = await readLocal<{ schedule?: Schedule | null; sessionBudgetCents?: number }>(c, WORKER_PATCH);
     scheduleOrThrow(req.schedule);
     const { out, tenantId } = await tenantTx(c, deps, async (tx, p) => {
+      // It rewrites the deployment row a sync writes: the worker's sync lock first (lock order step 9, before rows).
+      await workers().lockWorkerSync(tx, id);
       const w = await visibleWorker(tx, p, id, true);
       if (w.state === "retired") throw conflict("this worker is retired");
       const t = new Date(deps.clock.now());

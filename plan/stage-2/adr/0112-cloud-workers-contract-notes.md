@@ -70,7 +70,8 @@ none or several is `409`. A role identity sends through its own connection, so n
 
 ## 11. Lock order
 Worker rows are step 9 of the broker's lock order (broker.ts header). Within it: the tenant's run-admission advisory
-lock `offload_workers_budget:<tenant>`, the runner's cloud-device advisory lock, then `worker_runs`, then `workers`,
+lock `offload_workers_budget:<tenant>`, the per-worker sync advisory lock `offload_worker_sync:<worker>` (then
+`offload_worker_provision:<tenant>` while provisioning), the runner's cloud-device advisory lock, then `worker_runs`, then `workers`,
 then `deployments`, rows of one table in id order; audit events after the last row lock. Broker calls made inside
 worker transactions only read and queue no audit event. The monthly cap's check and its reservation (the run insert)
 run under the admission lock, for manual starts (the run route takes it before its worker row) and for scheduled runs
@@ -90,6 +91,20 @@ the platform started (deployment polling).
   not reached their overnight policy (`policy_reported_at`; act then mark, so a crash can only report twice).
 - Stopping the process never ends a run: consumers stop, the sessions keep running, recovery re-attaches.
 - One orchestrator process per tenant (event handling is exactly-once per process via `session_events`).
-- Residual: a deployment created on Managed Agents whose id was not recorded (crash between create and record) is not
-  found again; the recorded contract has no list-deployments call. Environments, vaults and agents left the same way
-  are inert.
+- A recorded session whose first message was never sent (process stopped in between) gets it from recovery: the
+  message is stored with the session id (`first_message`), `first_sent_at` marks it sent, and before sending,
+  recovery checks the session's event log for a user.message so it is never sent twice.
+
+## 13. Remote creates: serialized, never repeated blindly
+The recorded contract has no idempotency key (`idempotencyKey` is a no-op in @anthropic-ai/sdk 1.3.0) and no list
+calls for deployments, sessions, agents, environments or vaults. So every create is sent once (`maxRetries: 0`), and:
+| create | serialized by | after an unanswered create / a crash before the id is recorded |
+|---|---|---|
+| deployments | `offload_worker_sync:<worker>`, held over the remote calls by every sync path (reconcile, kill sweep, auto-pause, `PATCH /v1/workers/:id`) | `deployments.create_key` is committed before the call and sent as metadata `offload_create_key`. A 4xx clears it (nothing made). No answer keeps it: no second create, ever; audit `worker.deployment_unconfirmed` and a log line, once. A person finds the deployment in the Console by that metadata, archives it (or records its id), then clears `create_key` and `create_alerted_at`. |
+| sessions | one opener per run (`dispatchRun`), recovery skips runs being opened | a session without a recorded id never got its first message, so it is idle; recovery fails the run after 10 minutes and frees its budget |
+| agents | worker sync lock + `offload_worker_provision:<tenant>` | the worker stays `provisioning`; the next reconcile creates another agent; the orphan is configuration only (no session runs on it) |
+| environments | `offload_worker_provision:<tenant>` | the next reconcile creates another; the orphan is inert |
+| vaults | `offload_worker_provision:<tenant>` | the next reconcile creates another; the orphan holds no credential (credentials are added after the vault is recorded) |
+| vault credentials | `offload_worker_provision:<tenant>` | recorded one by one: at most the one in flight is created again in the same vault |
+Gap (contract): an unconfirmed deployment is detected and flagged but cannot be found or paused automatically until the
+contract offers a list or idempotent create; it is the one orphan that can schedule paid sessions.

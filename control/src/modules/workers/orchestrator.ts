@@ -13,7 +13,8 @@
  * them, the tenant's audit-chain lock after them. Within step 9 every transaction here takes, in this order and
  * never back up it: the tenant's `offload_workers_budget:<tenant>` advisory lock (run admission: the monthly cap's
  * check and its reservation, the run insert, are one critical section; the run route takes it before its worker row),
- * the runner's `offload_cloud_device:<person>` advisory lock, then worker_runs rows, then workers rows, then
+ * the worker's `offload_worker_sync:<worker>` advisory lock (held over a sync's remote calls; then
+ * `offload_worker_provision:<tenant>` while provisioning; ADR 0112 §13), the runner's `offload_cloud_device:<person>` advisory lock, then worker_runs rows, then workers rows, then
  * deployments rows; two rows of one table in id order. Audit events are written after the last row lock.
  * Broker calls made inside these transactions (loadBatch, dto, killSwitchActive) only read and queue no audit.
  *
@@ -27,6 +28,7 @@
  */
 import type { Deps, Principal } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
+import { ms } from "../../db/pool.ts";
 import { isUuid, withTenant } from "../../db/tenant.ts";
 import { HttpError, conflict, invalid, notFound, type ErrorCode } from "../../schema/http.ts";
 import { sha256Hex, ulid } from "../../schema/encoding.ts";
@@ -84,6 +86,8 @@ export interface Workers extends WorkersPort {
   recover(tenantId: string): Promise<void>;
   /** Run admission's tenant-wide lock (lock order step 9, first). Callers take it before any worker row. */
   lockBudget(tx: Tx): Promise<void>;
+  /** The worker's sync lock (lock order step 9, after the budget lock), for a transaction that rewrites its deployment. */
+  lockWorkerSync(tx: Tx, workerId: string): Promise<void>;
   monthSpent(tx: Tx, excludeRunId?: string): Promise<{ spent: number; cap: number }>;
   idle(): Promise<void>;
   /** Stops every consumer (process exit, tests). Sessions keep running on the platform; resume re-attaches. */
@@ -296,10 +300,9 @@ export function createWorkers(deps: Deps): Workers {
           if (!cred) continue;
           await api.createCredential(vaultId, { display_name: `read ${c.kind}`, auth: { type: "static_bearer", token: cred.token, mcp_server_url: cred.mcpServerUrl } });
           added.push(c.id);
+          // Recorded one by one: a stop mid-loop repeats at most the one credential in flight.
+          await service(tenantId, (tx) => tx`update worker_vaults set credential_connection_ids = credential_connection_ids || ${[c.id]}::jsonb where job_role_id = ${w.jobRoleId}`);
         }
-      }
-      if (added.length > 0) {
-        await service(tenantId, (tx) => tx`update worker_vaults set credential_connection_ids = credential_connection_ids || ${added}::jsonb where job_role_id = ${w.jobRoleId}`);
       }
       const agent = await api.createAgent(
         agentParams({ name: pl.name, version: w.version, model: pl.model, skillMd: pl.skillMd, servers: pl.servers, tools: { bash: pl.bash, webDomains: pl.webDomains }, workerId }),
@@ -344,17 +347,39 @@ export function createWorkers(deps: Deps): Workers {
     }
     if (!d.deploymentId) {
       if (w.state !== "ready" || d.desired !== "active" || !w.agentId || !w.environmentId) return;
-      const created = await api.createDeployment({
-        name: `offload-${w.id}`,
-        agent: { type: "agent", id: w.agentId, version: w.agentVersion ?? 1 },
-        environment_id: w.environmentId,
-        vault_ids: w.vaultId ? [w.vaultId] : [],
-        budget: budgetOf(w.sessionBudgetCents),
-        schedule: { type: "cron", expression: d.cron, timezone: d.timezone },
-        initial_events: [runMessage({ runId: "", workflow: w.workflowId, inputs: null, scheduled: true })],
-        metadata: { offload_worker_id: w.id },
-      });
-      await set({ deploymentId: created.id, remote: "active" });
+      // A create started earlier never got its answer recorded: the platform may run a deployment Offload does not
+      // know. Never create a second one; a person resolves it (ADR 0112 §13).
+      if (d.createKey !== null) return unconfirmedDeployment(tenantId, w.id, d);
+      // The marker (and its key, sent as metadata) is committed before the remote call.
+      const key = crypto.randomUUID();
+      const [claimed] = await service(tenantId, (tx) => tx`update deployments set create_key = ${key}, create_started_at = ${new Date(now())}
+        where worker_id = ${workerId} and deployment_id is null and create_key is null returning worker_id`);
+      if (!claimed) return;
+      let created: { id: string };
+      try {
+        created = await api.createDeployment({
+          name: `offload-${w.id}`,
+          agent: { type: "agent", id: w.agentId, version: w.agentVersion ?? 1 },
+          environment_id: w.environmentId,
+          vault_ids: w.vaultId ? [w.vaultId] : [],
+          budget: budgetOf(w.sessionBudgetCents),
+          schedule: { type: "cron", expression: d.cron, timezone: d.timezone },
+          initial_events: [runMessage({ runId: "", workflow: w.workflowId, inputs: null, scheduled: true })],
+          metadata: { offload_worker_id: w.id, offload_create_key: key },
+        });
+      } catch (e) {
+        const status = (e as { status?: unknown }).status;
+        if (typeof status === "number" && status >= 400 && status < 500) {
+          // Refused: nothing was made. The next reconcile tries again.
+          await service(tenantId, (tx) => tx`update deployments set create_key = null, create_started_at = null where worker_id = ${workerId} and create_key = ${key}`);
+          console.error(`workers: deployment of worker ${w.id} refused: ${(e as Error).message}`);
+          return;
+        }
+        // No answer (5xx, timeout, network): it may exist. The key stays.
+        return unconfirmedDeployment(tenantId, w.id, { ...d, createKey: key });
+      }
+      await service(tenantId, (tx) => tx`update deployments set deployment_id = ${created.id}, remote_status = 'active', create_key = null,
+          create_started_at = null, updated_at = ${new Date(now())} where worker_id = ${workerId} and create_key = ${key}`);
       await service(tenantId, (tx) => audit(tx, { actor: SERVICE, action: "worker.deployment", resource: { type: "worker", id: w.id }, detail: { deploymentId: created.id, cron: d.cron, timezone: d.timezone } }));
       return;
     }
@@ -368,14 +393,58 @@ export function createWorkers(deps: Deps): Workers {
     }
   }
 
+  /** Flags an unconfirmed remote create once: an audit event and a log line for a person to resolve. */
+  async function unconfirmedDeployment(tenantId: string, workerId: string, d: { createKey: string | null; createAlertedAt: number | null }): Promise<void> {
+    if (d.createAlertedAt !== null) return;
+    const flagged = await service(tenantId, async (tx) => {
+      const [u] = await tx`update deployments set create_alerted_at = ${new Date(now())} where worker_id = ${workerId} and create_alerted_at is null
+        returning create_key, create_started_at`;
+      if (!u) return false;
+      await audit(tx, {
+        actor: SERVICE,
+        action: "worker.deployment_unconfirmed",
+        resource: { type: "worker", id: workerId },
+        detail: { createKey: u.create_key as string, startedAt: ms(u.create_started_at as Date) },
+      });
+      return true;
+    });
+    if (flagged) console.error(`workers: worker ${workerId}: a deployment create (key ${d.createKey}) got no answer; it may exist on Managed Agents (metadata offload_create_key). No second create until a person resolves it.`);
+  }
+
+  /**
+   * One worker's remote state, serialized: in this process per tenant (one pool connection waits at a time), across
+   * processes by the advisory lock `offload_worker_sync:<worker>` (lock order step 9, right after the budget lock),
+   * held over the remote calls; provisioning also takes `offload_worker_provision:<tenant>` (the tenant's one
+   * environment). Every path that syncs a deployment comes through here.
+   */
+  function syncWorker(tenantId: string, workerId: string, provision: boolean): Promise<void> {
+    return locked(tenantId, () =>
+      service(tenantId, async (tx) => {
+        await tx`select pg_advisory_xact_lock(hashtext(${"offload_worker_sync:" + workerId}))`;
+        if (provision) {
+          const [x] = await tx`select state from workers where id = ${workerId}`;
+          if (x?.state === "provisioning") {
+            await tx`select pg_advisory_xact_lock(hashtext(${"offload_worker_provision:" + tenantId}))`;
+            await provisionOne(tenantId, workerId);
+          }
+        }
+        await syncDeployment(tenantId, workerId);
+      }),
+    );
+  }
+
   async function reconcile(tenantId: string, workerId?: string): Promise<void> {
     if (!workerId) await recover(tenantId);
     const ids = workerId
       ? [workerId]
       : await service(tenantId, async (tx) => (await tx`select id from workers where state <> 'retired' or id in (select worker_id from deployments where remote_status <> desired_status) order by created_at`).map((r: { id: string }) => r.id));
     for (const id of ids) {
-      await locked(tenantId, () => provisionOne(tenantId, id));
-      await syncDeployment(tenantId, id);
+      // One worker's failure does not stop the others.
+      try {
+        await syncWorker(tenantId, id, true);
+      } catch (e) {
+        console.error(`workers: reconcile of worker ${id}: ${(e as Error).message}`);
+      }
     }
   }
 
@@ -486,7 +555,8 @@ export function createWorkers(deps: Deps): Workers {
     // A session nobody sends a first message to stays idle: if the run ended meanwhile (recovery timed it out), the
     // session is left unrecorded and inert.
     const rec = await service(tenantId, async (tx) => {
-      const [u] = await tx`update worker_runs set session_ref = ${sessionId} where id = ${runId} and ended_at is null
+      // The first message is stored with the session id: a process that stops before sending it leaves it to recovery.
+      const [u] = await tx`update worker_runs set session_ref = ${sessionId}, first_message = ${first}::jsonb where id = ${runId} and ended_at is null
         returning interrupt_sent_at`;
       if (!u) return null;
       await tx`insert into session_cursors (tenant_id, session_id, run_id) values (current_setting('app.tenant_id')::uuid, ${sessionId}, ${runId})
@@ -545,8 +615,14 @@ export function createWorkers(deps: Deps): Workers {
       try {
         // Stream first (ADR 0105 §6): nothing the session does after our first event can be missed.
         stream = await api.streamEvents(sid, ac.signal);
-        if (first) await api.sendEvents(sid, [first]);
-        else if (await catchUp(ctx)) return;
+        // Shut down while the stream was opening: send nothing; recovery sends the stored first message.
+        if (ac.signal.aborted) return;
+        if (first) await sendFirst(ctx, first);
+        else {
+          const pending = await pendingFirst(ctx);
+          if (pending) await sendFirst(ctx, pending);
+          if (await catchUp(ctx)) return;
+        }
       } catch (e) {
         if (ac.signal.aborted) return;
         await finish(tenantId, runId, "failed", "error", "stream_unavailable");
@@ -593,6 +669,26 @@ export function createWorkers(deps: Deps): Workers {
       ac.abort();
       consuming.delete(runId);
     }
+  }
+
+  async function sendFirst(ctx: Ctx, first: ReturnType<typeof runMessage>): Promise<void> {
+    await api.sendEvents(ctx.sessionId, [first]);
+    await service(ctx.tenantId, (tx) => tx`update worker_runs set first_sent_at = coalesce(first_sent_at, ${new Date(now())}) where id = ${ctx.run.id}`);
+  }
+
+  /**
+   * The stored first message if it never reached the session (a process stopped between recording the session and
+   * sending it). The session's own event log decides: a user.message there means it was sent and only the mark was
+   * lost, so it is never sent twice. Nothing for scheduled runs (the platform sends theirs) or stopped runs.
+   */
+  async function pendingFirst(ctx: Ctx): Promise<ReturnType<typeof runMessage> | null> {
+    const [r] = await service(ctx.tenantId, (tx) => tx`select first_message, first_sent_at, interrupt_sent_at from worker_runs where id = ${ctx.run.id}`);
+    if (!r || r.first_message === null || r.first_sent_at !== null || r.interrupt_sent_at !== null) return null;
+    if ((await api.listEvents(ctx.sessionId)).some((e) => e.type === "user.message")) {
+      await service(ctx.tenantId, (tx) => tx`update worker_runs set first_sent_at = coalesce(first_sent_at, ${new Date(now())}) where id = ${ctx.run.id}`);
+      return null;
+    }
+    return r.first_message as ReturnType<typeof runMessage>;
   }
 
   /** Lists the events since the cursor and handles the ones not yet handled. True when the run ended. */
@@ -966,7 +1062,7 @@ export function createWorkers(deps: Deps): Workers {
     if (!after) return true;
     const { ended, w, paused } = after;
     if (ended.overnightPolicyId) await reportPolicy(tenantId, ended.id, ended.overnightPolicyId, ended.state !== "failed", ended.costCents);
-    if (paused) await syncDeployment(tenantId, w.id);
+    if (paused) await syncWorker(tenantId, w.id, false);
     return true;
   }
 
@@ -1045,7 +1141,7 @@ export function createWorkers(deps: Deps): Workers {
           return { run, paused: false, attach: true, overCap, policy: run.overnightPolicyId };
         });
         if (!started) continue;
-        if (started.paused) await syncDeployment(tenantId, d.worker_id);
+        if (started.paused) await syncWorker(tenantId, d.worker_id, false);
         if (!started.attach) {
           if (started.policy) await reportPolicy(tenantId, started.run.id, started.policy, false, 0);
           continue;
@@ -1098,7 +1194,7 @@ export function createWorkers(deps: Deps): Workers {
       for (const id of paused) await audit(tx, { actor: SERVICE, action: "worker.pause", resource: { type: "worker", id }, detail: { reason } });
       return out;
     });
-    for (const id of ids) await syncDeployment(tenantId, id);
+    for (const id of ids) await syncWorker(tenantId, id, false);
   }
 
   async function sweep(tenantId: string): Promise<void> {
@@ -1211,6 +1307,9 @@ export function createWorkers(deps: Deps): Workers {
     retention,
     recover,
     lockBudget,
+    async lockWorkerSync(tx, workerId) {
+      await tx`select pg_advisory_xact_lock(hashtext(${"offload_worker_sync:" + workerId}))`;
+    },
     monthSpent,
     async idle() {
       // Quiescent: nothing scheduled or running, and every consumer is waiting for its next event (a few ticks in a

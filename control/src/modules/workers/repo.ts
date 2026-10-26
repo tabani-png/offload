@@ -42,6 +42,9 @@ export interface DeploymentRow {
   remote: "none" | "active" | "paused" | "archived";
   stale: string[];
   lastRunSeenAt: string | null;
+  /** A remote create was started with this key and its answer not recorded (migration 0902). */
+  createKey: string | null;
+  createAlertedAt: number | null;
 }
 
 export interface RunRow {
@@ -102,6 +105,8 @@ export function deploymentRow(r: Row): DeploymentRow {
     remote: r.remote_status as DeploymentRow["remote"],
     stale: (r.stale_deployment_ids as string[]) ?? [],
     lastRunSeenAt: (r.last_run_seen_at as string | null) ?? null,
+    createKey: (r.create_key as string | null) ?? null,
+    createAlertedAt: r.create_alerted_at ? (r.create_alerted_at as Date).getTime() : null,
   };
 }
 

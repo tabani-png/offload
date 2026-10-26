@@ -174,7 +174,16 @@ export class FakeManagedAgents {
       return Response.json({ type: "error", error: { type: "api_error", message: "fake outage" } }, { status: 500 });
     }
     const delay = this.delayMs.get(ep.op) ?? 0;
-    if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+    if (delay > 0) {
+      await new Promise<void>((r) => {
+        const t = setTimeout(r, delay);
+        req.signal.addEventListener("abort", () => {
+          clearTimeout(t);
+          r();
+        });
+      });
+      if (req.signal.aborted) return Response.json({ type: "error", error: { type: "api_error", message: "aborted" } }, { status: 499 });
+    }
     const res = this.handle(ep.op, id, body ?? {}, query, req.signal);
     const lose = this.loseResponseNext.get(ep.op) ?? 0;
     if (lose > 0) {

@@ -65,7 +65,7 @@ describe("SESSION", () => {
   test("SESSION: a session recorded before its first message was sent (process exit) gets that message from recovery, once", async () => {
     const x = await createWorker(w);
     // The process stops while the stream is opening: the session id is recorded, the first message is not sent.
-    w.fake.delayMs.set("sessions.events.stream", 400);
+    w.fake.delayMs.set("sessions.events.stream", 5000); // aborted by the shutdown
     const r = await (await w.as("member")).post(`/v1/workers/${x.id}/runs`, {});
     expect(r.status).toBe(201);
     const runId = r.json.id as string;

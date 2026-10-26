@@ -173,13 +173,16 @@ async function all<T>(page: AsyncIterable<T>): Promise<T[]> {
 export function sdkManagedAgents(opts: ClientOpts): ManagedAgentsApi {
   const client = new Anthropic({ apiKey: opts.apiKey, maxRetries: 2, ...(opts.baseURL ? { baseURL: opts.baseURL } : {}), ...(opts.fetch ? { fetch: opts.fetch } : {}) });
   const b = client.beta;
+  // A create is never retried by the SDK: a 5xx or a timeout after the platform made the resource would make a
+  // second one (the contract has no idempotency key). The orchestrator decides what an unanswered create means.
+  const once = { maxRetries: 0 };
   return {
-    createEnvironment: (p) => b.environments.create(p),
+    createEnvironment: (p) => b.environments.create(p, once),
     updateEnvironment: (id, p) => b.environments.update(id, p),
-    createVault: (p) => b.vaults.create(p),
-    createCredential: (vaultId, p) => b.vaults.credentials.create(vaultId, p),
-    createAgent: (p) => b.agents.create(p),
-    createSession: (p) => b.sessions.create(p),
+    createVault: (p) => b.vaults.create(p, once),
+    createCredential: (vaultId, p) => b.vaults.credentials.create(vaultId, p, once),
+    createAgent: (p) => b.agents.create(p, once),
+    createSession: (p) => b.sessions.create(p, once),
     retrieveSession: async (id) => (await b.sessions.retrieve(id)) as unknown as SessionInfo,
     async deleteSession(id) {
       await b.sessions.delete(id);
@@ -192,7 +195,7 @@ export function sdkManagedAgents(opts: ClientOpts): ManagedAgentsApi {
     },
     listEvents: async (sessionId, createdGte) =>
       (await all(b.sessions.events.list(sessionId, { order: "asc", ...(createdGte ? { "created_at[gte]": createdGte } : {}) }))) as unknown as SessionEvent[],
-    createDeployment: (p) => b.deployments.create(p),
+    createDeployment: (p) => b.deployments.create(p, once),
     async pauseDeployment(id) {
       await b.deployments.pause(id);
     },
