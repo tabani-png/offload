@@ -467,8 +467,9 @@ export function createWorkers(deps: Deps): Workers {
   async function monthSpent(tx: Tx, excludeRunId?: string): Promise<{ spent: number; cap: number }> {
     const [t] = await tx`select monthly_worker_budget_cents, reporting_timezone from tenants where id = current_setting('app.tenant_id')::uuid`;
     const tz = (t?.reporting_timezone as string | undefined) ?? "UTC";
-    // This month in the tenant's reporting timezone; a running session counts at its whole budget.
-    const [s] = await tx`select coalesce(sum(case when ended_at is null then greatest(cost_cents, budget_cents) else cost_cents end), 0)::bigint as spent
+    // This month in the tenant's reporting timezone; a running session counts at its whole budget, and so does the
+    // session of a run that ended because we lost it, until it is confirmed stopped (settleLost).
+    const [s] = await tx`select coalesce(sum(case when ended_at is null or session_unsettled then greatest(cost_cents, budget_cents) else cost_cents end), 0)::bigint as spent
       from worker_runs where date_trunc('month', started_at at time zone ${tz}) = date_trunc('month', ${new Date(now())}::timestamptz at time zone ${tz})
         and id <> ${excludeRunId ?? ""}`;
     return { spent: Number(s!.spent), cap: Number(t?.monthly_worker_budget_cents ?? 0) };
@@ -678,8 +679,10 @@ export function createWorkers(deps: Deps): Workers {
         stream = await api.streamEvents(sid, ac.signal);
         // Shut down while the stream was opening: send nothing; recovery sends the stored first message.
         if (ac.signal.aborted) return;
-        if (first) await sendFirst(ctx, first);
-        else {
+        if (first) {
+          // Stopped while the stream opened: the first message is never sent; the log shows how the session idled.
+          if (!(await sendFirst(ctx, first)) && (await catchUp(ctx))) return;
+        } else {
           const pending = await pendingFirst(ctx);
           if (pending) await sendFirst(ctx, pending);
           if (await catchUp(ctx)) return;
@@ -732,9 +735,24 @@ export function createWorkers(deps: Deps): Workers {
     }
   }
 
-  async function sendFirst(ctx: Ctx, first: ReturnType<typeof runMessage>): Promise<void> {
-    await api.sendEvents(ctx.sessionId, [first]);
-    await service(ctx.tenantId, (tx) => tx`update worker_runs set first_sent_at = coalesce(first_sent_at, ${new Date(now())}) where id = ${ctx.run.id}`);
+  /**
+   * Sends work to a run's session unless the run has ended or its interrupt is requested. The run's row lock is held
+   * across the send, and every interrupt request updates that row: a request made first is seen here, one made during
+   * the send waits for it and is delivered after it. So no work ever reaches a session after its interrupt.
+   */
+  async function sendUnlessStopped(ctx: Ctx, events: UserEvent[] | [ReturnType<typeof runMessage>], after?: (tx: Tx) => Promise<unknown>): Promise<boolean> {
+    return service(ctx.tenantId, async (tx) => {
+      const [r] = await tx`select interrupt_sent_at, ended_at from worker_runs where id = ${ctx.run.id} for update`;
+      if (!r || r.interrupt_sent_at !== null || r.ended_at !== null) return false;
+      await api.sendEvents(ctx.sessionId, events as UserEvent[]);
+      if (after) await after(tx);
+      return true;
+    });
+  }
+
+  /** The run's first message, unless the run was stopped first. False when it was not sent. */
+  async function sendFirst(ctx: Ctx, first: ReturnType<typeof runMessage>): Promise<boolean> {
+    return sendUnlessStopped(ctx, [first], (tx) => tx`update worker_runs set first_sent_at = coalesce(first_sent_at, ${new Date(now())}) where id = ${ctx.run.id}`);
   }
 
   /**
@@ -752,10 +770,17 @@ export function createWorkers(deps: Deps): Workers {
     return r.first_message as ReturnType<typeof runMessage>;
   }
 
-  /** Lists the events since the cursor and handles the ones not yet handled. True when the run ended. */
+  /**
+   * Lists the session's whole event log and handles the events not yet handled (by event id). No time cursor: the
+   * list filter compares processed_at, and an event processed late can sort before one already handled, so any
+   * cursor could skip it. True when the run ended.
+   */
   async function catchUp(ctx: Ctx): Promise<boolean> {
-    const [c] = await service(ctx.tenantId, (tx) => tx`select last_processed_at from session_cursors where session_id = ${ctx.sessionId}`);
-    for (const ev of await api.listEvents(ctx.sessionId, (c?.last_processed_at as string | null) ?? undefined)) {
+    const done = new Set(
+      ((await service(ctx.tenantId, (tx) => tx`select event_id from session_events where session_id = ${ctx.sessionId}`)) as Array<{ event_id: string }>).map((r) => r.event_id),
+    );
+    for (const ev of await api.listEvents(ctx.sessionId)) {
+      if (typeof ev?.id === "string" && done.has(ev.id)) continue;
       if (await handle(ctx, ev)) return true;
     }
     return false;
@@ -770,14 +795,16 @@ export function createWorkers(deps: Deps): Workers {
     await service(ctx.tenantId, async (tx) => {
       await tx`insert into session_events (tenant_id, session_id, event_id, type, handled_at)
         values (current_setting('app.tenant_id')::uuid, ${ctx.sessionId}, ${ev.id}, ${ev.type.slice(0, 64)}, ${new Date(now())}) on conflict do nothing`;
+      // last_processed_at is informational only: catch-up never filters by it (see catchUp).
       await tx`update session_cursors set last_event_id = ${ev.id},
           last_processed_at = greatest(coalesce(last_processed_at, ''), ${ev.processed_at ?? ""})
         where session_id = ${ctx.sessionId}`;
     });
   }
 
+  /** A reply to the session (tool confirmation or result): never after the run's interrupt (sendUnlessStopped). */
   async function send(ctx: Ctx, e: UserEvent): Promise<void> {
-    await api.sendEvents(ctx.sessionId, [e]);
+    await sendUnlessStopped(ctx, [e]);
   }
 
   const ACTIONABLE = new Set(["agent.mcp_tool_use", "agent.tool_use", "agent.custom_tool_use"]);
@@ -1103,10 +1130,11 @@ export function createWorkers(deps: Deps): Workers {
       }
       if (final === "failed" && r.interruptSentAt !== null) final = "interrupted";
       // Ended here because we lost the session, not because it stopped: it may still be running, so its interrupt is
-      // requested with the end and delivered (and retried) by the sweep.
+      // requested with the end and delivered (and retried) by the sweep, and its budget stays reserved until the
+      // session is confirmed stopped and its final cost read (settleLost).
       const stopIt = r.sessionRef !== "" && errorCode !== null && ERRORS_SESSION_MAY_RUN.has(errorCode);
       const [u] = await tx`update worker_runs set state = ${final}, stop_reason = ${stopReason}, ended_at = ${new Date(now())},
-          error_code = coalesce(${errorCode}, error_code), cost_cents = greatest(cost_cents, ${cost ?? 0}),
+          error_code = coalesce(${errorCode}, error_code), cost_cents = greatest(cost_cents, ${cost ?? 0}), session_unsettled = ${stopIt},
           interrupt_sent_at = case when ${stopIt} then coalesce(interrupt_sent_at, ${new Date(now())}) else interrupt_sent_at end
         where id = ${runId} returning *`;
       const ended = runRow(u!);
@@ -1174,6 +1202,8 @@ export function createWorkers(deps: Deps): Workers {
     );
     for (const d of deps0) {
       const listedAt = now();
+      // created_at[gte] the newest created_at seen (the field the filter compares): a run created in that same instant
+      // but listed later is not skipped; one already imported is skipped by its deployment_run_ref below.
       const runs = (await api.listDeploymentRuns(d.deployment_id, d.last_run_seen_at ?? undefined)).sort((a, b) => a.created_at.localeCompare(b.created_at));
       for (const dr of runs) {
         const started = await service(tenantId, async (tx) => {
@@ -1285,8 +1315,38 @@ export function createWorkers(deps: Deps): Workers {
     // interruptRuns requests the new ones and delivers every due request (kill switch, person stopped, budget, lost).
     // A running session also stops when its worker is no longer eligible (the registry gate of startRun).
     await interruptRuns(tenantId, async (tx, r, w) => (await killedFor(tx, w, r.runnerPersonId)) || !(await eligible(tx, w)));
+    await settleLost(tenantId);
     await pauseDeploymentsWhere(tenantId, (tx, w) => killedFor(tx, w, w.identityType === "person" ? w.identityId : w.ownerPersonId), "kill_switch");
     await refreshHolds(tenantId);
+  }
+
+  /**
+   * Runs that ended because we lost their session keep their whole budget reserved (monthSpent) until the session is
+   * confirmed stopped: terminated, gone, or idle after its interrupt was delivered. Then its final cost replaces the
+   * reservation. Until then every sweep and recovery checks again.
+   */
+  async function settleLost(tenantId: string): Promise<void> {
+    const due = (await service(tenantId, (tx) => tx`select id, session_ref, interrupt_delivered_at from worker_runs
+      where session_unsettled and ended_at is not null order by id limit 200`)) as Array<{ id: string; session_ref: string; interrupt_delivered_at: Date | null }>;
+    for (const r of due) {
+      let cost: number | null = null;
+      try {
+        const s = await api.retrieveSession(r.session_ref);
+        const stopped = s.status === "terminated" || (s.status === "idle" && r.interrupt_delivered_at !== null);
+        if (!stopped) continue;
+        const amount = Number(s.usage?.list_cost?.amount ?? NaN);
+        if (Number.isInteger(amount) && amount >= 0) cost = amount;
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (!/404|not[ _]found/i.test(msg)) {
+          console.error(`workers: settling run ${r.id}: ${msg}`);
+          continue;
+        }
+        // The session no longer exists: it is stopped; the cost stays the last one observed.
+      }
+      await service(tenantId, (tx) => tx`update worker_runs set session_unsettled = false, cost_cents = greatest(cost_cents, ${cost ?? 0})
+        where id = ${r.id} and session_unsettled`);
+    }
   }
 
   async function interruptAll(tenantId: string, scope: { tenant: true } | { personId: string } | { workflowId: string }): Promise<number> {
@@ -1311,7 +1371,8 @@ export function createWorkers(deps: Deps): Workers {
       if (!consuming.has(r.id) && !opening.has(r.id)) void consume(tenantId, r.id);
     }
     await deliverPending(tenantId);
-    const unreported = (await service(tenantId, (tx) => tx`select id, overnight_policy_id, state, cost_cents from worker_runs
+    await settleLost(tenantId);
+    const unreported =(await service(tenantId, (tx) => tx`select id, overnight_policy_id, state, cost_cents from worker_runs
       where ended_at is not null and overnight_policy_id is not null and policy_reported_at is null order by id limit 200`)) as Array<{ id: string; overnight_policy_id: string; state: string; cost_cents: string | number }>;
     for (const r of unreported) await reportPolicy(tenantId, r.id, r.overnight_policy_id, r.state !== "failed", Number(r.cost_cents));
   }
@@ -1333,7 +1394,8 @@ export function createWorkers(deps: Deps): Workers {
         }
       }
       await service(tenantId, async (tx) => {
-        await tx`update worker_runs set session_deleted_at = ${new Date(now())} where id = ${r.id}`;
+        // A deleted session is stopped: nothing is left to settle.
+        await tx`update worker_runs set session_deleted_at = ${new Date(now())}, session_unsettled = false where id = ${r.id}`;
         await tx`delete from session_cursors where session_id = ${r.session_ref}`;
       });
       n += 1;

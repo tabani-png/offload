@@ -66,6 +66,8 @@ describe("BUDGET", () => {
     // The session kept spending meanwhile.
     s.costCents = 120;
     w.fake.failNext.set("sessions.events.send", 0);
+    // Past the interrupt's retry backoff.
+    w.h.clock.advance(16 * 60_000);
     await w.workers.sweep(w.t.id);
     await w.workers.recover(w.t.id);
     await w.workers.idle();
@@ -106,6 +108,24 @@ describe("KILL", () => {
     const r = await runRow(id);
     expect(r.ended_at).not.toBeNull();
     expect(r.state).toBe("interrupted");
+  }, 60_000);
+});
+
+describe("SCHEDULE", () => {
+  test("SCHEDULE: a deployment run listed after the poll cursor but created in the same instant is still imported", async () => {
+    const x = await createWorker(w, { schedule: { cron: "0 21 * * *", timezone: "UTC" } });
+    const dep = x.externalRefs.deploymentId as string;
+    w.fake.fire(dep);
+    await w.workers.pollDeployments(w.t.id);
+    await w.workers.idle();
+    // The platform lists a second run created at the same instant only after that poll.
+    const sid = w.fake.fire(dep)!;
+    const runs = w.fake.deploymentRuns.filter((r) => r.deployment_id === dep);
+    runs.at(-1)!.created_at = runs.at(-2)!.created_at;
+    await w.workers.pollDeployments(w.t.id);
+    await w.workers.idle();
+    const [r] = await w.h.db.migrator`select id from worker_runs where session_ref = ${sid}`;
+    expect(r).toBeDefined();
   }, 60_000);
 });
 

@@ -154,7 +154,7 @@ export interface ManagedAgentsApi {
   pauseDeployment(id: string): Promise<void>;
   unpauseDeployment(id: string): Promise<void>;
   archiveDeployment(id: string): Promise<void>;
-  listDeploymentRuns(deploymentId: string, createdGt?: string): Promise<DeploymentRunInfo[]>;
+  listDeploymentRuns(deploymentId: string, createdGte?: string): Promise<DeploymentRunInfo[]>;
 }
 
 export interface ClientOpts {
@@ -205,8 +205,8 @@ export function sdkManagedAgents(opts: ClientOpts): ManagedAgentsApi {
     async archiveDeployment(id) {
       await b.deployments.archive(id);
     },
-    listDeploymentRuns: async (deploymentId, createdGt) =>
-      (await all(b.deploymentRuns.list({ deployment_id: deploymentId, ...(createdGt ? { "created_at[gt]": createdGt } : {}) }))) as unknown as DeploymentRunInfo[],
+    listDeploymentRuns: async (deploymentId, createdGte) =>
+      (await all(b.deploymentRuns.list({ deployment_id: deploymentId, ...(createdGte ? { "created_at[gte]": createdGte } : {}) }))) as unknown as DeploymentRunInfo[],
   };
 }
 

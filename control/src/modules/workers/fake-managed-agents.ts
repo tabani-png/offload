@@ -273,8 +273,8 @@ export class FakeManagedAgents {
         return Response.json({ id: d.id, type: "deployment", status: d.status });
       }
       case "deploymentRuns.list": {
-        const gt = query["created_at[gt]"];
-        const data = this.deploymentRuns.filter((r) => r.deployment_id === query.deployment_id && (gt === undefined || r.created_at > gt));
+        const gte = query["created_at[gte]"];
+        const data = this.deploymentRuns.filter((r) => r.deployment_id === query.deployment_id && (gte === undefined || r.created_at >= gte));
         return Response.json({ data, next_page: null });
       }
       default:

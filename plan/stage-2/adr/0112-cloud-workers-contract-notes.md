@@ -140,3 +140,17 @@ runs. Sessions are tracked as runs until retention deletes them; environments, v
 their own (§13).
 The default digest day is `digestDayOf`: the local calendar day, or the next one from local noon on, the same rule as
 `windowOf` (DST-safe, including changes at midnight).
+
+## 16. A stopped run sends nothing; a lost session stays reserved; catch-up uses no time cursor
+- Every user event Offload sends to a session (first message, tool confirmation, custom tool result) goes through
+  `sendUnlessStopped`: the run's row lock is held across the send, and the send is skipped when the run has ended or
+  its interrupt is requested. Every interrupt request updates that row, so a request is either seen before the send or
+  waits for it and is delivered after it. `user.interrupt` itself is the only event sent without the check.
+- A run ended because Offload lost its session (`stream_lost`, `stream_unavailable`, `orchestrator_error`) is
+  `session_unsettled` (migration 0905): `monthSpent` keeps its whole budget reserved until `settleLost` (each sweep
+  and recovery) confirms the session stopped (terminated, deleted, or idle after the interrupt was delivered) and
+  records its final cost.
+- Session catch-up lists the whole event log and skips handled event ids. The list filter `created_at[gte]` compares
+  `processed_at` (SDK 1.3.0 docs), and an event processed late can sort before one already handled, so no time cursor
+  is safe. Deployment runs are polled `created_at[gte]` the newest `created_at` seen (the field that filter compares)
+  and deduplicated by `deployment_run_ref`.

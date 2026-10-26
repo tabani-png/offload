@@ -18,7 +18,7 @@
     { "op": "deployments.pause", "method": "POST", "path": "/v1/deployments/{id}/pause", "js": "resources/beta/deployments.js", "dts": "resources/beta/deployments.d.ts", "params": "DeploymentPauseParams", "required": [], "fields": [] },
     { "op": "deployments.unpause", "method": "POST", "path": "/v1/deployments/{id}/unpause", "js": "resources/beta/deployments.js", "dts": "resources/beta/deployments.d.ts", "params": "DeploymentUnpauseParams", "required": [], "fields": [] },
     { "op": "deployments.archive", "method": "POST", "path": "/v1/deployments/{id}/archive", "js": "resources/beta/deployments.js", "dts": "resources/beta/deployments.d.ts", "params": "DeploymentArchiveParams", "required": [], "fields": [] },
-    { "op": "deploymentRuns.list", "method": "GET", "path": "/v1/deployment_runs", "js": "resources/beta/deployment-runs.js", "dts": "resources/beta/deployment-runs.d.ts", "params": "DeploymentRunListParams", "required": [], "fields": [], "query": ["deployment_id", "created_at[gt]", "page", "limit"] }
+    { "op": "deploymentRuns.list", "method": "GET", "path": "/v1/deployment_runs", "js": "resources/beta/deployment-runs.js", "dts": "resources/beta/deployment-runs.d.ts", "params": "DeploymentRunListParams", "required": [], "fields": [], "query": ["deployment_id", "created_at[gte]", "page", "limit"] }
   ],
   "userEvents": {
     "dts": "resources/beta/sessions/events.d.ts",
