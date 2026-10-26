@@ -85,6 +85,18 @@ describe("FREEZE", () => {
     expect(ev!.detail.tokens).toBeGreaterThanOrEqual(1);
   });
 
+  test("FREEZE: lock order: the broker's token.revoke (audit lock, step 10) comes after S2-10's row changes, then S2-10's queued events", async () => {
+    const rows = (await w.h.db.migrator`select seq, action from audit_events where tenant_id = ${w.t.id} and subject_person_id = ${member}
+      and action in ('token.revoke', 'connection.removed', 'handover.opened', 'person.freeze') order by seq`) as Array<{ action: string }>;
+    const actions = rows.map((r) => r.action);
+    const revoke = actions.indexOf("token.revoke");
+    expect(revoke).toBeGreaterThanOrEqual(0);
+    expect(actions.slice(revoke + 1).filter((a) => a === "connection.removed").length).toBe(3);
+    expect(actions.slice(revoke + 1).filter((a) => a === "handover.opened").length).toBe(2);
+    expect(actions[actions.length - 1]).toBe("person.freeze");
+    expect(w.broker.lockRetries).toBe(0);
+  });
+
   test("FREEZE: rep2's personal connection and the company connections are untouched", async () => {
     const rows = await w.h.db.migrator`select id, external_ref from connections where id in (${w.rep2Gmail}, ${w.t.connections.company})`;
     expect(rows.length).toBe(2);

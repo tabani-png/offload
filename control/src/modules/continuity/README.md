@@ -18,9 +18,11 @@ Offboarding (ADR 0107, amendments ADR 0113). Tables: `migrations/1000_continuity
 | `idle()` | tests, shutdown | waits for after-commit follow-ups |
 
 ## Freeze (one transaction)
-Lock the person, mark `frozen`, revoke sessions and devices (`revokeAccess`), `broker.revokeTokensFor` +
-`broker.stopRunsFor`, delete (or erase, ADR 0113 §2) personal connections, record the offboarding, open one hand-over per
-role workflow (registry `workflowsOf` + `getVersion`), audit. After commit: `WorkersPort.pauseFor` (advisory lock +
+Lock the person (row + `continuity:<id>` advisory lock), lock the person's active overnight policies (broker lock order
+step 2), mark `frozen`, revoke sessions and devices (`revokeAccess`), delete (or erase, ADR 0113 §2) personal
+connections, record the offboarding, open one hand-over per role workflow (registry `workflowsOf` + `getVersion`), then
+`broker.stopRunsFor` (revokes tokens, pauses policies and workers, and flushes its audit events, taking the audit-chain
+lock) LAST, then S2-10's own audit events, which were queued until then. Lock order: control/src/modules/broker/broker.ts. After commit: `WorkersPort.pauseFor` (advisory lock +
 `pause_pending`, retried by the sweep).
 
 ## Gate

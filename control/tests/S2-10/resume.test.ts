@@ -15,7 +15,7 @@ beforeAll(async () => {
 });
 afterAll(() => w.close());
 
-const asMember = () => run(w, w.wf.sdr1, { type: "person", id: member }, member, w.t.connections.company);
+const asMember = () => run(w, w.wf.sdr1, { type: "person", id: member }, member, w.personal.gmail);
 
 describe("RESUME", () => {
   test("RESUME: while a hand-over is open, a run of the workflow is refused (forbidden) and audited", async () => {

@@ -53,16 +53,18 @@ function gateBroker(deps: Deps, c: Continuity): void {
   const b = deps.ports.broker as Partial<Broker>;
   if (b.isFullBroker !== true || typeof b.proposeBatch !== "function") return;
   const full = b as Broker;
-  const gated: Broker = {
-    ...full,
-    async proposeBatch(tenantId, run, items): Promise<ProposeResult> {
-      if (checkable(run)) {
-        const refusal = await withTenant(deps.db, { tenantId, accessRole: "system" }, (tx) => c.checkRun(tx, run));
-        if (refusal) return { ok: false, code: refusal.code, message: refusal.message, tripped: null };
-      }
-      return full.proposeBatch(tenantId, run, items);
-    },
+  const proposeBatch: Broker["proposeBatch"] = async (tenantId, run, items): Promise<ProposeResult> => {
+    if (checkable(run)) {
+      const refusal = await withTenant(deps.db, { tenantId, accessRole: "system" }, (tx) => c.checkRun(tx, run));
+      if (refusal) return { ok: false, code: refusal.code, message: refusal.message, tripped: null };
+    }
+    return full.proposeBatch(tenantId, run, items);
   };
+  // Copies property descriptors, not values, so the broker's getters (`lockRetries`) stay live.
+  const gated = Object.create(Object.getPrototypeOf(full), {
+    ...Object.getOwnPropertyDescriptors(full),
+    proposeBatch: { value: proposeBatch, enumerable: true, writable: true, configurable: true },
+  }) as Broker;
   deps.ports.broker = gated;
 }
 

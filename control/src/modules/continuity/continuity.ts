@@ -172,7 +172,21 @@ const lockKey = (personId: string) => `continuity:${personId}`;
 export function createContinuity(deps: Deps): Continuity {
   const now = () => deps.clock.now();
   const inflight = new Set<Promise<void>>();
-  const audit = (tx: Tx, e: AuditInput) => deps.ports.audit.write(tx, e);
+  /**
+   * Audit events a freeze queues until its last row lock: writing one takes the tenant's audit-chain lock, which the
+   * broker's lock order (broker.ts, step 10) keeps last. `flushQueued` writes them in order.
+   */
+  const queued = new WeakMap<Tx, AuditInput[]>();
+  const audit = async (tx: Tx, e: AuditInput): Promise<void> => {
+    const q = queued.get(tx);
+    if (q) q.push(e);
+    else await deps.ports.audit.write(tx, e);
+  };
+  async function flushQueued(tx: Tx): Promise<void> {
+    const q = queued.get(tx);
+    queued.delete(tx);
+    for (const e of q ?? []) await deps.ports.audit.write(tx, e);
+  }
 
   async function event(tx: Tx, handoverId: string, kind: string, actor: Actor, detail: Record<string, unknown> = {}) {
     await tx`insert into handover_events (tenant_id, handover_id, kind, actor_type, actor_id, detail, at)
@@ -187,15 +201,26 @@ export function createContinuity(deps: Deps): Continuity {
     return (p?.state as PersonState | undefined) ?? null;
   }
 
-  /** Revokes approvals and stops runs through the S2-07 broker (its full API when loaded, else the frozen port). */
+  /**
+   * Revokes approvals, pauses policies and workers through the S2-07 broker (its full API when loaded, else the frozen
+   * port). `stopRunsFor` revokes the person's tokens itself, then writes its audit events and so takes the audit-chain
+   * lock before it returns: it is called after every row lock the freeze takes (ADR 0113 §4, broker.ts lock order).
+   */
   async function stopRuns(tx: Tx, personId: string): Promise<{ tokens: number; policies: number }> {
     const b = deps.ports.broker as Partial<Broker>;
-    if (b.isFullBroker === true && b.revokeTokensFor && b.stopRunsFor) {
-      const tokens = await b.revokeTokensFor(tx, personId);
+    if (b.isFullBroker === true && b.stopRunsFor) {
       const s = await b.stopRunsFor(tx, personId);
-      return { tokens: tokens + s.tokens, policies: s.policies };
+      return { tokens: s.tokens, policies: s.policies };
     }
     return { tokens: await deps.ports.broker.revokeTokensOf(tx, personId), policies: 0 };
+  }
+
+  /** Lock order step 2 up front: the person's active policies (by id), before the connection deletes below take a KEY
+   * SHARE on batches that reference them (step 3). `stopRunsFor` re-takes the same locks. */
+  async function lockPolicies(tx: Tx, personId: string): Promise<void> {
+    const b = deps.ports.broker as Partial<Broker>;
+    if (b.isFullBroker !== true) return;
+    await tx`select id from overnight_policies where owner_person_id = ${personId} and state = 'active' order by id for no key update`;
   }
 
   /**
@@ -354,27 +379,40 @@ export function createContinuity(deps: Deps): Continuity {
     const [t] = await tx`select current_setting('app.tenant_id') as tenant`;
     await tx`select pg_advisory_xact_lock(hashtext(${lockKey(personId)}))`;
     const at = now();
-    await tx`update people set state = 'frozen', pending_freeze_at = ${new Date(at)} where id = ${personId}`;
-    const access = await revokeAccess(tx, personId, at);
-    const runs = await stopRuns(tx, personId);
-    const removed = await removePersonalConnections(tx, personId, req.actor);
-    await tx`insert into offboardings (tenant_id, person_id, state, reason, effective_on, note, requested_by, created_at,
-        frozen_at, pause_pending)
-      values (current_setting('app.tenant_id')::uuid, ${personId}, 'frozen', ${req.reason}, ${req.effectiveOn ?? null}::date,
-        ${req.note ?? ""}, ${req.requestedBy}, ${new Date(at)}, ${new Date(at)}, true)
-      on conflict (tenant_id, person_id) do update set state = 'frozen', reason = excluded.reason,
-        effective_on = coalesce(excluded.effective_on, offboardings.effective_on),
-        note = case when excluded.note <> '' then excluded.note else offboardings.note end,
-        requested_by = coalesce(excluded.requested_by, offboardings.requested_by),
-        frozen_at = excluded.frozen_at, pause_pending = true`;
-    const opened = await openHandovers(tx, personId, removed, req.actor);
-    await tx`update handovers set removed_connections = ${removed}::jsonb where person_id = ${personId} and state <> 'closed'`;
-    // Hand-overs that were settled while the person was leaving resume now, under the successor.
-    for (const h of (await tx.unsafe(
-      `select ${HANDOVER_COLUMNS} from handovers h where person_id = $1 and state <> 'closed' and ${READY} order by id`,
-      [personId],
-    )) as HandoverRow[]) {
-      await resumed(tx, h, req.actor);
+    // Lock order: person and its advisory lock (S2-10's own, before step 1), the person's policies (2), then S2-10's
+    // rows; the broker's stopRunsFor (2-9, then the audit lock, 10) and the queued audit events come last.
+    await lockPolicies(tx, personId);
+    queued.set(tx, []);
+    let runs: { tokens: number; policies: number };
+    let access: { sessions: number; devices: number };
+    let removed: string[];
+    let opened: number;
+    try {
+      await tx`update people set state = 'frozen', pending_freeze_at = ${new Date(at)} where id = ${personId}`;
+      access = await revokeAccess(tx, personId, at);
+      removed = await removePersonalConnections(tx, personId, req.actor);
+      await tx`insert into offboardings (tenant_id, person_id, state, reason, effective_on, note, requested_by, created_at,
+          frozen_at, pause_pending)
+        values (current_setting('app.tenant_id')::uuid, ${personId}, 'frozen', ${req.reason}, ${req.effectiveOn ?? null}::date,
+          ${req.note ?? ""}, ${req.requestedBy}, ${new Date(at)}, ${new Date(at)}, true)
+        on conflict (tenant_id, person_id) do update set state = 'frozen', reason = excluded.reason,
+          effective_on = coalesce(excluded.effective_on, offboardings.effective_on),
+          note = case when excluded.note <> '' then excluded.note else offboardings.note end,
+          requested_by = coalesce(excluded.requested_by, offboardings.requested_by),
+          frozen_at = excluded.frozen_at, pause_pending = true`;
+      opened = await openHandovers(tx, personId, removed, req.actor);
+      await tx`update handovers set removed_connections = ${removed}::jsonb where person_id = ${personId} and state <> 'closed'`;
+      // Hand-overs that were settled while the person was leaving resume now, under the successor.
+      for (const h of (await tx.unsafe(
+        `select ${HANDOVER_COLUMNS} from handovers h where person_id = $1 and state <> 'closed' and ${READY} order by id`,
+        [personId],
+      )) as HandoverRow[]) {
+        await resumed(tx, h, req.actor);
+      }
+      runs = await stopRuns(tx, personId);
+      await flushQueued(tx);
+    } finally {
+      queued.delete(tx);
     }
     await audit(tx, {
       actor: req.actor,

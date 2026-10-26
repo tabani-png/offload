@@ -11,7 +11,7 @@ let inFlightHash: string;
 beforeAll(async () => {
   w = await world();
   member = w.t.people.member.id;
-  const r = await w.broker.proposeBatch(w.t.id, run(w, w.wf.sdr1, { type: "person", id: member }, member, w.t.connections.company), [email(to())]);
+  const r = await w.broker.proposeBatch(w.t.id, run(w, w.wf.sdr1, { type: "person", id: member }, member, w.personal.gmail), [email(to())]);
   if (!r.ok) throw new Error(r.message);
   inFlightHash = r.batchHash;
   const lead = await principal(w, "lead");
