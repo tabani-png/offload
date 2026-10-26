@@ -813,6 +813,8 @@ export function createWorkers(deps: Deps): Workers {
       }
     }
     const after = await service(tenantId, async (tx) => {
+      // The runner's lock first (emitOutcome's cloud device takes it too), then rows: one lock order, no deadlock.
+      await tx`select pg_advisory_xact_lock(hashtext(${"offload_cloud_device:" + pre.runnerPersonId}))`;
       const r = await loadRun(tx, runId, true);
       if (!r || r.endedAt !== null) return null;
       const w = (await loadWorker(tx, r.workerId, true))!;
@@ -894,6 +896,7 @@ export function createWorkers(deps: Deps): Workers {
           const w = await loadWorker(tx, d.worker_id);
           if (!w) return null;
           if (dr.error || !dr.session_id) {
+            await tx`select pg_advisory_xact_lock(hashtext(${"offload_cloud_device:" + (w.identityType === "person" ? w.identityId : w.ownerPersonId)}))`;
             const run = await insertRun(tx, w, { trigger: "schedule", runnerPersonId: w.ownerPersonId, inputs: null, deploymentRunRef: dr.id, state: "failed", errorCode: safeCode(dr.error?.type ?? "no_session") });
             const paused = await countResult(tx, w, false);
             await emitOutcome(tx, run, w);
@@ -954,8 +957,11 @@ export function createWorkers(deps: Deps): Workers {
   async function pauseDeploymentsWhere(tenantId: string, pick: (tx: Tx, w: WorkerRow) => Promise<boolean>, reason: string): Promise<void> {
     const ids = await service(tenantId, async (tx) => {
       const out: string[] = [];
-      for (const row of await tx`select w.* from workers w join deployments d on d.tenant_id = w.tenant_id and d.worker_id = w.id
-          where d.desired_status = 'active' or d.remote_status = 'active'`) {
+      // Every row lock before the first audit write (which takes the tenant's audit-chain lock): one lock order with
+      // `finish`, which also locks its worker before auditing.
+      const rows = await tx`select w.* from workers w join deployments d on d.tenant_id = w.tenant_id and d.worker_id = w.id
+          where d.desired_status = 'active' or d.remote_status = 'active' order by w.id for update of w`;
+      for (const row of rows) {
         const w = workerRow(row);
         if (!(await pick(tx, w))) continue;
         await tx`update deployments set desired_status = case when desired_status = 'archived' then desired_status else 'paused' end, updated_at = ${new Date(now())} where worker_id = ${w.id}`;
