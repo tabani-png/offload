@@ -29,7 +29,7 @@ export interface PersonColumn {
   shownIn: Section | null;
   reason?: string;
   /** Set for another wave-B slice's table, which a tree without that slice does not have yet. */
-  slice?: "S2-05" | "S2-06" | "S2-07" | "S2-10";
+  slice?: "S2-05" | "S2-06" | "S2-07" | "S2-09" | "S2-10";
 }
 
 export const PERSON_COLUMNS: readonly PersonColumn[] = [
@@ -124,6 +124,23 @@ export const PERSON_COLUMNS: readonly PersonColumn[] = [
   {
     table: "role_policies", column: "updated_by", shownIn: null, slice: "S2-07",
     reason: "an editor's act on a job role's policy, recorded in the audit log",
+  },
+  // S2-09 cloud workers (migration 0900).
+  {
+    table: "worker_runs", column: "runner_person_id", shownIn: null, slice: "S2-09",
+    reason: "cloud runs I ran; each one's outcome is a run_outcomes row of my cloud device, listed under runs, and my morning digest (GET /v1/me/digest) lists them",
+  },
+  {
+    table: "workers", column: "owner_person_id", shownIn: null, slice: "S2-09",
+    reason: "cloud workers I own, listed to me by GET /v1/workers; every change is audited",
+  },
+  {
+    table: "workers", column: "created_by", shownIn: null, slice: "S2-09",
+    reason: "an admin's or dept lead's act of creating a worker, recorded in the audit log as worker.create",
+  },
+  {
+    table: "worker_cloud_devices", column: "person_id", shownIn: null, slice: "S2-09",
+    reason: "the revoked, keyless device my cloud run outcomes are recorded under; it is listed under devices",
   },
   // S2-10 continuity (migration 1000). The leaver is the subject of every row; each row is mirrored by an audit event
   // with them as subject (the frozen self-view schema has no continuity field), so it shows in their access log.

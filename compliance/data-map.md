@@ -41,6 +41,9 @@
 | `overnight_policies` | `owner_person_id` | overnight policies the person owns (S2-07) | listed by `GET /v1/overnight-policies` | until deleted |
 | `kill_switches` | `set_by` | who set a kill switch (S2-07) | in the audit log | kept as a record |
 | `role_policies` | `updated_by` | who last changed a job role's policy (S2-07) | in the audit log | while the role exists |
+| `worker_runs` | `runner_person_id` | cloud runs the person ran: trigger, state, cost, times, session reference (S2-09) | outcomes in `runs`; listed in `GET /v1/me/digest` | sessions deleted 30 days after the run; rows per tenant policy |
+| `workers` | `owner_person_id`, `created_by` | cloud workers the person owns or created (S2-09) | listed by `GET /v1/workers`; creation in the audit log | until retired |
+| `worker_cloud_devices` | `person_id` | the revoked, keyless device the person's cloud run outcomes are recorded under (S2-09) | listed under `devices` | while the person exists |
 | `handovers` | `person_id`, `successor_person_id` | one hand-over per role workflow of a leaver: state, successor (person or role identity), in-flight choice, inbox step, removed connection ids (S2-10) | in the access log as `handover.opened` / `assigned` / `accepted` / `resumed` / `closed` (the leaver is the subject); the named successor sees `handover.successor_named` (they are its subject) | kept as a record |
 | `handovers` | `assigned_by`, `closed_by` | who assigned the successor and who closed the hand-over (S2-10) | not shown as an identity: identifies the actor (admin, owner or dept lead), not the employee; the act is in the access log | kept as a record |
 | `offboardings` | `person_id` | the person's offboarding: state, reason, effective date, note, frozen / departed times (S2-10) | in the access log as `person.offboard` / `person.freeze` / `person.departed` (the free-text note stays on the row) | kept as a record |
