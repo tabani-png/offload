@@ -333,14 +333,19 @@ export function createWorkers(deps: Deps): Workers {
           remote_status = ${fields.remote ?? d.remote},
           stale_deployment_ids = ${fields.stale ?? d.stale}::jsonb, updated_at = ${new Date(now())}
         where worker_id = ${workerId}`);
+    // Archived on the platform is not forgotten: remote_deployments keeps polling it until it is drained.
+    const archived = (id: string) =>
+      service(tenantId, (tx) => tx`update remote_deployments set archived_at = coalesce(archived_at, ${new Date(now())}) where deployment_id = ${id}`);
     for (const old of d.stale) {
       await api.archiveDeployment(old);
+      await archived(old);
       d.stale = d.stale.filter((x) => x !== old);
       await set({ stale: d.stale });
     }
     if (d.desired === "archived") {
       if (d.deploymentId && d.remote !== "archived") {
         await api.archiveDeployment(d.deploymentId);
+        await archived(d.deploymentId);
         await set({ remote: "archived" });
       }
       return;
@@ -378,8 +383,13 @@ export function createWorkers(deps: Deps): Workers {
         // No answer (5xx, timeout, network): it may exist. The key stays.
         return unconfirmedDeployment(tenantId, w.id, { ...d, createKey: key });
       }
-      await service(tenantId, (tx) => tx`update deployments set deployment_id = ${created.id}, remote_status = 'active', create_key = null,
-          create_started_at = null, updated_at = ${new Date(now())} where worker_id = ${workerId} and create_key = ${key}`);
+      await service(tenantId, async (tx) => {
+        await tx`update deployments set deployment_id = ${created.id}, remote_status = 'active', create_key = null,
+            create_started_at = null, updated_at = ${new Date(now())} where worker_id = ${workerId} and create_key = ${key}`;
+        // Tracked until drained, with the budget its sessions are created with.
+        await tx`insert into remote_deployments (tenant_id, deployment_id, worker_id, budget_cents, created_at)
+          values (current_setting('app.tenant_id')::uuid, ${created.id}, ${workerId}, ${w.sessionBudgetCents}, ${new Date(now())}) on conflict do nothing`;
+      });
       await service(tenantId, (tx) => audit(tx, { actor: SERVICE, action: "worker.deployment", resource: { type: "worker", id: w.id }, detail: { deploymentId: created.id, cron: d.cron, timezone: d.timezone } }));
       return;
     }
@@ -471,7 +481,11 @@ export function createWorkers(deps: Deps): Workers {
     return (p?.id as string | undefined) ?? null;
   }
 
-  async function insertRun(tx: Tx, w: WorkerRow, o: StartOpts & { deploymentRunRef?: string; sessionRef?: string; state?: RunState; errorCode?: string }): Promise<RunRow> {
+  async function insertRun(
+    tx: Tx,
+    w: WorkerRow,
+    o: StartOpts & { deploymentRunRef?: string; deploymentId?: string; budgetCents?: number; sessionRef?: string; state?: RunState; errorCode?: string },
+  ): Promise<RunRow> {
     const id = ulid(now());
     const runner = w.identityType === "person" ? w.identityId : o.runnerPersonId;
     const policyId = o.trigger === "schedule" ? await overnightPolicyFor(tx, w, runner) : null;
@@ -479,10 +493,11 @@ export function createWorkers(deps: Deps): Workers {
     const recipients = o.trigger === "schedule" ? (policyId ? [] : null) : (o.inputs?.recipients ?? null);
     const ended = o.state !== undefined && o.state !== "running";
     const [r] = await tx`insert into worker_runs (tenant_id, id, worker_id, trigger, runner_person_id, input_recipients, overnight,
-        overnight_policy_id, started_at, ended_at, state, stop_reason, error_code, budget_cents, session_ref, deployment_run_ref)
+        overnight_policy_id, started_at, ended_at, state, stop_reason, error_code, budget_cents, session_ref, deployment_run_ref, deployment_id)
       values (current_setting('app.tenant_id')::uuid, ${id}, ${w.id}, ${o.trigger}, ${runner}, ${recipients}::jsonb,
         ${o.trigger === "schedule"}, ${policyId}, ${new Date(now())}, ${ended ? new Date(now()) : null}, ${o.state ?? "running"},
-        ${ended ? "error" : null}, ${o.errorCode ?? null}, ${w.sessionBudgetCents}, ${o.sessionRef ?? ""}, ${o.deploymentRunRef ?? null})
+        ${ended ? "error" : null}, ${o.errorCode ?? null}, ${o.budgetCents ?? w.sessionBudgetCents}, ${o.sessionRef ?? ""}, ${o.deploymentRunRef ?? null},
+        ${o.deploymentId ?? null})
       returning *`;
     return runRow(r!);
   }
@@ -496,12 +511,12 @@ export function createWorkers(deps: Deps): Workers {
    * Why a scheduled session may not run, by the gates a manual run passes, in startRun's order: kill switch, worker
    * state, eligibility, the monthly cap (a session the platform already started counts at its budget).
    */
-  async function scheduledRefusal(tx: Tx, w: WorkerRow, runner: string, runId: string): Promise<"kill_switch_active" | "worker_not_ready" | "ineligible" | "budget_exceeded" | null> {
+  async function scheduledRefusal(tx: Tx, w: WorkerRow, runner: string, run: RunRow): Promise<"kill_switch_active" | "worker_not_ready" | "ineligible" | "budget_exceeded" | null> {
     if (await killedFor(tx, w, runner)) return "kill_switch_active";
     if (w.state !== "ready") return "worker_not_ready";
     if (!(await eligible(tx, w))) return "ineligible";
-    const { spent, cap } = await monthSpent(tx, runId);
-    return spent + w.sessionBudgetCents > cap ? "budget_exceeded" : null;
+    const { spent, cap } = await monthSpent(tx, run.id);
+    return spent + run.budgetCents > cap ? "budget_exceeded" : null;
   }
 
   /** What holds a ready worker's active deployment paused now (budget, eligibility), or null. */
@@ -587,7 +602,8 @@ export function createWorkers(deps: Deps): Workers {
         agent: { type: "agent", id: s.w.agentId!, version: s.w.agentVersion ?? 1 },
         environment_id: s.w.environmentId!,
         vault_ids: s.w.vaultId ? [s.w.vaultId] : [],
-        budget: budgetOf(s.w.sessionBudgetCents),
+        // The budget the run reserved at admission (a raise after it does not reach this session).
+        budget: budgetOf(s.run.budgetCents),
         title: `Offload run ${runId}`,
         metadata: { offload_run_id: runId, offload_worker_id: s.w.id },
       });
@@ -1150,10 +1166,14 @@ export function createWorkers(deps: Deps): Workers {
   // ---------- deployments: the platform's scheduled runs ----------
 
   async function pollDeployments(tenantId: string): Promise<void> {
+    // Every deployment Offload made that is not drained: the current one and replaced or removed ones, so a session
+    // an old deployment started just before it was archived is still imported, accounted, swept and recovered.
     const deps0 = await service(tenantId, async (tx) =>
-      (await tx`select d.worker_id, d.deployment_id, d.last_run_seen_at from deployments d where d.deployment_id is not null and d.remote_status in ('active', 'paused')`) as Array<{ worker_id: string; deployment_id: string; last_run_seen_at: string | null }>,
+      (await tx`select worker_id, deployment_id, last_run_seen_at, budget_cents, archived_at from remote_deployments
+        where drained_at is null order by deployment_id`) as Array<{ worker_id: string; deployment_id: string; last_run_seen_at: string | null; budget_cents: number; archived_at: Date | null }>,
     );
     for (const d of deps0) {
+      const listedAt = now();
       const runs = (await api.listDeploymentRuns(d.deployment_id, d.last_run_seen_at ?? undefined)).sort((a, b) => a.created_at.localeCompare(b.created_at));
       for (const dr of runs) {
         const started = await service(tenantId, async (tx) => {
@@ -1168,22 +1188,23 @@ export function createWorkers(deps: Deps): Workers {
             await tx`select pg_advisory_xact_lock(hashtext(${"offload_cloud_device:" + (w0.identityType === "person" ? w0.identityId : w0.ownerPersonId)}))`;
           }
           const w = w0 ? await loadWorker(tx, d.worker_id, true) : null;
-          await tx`update deployments set last_run_seen_at = greatest(coalesce(last_run_seen_at, ''), ${dr.created_at}) where worker_id = ${d.worker_id}`;
+          await tx`update remote_deployments set last_run_seen_at = greatest(coalesce(last_run_seen_at, ''), ${dr.created_at}) where deployment_id = ${d.deployment_id}`;
           if (dup || !w) return null;
           if (dr.error || !dr.session_id) {
-            const run = await insertRun(tx, w, { trigger: "schedule", runnerPersonId: w.ownerPersonId, inputs: null, deploymentRunRef: dr.id, state: "failed", errorCode: safeCode(dr.error?.type ?? "no_session") });
+            const run = await insertRun(tx, w, { trigger: "schedule", runnerPersonId: w.ownerPersonId, inputs: null, deploymentRunRef: dr.id, deploymentId: d.deployment_id, budgetCents: Number(d.budget_cents), state: "failed", errorCode: safeCode(dr.error?.type ?? "no_session") });
             const paused = await countResult(tx, w, false);
             await emitOutcome(tx, run, w);
             await audit(tx, { actor: SERVICE, action: "worker.run_end", subjectPersonId: run.runnerPersonId, resource: { type: "worker_run", id: run.id }, detail: { workerId: w.id, state: "failed", errorCode: run.errorCode } });
             return { run, paused, attach: false, policy: run.overnightPolicyId };
           }
-          const run = await insertRun(tx, w, { trigger: "schedule", runnerPersonId: w.ownerPersonId, inputs: null, deploymentRunRef: dr.id, sessionRef: dr.session_id });
+          // The session runs with the deployment's budget: that is what it reserves.
+          const run = await insertRun(tx, w, { trigger: "schedule", runnerPersonId: w.ownerPersonId, inputs: null, deploymentRunRef: dr.id, deploymentId: d.deployment_id, budgetCents: Number(d.budget_cents), sessionRef: dr.session_id });
           await tx`insert into session_cursors (tenant_id, session_id, run_id) values (current_setting('app.tenant_id')::uuid, ${dr.session_id}, ${run.id}) on conflict do nothing`;
           await audit(tx, { actor: SERVICE, action: "worker.run_start", subjectPersonId: run.runnerPersonId, resource: { type: "worker_run", id: run.id }, detail: { workerId: w.id, trigger: "schedule", deploymentRun: dr.id } });
           // The platform already created this session: it passes a manual run's gates or it is stopped at once. The
           // stop is requested with the run (durable), delivered below and retried by the sweep; a budget or
           // eligibility refusal also holds the deployment paused so it fires no more paid sessions.
-          const refusal = await scheduledRefusal(tx, w, run.runnerPersonId, run.id);
+          const refusal = await scheduledRefusal(tx, w, run.runnerPersonId, run);
           if (refusal) {
             await tx`update worker_runs set error_code = ${refusal}, interrupt_sent_at = ${new Date(now())} where id = ${run.id}`;
             if (refusal === "budget_exceeded" || refusal === "ineligible") {
@@ -1203,6 +1224,14 @@ export function createWorkers(deps: Deps): Workers {
           await syncWorker(tenantId, d.worker_id, false);
         }
         void consume(tenantId, started.run.id);
+      }
+      // Drain: a deployment archived before this listing started fires no more; once every session it started has
+      // been imported (above) and has ended, it is drained and no longer polled.
+      if (d.archived_at !== null && d.archived_at.getTime() <= listedAt) {
+        await service(tenantId, (tx) => tx`update remote_deployments set polled_after_archive_at = coalesce(polled_after_archive_at, ${new Date(listedAt)}),
+            drained_at = case when not exists (select 1 from worker_runs r where r.deployment_id = ${d.deployment_id} and r.ended_at is null)
+              then ${new Date(now())}::timestamptz else null end
+          where deployment_id = ${d.deployment_id} and drained_at is null`);
       }
     }
   }

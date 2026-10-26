@@ -41,8 +41,16 @@ export function windowOf(day: string, tz: string): { from: number; to: number } 
   };
 }
 
-/** The digest that covers `t`: the local day of t + 12 h. */
-export const digestDayOf = (t: number, tz: string) => localDay(t + 12 * 3600_000, tz);
+/**
+ * The digest day whose window (windowOf) holds `t`: the local calendar day, or the next one from local noon on. The
+ * same calendar rule as windowOf, so it holds across DST changes (including ones at midnight).
+ */
+export function digestDayOf(t: number, tz: string): string {
+  const today = localDay(t, tz);
+  if (t < windowOf(today, tz).to) return today;
+  const [y, m, d] = today.split("-").map(Number) as [number, number, number];
+  return new Date(Date.UTC(y, m - 1, d) + DAY_MS).toISOString().slice(0, 10);
+}
 
 export async function buildDigest(tx: Tx, _deps: Deps, personId: string, day: string, tz: string): Promise<Digest> {
   const { from, to } = windowOf(day, tz);

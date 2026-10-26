@@ -123,3 +123,20 @@ which the sync turns into a remote pause (desired vs remote, retried every tick)
 Gap (contract): read credentials live in the job role's vault and the recorded contract has no credential delete, so
 an ineligible worker's access is cut by pausing its deployment, interrupting its sessions and refusing admission;
 the credentials are not revoked.
+
+## 15. Admitted values are snapshots; remote objects are drained before they are forgotten
+Values fixed at admission and used later come from the run, not from the worker as it is now:
+| value | fixed at | used later by |
+|---|---|---|
+| session budget | `worker_runs.budget_cents` (manual: the worker's at admission; scheduled: the deployment's, `remote_deployments.budget_cents`) | session create, monthly cap, scheduled admission |
+| model, tools, MCP servers | the agent version pinned at provisioning (`workers.agent_version`, `mcp_servers`) | every session of the worker |
+| identity, commit connection | immutable worker columns | broker proposals |
+| overnight policy | `worker_runs.overnight_policy_id` at insert | broker; the policy's own state (paused, tripped) is read live on purpose: a stricter state applies at once |
+| bash permission | the version's bindings, read when the consumer attaches | tool confirmations of that consumer |
+Remote objects that may still act are tracked until they cannot: every deployment Offload made is a
+`remote_deployments` row, polled until it is drained (archived on the platform, listed at least once after the
+archive, every session it started imported as a run and ended). Kill sweeps, recovery and retention act on those
+runs. Sessions are tracked as runs until retention deletes them; environments, vaults and agents do not act on
+their own (§13).
+The default digest day is `digestDayOf`: the local calendar day, or the next one from local noon on, the same rule as
+`windowOf` (DST-safe, including changes at midnight).
