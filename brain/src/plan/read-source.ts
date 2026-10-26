@@ -344,7 +344,7 @@ function putKey(o: Obj, k: string, v: unknown): void {
  * JSON parsed exactly: every number keeps its own text (25.50 stays "25.50", 1e3 stays "1e3", -0.0 stays), and a key
  * repeated in one object with another value is Repeated (JSON.parse would silently keep the last). Throws on invalid.
  */
-function parseExact(t: string): unknown {
+export function parseExact(t: string): unknown {
   let i = 0;
   const ws = () => {
     while (i < t.length && (t[i] === " " || t[i] === "\n" || t[i] === "\r" || t[i] === "\t")) i += 1;

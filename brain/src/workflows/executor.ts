@@ -144,13 +144,35 @@ const ENV_ALLOW = [
   "NO_PROXY",
 ] as const;
 
-export function executorEnv(env: Readonly<Record<string, string | undefined>> = process.env): Record<string, string> {
+/** `oauth`: no API key is configured but a Claude Code OAuth token is: the token goes to the child exactly as before
+ * this slice (an OAuth token is not an API key, so it never goes through apiKeyHelper). */
+export function executorEnv(env: Readonly<Record<string, string | undefined>> = process.env, oauth = false): Record<string, string> {
   const out: Record<string, string> = {};
   for (const k of ENV_ALLOW) {
     const v = env[k];
     if (v !== undefined && v !== "") out[k] = v;
   }
+  const t = env.CLAUDE_CODE_OAUTH_TOKEN;
+  if (oauth && t !== undefined && t !== "") out.CLAUDE_CODE_OAUTH_TOKEN = t;
   return out;
+}
+
+/** s27 round 9 (manager decision, BYOK API key first): how a workflow run signs in to Claude. */
+export type ExecutorAuth = { kind: "api_key"; credential: { helper: string; command: string; cleanup: () => void } } | { kind: "oauth" } | { kind: "none" };
+
+export const NO_KEY_WORDS = "No Claude key is set up for workflow runs: add a key in Settings.";
+const OAUTH_WARNING = "brain: workflow runs sign in with a Claude Code OAuth token passed in the child's environment (no API key is set up; add one in Settings to use the Keychain instead)";
+
+/** An API key (Keychain reference or the brain's own env) -> apiKeyHelper; else an OAuth token -> env (one warning
+ * line); else none. The OAuth token is never handed to the helper as if it were an API key. */
+export function executorAuth(env: Readonly<Record<string, string | undefined>> = process.env, log: (line: string) => void = (l) => console.error(l)): ExecutorAuth {
+  const credential = executorCredential({ ...env, CLAUDE_CODE_OAUTH_TOKEN: undefined });
+  if (credential !== null) return { kind: "api_key", credential };
+  if ((env.CLAUDE_CODE_OAUTH_TOKEN ?? "").trim() !== "") {
+    log(OAUTH_WARNING);
+    return { kind: "oauth" };
+  }
+  return { kind: "none" };
 }
 
 /** s27: the person's Claude key for a workflow run, as the builder gives it (builder/runner.ts writeCredentialHelper,
@@ -176,7 +198,7 @@ export function executorCredential(env: Readonly<Record<string, string | undefin
 }
 
 /** The exact query() arguments the SDK executor uses (exported so tests can pin them without a network call). */
-export function sdkQueryOptions(job: ExecJob, env: Readonly<Record<string, string | undefined>> = process.env, credential: { command: string } | null = null): { prompt: string; options: Options } {
+export function sdkQueryOptions(job: ExecJob, env: Readonly<Record<string, string | undefined>> = process.env, credential: { command: string } | null = null, oauth = false): { prompt: string; options: Options } {
   const abort = new AbortController();
   if (job.signal !== undefined) {
     if (job.signal.aborted) abort.abort(job.signal.reason);
@@ -194,7 +216,7 @@ export function sdkQueryOptions(job: ExecJob, env: Readonly<Record<string, strin
       mcpServers: job.mcpServers ?? {},
       permissionMode: "default",
       maxTurns: job.batch.items.length * 2 + 4,
-      env: executorEnv(env),
+      env: executorEnv(env, oauth && credential === null),
       ...(credential === null ? {} : { settings: { apiKeyHelper: credential.command } }),
       abortController: abort,
       ...(job.cwd === undefined ? {} : { cwd: job.cwd }),
@@ -203,20 +225,25 @@ export function sdkQueryOptions(job: ExecJob, env: Readonly<Record<string, strin
 }
 
 export class AgentSdkExecutor implements Executor {
+  constructor(private readonly o: { env?: Readonly<Record<string, string | undefined>>; log?: (line: string) => void } = {}) {}
+
   async execute(job: ExecJob): Promise<ExecResult> {
-    const { query } = await import("@anthropic-ai/claude-agent-sdk");
-    const credential = executorCredential();
+    const env = this.o.env ?? process.env;
+    // Signed in before anything starts: no key and no token is a plain refusal (nothing attempted, nothing sent).
+    const auth = executorAuth(env, this.o.log);
+    if (auth.kind === "none") throw new Error(NO_KEY_WORDS);
     try {
-      return await this.run(job, query, credential);
+      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      return await this.run(job, query, env, auth.kind === "api_key" ? auth.credential : null, auth.kind === "oauth");
     } finally {
-      credential?.cleanup();
+      if (auth.kind === "api_key") auth.credential.cleanup();
     }
   }
 
-  private async run(job: ExecJob, query: typeof import("@anthropic-ai/claude-agent-sdk").query, credential: { command: string } | null): Promise<ExecResult> {
+  private async run(job: ExecJob, query: typeof import("@anthropic-ai/claude-agent-sdk").query, env: Readonly<Record<string, string | undefined>>, credential: { command: string } | null, oauth: boolean): Promise<ExecResult> {
     const toolCalls: ToolCallRecord[] = [];
     const byId = new Map<string, ToolCallRecord>();
-    const base = sdkQueryOptions(job, process.env, credential);
+    const base = sdkQueryOptions(job, env, credential, oauth);
     const q = query({
       prompt: base.prompt,
       options: {

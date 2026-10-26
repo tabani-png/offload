@@ -122,7 +122,16 @@ only saving was the typing.
     row as ambiguous, named. JSON is parsed by an exact parser (numbers keep their text, duplicates kept). Accessibility
     text has ONE format, `connectors/computer/ax-text.ts` (`<role> "<label>" = "<value>"`, JSON-quoted; curly quotes
     read too): the stub driver and the real driver write it, the read step parses it.
-16. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+16. **Round 9 (PR #35 review).** Workflow run sign-in (manager decision, BYOK API key first): an API key (Keychain
+    reference, or the brain's own env) goes through `settings.apiKeyHelper` with no key and no OAuth token in the
+    child env; with no API key but a Claude Code OAuth token, the token goes in the child env exactly as before this
+    slice (never through apiKeyHelper, which is API-key auth) and the brain logs one warning line; with neither, the
+    run is refused before anything starts ("add a key in Settings"). The builder's `writeCredentialHelper` has the
+    same OAuth-as-API-key mix-up; it is not changed here (the builder is off and keeps every secret out of its
+    sandbox env by design; reported). Composio answers reach the shared exact parser as the CLI's raw text (no
+    JSON.parse/stringify round trip). Reader audit: MCP returns the tool's text content as sent, the direct API
+    returns `res.text()`, the screen returns the accessibility text; none re-encodes values.
+17. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)
