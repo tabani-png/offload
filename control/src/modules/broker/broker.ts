@@ -1161,8 +1161,10 @@ export function createBroker(deps: Deps): Broker {
     let named: string[] = [key];
     const failBefore = async (tx: Tx, b: BatchRow, code: string, reason0: string, tool: string | null = null) => {
       const reason = scrubFor(reason0, named);
-      await tx`update batch_items set state = 'failed_before_send', error = ${reason.slice(0, 500)}, tool = ${tool}, updated_at = ${new Date(now())}
-        where batch_hash = ${hash} and key = ${key} and state = 'pending'`;
+      const moved = await tx`update batch_items set state = 'failed_before_send', error = ${reason.slice(0, 500)}, tool = ${tool}, updated_at = ${new Date(now())}
+        where batch_hash = ${hash} and key = ${key} and state = 'pending' returning key`;
+      // Held under the item lock, so it always moves; if not, nothing is recorded for a transition that did not happen.
+      if (moved.length === 0) return "waiting" as const;
       await recompute(tx, hash);
       await audit(tx, { actor: SERVICE, action: "batch.item_denied", subjectPersonId: b.runnerPersonId, resource: { type: "batch", id: hash }, detail: { item: itemRef(b.workflowId, key), code, reason: reason.slice(0, 200) } });
       return "failed_before_send" as const;
@@ -1239,8 +1241,9 @@ export function createBroker(deps: Deps): Broker {
       if (!tk || tk.used_at === null || tk.revoked_at !== null) return { done: "waiting" as const };
       /** This item (only) goes back to a person: no token, not scheduled. */
       const takeBack = async (reason: string) => {
-        await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${new Date(now())}
-          where batch_hash = ${hash} and key = ${key} and state = 'pending'`;
+        const moved = await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${new Date(now())}
+          where batch_hash = ${hash} and key = ${key} and state = 'pending' and token_id is not null returning key`;
+        if (moved.length === 0) return { done: "waiting" as const };
         await recompute(tx, hash);
         await audit(tx, { actor: SERVICE, action: "batch.item_taken_back", subjectPersonId: b.runnerPersonId, resource: { type: "batch", id: hash }, detail: { item: itemRef(b.workflowId, key), reason } });
         return { done: "waiting" as const };
@@ -1360,15 +1363,29 @@ export function createBroker(deps: Deps): Broker {
     }
     // A provider's error text may quote the recipient: the journal keeps it without the address or its domain.
     if (error !== null) error = scrubFor(error, [key, prepared.recipient]);
-    const state = ok ? "sent" : "unknown";
-    await service(tenantId, async (tx) => {
+    const answer = ok ? "sent" : "unknown";
+    return service(tenantId, async (tx) => {
       // Lock order: the batch before its item and the night's counters (tripPolicy holds batches, then counters).
       await tx`select 1 from batches where hash = ${hash} for update`;
       const t = new Date(now());
-      await tx`update batch_items set state = ${state}, error = ${error === null ? null : error.slice(0, 500)},
+      // Every write below depends on this transition (round 5): an item that is no longer `sending` was settled by
+      // someone else (reconcile marked it `unknown`). Its outcome stands, the ledger keeps holding the recipient, the
+      // night's sends are not counted, and only the late answer is audited.
+      const moved = await tx`update batch_items set state = ${answer}, error = ${error === null ? null : error.slice(0, 500)},
           sent_at = ${ok ? t : null}, updated_at = ${t}
-        where batch_hash = ${hash} and key = ${key} and state = 'sending'`;
-      await tx`update contacted_ledger set outcome = ${state} where batch_hash = ${hash} and item_key = ${key}`;
+        where batch_hash = ${hash} and key = ${key} and state = 'sending' returning key`;
+      if (moved.length === 0) {
+        const [cur] = await tx`select state from batch_items where batch_hash = ${hash} and key = ${key}`;
+        await audit(tx, {
+          actor: SERVICE,
+          action: "batch.item_late_result",
+          subjectPersonId: prepared.b.runnerPersonId,
+          resource: { type: "batch", id: hash },
+          detail: { item: itemRef(prepared.b.workflowId, key), tool: prepared.call.tool, answer, kept: (cur?.state as string | undefined) ?? null },
+        });
+        return ((cur?.state as ItemState | undefined) === "sent" ? "sent" : "unknown") as "sent" | "unknown";
+      }
+      await tx`update contacted_ledger set outcome = ${answer} where batch_hash = ${hash} and item_key = ${key} and outcome = 'sending'`;
       if (ok && prepared.policyId !== null) {
         const night = nightOf(now(), await tenantTimezone(tx));
         await tx`update overnight_counters set sends = sends + 1 where policy_id = ${prepared.policyId} and night = ${night}::date`;
@@ -1381,8 +1398,8 @@ export function createBroker(deps: Deps): Broker {
         resource: { type: "batch", id: hash },
         detail: { item: itemRef(prepared.b.workflowId, key), tool: prepared.call.tool },
       });
+      return answer;
     });
-    return state;
   }
 
   async function reconcile(tenantId: string, staleMs = SENDING_STALE_MS): Promise<number> {
@@ -1397,7 +1414,7 @@ export function createBroker(deps: Deps): Broker {
           and batch_hash in (select jsonb_array_elements_text(${stale.map((x: Record<string, unknown>) => x.batch_hash as string)}::jsonb))
         returning batch_hash, key`;
       for (const r of rows) {
-        await tx`update contacted_ledger set outcome = 'unknown' where batch_hash = ${r.batch_hash} and item_key = ${r.key}`;
+        await tx`update contacted_ledger set outcome = 'unknown' where batch_hash = ${r.batch_hash} and item_key = ${r.key} and outcome = 'sending'`;
         await recompute(tx, r.batch_hash as string);
       }
       return rows.length;
