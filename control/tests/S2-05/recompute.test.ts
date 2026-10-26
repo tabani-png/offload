@@ -78,7 +78,19 @@ describe("RECOMPUTE nightly equality check (ADR 0109 §11)", () => {
     expect((await owner.get(OCT)).json.final).toBe(false);
     await nightly();
     expect((await alerts()).length).toBe(before);
-    expect((await snapshots()).every((x) => !x.stale && !x.final)).toBe(true);
+    const snaps = await snapshots();
+    expect(snaps.every((x) => !x.stale)).toBe(true);
+    // The company sees all data: not final until the next run. Below it only a cell whose own inputs moved (October
+    // Sales and SDR) waits; Finance, AP and September Sales keep their flag, or it would tell a department's reader
+    // that someone elsewhere sent data (PR #9 round 5).
+    const final = Object.fromEntries(snaps.map((x) => [`${x.month} ${x.scope_key}`, x.final]));
+    expect(final["2026-10 company:"]).toBe(false);
+    expect(final["2026-09 company:"]).toBe(false);
+    expect(final[`2026-10 department:${s.h.a.departments.sales}`]).toBe(false);
+    expect(final[`2026-10 job_role:${s.h.a.jobRoles.sdr}`]).toBe(false);
+    expect(final[`2026-10 department:${s.h.a.departments.finance}`]).toBe(true);
+    expect(final[`2026-10 job_role:${s.h.a.jobRoles.ap}`]).toBe(true);
+    expect(final[`2026-09 department:${s.h.a.departments.sales}`]).toBe(true);
     await nightly();
     expect((await owner.get(OCT)).json.final).toBe(true);
   });
