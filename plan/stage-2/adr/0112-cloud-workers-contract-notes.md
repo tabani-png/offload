@@ -197,3 +197,15 @@ required, or treat a missing set as empty.
   deployment run once and neither fails on the unique key.
 - The event consumer claims each event (`session_events.claimed_at`, 5-minute lease) before acting and marks it
   handled after: two consumers of one session (two processes) never send a tool confirmation or result twice.
+
+## 21. Every claim has a retrier
+| claim | expires | retried by | can it strand work |
+|---|---|---|---|
+| `session_events.claimed_at` | 5 min (`EVENT_CLAIM_LEASE_MS`) | `recover` (every minute): `retryExpiredClaims` catches up the session, through a new consumer or next to the attached one | no |
+| `worker_runs.policy_claimed_at` | 10 min (`POLICY_CLAIM_LEASE_MS`) | `recover` (every minute): unreported runs whose claim expired | no |
+| per-deployment-run advisory lock | end of its transaction | none needed (released on commit, rollback or a dropped connection) | no |
+| `deployments.create_key` | never, by design | a person (audit `worker.deployment_unconfirmed`): an unanswered create may exist remotely, so no second one is made | yes, on purpose, alerted |
+| interrupt retry (`interrupt_next_at`) | backoff | `sweep` and `recover` (`deliverPending`) | no |
+| unsettled session (`session_unsettled`) | until confirmed | `sweep` and `recover` (`settleLost`) | no |
+The in-memory guards (`consuming`, `opening`) never block a retry: an attached consumer's session is caught up next
+to it, and a run being opened is left to `openSession`, which consumes it.

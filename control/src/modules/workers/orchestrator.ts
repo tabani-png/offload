@@ -183,6 +183,8 @@ export function createWorkers(deps: Deps): Workers {
   const consuming = new Map<string, AbortController>();
   // Runs whose session this process is creating: recovery leaves them to openSession (which sends the first message).
   const opening = new Set<string>();
+  // Runs whose expired event claims this process is retrying (retryExpiredClaims): one retry per run at a time.
+  const retrying = new Set<string>();
   let busy = 0;
   // One provisioning at a time per tenant: the environment is shared and must not be created twice.
   const tenantLocks = new Map<string, Promise<unknown>>();
@@ -1456,11 +1458,49 @@ export function createWorkers(deps: Deps): Workers {
       }
       if (!consuming.has(r.id) && !opening.has(r.id)) void consume(tenantId, r.id);
     }
+    await retryExpiredClaims(tenantId);
     await deliverPending(tenantId);
     await settleLost(tenantId);
+    // Runs not reported yet whose claim (if any) has expired: a fresh claim belongs to a reporter still working.
     const unreported = (await service(tenantId, (tx) => tx`select id, overnight_policy_id, state, cost_cents from worker_runs
-      where ended_at is not null and overnight_policy_id is not null and policy_reported_at is null order by id limit 200`)) as Array<{ id: string; overnight_policy_id: string; state: string; cost_cents: string | number }>;
+      where ended_at is not null and overnight_policy_id is not null and policy_reported_at is null
+        and (policy_claimed_at is null or policy_claimed_at < ${new Date(now() - POLICY_CLAIM_LEASE_MS)})
+      order by id limit 200`)) as Array<{ id: string; overnight_policy_id: string; state: string; cost_cents: string | number }>;
     for (const r of unreported) await reportPolicy(tenantId, r.id);
+  }
+
+  /**
+   * Events a consumer claimed and never marked handled (it crashed mid-event), whose lease has expired, on runs still
+   * running. Nothing else would revisit them: a consumer attached here waits on its stream and catches up only on
+   * connect or reconnect. So this every-minute recovery step catches up that session: through the consumer it attaches
+   * when none is attached in this process, or directly next to the attached one (the in-memory guard never blocks it).
+   */
+  async function retryExpiredClaims(tenantId: string): Promise<void> {
+    const runs = (await service(tenantId, (tx) => tx`select distinct c.run_id from session_events e
+        join session_cursors c on c.tenant_id = e.tenant_id and c.session_id = e.session_id
+        join worker_runs r on r.tenant_id = c.tenant_id and r.id = c.run_id
+      where e.handled_at is null and e.claimed_at < ${new Date(now() - EVENT_CLAIM_LEASE_MS)} and r.ended_at is null
+      order by c.run_id limit 200`)) as Array<{ run_id: string }>;
+    for (const { run_id: runId } of runs) {
+      if (opening.has(runId) || retrying.has(runId)) continue;
+      if (!consuming.has(runId)) {
+        void consume(tenantId, runId);
+        continue;
+      }
+      retrying.add(runId);
+      void track(
+        (async () => {
+          try {
+            const ctx = await ctxOf(tenantId, runId);
+            if (!ctx || ctx.run.state !== "running") return;
+            // The run ended through a retried event: stop the attached consumer, which would wait on its stream.
+            if (await catchUp(ctx)) consuming.get(runId)?.abort();
+          } finally {
+            retrying.delete(runId);
+          }
+        })(),
+      );
+    }
   }
 
   // ---------- retention ----------
