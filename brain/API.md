@@ -527,7 +527,10 @@ check script exits 0, never "the model says done".
 - CLI: `build --solution N|ins_ID|held:N --option n --home DIR [--model stub|real] [--json]` (brief + checks, prints both
   hashes); `build approve --brief sol_ID --brief-hash H --check-hash C --home DIR`; `build run --brief sol_ID --token T
   --home DIR [--max-tries N] [--max-usd X]` (exit 0 only on PASS); `build record --run run_ID --home DIR`.
-- Env: `OFFLOAD_BUILDER_SANDBOX=container` allows bypass mode (inside a throwaway container only). Claude Code
+- Env: `OFFLOAD_BUILDER_SANDBOX=container` is refused for now ("container mode is not supported yet"; 403 / exit 2),
+  so bypass mode never runs either: macOS `sandbox-exec` is the only execution path and other platforms fail
+  closed. Design note for a future container mode: the runner, the harness (frozen/) and the credentials (cred/)
+  must stay OUTSIDE the container (separate filesystem and user), with only the workspace mounted in. Claude Code
   subprocesses get `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`.
 - Isolation: builder Bash commands and the acceptance check run under an OS sandbox (macOS `sandbox-exec`,
   deny-default: workspace read-write, `accept/` and the frozen master at `builds/<run>/frozen/` read-only,
@@ -562,6 +565,9 @@ check script exits 0, never "the model says done".
   `verifyArtifact`, every byte of every workspace file (outside accept/, .tmp, __pycache__) is scanned in overlapping
   chunks for exact known secret values and secret-shaped strings; a hit is FAIL "artifact contains a secret", and a
   file over 64 MB fails closed ("artifact file too large to scan").
+  The artifact is sized from metadata before any read: a sparse file, a file over 64 MB or a workspace over 256 MB
+  is FAIL "artifact rejected"; hashing and scanning then read asynchronously in chunks, bounded by the wall budget
+  plus 30 s.
   Every exit path (PASS, FAIL, CAP, TAMPER, an error, an unreadable artifact, SIGTERM/SIGINT/SIGHUP to the brain)
   releases the supervisor (it sweeps its sandbox instance first), the command socket and its /tmp/ofl-* folder, and
   `cred/`; any error after setup is a recorded FAIL (an unreadable workspace file: "artifact unreadable"). A check's
