@@ -27,6 +27,8 @@ export interface BuildPlaybookOptions {
   facts?: string;
   /** null = rules only (no model call). */
   model: Model | null;
+  /** Labeller calls at most (default MAX_LABEL_CALLS). */
+  maxLabelCalls?: number;
   now: number;
   previous?: Playbook | null;
 }
@@ -43,7 +45,7 @@ export async function buildPlaybook(o: BuildPlaybookOptions): Promise<BuildPlayb
   const identity = buildIdentity(o.messages, o.facts ?? "");
   const threaded = threadMessages(o.messages).filter((t) => o.readIds === undefined || o.readIds.has(t.message.id));
   if (threaded.length < MIN_MESSAGES) throw new PlaybookInputError(`a playbook needs at least ${MIN_MESSAGES} sent messages of this workflow (found ${threaded.length})`);
-  const { reads, prompts } = await readMessages(threaded, identity, o.model);
+  const { reads, prompts, warnings } = await readMessages(threaded, identity, o.model, o.maxLabelCalls);
   const stats = computeStats(reads);
   const outcomes = computeOutcomes(reads);
   const cadence = computeCadence(reads, o.messages);
@@ -69,8 +71,8 @@ export async function buildPlaybook(o: BuildPlaybookOptions): Promise<BuildPlayb
     outcomes,
     notes: prev?.notes ?? "",
     history: [...(prev?.history ?? []), { version, at: o.now, change: "built" as const }].slice(-50),
-    models: { label: o.model === null ? "rules" : TIER_MODELS.haiku, synth: TIER_MODELS.opus, synthUsed: synth.used },
-    warnings: synth.warning === null ? [] : [synth.warning],
+    models: { label: reads.some((r) => r.labelledBy === "model") ? TIER_MODELS.haiku : "rules", synth: TIER_MODELS.opus, synthUsed: synth.used },
+    warnings: [...warnings, ...(synth.warning === null ? [] : [synth.warning])],
   };
   assertDepersonalised(playbook, identity);
   return { playbook, reads, identity, prompts };

@@ -291,10 +291,16 @@ export function mergeLabels(rule: MessageRead, reply: string, id: Identity): Mes
   };
 }
 
-/** Reads every message: rules first, then one Haiku call per message (route classify) over masked text only. */
-export async function readMessages(threaded: readonly Threaded[], id: Identity, model: Model | null): Promise<{ reads: MessageRead[]; prompts: string[] }> {
+/** At most this many labeller calls per build; the other messages keep their rule read. */
+export const MAX_LABEL_CALLS = 60;
+
+/** Reads every message: rules first, then one Haiku call per message (route classify) over masked text only, up to
+ * `maxCalls`. A failed call keeps that message's rule read; warnings are fixed code text (counts only). */
+export async function readMessages(threaded: readonly Threaded[], id: Identity, model: Model | null, maxCalls: number = MAX_LABEL_CALLS): Promise<{ reads: MessageRead[]; prompts: string[]; warnings: string[] }> {
   const reads: MessageRead[] = [];
   const prompts: string[] = [];
+  let failed = 0;
+  let capped = false;
   for (const t of threaded) {
     const { core } = maskedCore(t.message, id);
     const rule = ruleRead(core, t.message.body, { id: t.message.id, threadKey: t.threadKey, role: t.role, outcome: t.outcome, subject: maskText(t.message.subject, id) });
@@ -302,18 +308,33 @@ export async function readMessages(threaded: readonly Threaded[], id: Identity, 
       reads.push(rule);
       continue;
     }
+    if (prompts.length >= maxCalls) {
+      capped = true;
+      reads.push(rule);
+      continue;
+    }
     const prompt = labelPrompt(core, rule);
     prompts.push(prompt);
-    const reply = await model.complete({
-      role: "playbook_label",
-      route: "classify",
-      model: TIER_MODELS.haiku,
-      system: LABEL_SYSTEM,
-      prompt,
-      maxTokens: 400,
-      validate: (text) => (parseJson(text) === null ? "the reply is not the label JSON" : null),
-    });
+    let reply: string;
+    try {
+      reply = await model.complete({
+        role: "playbook_label",
+        route: "classify",
+        model: TIER_MODELS.haiku,
+        system: LABEL_SYSTEM,
+        prompt,
+        maxTokens: 400,
+        validate: (text) => (parseJson(text) === null ? "the reply is not the label JSON" : null),
+      });
+    } catch {
+      failed += 1;
+      reads.push(rule);
+      continue;
+    }
     reads.push(mergeLabels(rule, reply, id));
   }
-  return { reads, prompts };
+  const warnings: string[] = [];
+  if (failed > 0) warnings.push(`${failed} message${failed === 1 ? " was" : "s were"} read by the rules only: the labelling model failed`);
+  if (capped) warnings.push(`only the first ${maxCalls} messages were labelled by the model; the rest were read by the rules`);
+  return { reads, prompts, warnings };
 }

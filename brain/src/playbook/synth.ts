@@ -1,6 +1,6 @@
 // The playbook text. Code writes a complete baseline from the counts; Opus 5.5 (route understand) may reword it.
 // The model's reply is used only when it keeps the shape, every id and slot, adds no number that is not one of the
-// counts and names nobody (leak.ts); otherwise the baseline stands and a warning says why.
+// counts and names nobody (leak.ts); otherwise, or when the model call fails, the baseline stands and a warning says why.
 import { TIER_MODELS } from "../models/router.ts";
 import type { Model } from "../models/model.ts";
 import { untrustedBlock } from "../workflows/untrusted.ts";
@@ -301,7 +301,12 @@ export async function synthesise(b: Baseline, stats: Stats, outcomes: Outcomes, 
   if (model === null) return { text: b, used: false, warning: null, prompt: null };
   const nums = allowedNumbers({ stats, outcomes, cadence });
   const prompt = synthPrompt(b, stats, outcomes, cadence);
-  const reply = await model.complete({ role: "playbook", route: "understand", model: TIER_MODELS.opus, system: SYNTH_SYSTEM, prompt, maxTokens: 3000 });
+  let reply: string;
+  try {
+    reply = await model.complete({ role: "playbook", route: "understand", model: TIER_MODELS.opus, system: SYNTH_SYSTEM, prompt, maxTokens: 3000 });
+  } catch {
+    return { text: b, used: false, warning: "the model's wording was not used: the model call failed", prompt };
+  }
   const got = acceptWording(reply, b, nums, id);
   if (!got.ok) return { text: b, used: false, warning: `the model's wording was not used: ${got.reason}`, prompt };
   return { text: { ...b, ...got.value }, used: true, warning: null, prompt };
