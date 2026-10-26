@@ -5,8 +5,10 @@ import { principalOf, reply, tenantTx, type App, type AppEnv, type Deps } from "
 import type { Tx } from "../../db/pool.ts";
 import { HttpError, invalid, page, pageParams } from "../../schema/http.ts";
 import {
-  evidence, report, type HoursSavedReport, type Period, type ReportInput, type Scope,
+  SUPPRESSED, baselinesFor, buildRows, cellOf, evidence, report, selectRows, type HoursSavedReport, type Period, type ReportInput,
+  type Scope,
 } from "../../../../packages/hours-saved/src/index.ts";
+import { hiddenInTree, type CellFor } from "./floor.ts";
 import { aggregateRead, loadInputs, loadReviews, loadRuns, loadSamples, withAggregateRead } from "./load.ts";
 import {
   bounds, checkGroupScope, childrenOf, monthOf, parsePeriod, parseScope, personRead, tenantSettings,
@@ -20,6 +22,13 @@ const MAX_SAMPLES = 500;
 export async function groupInput(tx: Tx, scope: Scope, period: Period, tz: string, floor: number): Promise<ReportInput> {
   const rows = await loadInputs(tx, bounds(period, tz));
   return { ...rows, estimates: [], workflows: [], scope, children: await childrenOf(tx, scope), period, timezone: tz, floor };
+}
+
+/** Cells of any group scope over the same rows report() uses. */
+function hoursCells(input: ReportInput): CellFor {
+  const rows = buildRows(input.runs, input.reviews, baselinesFor(input.samples, input.estimates, input.runs));
+  const sel = (rs: typeof rows, s: Scope) => selectRows(rs, s, input.period, input.timezone);
+  return (s, parent) => cellOf(sel(parent === null ? rows : sel(rows, parent), s));
 }
 
 /** A month's report is final when the nightly recompute matched it and nothing arrived since (ADR 0109 §11). */
@@ -45,8 +54,14 @@ async function hoursSaved(c: Context<AppEnv>, deps: Deps): Promise<HoursSavedRep
     }
     await checkGroupScope(c, tx, p, scope);
     await aggregateRead(tx);
-    const r = report(await groupInput(tx, scope, period, timezone, floor));
-    return { ...r, final: await isFinal(tx, scope, period, r.inputsDigest) };
+    const input = await groupInput(tx, scope, period, timezone, floor);
+    const r = report(input);
+    const final = await isFinal(tx, scope, period, r.inputsDigest);
+    // Hidden in the company tree: shown exactly as an under-floor root (ADR 0103 §5 across reads, floor.ts).
+    if (await hiddenInTree(tx, scope, hoursCells(input), floor)) {
+      return { ...r, total: SUPPRESSED, children: r.children.map((c) => ({ ...c, value: SUPPRESSED })), topWorkflows: [], final };
+    }
+    return { ...r, final };
   });
 }
 
