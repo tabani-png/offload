@@ -129,6 +129,42 @@ function isFinal(toExclusive: string): boolean {
   return toExclusive <= currentMonthStart;
 }
 
+/** The company report's department cells, floored and complemented. */
+function deptCells(months: number[]) {
+  const specs = WORKFLOW_SPECS.filter(counted);
+  return complementary(departments.map((d) => {
+    const n = deptWithData(d.id, months);
+    const ds = specs.filter((s) => s.departmentId === d.id);
+    const val: HoursValue | Suppressed = n < FLOOR() ? suppressed() : value(ds, months, n);
+    return { scope: { type: "department" as const, id: d.id }, label: d.name, value: val, size: n };
+  }));
+}
+
+/** A department report's job-role cells, floored and complemented. */
+function roleCells(departmentId: string, months: number[]) {
+  const specs = WORKFLOW_SPECS.filter((s) => counted(s) && s.departmentId === departmentId);
+  return complementary(jobRoles.filter((j) => j.departmentId === departmentId).map((j) => {
+    const size = roleWithData(j.id, months);
+    const js = specs.filter((s) => s.jobRoleId === j.id);
+    const val: HoursValue | Suppressed = size < FLOOR() ? suppressed() : value(js, months, size);
+    return { scope: { type: "job_role" as const, id: j.id }, label: j.name, value: val, size };
+  }));
+}
+
+const hiddenIn = (cells: { scope: Scope; value: HoursValue | Suppressed }[], id: string | null | undefined) =>
+  cells.some((c) => c.scope.id === id && "suppressed" in c.value);
+
+/** A department or job role hidden where it sits in the company tree (under the floor or complementary). */
+function hiddenInTree(scope: Scope, from: string, toExclusive: string): boolean {
+  const months = monthIndexes(from, toExclusive);
+  if (scope.type === "department") return hiddenIn(deptCells(months), scope.id);
+  if (scope.type === "job_role") {
+    const dept = jobRoles.find((j) => j.id === scope.id)?.departmentId ?? "";
+    return hiddenIn(deptCells(months), dept) || hiddenIn(roleCells(dept, months), scope.id);
+  }
+  return false;
+}
+
 export function hoursSavedReport(scope: Scope, from: string, toExclusive: string): HoursSavedReport {
   const months = monthIndexes(from, toExclusive);
   const base = {
@@ -155,12 +191,7 @@ export function hoursSavedReport(scope: Scope, from: string, toExclusive: string
 
   if (scope.type === "company") {
     const specs = WORKFLOW_SPECS.filter(counted);
-    const cells = complementary(departments.map((d) => {
-      const n = deptWithData(d.id, months);
-      const ds = specs.filter((s) => s.departmentId === d.id);
-      const val: HoursValue | Suppressed = n < FLOOR() ? suppressed() : value(ds, months, n);
-      return { scope: { type: "department" as const, id: d.id }, label: d.name, value: val, size: n };
-    }));
+    const cells = deptCells(months);
     const visibleDepts = new Set(cells.filter((c) => !("suppressed" in c.value)).map((c) => c.scope.id));
     const total = value(specs, months, peopleWithData(scope, from, toExclusive));
     return {
@@ -174,13 +205,10 @@ export function hoursSavedReport(scope: Scope, from: string, toExclusive: string
   if (scope.type === "department") {
     const n = deptWithData(scope.id ?? "", months);
     const specs = WORKFLOW_SPECS.filter((s) => counted(s) && s.departmentId === scope.id);
-    if (n < FLOOR()) return { ...base, total: suppressed(), children: [], topWorkflows: [], anomalies: [] };
-    const cells = complementary(jobRoles.filter((j) => j.departmentId === scope.id).map((j) => {
-      const size = roleWithData(j.id, months);
-      const js = specs.filter((s) => s.jobRoleId === j.id);
-      const val: HoursValue | Suppressed = size < FLOOR() ? suppressed() : value(js, months, size);
-      return { scope: { type: "job_role" as const, id: j.id }, label: j.name, value: val, size };
-    }));
+    // Floored where it sits in the company tree, like the API (ADR 0113 metrics floor §1): a department hidden in
+    // the company report, as small or as the complementary cell, is hidden on its own page too.
+    if (hiddenIn(deptCells(months), scope.id)) return { ...base, total: suppressed(), children: [], topWorkflows: [], anomalies: [] };
+    const cells = roleCells(scope.id ?? "", months);
     const visibleRoles = new Set(cells.filter((c) => !("suppressed" in c.value)).map((c) => c.scope.id));
     return {
       ...base,
@@ -194,7 +222,8 @@ export function hoursSavedReport(scope: Scope, from: string, toExclusive: string
   if (scope.type === "job_role") {
     const size = roleWithData(scope.id ?? "", months);
     const specs = WORKFLOW_SPECS.filter((s) => counted(s) && s.jobRoleId === scope.id);
-    if (size < FLOOR()) return { ...base, total: suppressed(), children: [], topWorkflows: [], anomalies: [] };
+    const dept = jobRoles.find((j) => j.id === scope.id)?.departmentId ?? "";
+    if (size < FLOOR() || hiddenIn(deptCells(months), dept) || hiddenIn(roleCells(dept, months), scope.id)) return { ...base, total: suppressed(), children: [], topWorkflows: [], anomalies: [] };
     return { ...base, total: value(specs, months, size), children: [], topWorkflows: top(specs), anomalies: anomaliesFor(specs) };
   }
 
@@ -281,7 +310,7 @@ export function adoption(scope: Scope, from: string, toExclusive: string): Adopt
   const n = scopeSize(scope);
   const withData = peopleWithData(scope, from, toExclusive);
   const period = { from, toExclusive };
-  if (scope.type !== "company" && withData < FLOOR()) return { scope, period, value: suppressed() };
+  if (scope.type !== "company" && (withData < FLOOR() || hiddenInTree(scope, from, toExclusive))) return { scope, period, value: suppressed() };
   const specs = WORKFLOW_SPECS.filter((s) => s.state === "role" && (scope.type === "company"
     || (scope.type === "department" && s.departmentId === scope.id) || (scope.type === "job_role" && s.jobRoleId === scope.id)));
   const users = Math.min(n, withData);
@@ -300,7 +329,7 @@ export function adoption(scope: Scope, from: string, toExclusive: string): Adopt
 export function workingTime(scope: Scope, from: string, toExclusive: string): WorkingTimeReport {
   const n = scope.type === "person" ? 1 : peopleWithData(scope, from, toExclusive);
   const period = { from, toExclusive };
-  if (scope.type !== "person" && n < FLOOR()) return { scope, period, value: suppressed() };
+  if (scope.type !== "person" && (n < FLOOR() || hiddenInTree(scope, from, toExclusive))) return { scope, period, value: suppressed() };
   const seed = (scope.id ?? "company").charCodeAt(scope.id ? scope.id.length - 1 : 0) % 7;
   return { scope, period, value: { people: n, medianActiveMinutesPerDay: 372 + seed * 6, p25: 318 + seed * 4, p75: 421 + seed * 5 } };
 }

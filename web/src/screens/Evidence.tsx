@@ -1,10 +1,41 @@
+import { useInfiniteQuery, type UseQueryResult } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { ApiError, type ApiClient } from "../api/client.ts";
 import type { HoursSavedEvidence, Workflow } from "../api/types.ts";
-import { Card, Chip, GRADE_WORDS, Section, Segmented, StateTag, Table } from "../design/components.tsx";
+import { Button, Card, Chip, GRADE_WORDS, Section, Segmented, StateTag, Table } from "../design/components.tsx";
 import { hoursText, minutesText, timeText } from "../lib/format.ts";
-import { Load, useGet } from "../app/data.tsx";
+import { Load, periodPath, useDeps, useGet, usePeriod } from "../app/data.tsx";
 import { Page } from "../app/page.tsx";
+
+/**
+ * Pages through the evidence run list (`page.nextCursor`) from `start`, at most `maxPages` pages. The returned
+ * `page.nextCursor` is non-null when runs remain: the caller must say the list is partial (ADR 0005).
+ */
+export async function evidenceAll(
+  api: ApiClient, path: string, pageSize = 200, maxPages = 50, start: string | null = null,
+): Promise<HoursSavedEvidence> {
+  let first: HoursSavedEvidence | null = null;
+  const runs: HoursSavedEvidence["runs"] = [];
+  let cursor: string | null = start;
+  for (let i = 0; i < maxPages; i++) {
+    const e: HoursSavedEvidence = await api.get<HoursSavedEvidence>(`${path}&limit=${pageSize}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+    first ??= e;
+    runs.push(...e.runs);
+    cursor = e.page.nextCursor;
+    if (cursor === null) break;
+  }
+  return { ...first!, runs, page: { nextCursor: cursor } };
+}
+
+/**
+ * 422 group_floor on evidence is expected, not a fault: fewer than 5 people ran the version in the caller's scope, or
+ * its baseline samples come from fewer than 5 senders, so stats and runs would be someone's own timing (ADR 0113
+ * metrics floor §5). Said calmly, as a hidden figure, never as zeros.
+ */
+export const EVIDENCE_FLOOR_WORDS =
+  "Evidence for this version is not shown: fewer than 5 people ran it in what you can see this period, or its baseline " +
+  "comes from fewer than 5 people, so the figures would be one person's timing. Its hours still count in the totals.";
 
 const SOURCE_WORDS = {
   observed: "Observed on employees' Macs",
@@ -22,11 +53,29 @@ export function EvidenceScreen() {
   useEffect(() => {
     if (wq.data && version === null) setVersion(wq.data.latestVersion);
   }, [wq.data, version]);
-  const ev = useGet<HoursSavedEvidence>(version ? `/v1/metrics/hours-saved/evidence?workflowId=${id}&version=${version}` : null);
+  // The same period as the overview, so the runs listed here add up to the hours shown there.
+  const period = usePeriod();
+  const { api, evidencePaging } = useDeps();
+  const { pageSize, maxPages } = evidencePaging ?? { pageSize: 200, maxPages: 50 };
+  const path = version ? periodPath(`/v1/metrics/hours-saved/evidence?workflowId=${id}&version=${version}`, period) : null;
+  const inf = useInfiniteQuery({
+    queryKey: ["evidence", path, pageSize, maxPages],
+    queryFn: ({ pageParam }) => evidenceAll(api, path!, pageSize, maxPages, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.page.nextCursor ?? undefined,
+    enabled: path !== null,
+  });
+  // One evidence object over every batch loaded so far; `page.nextCursor` non-null means runs remain unloaded.
+  const merged: HoursSavedEvidence | undefined = inf.data && {
+    ...inf.data.pages[0]!,
+    runs: inf.data.pages.flatMap((p) => p.runs),
+    page: { nextCursor: inf.data.pages[inf.data.pages.length - 1]!.page.nextCursor },
+  };
+  const ev = { ...inf, data: merged } as unknown as UseQueryResult<HoursSavedEvidence>;
   const w = wq.data;
 
   return (
-    <Page title={w ? `Evidence: ${w.name}` : "Evidence"} subtitle="How the hours were worked out">
+    <Page title={w ? `Evidence: ${w.name}` : "Evidence"} subtitle={period ? `How the hours were worked out · ${period.label}` : "How the hours were worked out"}>
       {w && (
         <div className="spread">
           <Segmented<string> label="Version" value={String(version)} onChange={(x) => setVersion(Number(x))}
@@ -34,11 +83,16 @@ export function EvidenceScreen() {
           <Link to="/workflows/$id" params={{ id }} className="link t-callout">Workflow details</Link>
         </div>
       )}
-      <Load q={ev} label="Loading evidence">
+      {ev.error instanceof ApiError && ev.error.code === "group_floor" ? (
+        <Card>
+          <p className="t-body ink2" role="note" data-suppressed="group_floor">{EVIDENCE_FLOOR_WORDS}</p>
+        </Card>
+      ) : <Load q={ev} label="Loading evidence">
         {(e) => {
           const b = e.baseline;
           const success = e.runs.filter((r) => r.outcome === "success");
           const saved = e.runs.reduce((a, r) => a + r.savedSeconds, 0);
+          const partial = e.page.nextCursor !== null;
           return (
             <>
               <Section title="Baseline" aside={`Computation ${e.computation}`}>
@@ -63,8 +117,21 @@ export function EvidenceScreen() {
                 </Card>
               </Section>
 
-              <Section title="Runs" aside={`${success.length} successful of ${e.runs.length} · ${hoursText(saved)} saved in this list`}>
+              <Section title="Runs" aside={partial
+                ? `${success.length} successful of the first ${e.runs.length} · ${hoursText(saved)} saved in the first ${e.runs.length} runs listed`
+                : `${success.length} successful of ${e.runs.length} · ${hoursText(saved)} saved in this list`}>
                 <Card>
+                  {partial && (
+                    <div className="spread" data-partial="runs" role="note">
+                      <span className="t-callout ink2">
+                        Showing the first {e.runs.length} runs. More runs exist, so the counts and hours here are for these
+                        runs only, not the workflow's total.
+                      </span>
+                      <Button onClick={() => void inf.fetchNextPage()} disabled={inf.isFetchingNextPage}>
+                        {inf.isFetchingNextPage ? "Loading more runs" : "Load more runs"}
+                      </Button>
+                    </div>
+                  )}
                   <p className="t-callout ink2">Saved per run = baseline × items sent − review and fix time, never below 0. Runs without a review count 0 until reviewed.</p>
                   <Table caption="Runs behind the hours" rows={e.runs} rowKey={(r) => r.runId}
                     columns={[
@@ -81,7 +148,7 @@ export function EvidenceScreen() {
             </>
           );
         }}
-      </Load>
+      </Load>}
     </Page>
   );
 }
