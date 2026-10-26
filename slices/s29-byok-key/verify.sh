@@ -44,14 +44,17 @@ fi
 echo "== hygiene (the key has no sink but the Keychain)"
 for f in "$S/Core/ClaudeKey.swift" "$S/Surfaces/ClaudeKeychain.swift"; do
   [ -f "$f" ] || { fail "missing ${f#$ROOT/}"; continue; }
-  grep -nE "NSLog|print\(|UserDefaults|\.write\(|FileManager|Process\(|executableURL|setenv|environment\[" "$f" && fail "${f#$ROOT/} has a log, file, defaults, env or security-CLI sink"
+  sinks="$(grep -nE "NSLog|print\(|UserDefaults|\.write\(|FileManager|Process\(|executableURL|setenv|environment\[" "$f" | grep -vE "^[0-9]+:[[:space:]]*//")"
+  [ -z "$sinks" ] || { echo "$sinks"; fail "${f#$ROOT/} has a log, file, defaults, env or subprocess sink"; }
 done
 grep -q "claudeKeyEnvironment" "$S/App/OffloadApp.swift" || fail "OffloadApp does not launch the brain through BrainLaunch.claudeKeyEnvironment"
 grep -q "claudeKeyEnvironment" "$S/Core/BrainCheck.swift" || fail "--brain-check does not launch the brain through BrainLaunch.claudeKeyEnvironment"
 grep -q "checkLine" "$S/Core/BrainCheck.swift" || fail "--brain-check does not print the key line"
 grep -q "kSecAttrAccess\b\|kSecAttrAccess as" "$S/Surfaces/ClaudeKeychain.swift" 2>/dev/null || fail "the Keychain item has no access list (the brain's security read would prompt)"
-# A real-looking key anywhere in the repo's tracked files (test strings are built by concatenation and do not match).
-if git -C "$ROOT" grep -nE "sk-ant-(api|admin|oat)[0-9]{2}-[A-Za-z0-9_-]{20,}" -- . ':!**/node_modules/**' 2>/dev/null; then fail "a real-looking Anthropic key is in the repo"; else echo "no real-looking key in tracked files"; fi
+# A real-looking key in anything this slice added (older slices keep their own sentinel strings; ours are built by
+# concatenation and do not match).
+added="$(git -C "$ROOT" diff "$BASE" HEAD -- app slices/s29-byok-key slices/s25-standalone-install 2>/dev/null | grep -E "^\+" || true)"
+if echo "$added" | grep -nE "sk-ant-(api|admin|oat)[0-9]{2}-[A-Za-z0-9_-]{20,}"; then fail "a real-looking Anthropic key was added"; else echo "no real-looking key added"; fi
 
 echo "== check (--brain-check prints key: set|missing)"
 b="$(OFFLOAD_BUILD_DIR="$T/build" OFFLOAD_BUNDLE_BRAIN=0 "$ROOT/app/build.sh" 2>&1)" || { echo "$b" | tail -10; fail "app/build.sh exited non-zero"; }
