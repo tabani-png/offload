@@ -5,6 +5,10 @@
 // <person:qzkt.me>; "qzkt" is the run's random tag) so a model can refer to people consistently; `unmask` restores them
 // exactly, on the Mac. The map lives in memory only. Placeholder-shaped text that arrives in the input (a notes cell, an
 // inbound message) carries no run tag: it becomes <name> before masking, so it can never restore to a real name.
+// Rules read an NFC view with zero-width characters dropped; every surface matches in any case, except a single
+// everyday word ("Will", "May"), which matches only as written. Known limit (not fixed, measured apart as held-out
+// recall): a name outside the lexicon with no cue, no contact entry and no earlier sighting ("José García sent it")
+// is not found. Contacts (`known`) and the user's own name close that gap for the people that matter most.
 import { randomBytes } from "node:crypto";
 import { AMBIGUOUS_GIVEN, CLOSINGS, COMMON, FAMILY, GIVEN, GREETING_CUES, HONORIFICS, ORG, PARTICLES, PRODUCT, PROTECTED_PHRASES, ROLE_CUES, ROLE_MAILBOXES, STRONG_CUE_PAIRS, WEAK_CUES } from "./lexicon.ts";
 
@@ -57,6 +61,31 @@ const ANY_PLACEHOLDER_RE = /<(?:[a-z][a-z0-9_]*(?::[a-z0-9.~]+)?|\*)>/g;
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const B_START = "(?<![\\p{L}\\p{N}_])";
 const B_END = "(?![\\p{L}\\p{N}_])";
+
+/** Zero-width and invisible characters that can sit inside a name without showing: ZWSP, ZWNJ, ZWJ, word joiner, BOM,
+ * soft hyphen, Mongolian vowel separator. */
+const INVISIBLE_RE = /^[\u200b-\u200d\u2060\ufeff\u00ad\u180e]$/u;
+/** One base character with its combining marks, or one invisible character. */
+const CLUSTER_RE = /[\u200b-\u200d\u2060\ufeff\u00ad\u180e]|\P{M}\p{M}*|\p{M}+/gsu;
+
+/** The text the rules read: NFC (a decomposed "José" is one word) with invisible characters dropped ("Am\u200bara"
+ * is "Amara"). `from[k]`/`to[k]`: the input range that character k of `text` came from, so a match maps back to the
+ * exact input text and the round trip restores what the user wrote, byte for byte. */
+function matchView(input: string): { text: string; from: number[]; to: number[] } {
+  let text = "";
+  const from: number[] = [];
+  const to: number[] = [];
+  for (const m of input.matchAll(CLUSTER_RE)) {
+    if (INVISIBLE_RE.test(m[0])) continue;
+    const n = m[0].normalize("NFC");
+    for (let k = 0; k < n.length; k++) {
+      from.push(m.index!);
+      to.push(m.index! + m[0].length);
+    }
+    text += n;
+  }
+  return { text, from, to };
+}
 
 const isNameWord = (t: Tok) => NAME_RE.test(t.text) && t.text.length >= 2 && !COMMON.has(t.lower) && !GREETING_CUES.has(t.lower) && !HONORIFICS.has(t.lower);
 const isBlocker = (lower: string) => ORG.has(lower) || PRODUCT.has(lower);
@@ -278,6 +307,10 @@ export class NameMap {
 
   /** Finds names in `text` by rule and adds them to the map (no replacement). */
   learn(text: string): void {
+    this.learnView(matchView(text).text);
+  }
+
+  private learnView(text: string): void {
     const prot = protectedRanges(text, this.keptRes);
     const isProt = (s: number, e: number) => prot.some(([a, b]) => s < b && e > a);
     /** Names found, and whether a cue (greeting, role, honorific, signature) confirmed each one. */
@@ -363,14 +396,18 @@ export class NameMap {
    * stay; any other placeholder-shaped text (injected in the input) becomes <name>. */
   mask(input: string): string {
     if (input === "") return input;
-    const text = this.neutralise(input);
-    this.learn(text);
+    const raw = this.neutralise(input);
+    // Rules and surfaces run on the normalised view; replacements cut the input itself (see matchView).
+    const view = matchView(raw);
+    const text = view.text;
+    this.learnView(text);
     const prot = protectedRanges(text, this.keptRes);
     const spans: Array<{ start: number; end: number; found: string; person: Person; part: Part }> = [];
-    const add = (start: number, end: number, found: string, person: Person, part: Part) => {
+    const add = (start: number, end: number, person: Person, part: Part) => {
       if (prot.some(([a, b]) => start < b && end > a)) return;
       if (spans.some((x) => start < x.end && end > x.start)) return;
-      spans.push({ start, end, found, person, part });
+      // The placeholder stands for the input text as written (decomposed accents and zero-width characters kept).
+      spans.push({ start, end, found: raw.slice(view.from[start], view.to[end - 1]), person, part });
     };
     // Longest first, so "Amara Okafor" wins over "Amara"; full names match any case and across . _ - (slugs, ids).
     const lower = text.toLowerCase();
@@ -381,17 +418,18 @@ export class NameMap {
         re = surfaceRegex(surface, part === "full");
         this.regexes.set(surface, re);
       }
-      for (const m of text.matchAll(re)) add(m.index!, m.index! + m[0].length, m[0], person, part);
+      for (const m of text.matchAll(re)) add(m.index!, m.index! + m[0].length, person, part);
     }
     // Placeholders are numbered in order of first appearance.
     spans.sort((a, b) => a.start - b.start);
     let out = "";
     let at = 0;
     for (const s of spans) {
-      out += text.slice(at, s.start) + this.placeholderFor(s.found, s.person, s.part);
-      at = s.end;
+      const a = view.from[s.start]!;
+      out += raw.slice(at, a) + this.placeholderFor(s.found, s.person, s.part);
+      at = view.to[s.end - 1]!;
     }
-    return out + text.slice(at);
+    return out + raw.slice(at);
   }
 
   /** Placeholders back to the real names. A placeholder this map never wrote stays as it is. */
