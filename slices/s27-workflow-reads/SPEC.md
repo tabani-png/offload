@@ -1,0 +1,87 @@
+---
+id: s27-workflow-reads
+title: Workflows fetch their own data - the read step is learned from the recordings, read through the connector chain read-only, and feeds the live batch
+depends_on: [s13 (chain, gate, computer use), s14 (general plan, dry run), s17 (Composio reads), s26 (live batches for general plans, row key, done log)]
+parallel_safe: true (seams in runner.ts, gate.ts, drafter.ts, plan/dryrun.ts, workflows/dryrun.ts, service.ts, workflow-routes.ts, server.ts)
+human_gated: false
+verify: bash slices/s27-workflow-reads/verify.sh
+paths_in_scope: [brain/tests/s27-workflow-reads/**, slices/s27-workflow-reads/**, brain/src/plan/read-source.ts (new), brain/src/workflows/read-fetch.ts (new), brain/src/workflows/gate.ts (read mode only), brain/src/workflows/types.ts (additive), brain/src/workflows/drafter.ts (read step on build), brain/src/workflows/plan-live.ts, brain/src/workflows/runner.ts (prepareLiveBatch seam), brain/src/workflows/dryrun.ts (read preview, totals), brain/src/plan/dryrun.ts (source fields, read minutes), brain/src/workflows/service.ts (estimate and measured with reading), brain/src/api/workflow-routes.ts (pass the fetcher), brain/src/api/server.ts (readers option), brain/src/api/types.ts (additive), brain/src/api/s14-types.ts (additive), brain/src/understanding/surfaces.ts (one known product: PostHog), brain/API.md, plan/plan.md (s27 row)]
+paths_out_of_scope: [engine/**, app/**, control/**, web/**, packet/**, schemas/**, brain/src/builder/** (the builder stays off), brain/fixtures/**, brain/src/connectors/** (read-only use), every other slice's tests]
+---
+
+# s27 workflows fetch their own data (read steps)
+
+## Operator intent (binding, 2026-10-26)
+"Once installed it records, and then fetches the data." Offload must learn from the recordings WHERE a repeated
+task's values come from, and then read them itself, instead of the person filling a file. s26 left this open: the
+live items of a general workflow come from the person's `items.csv`, so for "Team metrics into a Google Sheet" the
+only saving was the typing.
+
+## Design
+1. **Understanding: the source step** (`plan/read-source.ts`, pure code over the Analysis, ADR 0005). For every
+   instance of the task, the spans just before it (same day, ending at most 3 minutes before it starts, at most the 2
+   nearest, not part of the task, not the task's own app or site) are candidate sources, keyed by site (host) or app.
+   The values the person typed are read from the commit screen's masked OCR (a table header with a row of values, or
+   `Label: value` lines). A candidate is the source when it comes right before at least half of the instances (and at
+   least 2), and on at least half of those (and at least 2) the typed values were on its screen (its OCR, or its frame
+   notes: activity, object, inputs, outputs, identifiers). Values match as whole tokens (`3` never matches inside
+   `43`). Each field read = the commit label + the label shown before the value on the source (majority vote), kept
+   when it was found on at least half of the matching instances. Labels must be plain words (letters and spaces, up to
+   4 words): no value, number or address is ever stored. The result is stored on the workflow (`workflow.json`
+   `read`, additive): target id and name, app / host, fields, instances seen, reading seconds per instance and reading
+   hours per week (code arithmetic), evidence span / event / frame ids. No source is invented: nothing qualifies =
+   no `read`.
+2. **Plan: a read step before the commit.** Both plan variants get the step `read_source` (type read, capability
+   role read, never gated: it changes nothing) as their first step; the legacy steps, SKILL.md and the capability
+   resolution follow. The step reads through the connector chain in its order (MCP -> Composio -> direct API ->
+   computer use, the last resort: a read-only screen read).
+3. **Read-only, enforced in the gate.** Every read call goes through a gate in the new mode `read`
+   (`createGate({ mode: "read" })`): anything that is not an allowlisted read (a send, a log, a draft, a computer-use
+   input or commit, an unknown tool) is denied with "a read step only reads: it never writes, saves or sends", before
+   any other rule, and logged. A refused call stops the read (it is never retried through another method); a method
+   that fails moves on to the next one (`markFailed`). Readers never run a call the gate did not allow.
+   Readers per method (`workflows/read-fetch.ts`): mcp = one allowlisted read tool of the server the probe found; composio
+   = `composio execute <read slug>`; api = a configured read operation (GET); computer = open the app or site and read
+   the window's accessibility text (no planner, no clicks, no typing). Tests inject fake readers and probes.
+4. **Live batch.** For a workflow with a read source and a fetcher, `POST /workflows/:id/run` reads the source first;
+   its values become the items (`commit.fields` = the commit labels with the fetched values, copied by code), so the
+   approval hash covers the exact fetched values. The s26 row key, done log, live batches and ledger still stop
+   repeats ("nothing new at <source> since the last run"). `items.csv` is the fallback only when no source is known or
+   the source cannot be read; the run response says which (`source: {kind: read | list, name, via, message}`), and
+   every item of a fallback batch with a known source carries a plain warning.
+5. **Dry run.** For a workflow with a read source, each past instance is filled from what the source screen showed
+   right before it (code), compared with what the person typed; the response carries `read`: the values fetched now
+   (read-only, through the same gate) or why nothing was fetched.
+6. **Honest numbers.** The reading time counts as saved only when the read is automated (the last read through the
+   chain succeeded): dry-run instances add their measured reading minutes, the dashboard estimate adds the reading
+   hours per week (with the arithmetic), and the measured saving adds the reading time on the source before the task's
+   instances (before) against all time on the source (after, conservative). When it is not automated, none of it is
+   counted.
+7. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+   router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
+
+## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)
+Hermetic: real brain routes, stub model, fake clock, stub chain plus fake MCP / Composio probes and readers, an
+in-memory computer-use driver (a dashboard and a sheet). No network, no real model, nothing sent.
+
+| tag | what is checked |
+|---|---|
+| SOURCE | recordings show dashboard -> sheet: the read source is found (PostHog, 4 fields, reading time), stored on the workflow, evidence ids resolve; noise before some instances does not win; the plain neutral week finds none |
+| STEP | the plan has `read_source` before the commit in both variants, not gated, role read; legacy steps and SKILL.md show it |
+| GATE | a read gate denies send, log, draft, input and commit and any unknown tool, allows allowlisted reads; a reader that tries to write is refused, its call never runs, no other method is tried, nothing reaches items |
+| FETCH | the chain order: fake MCP reads the values; MCP failing falls to Composio; only a screen read possible reads the dashboard's text without a click or a keystroke |
+| DRYRUN | the dry run shows the fetched values and fills past instances from the source; saved minutes include the reading minutes only when the read is automated |
+| LIVE | items come from the fetched values with their exact commit; the hash covers them (another value = another hash); the response says the source; with no source known it falls back to items.csv and says so plainly; a source that cannot be read falls back with a warning |
+| EXECUTE | approve -> commit through computer use with exactly the fetched values -> sent -> done log -> the next run does not repeat it |
+| METRIC | the dashboard estimate adds the reading hours only when automated; the measured saving counts the reading time |
+
+## Cannot pass vacuously
+The path test fails when any step returns nothing: a source with 4 fields and > 0 reading seconds, a live batch of 1
+item whose fields equal the fake connector's values, exactly one Save pressed with those values, a refused write with
+its call never run, a screen read with zero clicks and zero typed keys. verify.sh counts tests per tag; a tag with 0
+passing tests fails.
+
+## Done-signal
+`slices/s27-workflow-reads/verify.sh`: brain typecheck; the s27 suite (>= 20 tests) with every tag present and
+passing; the s26 suite still passes; the full brain suite; the builder flag is untouched; no s27 change touches an
+out-of-scope path.
