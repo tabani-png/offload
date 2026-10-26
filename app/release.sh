@@ -71,7 +71,7 @@ trap 'rm -f "$notes"' EXIT
 {
   echo "$signed_line"
   echo
-  echo "**Private repo:** only collaborators on $REPO can download these files. Anyone else gets a 404."
+  echo "**This repo is private:** only collaborators on $REPO can download these files. Anyone else gets a 404."
   echo
   echo "- Commit: \`$head\`"
   echo "- \`$name\` SHA-256: \`$sum\`"

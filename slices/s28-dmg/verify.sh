@@ -138,7 +138,9 @@ fi
 echo "== SIGN (app/build.sh sign-dmg with an ad hoc identity)"
 s="$(OFFLOAD_SIGN_IDENTITY=- "$ROOT/app/build.sh" sign-dmg "$DMG" 2>&1)" || { echo "$s" | tail -5; fail "build.sh sign-dmg exited non-zero"; }
 codesign --verify --strict "$DMG" >/dev/null 2>&1 && echo "signed DMG verifies" || fail "codesign --verify failed on the signed DMG"
-codesign -dv "$DMG" 2>&1 | grep -q "Format=disk image" || fail "codesign does not see a signed disk image"
+# (captured first: grep -q closing the pipe early would make pipefail report SIGPIPE)
+sig_dmg="$(codesign -dv "$DMG" 2>&1)"
+echo "$sig_dmg" | grep -q "Format=disk image" || fail "codesign does not see a signed disk image"
 
 echo "== NOTARY gate"
 grep -q "notarytool submit" "$ROOT/app/build.sh" && grep -qE "stapler (staple|validate) \"\\\$dmg\"" "$ROOT/app/build.sh" \
