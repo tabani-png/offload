@@ -8,7 +8,8 @@ import { randomBytes } from "node:crypto";
 import { analyzeHome, type Analysis, type AnalyzeOptions } from "../analyze.ts";
 import { DAY_RE, storeFingerprint } from "../store/reader.ts";
 import type { Env } from "../connectors/config.ts";
-import { AgentSdkModel, StubModel, type Model } from "../models/model.ts";
+import { StubModel, type Model } from "../models/model.ts";
+import { createRoutedModel } from "../models/factory.ts";
 import { RoutedModel } from "../models/router.ts";
 import { AgentSdkExecutor, type Executor } from "../workflows/executor.ts";
 import { dashboard, keptFiles } from "../workflows/service.ts";
@@ -38,7 +39,7 @@ export interface BrainOptions {
   token: string;
   now?: () => number;
   analyze?: Omit<AnalyzeOptions, "reviewSeconds" | "now">;
-  /** s05: model for drafts and cards (default: Agent SDK), executor for approved batches (default: Agent SDK),
+  /** s05: model for drafts and cards (default: the router over the Claude API or the Agent SDK, as `serve`), executor for approved batches (default: Agent SDK),
    * env for connector secrets (default process.env). Tests pass StubModel and ScriptedExecutor. */
   workflows?: { model?: Model; executor?: Executor; env?: Env; modelLabel?: ModelLabel };
   /** OFFLOAD_OBSERVER_BIN for GET /observer (default process.env). */
@@ -189,7 +190,8 @@ export function createBrain(opts: BrainOptions): Brain {
 
   const background = new Set<Promise<unknown>>();
   const env = opts.workflows?.env ?? process.env;
-  const model = opts.workflows?.model ?? new AgentSdkModel();
+  // s18: the default is the router too (as `serve` builds it), so no model call skips name masking (ADR 0010).
+  const model = opts.workflows?.model ?? createRoutedModel({ home: opts.home, env });
   const modelLabel: ModelLabel = opts.workflows?.modelLabel ?? (model instanceof StubModel ? "stub" : "real");
   // s14: the model router behind `model` (ADR 0009), for GET /status `models` and GET /models/usage.
   const router = model instanceof RoutedModel ? model.router : undefined;
