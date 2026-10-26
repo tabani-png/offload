@@ -7,8 +7,9 @@ import { join } from "node:path";
 
 /** draft = per-recipient emails (best model); bucket and style_card = cheap steps.
  * s14: workflow_design = the general workflow builder rewriting step text (best model); step = one text step of a
- * general workflow, e.g. a ticket reply (cheap model). Both see masked text only, never images (ADR 0007). */
-export type ModelRole = "draft" | "bucket" | "style_card" | "workflow_design" | "step" | "label" | "refine" | "explain";
+ * general workflow, e.g. a ticket reply (cheap model). Both see masked text only, never images (ADR 0007).
+ * s22: solution_design = the solution designer wording each kind of fix and its builder brief (best model). */
+export type ModelRole = "draft" | "bucket" | "style_card" | "workflow_design" | "step" | "label" | "refine" | "explain" | "solution_design";
 
 export interface ModelRequest {
   role: ModelRole;
@@ -41,7 +42,7 @@ export interface ModelConfig {
 export const DEFAULT_MODELS: Readonly<ModelConfig> = { draft: TIER_MODELS.opus, cheap: TIER_MODELS.sonnet };
 
 export function modelFor(role: ModelRole, cfg: ModelConfig): string {
-  return role === "draft" || role === "workflow_design" ? cfg.draft : cfg.cheap;
+  return role === "draft" || role === "workflow_design" || role === "solution_design" ? cfg.draft : cfg.cheap;
 }
 
 const MODEL_ID_RE = /^[a-z0-9][a-z0-9.\-]{2,80}$/;
@@ -91,10 +92,13 @@ export class StubModel implements Model {
     if (req.role === "bucket") return tagged(req.prompt, "bucket_hint") ?? "other";
     // s14: the design model echoes the rules variants (so stub plans equal the rules plans); a step draft is built
     // from the source text and the facts only (plan/text-step.ts stubStepDraft).
-    if (req.role === "workflow_design") return tagged(req.prompt, "baseline") ?? "{}";
+    if (req.role === "workflow_design" || req.role === "solution_design") return tagged(req.prompt, "baseline") ?? "{}";
     if (req.role === "step") return stubStepDraft(req.prompt);
     const examples = parseExamples(tagged(req.prompt, "examples") ?? "");
     if (req.role === "style_card") return stubStyleCard(examples);
+    // s22 bias audit: only the email draft role gets the email-shaped stub; label, refine and explain get no text
+    // (their callers fall back to the rules), never an investor email.
+    if (req.role !== "draft") return "";
     return stubDraft(req.prompt, examples);
   }
 }
@@ -180,8 +184,13 @@ function stubStepDraft(prompt: string): string {
   const sign = /sign-off: "([^"]+)"/.exec(card)?.[1] ?? exampleSign(examples) ?? "The team";
   const topic = source.split("\n").map((l) => l.trim()).find((l) => l !== "" && !/^customer:/i.test(l)) ?? "your message";
   const what = /Write the (.+?) now\.\s*$/m.exec(prompt)?.[1] ?? "reply";
+  if (!/reply|answer|message|respon/i.test(what) && !/scorecard|assessment|feedback|evaluation|review/i.test(what)) {
+    // s22 bias audit: any other text (a post, a prompt, a description, a note) is a neutral draft of that text with
+    // the gap a person fills in, not a recruiter scorecard. No number.
+    return [`${what.charAt(0).toUpperCase()}${what.slice(1)}: ${topic.replace(/[.?!]+$/, "")}`, "", `[missing: your ${what}]`].join("\n");
+  }
   if (!/reply|answer|message|respon/i.test(what)) {
-    // A note (scorecard, comment): what it is about and the gaps a person fills in. No number, no verdict.
+    // A scorecard or assessment: what it is about and the gaps a person fills in. No number, no verdict.
     return [`${what.charAt(0).toUpperCase()}${what.slice(1)}: ${topic.replace(/[.?!]+$/, "")}`, "- What stands out: [missing: your read of the source]", "- Gaps against what you look for: [missing: your read]", "- Recommendation: [missing: your decision]"].join("\n");
   }
   const ask = /order #\d+/i.exec(source)?.[0];
