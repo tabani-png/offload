@@ -85,7 +85,10 @@ describe("s24 caps hold during the check", () => {
     expect(rec.outcome).toBe("CAP");
     expect(rec.reason).toContain("wall time");
     expect(rec.tries.every((t) => t.checkExit !== 0)).toBe(true);
-    expect(elapsed).toBeLessThan(1600);
+    // Stopped, not run to completion (which would print PASS slow at ~1.7 s); the run adds a bounded post-verdict
+    // sweep and double artifact hash, so the elapsed bound is loose.
+    expect(rec.tries.map((t) => t.checkOutput).join("\n")).not.toContain("PASS slow");
+    expect(elapsed).toBeLessThan(2500);
   }, 30_000);
 
   test("CAPS: a check that hangs is killed at the wall cap, with its children", async () => {
