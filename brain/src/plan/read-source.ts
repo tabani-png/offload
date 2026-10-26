@@ -326,7 +326,8 @@ function flat(o: Record<string, unknown>, depth = 0): Map<string, unknown> {
       for (const [k2, v2] of flat(v as Record<string, unknown>, depth + 1)) {
         if (!out.has(k2)) out.set(k2, v2);
       }
-    } else if (!out.has(normKey(k))) {
+    } else if (out.get(normKey(k)) == null) {
+      // A null never hides a value under the same key ("active_users": null beside "activeUsers": 2455).
       out.set(normKey(k), v);
     }
   }
@@ -360,50 +361,72 @@ function morePages(o: Obj): boolean {
   return false;
 }
 
+/** A candidate collection of rows: where it sits (depth) and the context of the envelopes around it. */
+interface Collection {
+  rows: Obj[];
+  depth: number;
+  /** [normalised key, text] scalars of every envelope on the path to it (the top level included). */
+  context: Array<[string, string]>;
+  order: number;
+}
+
+const scalars = (o: Obj): Array<[string, string]> => Object.entries(o).flatMap(([k, v]) => (typeof v === "string" || typeof v === "number" ? [[normKey(k), String(v).trim()] as [string, string]] : []));
+
 /**
- * The rows of an answer: every list of objects (or table) inside its envelopes up to MAX_DEPTH, and the answer itself
- * as one object; the candidate whose keys match the most fields wins (ties: shallower, then first in key order).
+ * s27 round 5: the ONE normaliser of a connector answer. One walk (depth <= MAX_DEPTH) yields every candidate
+ * collection with the context of its envelopes: lists of objects, `columns` + `rows` tables, and each object as a
+ * single row. Pagination markers are noted on the way.
  */
-function objectsOf(v: unknown, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): { objects: Obj[]; more: boolean } {
-  const wanted = fields.map((f) => [normKey(f.sourceLabel), normKey(f.label)]);
-  const score = (o: Obj | undefined) => {
-    if (o === undefined) return 0;
-    const keys = new Set(flat(o).keys());
-    return wanted.filter(([a, b]) => keys.has(a!) || keys.has(b!)).length;
-  };
-  const cands: Array<{ objects: Obj[]; depth: number; score: number }> = [];
+function collections(v: unknown): { all: Collection[]; more: boolean } {
+  const all: Collection[] = [];
   let more = false;
-  const walk = (x: unknown, depth: number) => {
+  const walk = (x: unknown, depth: number, ctx: Array<[string, string]>) => {
     if (depth > MAX_DEPTH) return;
     if (Array.isArray(x)) {
       const objs = x.filter(isObj);
-      if (objs.length > 0) cands.push({ objects: objs, depth, score: score(objs[0]) });
+      if (objs.length > 0) all.push({ rows: objs, depth, context: ctx, order: all.length });
       return;
     }
     if (!isObj(x)) return;
     if (morePages(x)) more = true;
+    const here = [...ctx, ...scalars(x)];
     const t = tableRows(x);
-    if (t !== null) cands.push({ objects: t, depth, score: score(t[0]) });
-    cands.push({ objects: [x], depth, score: score(x) });
-    for (const k of Object.keys(x)) walk(x[k], depth + 1);
+    if (t !== null) all.push({ rows: t, depth, context: here, order: all.length });
+    // The object itself as one row: its own scalars are the row's, only the envelopes above are context.
+    all.push({ rows: [x], depth, context: ctx, order: all.length });
+    for (const k of Object.keys(x)) walk(x[k], depth + 1, here);
   };
-  walk(v, 0);
-  let best: (typeof cands)[number] | undefined;
-  for (const c of cands) if (c.score > 0 && (best === undefined || c.score > best.score || (c.score === best.score && c.depth < best.depth))) best = c;
-  return { objects: best?.objects ?? [], more };
+  walk(v, 0, []);
+  return { all, more };
 }
 
-/**
- * Rows of [commit label, value] from what a source returned: JSON from a connector (keys matched to the source label or
- * the commit label), or screen text ("Signups 352" lines; accessibility outlines too). A row missing a field is not a
- * row: the missing labels are returned, never guessed. Values are copied by code (ADR 0005).
- */
+const REPORT_KEYS = new Set(["report", "report name", "insight", "insight name", "dashboard", "dashboard name"]);
+const FILTER_ALIASES: Record<string, string[]> = { period: ["period", "date range", "time range", "range", "timeframe"] };
+const sameText = (a: string, b: string) => a.toLowerCase().replace(/\s+/g, " ").trim() === b.toLowerCase().replace(/\s+/g, " ").trim();
+
+/** A [key, value] that names another report or filter value than the learned query: the reason, else null. */
+function conflictOf(pairs: Iterable<[string, unknown]>, q: ReadQueryDTO): string | null {
+  for (const [k, raw] of pairs) {
+    if (typeof raw !== "string" && typeof raw !== "number") continue;
+    const v = String(raw).trim();
+    if (v === "") continue;
+    if (q.report !== null && REPORT_KEYS.has(k) && !sameText(v, q.report)) return `the answer is for the '${v}' report, not ${contextWords(q)}`;
+    for (const [fk, fv] of q.filters) if ((FILTER_ALIASES[fk] ?? [normKey(fk)]).includes(k) && !sameText(v, fv)) return `the answer is for ${v}, not ${contextWords(q)}`;
+  }
+  return null;
+}
+
 /** A row the source returned that is not complete: SKIPPED (never done, never guessed), with the fields it lacked. */
 export interface SkippedRow {
   missing: string[];
 }
 
-export function readValues(text: string, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): { rows: Array<Array<[string, string]>>; missing: string[]; more?: true; skipped?: SkippedRow[] } {
+export function readValues(
+  text: string,
+  fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[],
+  /** The learned query: a JSON answer naming another report or filter (envelope or row) is refused (`conflict`). */
+  query?: ReadQueryDTO,
+): { rows: Array<Array<[string, string]>>; missing: string[]; more?: true; skipped?: SkippedRow[]; conflict?: string } {
   const missing = new Set<string>();
   const rows: Array<Array<[string, string]>> = [];
   let json: unknown;
@@ -415,23 +438,44 @@ export function readValues(text: string, fields: readonly Pick<ReadFieldDTO, "la
     isJson = false;
   }
   if (isJson) {
-    const found = objectsOf(json, fields);
-    const skipped: SkippedRow[] = [];
-    for (const o of found.objects) {
-      const f = flat(o);
-      const row: Array<[string, string]> = [];
-      const lacks: string[] = [];
-      for (const fd of fields) {
-        // Missing, null, empty or oversized: the value is not known, so the row is skipped, never guessed.
-        const v = cleanValue(f.get(normKey(fd.sourceLabel)) ?? f.get(normKey(fd.label)));
-        if (v === null) lacks.push(fd.label);
-        else row.push([fd.label, v]);
-      }
-      for (const l of lacks) missing.add(l);
-      if (lacks.length === 0) rows.push(row);
-      else skipped.push({ missing: lacks });
+    // 1. normalise: every candidate collection with its envelope context (one walk).
+    const { all, more } = collections(json);
+    const wanted = fields.map((f) => [normKey(f.sourceLabel), normKey(f.label)] as const);
+    const valueOf = (f: Map<string, unknown>, i: number) => cleanValue(f.get(wanted[i]![0]) ?? f.get(wanted[i]![1]));
+    const hits = (f: Map<string, unknown>) => wanted.filter(([a, b]) => f.get(a) != null || f.get(b) != null).length;
+    // 2. pick the collection: scored over ALL its rows (best row's field matches, then how many rows reach it),
+    //    then shallower, then first in walk order. Deterministic.
+    let best: { c: Collection; flats: Array<Map<string, unknown>>; top: number; count: number } | undefined;
+    for (const c of all) {
+      const flats = c.rows.map((r) => flat(r));
+      const top = Math.max(0, ...flats.map(hits));
+      if (top === 0) continue;
+      const count = flats.filter((f) => hits(f) === top).length;
+      if (best === undefined || top > best.top || (top === best.top && (count > best.count || (count === best.count && (c.depth < best.c.depth || (c.depth === best.c.depth && c.order < best.c.order)))))) best = { c, flats, top, count };
     }
-    return { rows, missing: rows.length > 0 ? [] : [...missing], ...(found.more ? { more: true as const } : {}), ...(rows.length > 0 && skipped.length > 0 ? { skipped } : {}) };
+    const skipped: SkippedRow[] = [];
+    if (best !== undefined) {
+      // 3. validate the context: the envelopes, then every row. Any conflict refuses the whole answer (I1).
+      if (query !== undefined) {
+        const conflict = conflictOf(best.c.context, query) ?? best.flats.map((f) => conflictOf(f.entries(), query)).find((x) => x !== null) ?? null;
+        if (conflict !== null) return { rows: [], missing: [], conflict };
+      }
+      // 4. validate each row: complete rows are rows (I2); the others are skipped with what they lack (I3).
+      for (const f of best.flats) {
+        const row: Array<[string, string]> = [];
+        const lacks: string[] = [];
+        fields.forEach((fd, i) => {
+          // Missing, null, empty or oversized: the value is not known, so the row is skipped, never guessed.
+          const v = valueOf(f, i);
+          if (v === null) lacks.push(fd.label);
+          else row.push([fd.label, v]);
+        });
+        for (const l of lacks) missing.add(l);
+        if (lacks.length === 0) rows.push(row);
+        else skipped.push({ missing: lacks });
+      }
+    } else for (const fd of fields) missing.add(fd.label);
+    return { rows, missing: rows.length > 0 ? [] : [...missing], ...(more ? { more: true as const } : {}), ...(rows.length > 0 && skipped.length > 0 ? { skipped } : {}) };
   }
   const lines = text
     .split("\n")
@@ -503,37 +547,6 @@ export function contextWords(q: ReadQueryDTO): string {
 export function confirmOnScreen(text: string, q: ReadQueryDTO): string | null {
   const ok = (q.report === null || phrase(text, q.report)) && q.filters.every(([, v]) => phrase(text, v));
   return ok ? null : `could not confirm ${contextWords(q)} on screen`;
-}
-
-const REPORT_KEYS = new Set(["report", "report name", "insight", "insight name", "dashboard", "dashboard name"]);
-const FILTER_ALIASES: Record<string, string[]> = { period: ["period", "date range", "time range", "range", "timeframe"] };
-
-/**
- * A connector answer that itself names a different report or filter value than the learned query is not the data the
- * person approved: the reason, or null. Answers that do not say are accepted (they were asked with the query).
- */
-export function contradicts(text: string, q: ReadQueryDTO): string | null {
-  let json: unknown;
-  try {
-    json = JSON.parse(text.trim());
-  } catch {
-    return null;
-  }
-  const seen: Array<[string, string]> = [];
-  const walk = (x: unknown, depth: number) => {
-    if (depth > 2 || x === null || typeof x !== "object" || Array.isArray(x)) return;
-    for (const [k, v] of Object.entries(x as Record<string, unknown>)) {
-      if (typeof v === "string") seen.push([normKey(k), v.trim()]);
-      else walk(v, depth + 1);
-    }
-  };
-  walk(json, 0);
-  const same = (a: string, b: string) => a.toLowerCase().replace(/\s+/g, " ") === b.toLowerCase().replace(/\s+/g, " ");
-  for (const [k, v] of seen) {
-    if (q.report !== null && REPORT_KEYS.has(k) && !same(v, q.report)) return `the answer is for the '${v}' report, not ${contextWords(q)}`;
-    for (const [fk, fv] of q.filters) if ((FILTER_ALIASES[fk] ?? [normKey(fk)]).includes(k) && !same(v, fv)) return `the answer is for ${v}, not ${contextWords(q)}`;
-  }
-  return null;
 }
 
 /** True when an answer names the learned report and every learned filter value somewhere (a connector that confirms). */

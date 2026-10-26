@@ -537,6 +537,9 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   - Round 4: a screen read accepts values only when the learned report and filters are on screen (else that way is
     refused with the reason); a connector answer naming another report or period is refused. Incomplete rows are
     skipped and reported (`read.skipped`, `source.skipped`, item warnings, "nothing new"), never counted done.
+  - Round 5: one parser for connector answers (normalise, pick the collection over all its rows, check the context of
+    the envelopes and of every row, then each row). A row or envelope naming another report or period refuses the
+    answer for that method.
 
 ## s19: messaging playbook (additive, ADR 0011)
 A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,

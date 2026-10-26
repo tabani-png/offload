@@ -87,7 +87,15 @@ only saving was the typing.
    with a missing, null or unreadable value are SKIPPED: named in the dry run (`read.skipped`) and the run
    (`source.skipped`, message, a warning on every item), never entered and never in the done log; "nothing new" says
    how many were skipped and why.
-11. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+11. **Round 5 (PR #35 review): one answer normaliser, with invariants.** A connector answer is parsed in one pass:
+    normalise (every list of objects, `columns` + `rows` table and single object up to 4 levels, each with the
+    context of the envelopes around it) -> pick the collection (scored over ALL its rows: best field match, then how
+    many rows reach it, then shallower, then walk order) -> validate the context (envelopes and every row against the
+    learned report and filters; any conflict refuses the whole answer for that method) -> validate each row (complete
+    = row, else skipped with the fields it lacks). Invariants, tested over 50+ generated shapes
+    (`brain/tests/s27-workflow-reads/parser-table.test.ts`): I1 a wrong context never becomes a row; I2 a valid row is
+    never lost silently; I3 an incomplete row is never a row and is always named.
+12. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)

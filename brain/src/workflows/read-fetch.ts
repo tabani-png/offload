@@ -17,7 +17,7 @@ import { loadConnectorsConfig, toMcpServers, type Env } from "../connectors/conf
 import type { LinkRunner, Method } from "../connectors/link.ts";
 import type { SecretReader } from "../connectors/secrets.ts";
 import type { ChainTarget } from "../connectors/targets.ts";
-import { confirmOnScreen, contextWords, contradicts, mentionsContext, queryArgs, queryOf, readValues, sourceTarget, type SkippedRow } from "../plan/read-source.ts";
+import { confirmOnScreen, contextWords, mentionsContext, queryArgs, queryOf, readValues, sourceTarget, type SkippedRow } from "../plan/read-source.ts";
 import type { ToolPolicy } from "./allowlist.ts";
 import { makeBatch } from "./batch.ts";
 import { createGate, READ_ONLY_WORDS, splitMcpName } from "./gate.ts";
@@ -194,13 +194,18 @@ export class ChainSourceFetcher implements SourceFetcher {
       // Only what can be confirmed: the screen must show the learned report and filters (no navigation, no filter
       // change); a connector answer that names another report or filter is not the approved data.
       const query = queryOf(src);
-      const unsure = state.method === "computer" ? confirmOnScreen(text, query) : contradicts(text, query);
-      if (unsure !== null) {
-        if (state.method !== "computer") this.o.resolver.markFailed(target.id, state.method, new Error(unsure));
-        why.push(`${VIA_WORDS[state.method]}: ${unsure}`);
+      const onScreen = state.method === "computer" ? confirmOnScreen(text, query) : null;
+      if (onScreen !== null) {
+        why.push(`${VIA_WORDS[state.method]}: ${onScreen}`);
         continue;
       }
-      const { rows, missing, more, skipped } = readValues(text, src.fields);
+      // One parse: the answer's envelopes and every row are checked against the learned query in the same pass.
+      const { rows, missing, more, skipped, conflict } = readValues(text, src.fields, query);
+      if (conflict !== undefined) {
+        this.o.resolver.markFailed(target.id, state.method, new Error(conflict));
+        why.push(`${VIA_WORDS[state.method]}: ${conflict}`);
+        continue;
+      }
       if (rows.length === 0) {
         why.push(`${VIA_WORDS[state.method]}: ${src.targetName} did not show ${missing.join(", ")}`);
         continue;
