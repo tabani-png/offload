@@ -87,26 +87,30 @@ describe("s19 per-message read", () => {
     expect(r.shape).toMatchObject({ questions: 1, links: 0, attachments: 1 });
   });
 
+  const coreOf = (r: { id: string }) => maskedCore(founder.messages.find((m) => m.id === r.id)!, fr.identity).core;
+
   test("READ: the model may overrule a label within the vocabulary", () => {
     const rule = fr.reads[0]!;
-    const merged = mergeLabels(rule, JSON.stringify({ intent: "get_reply", opener: "problem_first", cta: "reply", proof: ["momentum"] }), fr.identity);
+    const merged = mergeLabels(rule, JSON.stringify({ intent: "get_reply", opener: "problem_first", cta: "reply", proof: ["momentum"] }), fr.identity, coreOf(rule));
     expect(merged).toMatchObject({ intent: "get_reply", opener: "problem_first", cta: "reply", proof: ["momentum"], labelledBy: "model" });
   });
 
   test("READ: off-vocabulary values and unparsable replies fall back to the rule labels", () => {
     const rule = fr.reads[0]!;
-    const merged = mergeLabels(rule, JSON.stringify({ intent: "close_deal", cta: "wire_money", proof: ["traction", "made_up"], audience: "aliens" }), fr.identity);
+    const merged = mergeLabels(rule, JSON.stringify({ intent: "close_deal", cta: "wire_money", proof: ["traction", "made_up"], audience: "aliens" }), fr.identity, coreOf(rule));
     expect(merged.intent).toBe(rule.intent);
     expect(merged.cta).toBe(rule.cta);
     expect(merged.proof).toEqual(rule.proof);
     expect(merged.audience).toBe(rule.audience);
-    expect(mergeLabels(rule, "I think this is outreach.", fr.identity)).toEqual(rule);
+    expect(mergeLabels(rule, "I think this is outreach.", fr.identity, coreOf(rule))).toEqual(rule);
   });
 
-  test("READ: a model's free-text label is masked again and dropped when it names someone", () => {
+  test("READ: a model's free-text label is masked again and kept only when it is text of the message", () => {
     const rule = fr.reads[0]!;
-    expect(mergeLabels(rule, JSON.stringify({ coreClaim: "Offload saves 9 hours" }), fr.identity).coreClaim).toBe("{company} saves [number] hours");
-    expect(mergeLabels(rule, JSON.stringify({ coreClaim: "Anna should back it like Spotify" }), fr.identity).coreClaim).toBe("[name] should back it like [name]");
+    const merge = (coreClaim: string) => mergeLabels(rule, JSON.stringify({ coreClaim }), fr.identity, coreOf(rule)).coreClaim;
+    expect(merge("Offload is a Mac app that watches a week of your work")).toBe("{company} is a Mac app that watches a week of your work");
+    expect(merge("You backed Spotify early")).toBe("You backed [name] early");
+    expect(merge("Offload saves 9 hours")).toBe(rule.coreClaim);
   });
 
   test("READ: each message is labelled once through the classify route, Haiku 5.5, with the rule read as the hint", () => {
