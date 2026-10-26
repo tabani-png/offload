@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { approveBuild } from "../../src/builder/approval.ts";
 import { runBuild } from "../../src/builder/runner.ts";
-import { assertSafeExecutionProfile, BUILDER_TOOLS, builderEnv, decideBashCommand, decideTool, DISALLOWED_TOOLS, NETWORK_TOOLS, profileFromEnv, UnsafeProfileError } from "../../src/builder/sandbox.ts";
+import { assertSafeExecutionProfile, BUILDER_TOOLS, builderEnv, builderPermissions, decideBashCommand, decideTool, DISALLOWED_TOOLS, NETWORK_TOOLS, profileFromEnv, UnsafeProfileError } from "../../src/builder/sandbox.ts";
 import { fakeQuery, NOW, prepared, writeSlug } from "./setup.ts";
 
 const WS = "/tmp/ws-s24";
@@ -69,17 +69,16 @@ describe("s24 builder sandbox", () => {
     expect(f.seen).toHaveLength(0);
   });
 
-  test("SAFETY: in a container, bypass skips canUseTool but the PreToolUse hook still guards the check", async () => {
+  test("SAFETY: container mode is not supported: the run is refused (allowlist or bypass) and the approval is kept; the PreToolUse hook still guards the check", async () => {
     const p = await prepared();
     const { token } = approveBuild(p.home, p.briefId, p.briefHash, p.checkHash, NOW);
     const f = fakeQuery([{ act: writeSlug("good") }]);
-    await runBuild({ home: p.home, briefId: p.briefId, token, query: f.query, profile: { mode: "bypass", containerSandbox: true } });
-    const o = f.seen[0]!.options;
-    expect(o.permissionMode).toBe("bypassPermissions");
-    expect(o.allowDangerouslySkipPermissions).toBe(true);
-    expect(o.canUseTool).toBeUndefined();
-    const hook = o.hooks!.PreToolUse![0]!.hooks[0]!;
-    const out = await hook({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: "accept/accept.py" } } as never, "t", { signal: new AbortController().signal });
+    for (const mode of ["bypass", "allowlist"] as const) {
+      await expect(runBuild({ home: p.home, briefId: p.briefId, token, query: f.query, profile: { mode, containerSandbox: true } })).rejects.toThrow(/container mode is not supported/);
+    }
+    expect(f.seen).toHaveLength(0);
+    expect((await runBuild({ home: p.home, briefId: p.briefId, token, query: f.query, profile: { mode: "allowlist", containerSandbox: false } })).outcome).toBe("PASS");
+    const out = await builderPermissions("/tmp/ws-s24").preToolUse({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: "accept/accept.py" } } as never, "t", { signal: new AbortController().signal });
     expect(JSON.stringify(out)).toContain('"permissionDecision":"deny"');
   });
 
