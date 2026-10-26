@@ -9,6 +9,9 @@
 //   bun run brain/src/cli.ts draft   --insight N|ins_… --home DIR [--facts FILE] [--json]
 //   bun run brain/src/cli.ts dry-run (--workflow ID | --insight N|ins_…) --home DIR [--limit N] [--model stub|claude] [--json]
 //   bun run brain/src/cli.ts purge   --home DIR [--json]   (s10b N4: the app runs it at launch; same purge as serve)
+//   bun run brain/src/cli.ts solutions (--insight N|ins_… | --held N) --home DIR [--choose KIND] [--model stub|real] [--json]
+//     (s22) ranks the five kinds of fix; --choose workflow drafts it (same as `draft`), tool|setup|remove_step writes a
+//     draft brief. `solutions approve --brief sol_… --hash H` / `solutions handoff --brief sol_… --token T`.
 //   analyze/serve --understanding v1|v2 (s12; default v1 until s15): v2 = span descriptions + local embeddings + task
 //     induction. --embedder stub|ollama (v2 only; default stub = deterministic offline; ollama = 127.0.0.1:11434,
 //     --embed-model qwen3-embedding:0.6b|bge-m3). --role R --industry I: optional user context (prompts only).
@@ -45,6 +48,9 @@ import { StubCaptioner } from "./vision/stub.ts";
 import { SpawnLinkRunner } from "./connectors/link.ts";
 import { fetchSchema, readUniverse, syncUniverse, UniverseSyncError, universeStatus } from "./connectors/universe.ts";
 import { CaptionWorker } from "./vision/worker.ts";
+import { approveBrief, BriefError, handOffBrief } from "./solutions/brief.ts";
+import { ChooseError, chooseSolution, designSolutions, parseKind, withSolutions } from "./solutions/service.ts";
+import type { SolutionSet } from "./solutions/types.ts";
 
 const USAGE = `usage:
   bun run brain/src/cli.ts analyze --home DIR [--top N] [--review-seconds S] [--json]
@@ -56,12 +62,14 @@ const USAGE = `usage:
   bun run brain/src/cli.ts draft --insight N|ins_ID --home DIR [--facts FILE] [--json]
   bun run brain/src/cli.ts dry-run (--workflow ID | --insight N|ins_ID) --home DIR [--limit N] [--model stub|claude] [--json]
   bun run brain/src/cli.ts purge --home DIR [--json]
+  bun run brain/src/cli.ts solutions (--insight N|ins_ID | --held N) --home DIR [--choose workflow|tool|setup|remove_step] [--model stub|real] [--json]
+  bun run brain/src/cli.ts solutions approve --brief sol_ID --hash H --home DIR | solutions handoff --brief sol_ID --token T --home DIR
   bun run brain/src/cli.ts universe sync|status|schema SLUG --home DIR [--json]   (s17, read-only Composio listing)
   serve also takes --log-file FILE, --captioner off|stub|ollama|claude|auto, --vision-model TAG|auto, --claude-vision-model M, --ollama-url URL`;
 
 class UsageError extends Error {}
 
-type Command = "analyze" | "serve" | "tone build" | "tone test" | "tone pairs" | "draft" | "dry-run" | "purge";
+type Command = "analyze" | "serve" | "tone build" | "tone test" | "tone pairs" | "draft" | "dry-run" | "purge" | "solutions";
 
 interface Args {
   command: Command;
@@ -94,6 +102,9 @@ interface Args {
   /** s14: --claude-vision-model (default: the router's caption model, claude-haiku-5-5). */
   claudeVisionModel: string;
   ollamaUrl: string;
+  /** s22: --held N (a held-back task) and --choose KIND. */
+  held: number;
+  choose: string;
 }
 
 function parse(argv: readonly string[]): Args {
@@ -104,9 +115,9 @@ function parse(argv: readonly string[]): Args {
     if (sub !== "build" && sub !== "test" && sub !== "pairs") throw new UsageError(`unknown tone command ${sub ?? "(none)"}`);
     command = `tone ${sub}`;
     rest = rest.slice(1);
-  } else if (first === "analyze" || first === "serve" || first === "draft" || first === "dry-run" || first === "purge") command = first;
+  } else if (first === "analyze" || first === "serve" || first === "draft" || first === "dry-run" || first === "purge" || first === "solutions") command = first;
   else throw new UsageError(`unknown command ${first ?? "(none)"}`);
-  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "real", modelGiven: false, source: "fixture", force: false, holdBack: 0, answers: false, logFile: "", understanding: "v1", embedder: "stub", embedModel: "qwen3-embedding:0.6b", role: "", industry: "", s12Flags: [], captioner: "off", visionModel: DEFAULT_VISION_MODEL, claudeVisionModel: "", ollamaUrl: DEFAULT_OLLAMA_URL };
+  const args: Args = { command, home: "", top: 5, reviewSeconds: undefined, json: false, port: 0, insight: "", workflow: "", facts: "", limit: undefined, model: "real", modelGiven: false, source: "fixture", force: false, holdBack: 0, answers: false, logFile: "", understanding: "v1", embedder: "stub", embedModel: "qwen3-embedding:0.6b", role: "", industry: "", s12Flags: [], captioner: "off", visionModel: DEFAULT_VISION_MODEL, claudeVisionModel: "", ollamaUrl: DEFAULT_OLLAMA_URL, held: 0, choose: "" };
   const num = (flag: string, v: string | undefined, min: number, max: number): number => {
     const n = Number(v);
     if (v === undefined || !Number.isFinite(n) || n < min || n > max) throw new UsageError(`${flag} must be a number in [${min}, ${max}]`);
@@ -127,6 +138,8 @@ function parse(argv: readonly string[]): Args {
     else if (a === "--workflow") args.workflow = str(a, rest[++i]);
     else if (a === "--facts") args.facts = str(a, rest[++i]);
     else if (a === "--limit") args.limit = Math.floor(num(a, rest[++i], 1, 50));
+    else if (a === "--held") args.held = Math.floor(num(a, rest[++i], 1, 100));
+    else if (a === "--choose") args.choose = str(a, rest[++i]);
     else if (a === "--hold-back") args.holdBack = Math.floor(num(a, rest[++i], 1, 100));
     else if (a === "--force") args.force = true;
     else if (a === "--answers") args.answers = true;
@@ -183,10 +196,12 @@ function parse(argv: readonly string[]): Args {
   }
   if (args.home === "") throw new UsageError("--home DIR is required");
   // s14: draft and dry-run analyse the store too, so they take the same flags.
-  if (args.s12Flags.length > 0 && command !== "analyze" && command !== "serve" && command !== "draft" && command !== "dry-run") throw new UsageError(`${args.s12Flags[0]} is only for analyze, serve, draft and dry-run`);
+  if (args.s12Flags.length > 0 && command !== "analyze" && command !== "serve" && command !== "draft" && command !== "dry-run" && command !== "solutions") throw new UsageError(`${args.s12Flags[0]} is only for analyze, serve, draft, dry-run and solutions`);
   if (args.understanding === "v1" && (args.s12Flags.includes("--embedder") || args.s12Flags.includes("--embed-model"))) throw new UsageError("--embedder needs --understanding v2");
   if (command === "draft" && args.insight === "") throw new UsageError("draft needs --insight N|ins_ID");
   if (command === "dry-run" && args.insight === "" && args.workflow === "") throw new UsageError("dry-run needs --workflow ID or --insight N");
+  if (command === "solutions" && (args.insight === "") === (args.held === 0)) throw new UsageError("solutions needs one of --insight N|ins_ID or --held N");
+  if (command === "solutions" && args.choose !== "" && parseKind(args.choose) === null) throw new UsageError("--choose must be workflow, tool, setup or remove_step");
   if (command === "tone test" && args.holdBack === 0) throw new UsageError("tone test needs --hold-back N");
   return args;
 }
@@ -365,7 +380,56 @@ async function universeCommand(argv: readonly string[]): Promise<number> {
   throw new UsageError(`unknown universe command ${sub ?? "(none)"} (sync, status, schema SLUG)`);
 }
 
+export function formatSolutions(set: SolutionSet): string {
+  const lines = [`${set.name}${set.heldBack ? " (held back: a person is at the keyboard)" : ""}: ${set.observedArithmetic}`, `best: ${set.top} · worded by ${set.designedBy}`];
+  set.options.forEach((o, i) => {
+    lines.push(`  ${i + 1}. ${o.kind.padEnd(11)} saves ${o.weeklyHoursSaved.toFixed(2)} h/wk · effort ${o.effort.level} (${o.effort.setupHours} h) · confidence ${o.confidence.level} (${o.confidence.value.toFixed(2)})`);
+    lines.push(`     ${o.what}`);
+    lines.push(`     ${o.arithmetic}${o.evidence.spanIds.length === 0 ? "" : ` · evidence ${o.evidence.spanIds.length} spans, ${o.evidence.instanceIds.length} instances`}`);
+  });
+  return lines.join("\n");
+}
+
+/** s22: solutions approve|handoff (no analysis: the brief on disk is the whole input). */
+async function solutionsBriefCommand(argv: readonly string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  let home = "";
+  let brief = "";
+  let hash = "";
+  let token = "";
+  let json = false;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === "--home") home = rest[++i] ?? "";
+    else if (a === "--brief") brief = rest[++i] ?? "";
+    else if (a === "--hash") hash = rest[++i] ?? "";
+    else if (a === "--token") token = rest[++i] ?? "";
+    else if (a === "--json") json = true;
+    else throw new UsageError(`unknown argument ${a}`);
+  }
+  if (home === "" || brief === "") throw new UsageError(`solutions ${sub} needs --home DIR and --brief sol_ID`);
+  if (sub === "approve") {
+    if (hash === "") throw new UsageError("solutions approve needs --hash H (the brief's hash)");
+    const r = approveBrief(home, brief, hash, Date.now());
+    console.log(json ? JSON.stringify(r) : `approved ${brief}; hand-off token (shown once): ${r.token}`);
+    return 0;
+  }
+  if (token === "") throw new UsageError("solutions handoff needs --token T");
+  const r = handOffBrief(home, brief, token, Date.now());
+  console.log(json ? JSON.stringify(r) : r.builderPrompt);
+  return 0;
+}
+
 async function main(argv: readonly string[]): Promise<number> {
+  if (argv[0] === "solutions" && (argv[1] === "approve" || argv[1] === "handoff")) {
+    try {
+      return await solutionsBriefCommand(argv.slice(1));
+    } catch (err) {
+      if (!(err instanceof UsageError) && !(err instanceof BriefError)) throw err;
+      console.error(`brain: ${err.message}`);
+      return 2;
+    }
+  }
   if (argv[0] === "universe") {
     try {
       return await universeCommand(argv.slice(1));
@@ -386,7 +450,7 @@ async function main(argv: readonly string[]): Promise<number> {
   try {
     return await runCommand(args);
   } catch (err) {
-    if (err instanceof UsageError || err instanceof NotFoundError) {
+    if (err instanceof UsageError || err instanceof NotFoundError || err instanceof ChooseError || err instanceof BriefError) {
       console.error(`brain: ${err.message}`);
       return 2;
     }
@@ -403,7 +467,7 @@ async function runCommand(args: Args): Promise<number> {
   if (args.command === "analyze") {
     const a = await analyzeHome(args.home, { ...understandingOptions(args), ...(args.reviewSeconds === undefined ? {} : { reviewSeconds: args.reviewSeconds }) });
     if (args.json) {
-      const body = toInsights(a);
+      const body = withSolutions(a, toInsights(a));
       console.log(JSON.stringify({ ...body, insights: body.insights.slice(0, args.top) }, null, 2));
     } else console.log(formatReport(a, args.top));
     return 0;
@@ -432,6 +496,27 @@ async function runCommand(args: Args): Promise<number> {
     } finally {
       await close();
     }
+    return 0;
+  }
+  if (args.command === "solutions") {
+    const stored = readUserContext(args.home).context;
+    const u = understandingOptions(args);
+    const opts = { ...u, ...(u.userContext === undefined && stored !== undefined ? { userContext: stored } : {}) };
+    const a = await analyzeHome(args.home, opts);
+    // Like draft: the stub design model unless --model is given.
+    const model = args.modelGiven ? modelOf(args) : new StubModel();
+    const models = loadModelConfig(args.home);
+    const user = opts.userContext;
+    const { set } = await designSolutions({ analysis: a, ref: args.held > 0 ? `held:${args.held}` : args.insight, model, models, ...(user === undefined ? {} : { user }) });
+    const kind = parseKind(args.choose);
+    if (kind === null) {
+      console.log(args.json ? JSON.stringify(set, null, 2) : formatSolutions(set));
+      return 0;
+    }
+    const r = await chooseSolution({ home: args.home, analysis: a, set, kind, model, models, ...(user === undefined ? {} : { user }) });
+    if (args.json) console.log(JSON.stringify(r, null, 2));
+    else if (r.kind === "workflow") console.log(`${r.created ? "drafted" : "exists"} ${r.workflow.id}: ${r.workflow.name} [${r.workflow.status}] (the workflow drafter, same as \`draft\`)`);
+    else console.log(`${r.created ? "drafted" : "kept"} brief ${r.brief.id} [${r.brief.status}]: ${r.brief.what}\n  file: ${args.home.replace(/\/$/, "")}/solutions/${r.brief.id}/BRIEF.md\n  approve: solutions approve --brief ${r.brief.id} --hash ${r.brief.hash} --home ${args.home}`);
     return 0;
   }
   if (args.command === "draft" || args.command === "dry-run") {

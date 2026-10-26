@@ -53,6 +53,7 @@ export const ROLE_ROUTES: Readonly<Record<ModelRole, Route>> = {
   bucket: "classify",
   style_card: "classify",
   workflow_design: "design",
+  solution_design: "design",
   step: "item_step",
   label: "understand",
   refine: "refine",

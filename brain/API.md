@@ -406,6 +406,41 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
 - CLI: `draft` and `dry-run` take `--understanding v1|v2` (and the embedder flags); `draft` of a general insight uses
   the stub design model unless `--model real` is given.
 
+## Solutions (s22): the best kind of fix per task (additive)
+For every insight, and every task the judge holds back because a person is at the keyboard (e.g. watching a coding
+agent), the brain ranks five kinds of fix (`brain/src/solutions/`):
+`workflow` (automate it: the existing drafter, MCP -> Composio -> API -> computer use), `tool` (build a custom tool or
+script), `setup` (change the setup: IDE, coding-agent rules and permissions, shortcuts, templates), `remove_step`
+(replace a manual sub-process with a pipeline, e.g. post images generated from the post text), `leave_alone`.
+Numbers are code (ADR 0005): observed h/wk = `activeMinutes` / 60 × 7 / window days; each option saves
+min(observed, observed × share × factor) (workflow: min(observed, the s04 estimate) × share), never more than
+observed; confidence = fit × (0.6 + 0.4 × min(1, √(instances/8))); rank = saving × confidence (ties: fewer setup
+hours), `leave_alone` first when nothing clears 0.5 h/wk × confidence or the task is one-off reading. Opus 5.5 (role
+`solution_design`, router route `design`) may reword only `what`, `why` and the brief text; a reply that changes a
+kind, the order, a figure or holds a digit is ignored (`designedBy: "rules"`).
+
+- `GET /insights` gains `solutions` on each insight (`{top, observedWeeklyHours, options[{kind, what,
+  weeklyHoursSaved, effort, confidence}]}`, rules only, no model call) and a top-level `heldBack[]` (`{id, taskId,
+  kind, name, description, category, reason, activeMinutes, instances, solutions}`). Every existing key is unchanged.
+- `GET /insights/:id/solutions` -> `SolutionSet` (`solutions/types.ts`): `{version, subjectId, taskId, name, heldBack,
+  observedWeeklyHours, observedArithmetic, parts[{id, name, activeMs, spanIds, tags}], options[], top, designedBy}`;
+  each option `{kind, what, why, weeklyHoursSaved, share, arithmetic, effort{level, setupHours, paybackWeeks},
+  confidence{value, level, reasons}, evidence{spanIds, instanceIds, parts}, handoff}`; `handoff` is
+  `{to: "workflow_drafter", insightId}`, `{to: "brief", spec{inputs, outputs, runsWhere, builderPrompt, acceptance}}`
+  or `{to: "none"}`. `:id` is an `ins_…` id of an insight or a held-back task.
+- `POST /insights/:id/solutions/choose {kind}`: `workflow` -> `{kind, workflow: WorkflowDetailDTO}`, exactly what
+  `POST /workflows/draft` makes (201 new, 200 existing); `tool` / `setup` / `remove_step` -> `{kind, brief}` (201
+  new), a draft in `$OFFLOAD_HOME/solutions/<sol_id>/{brief.json, BRIEF.md}` (0600). `leave_alone` or an option that
+  is not a fit -> 409.
+- `GET /solutions/:id` -> the brief (`status` draft | approved | handed_off, `hash` = sha256 of its canonical content).
+  `POST /solutions/:id/approve {briefHash}` -> `{brief, token}`: only the exact current hash of a draft (409
+  otherwise, also when the file changed on disk); the token is single use and only its sha256 is stored.
+  `POST /solutions/:id/handoff {token}` -> `{brief, builderPrompt, briefMd}` once (403 wrong token, 409 reused or not
+  approved). Nothing is executed: a brief is text for a builder (e.g. a Claude Code session).
+- CLI: `solutions (--insight N|ins_ID | --held N) --home DIR [--choose KIND] [--json] [--model stub|real]` (stub design
+  model unless `--model` is given, like `draft`); `solutions approve --brief sol_ID --hash H --home DIR`;
+  `solutions handoff --brief sol_ID --token T --home DIR`. `analyze --json` carries the same additive fields.
+
 ## Company sync (S2-02, ADR 0103)
 The brain's sync client (`src/sync/`) connects this Mac to the company control plane (`OFFLOAD_CONTROL_URL`, https;
 http only on 127.0.0.1). It can emit only the seven sync objects of `schemas/stage2` (`notice_ack`, `run_outcome`,

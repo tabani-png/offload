@@ -17,6 +17,8 @@ import { BRAIN_READY_PREFIX, CAPTIONER_OFF, MODEL_HEADER, type BrainReadyDTO, ty
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
 import { workflowRoute } from "./workflow-routes.ts";
 import { s14Route } from "./s14-routes.ts";
+import { solutionsRoute } from "../solutions/routes.ts";
+import { withSolutions } from "../solutions/service.ts";
 import { syncRoute } from "./sync-routes.ts";
 import { SyncClient, type SyncDeps } from "../sync/client.ts";
 import { contextStamp, readUserContext } from "../context/store.ts";
@@ -287,6 +289,9 @@ export function createBrain(opts: BrainOptions): Brain {
     if (!authorized(req, opts.token)) return error(401, "unauthorized");
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
+    // s22: solution options per insight and solution briefs (solutions/routes.ts); null = not one of its routes.
+    const sol = await solutionsRoute(req, path, { home: opts.home, env, model, modelLabel, now, analysis: () => analysis(undefined) });
+    if (sol !== null) return sol;
     // s14: context, general drafting and plan choice (api/s14-routes.ts); null = not one of its routes.
     const s14 = await s14Route(req, path, { home: opts.home, env, model, modelLabel, now, analysis: () => analysis(undefined), ...(router === undefined ? {} : { router }) });
     if (s14 !== null) return s14;
@@ -355,7 +360,9 @@ export function createBrain(opts: BrainOptions): Brain {
     if (path === "/insights") {
       const review = parseReviewSeconds(url.searchParams.get("reviewSeconds"));
       if (review === "invalid") return error(400, "bad_request", "reviewSeconds must be a number in (0, 600]");
-      return json(200, toInsights(await analysis(review)));
+      // s22: plus `solutions` per insight and `heldBack[]` (additive; rules only, no model call).
+      const a = await analysis(review);
+      return json(200, withSolutions(a, toInsights(a)));
     }
     const ev = /^\/insights\/([A-Za-z0-9_-]+)\/evidence$/.exec(path);
     if (ev?.[1] !== undefined) {
