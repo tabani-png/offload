@@ -33,6 +33,7 @@ import {
   type OvernightPolicy,
 } from "../policies/evaluate.ts";
 import { overnightById, rolePolicyOf, type RolePolicy } from "../policies/repo.ts";
+import { scrubLogText } from "../../../../brain/src/log.ts";
 import type { CommitCall, CommitTarget, Executor } from "./executors.ts";
 import {
   checkCall,
@@ -86,7 +87,7 @@ export interface ProposeRun {
 
 export type ProposeResult =
   | { ok: true; batchHash: string; state: BatchState; overnightEvaluation: OvernightEvaluation | null; autoApproved: number }
-  | { ok: false; code: ErrorCode; message: string; tripped: string | null };
+  | { ok: false; code: ErrorCode; message: string; tripped: string | null; item?: string };
 
 export interface OvernightEvaluation {
   policyId: string;
@@ -155,6 +156,9 @@ export interface Broker extends BrokerPort {
   revokeForKill(tx: Tx, scope: "tenant" | "person" | "workflow", targetId: string | null, reason: string): Promise<number>;
   reportNightSignals(tenantId: string, policyId: string, s: { sends?: number; bounces?: number; negativeReplies?: number; costCents?: number }): Promise<string | null>;
   reportRunResult(tenantId: string, policyId: string, ok: boolean): Promise<string | null>;
+  /** After a policy edit (policies module): a narrowing edit unlinks what the policy approved and has not sent; a
+   * widening edit makes the rest of tonight a dry run (ADR 0112 §1-2). */
+  policyChanged(tx: Tx, policyId: string, change: { narrowed: boolean; widened: boolean }): Promise<number>;
   /** Background commits started by approvals and policies; tests await it. */
   idle(): Promise<void>;
   dispatch(tenantId: string, hash: string, token: string): void;
@@ -266,7 +270,32 @@ function intact(b: BatchRow, rows: ItemRow[]): boolean {
 
 const hasAttachments = (i: BatchItem) => (i.commit?.fields ?? []).some(([l, v]) => /^attachment/i.test(l) && v.trim() !== "");
 
-const reject = (code: ErrorCode, message: string, tripped: string | null = null): ProposeResult => ({ ok: false, code, message, tripped });
+const reject = (code: ErrorCode, message: string, tripped: string | null = null, item?: string): ProposeResult => ({
+  ok: false,
+  code,
+  message,
+  tripped,
+  ...(item === undefined ? {} : { item }),
+});
+
+/**
+ * Free text bound for the audit log or the item journal (ADR 0111 §6: owner, admin and auditor read the audit log and
+ * are not approvers). The brain's `scrubLogText` drops addresses and quoted text; the recipients the text may name,
+ * and their domains, go too (a provider error or an allowlist reason quotes them, and a bare domain is no address).
+ */
+export function scrubFor(text: string, recipients: readonly string[]): string {
+  let s = text;
+  const swap = (needle: string, by: string) => {
+    if (needle.length < 3) return;
+    s = s.replace(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), by);
+  };
+  for (const r of recipients) swap(r.trim(), "<address>");
+  for (const r of recipients) {
+    const at = r.lastIndexOf("@");
+    if (at >= 0) swap(r.slice(at + 1).trim(), "<domain>");
+  }
+  return scrubLogText(s);
+}
 
 interface Validated {
   items: BatchItem[];
@@ -397,7 +426,8 @@ export function createBroker(deps: Deps): Broker {
       ((runner && (policy.approvers === "runner" || policy.approvers === "runner_or_dept_lead")) ||
         (lead && (policy.approvers === "dept_lead" || policy.approvers === "runner_or_dept_lead")));
     const visible = runner || approver || p.accessRole === "owner" || p.accessRole === "admin" || lead;
-    return { visible, approver, fields: runner || approver };
+    // ADR 0111 §6: only an approver sees recipients and bodies; a runner who may not approve sees the batch without them.
+    return { visible, approver, fields: approver };
   }
 
   async function mustApprove(tx: Tx, p: Principal, b: BatchRow): Promise<void> {
@@ -441,13 +471,17 @@ export function createBroker(deps: Deps): Broker {
     }
     const items: BatchItem[] = [];
     const keys = new Set<string>();
+    const ref = (key: string) => itemRef(run.workflowId, key);
     for (const it of input) {
       const s = toStage1(it);
-      if ("reason" in s) return { ok: false, r: reject("validation_failed", s.reason) };
-      if (keys.has(s.item.key)) return { ok: false, r: reject("validation_failed", "two items for the same recipient") };
+      if ("reason" in s) return { ok: false, r: reject("validation_failed", s.reason, null, typeof it.key === "string" ? ref(it.key) : undefined) };
+      // The same recipient twice, however it is spelled (trim, case, NFC, punycode: the brain's normaliseAddress).
+      const same = normaliseAddress(s.item.to) ?? s.item.to.normalize("NFC").trim().toLowerCase();
+      if (keys.has(s.item.key) || keys.has(same)) return { ok: false, r: reject("validation_failed", "two items for the same recipient", null, ref(s.item.key)) };
       keys.add(s.item.key);
+      keys.add(same);
       if (!policy.allowedCapabilities.includes(it.capability)) {
-        return { ok: false, r: reject("forbidden", `capability ${it.capability} is not allowed for this job role`) };
+        return { ok: false, r: reject("forbidden", `capability ${it.capability} is not allowed for this job role`, null, ref(s.item.key)) };
       }
       items.push(s.item);
     }
@@ -455,13 +489,13 @@ export function createBroker(deps: Deps): Broker {
     const method = methodOf(conn.provider)!;
     for (let i = 0; i < items.length; i++) {
       const pr = policyForItem(input[i]!.capability, items[i]!, { kind: conn.kind, method }, { batchHash: hash, ...(run.crmSheet ? { crmSheet: run.crmSheet } : {}) });
-      if ("reason" in pr) return { ok: false, r: reject("forbidden", pr.reason) };
+      if ("reason" in pr) return { ok: false, r: reject("forbidden", pr.reason, null, ref(items[i]!.key)) };
     }
     // Stage 1: an `unknown` item counts as contacted until a person releases it; it is never drafted again before.
     for (const item of items) {
       const [u] = await tx`select 1 from contacted_ledger where workflow_id = ${run.workflowId} and recipient = ${recipientOf(item)}
         and outcome in ('sending', 'unknown') and released_at is null limit 1`;
-      if (u) return { ok: false, r: reject("conflict", `${item.key} may already have been sent: release it before a new batch`) };
+      if (u) return { ok: false, r: reject("conflict", "a recipient in this batch may already have been sent to: release it before a new batch", null, ref(item.key)) };
     }
     return { ok: true, v: { items, hash, conn, policy } };
   }
@@ -540,16 +574,13 @@ export function createBroker(deps: Deps): Broker {
     await tx`insert into breaker_trips (tenant_id, policy_id, reason, batch_hash, at, detail)
       values (current_setting('app.tenant_id')::uuid, ${policyId}, ${reason}, ${hash}, ${new Date(t)}, ${detail}::jsonb)`;
     // "pause the policy and queue the rest": unspent policy tokens are revoked, their unsent items go back to a person.
-    const open = await tx`select distinct t.batch_hash from approval_tokens t where t.policy_id = ${policyId} and t.revoked_at is null
-        and (t.used_at is null or exists (select 1 from batch_items i
-          where i.tenant_id = t.tenant_id and i.token_id = t.id and i.state = 'pending'))`;
-    for (const o of open) {
-      await tx`update approval_tokens set revoked_at = ${new Date(t)}, revoked_reason = ${"breaker: " + reason}
-        where batch_hash = ${o.batch_hash} and policy_id = ${policyId} and used_at is null and revoked_at is null`;
-      await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${new Date(t)}
-        where batch_hash = ${o.batch_hash} and state = 'pending'
-          and token_id in (select id from approval_tokens where policy_id = ${policyId})`;
-      await recompute(tx, o.batch_hash as string);
+    await unlinkPolicy(tx, policyId, "breaker: " + reason);
+    // Only a night that did not trip counts as a dry-run night (ADR 0106 "successful" nights; ADR 0112 §3).
+    const night = nightOf(t, await tenantTimezone(tx));
+    const [c] = await tx`select counted from overnight_counters where policy_id = ${policyId} and night = ${night}::date for update`;
+    await tx`update overnight_counters set tripped = true, counted = false where policy_id = ${policyId} and night = ${night}::date`;
+    if (c?.counted === true) {
+      await tx`update overnight_policies set dry_run_nights_done = greatest(0, dry_run_nights_done - 1) where id = ${policyId}`;
     }
     await audit(tx, {
       actor: SERVICE,
@@ -560,17 +591,55 @@ export function createBroker(deps: Deps): Broker {
     });
   }
 
-  /** The night's counters row; the first evaluation of a night decides whether it is a dry-run night. */
+  /** Unspent approvals of a policy are revoked and its approved, unsent items go back to a person (no token, not
+   * scheduled). Used by a trip, a narrowing edit and execute's fail-closed check. Returns the batches touched. */
+  async function unlinkPolicy(tx: Tx, policyId: string, reason: string): Promise<number> {
+    const t = new Date(now());
+    const open = await tx`select distinct t.batch_hash from approval_tokens t where t.policy_id = ${policyId} and t.revoked_at is null
+        and (t.used_at is null or exists (select 1 from batch_items i
+          where i.tenant_id = t.tenant_id and i.token_id = t.id and i.state = 'pending'))`;
+    for (const o of open) {
+      await tx`update approval_tokens set revoked_at = ${t}, revoked_reason = ${reason.slice(0, 200)}
+        where batch_hash = ${o.batch_hash} and policy_id = ${policyId} and used_at is null and revoked_at is null`;
+      await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${t}
+        where batch_hash = ${o.batch_hash} and state = 'pending'
+          and token_id in (select id from approval_tokens where policy_id = ${policyId})`;
+      await recompute(tx, o.batch_hash as string);
+    }
+    return open.length;
+  }
+
+  async function policyChanged(tx: Tx, policyId: string, change: { narrowed: boolean; widened: boolean }): Promise<number> {
+    const n = change.narrowed ? await unlinkPolicy(tx, policyId, "policy changed") : 0;
+    if (change.widened) {
+      // Tonight already started under the old policy: the rest of it is a dry run, and it does not count.
+      const night = nightOf(now(), await tenantTimezone(tx));
+      await tx`update overnight_counters set dry_run = true, counted = false, evaluated = true
+        where policy_id = ${policyId} and night = ${night}::date
+          and exists (select 1 from overnight_policies o where o.id = ${policyId} and o.dry_run_nights > 0)`;
+    }
+    return n;
+  }
+
+  /** The night's counters row; the first evaluation of a night decides whether it is a dry-run night (a row a signal
+   * report wrote first is not evaluated yet). */
   async function nightRow(tx: Tx, policy: OvernightPolicy, night: string): Promise<{ dryRun: boolean; budget: number }> {
-    const [existing] = await tx`select dry_run, budget_cents from overnight_counters where policy_id = ${policy.id} and night = ${night}::date`;
-    if (existing) return { dryRun: existing.dry_run as boolean, budget: Number(existing.budget_cents) };
+    const [existing] = await tx`select dry_run, budget_cents, evaluated from overnight_counters
+      where policy_id = ${policy.id} and night = ${night}::date for update`;
+    if (existing?.evaluated === true) return { dryRun: existing.dry_run as boolean, budget: Number(existing.budget_cents) };
+    const budget = existing ? Number(existing.budget_cents) : 0;
     const counts = policy.mode === "preapproved" && policy.state === "active";
     const dryRun = counts && policy.dryRunNightsDone < policy.dryRunNights;
-    if (!counts) return { dryRun: false, budget: 0 };
-    await tx`insert into overnight_counters (tenant_id, policy_id, night, dry_run)
-      values (current_setting('app.tenant_id')::uuid, ${policy.id}, ${night}::date, ${dryRun})`;
+    if (!counts) return { dryRun: false, budget };
+    if (existing) {
+      await tx`update overnight_counters set dry_run = ${dryRun}, evaluated = true, counted = ${dryRun}
+        where policy_id = ${policy.id} and night = ${night}::date`;
+    } else {
+      await tx`insert into overnight_counters (tenant_id, policy_id, night, dry_run, evaluated, counted)
+        values (current_setting('app.tenant_id')::uuid, ${policy.id}, ${night}::date, ${dryRun}, true, ${dryRun})`;
+    }
     if (dryRun) await tx`update overnight_policies set dry_run_nights_done = dry_run_nights_done + 1 where id = ${policy.id}`;
-    return { dryRun, budget: 0 };
+    return { dryRun, budget };
   }
 
   async function evaluateBatch(
@@ -643,16 +712,18 @@ export function createBroker(deps: Deps): Broker {
     }
     let policyToken: string | null = null;
     const result = await service(tenantId, async (tx): Promise<ProposeResult> => {
-      const auditReject = async (r: ProposeResult) => {
-        if (!r.ok) {
-          await audit(tx, {
-            actor: SERVICE,
-            action: "batch.propose_rejected",
-            subjectPersonId: run.runnerPersonId,
-            resource: { type: "workflow", id: run.workflowId },
-            detail: { runId: run.runId, code: r.code, reason: r.message, tripped: r.tripped },
-          });
-        }
+      const named = input.flatMap((i) => [typeof i?.key === "string" ? i.key : "", ...(Array.isArray(i?.fields) ? i.fields.filter((f) => Array.isArray(f) && f[0] === "to").map((f) => String(f[1])) : [])]);
+      const auditReject = async (r0: ProposeResult) => {
+        if (r0.ok) return r0;
+        // The reason may quote a recipient (brain allowlist messages do): scrubbed for the run and for the log.
+        const r = { ...r0, message: scrubFor(r0.message, named) };
+        await audit(tx, {
+          actor: SERVICE,
+          action: "batch.propose_rejected",
+          subjectPersonId: run.runnerPersonId,
+          resource: { type: "workflow", id: run.workflowId },
+          detail: { runId: run.runId, code: r.code, reason: r.message, tripped: r.tripped, item: r.item ?? null },
+        });
         return r;
       };
       // The overnight policy this run is under (only one that matches its workflow version and identity).
@@ -825,10 +896,11 @@ export function createBroker(deps: Deps): Broker {
     return { response, token: minted.token };
   }
 
-  async function rejectBatch(tx: Tx, p: Principal, hash: string, reason: string): Promise<BatchDto> {
+  async function rejectBatch(tx: Tx, p: Principal, hash: string, reason0: string): Promise<BatchDto> {
     const b = await loadBatch(tx, hash, true);
     if (!b) throw notFound();
     await mustApprove(tx, p, b);
+    const reason = scrubFor(reason0, (await itemsOf(tx, hash)).flatMap((r) => [r.key, r.recipient]));
     if (b.state === "rejected" || b.state === "expired" || b.state === "done") throw conflict(`this batch is ${b.state}`);
     await revokeBatch(tx, hash, "rejected");
     await tx`update batch_items set state = 'rejected', updated_at = ${new Date(now())} where batch_hash = ${hash} and state = 'pending'`;
@@ -943,25 +1015,37 @@ export function createBroker(deps: Deps): Broker {
 
   /** One item through the gate and the journal. Returns what became of it. */
   async function executeItem(tenantId: string, hash: string, key: string): Promise<"sent" | "unknown" | "failed_before_send" | "waiting"> {
-    const failBefore = async (tx: Tx, b: BatchRow, reason: string, tool: string | null = null) => {
+    let named: string[] = [key];
+    const failBefore = async (tx: Tx, b: BatchRow, code: string, reason0: string, tool: string | null = null) => {
+      const reason = scrubFor(reason0, named);
       await tx`update batch_items set state = 'failed_before_send', error = ${reason.slice(0, 500)}, tool = ${tool}, updated_at = ${new Date(now())}
         where batch_hash = ${hash} and key = ${key} and state = 'pending'`;
       await recompute(tx, hash);
-      await audit(tx, { actor: SERVICE, action: "batch.item_denied", subjectPersonId: b.runnerPersonId, resource: { type: "batch", id: hash }, detail: { item: itemRef(b.workflowId, key), reason: reason.slice(0, 200) } });
+      await audit(tx, { actor: SERVICE, action: "batch.item_denied", subjectPersonId: b.runnerPersonId, resource: { type: "batch", id: hash }, detail: { item: itemRef(b.workflowId, key), code, reason: reason.slice(0, 200) } });
       return "failed_before_send" as const;
     };
     type Prepared =
       | { done: "failed_before_send" | "waiting" }
-      | { call: CommitCall; executor: Executor; target: CommitTarget; policy: ToolPolicy; b: BatchRow; policyId: string | null };
+      | { call: CommitCall; executor: Executor; target: CommitTarget; policy: ToolPolicy; b: BatchRow; policyId: string | null; recipient: string };
     const prepared = await service(tenantId, async (tx): Promise<Prepared> => {
       const b = await loadBatch(tx, hash, true);
       if (!b) return { done: "waiting" as const };
       const [raw] = await tx`select * from batch_items where batch_hash = ${hash} and key = ${key} for update`;
       if (!raw) return { done: "waiting" as const };
       const row = itemRow(raw);
+      named = [key, row.recipient];
       if (row.state !== "pending" || row.tokenId === null) return { done: "waiting" as const };
       const [tk] = await tx`select used_at, revoked_at, approver_kind, policy_id from approval_tokens where id = ${row.tokenId}`;
       if (!tk || tk.used_at === null || tk.revoked_at !== null) return { done: "waiting" as const };
+      // A policy approval holds only while its policy is active (ADR 0112 §1): paused, tripped or gone fails closed and
+      // the policy's unsent items go back to a person.
+      if (tk.policy_id !== null) {
+        const pol = await overnightById(tx, tk.policy_id as string);
+        if (pol?.state !== "active") {
+          await unlinkPolicy(tx, tk.policy_id as string, `policy ${pol?.state ?? "gone"}`);
+          return { done: "waiting" as const };
+        }
+      }
       if (row.scheduledFor !== null && row.scheduledFor > now()) return { done: "waiting" as const };
       if (await batchKilled(tx, b)) {
         await revokeBatch(tx, hash, "kill switch");
@@ -986,22 +1070,29 @@ export function createBroker(deps: Deps): Broker {
           }
         }
       }
+      // Stage 1: an unreleased `sending` or `unknown` to this recipient in another batch of the workflow holds this
+      // one, whenever it was approved (the propose-time check cannot see a batch that went unknown later). The lock
+      // makes the check and the journal below one step per (workflow, recipient).
+      await tx`select pg_advisory_xact_lock(hashtextextended(${`s207:${b.workflowId}:${row.recipient}`}, 0))`;
+      const [held] = await tx`select 1 from contacted_ledger where workflow_id = ${b.workflowId} and recipient = ${row.recipient}
+        and outcome in ('sending', 'unknown') and released_at is null and batch_hash <> ${hash} limit 1`;
+      if (held) return { done: "waiting" as const };
       const item = stage1Items([row])![0]!;
       const conn = await connectionOf(tx, b.connectionId);
-      if (!conn) return { done: await failBefore(tx, b, "the connection is gone") };
+      if (!conn) return { done: await failBefore(tx, b, "connection_gone", "the connection is gone") };
       const refusal = bindingRefusal(conn);
-      if (refusal) return { done: await failBefore(tx, b, refusal) };
+      if (refusal) return { done: await failBefore(tx, b, "binding_refused", refusal) };
       const method = methodOf(conn.provider)! as Method;
       const executor = executors[method];
-      if (!executor) return { done: await failBefore(tx, b, `no ${method} executor is configured`) };
+      if (!executor) return { done: await failBefore(tx, b, "no_executor", `no ${method} executor is configured`) };
       const ctx = { batchHash: hash, ...(b.crmSheet ? { crmSheet: b.crmSheet } : {}) };
       const pr = policyForItem(row.capability, item, { kind: conn.kind, method }, ctx);
-      if ("reason" in pr) return { done: await failBefore(tx, b, pr.reason) };
+      if ("reason" in pr) return { done: await failBefore(tx, b, "no_allowlisted_tool", pr.reason) };
       const call = executor.build(pr.policy, item, ctx);
-      if (call === null) return { done: await failBefore(tx, b, "the executor cannot express this item", pr.policy.tool) };
-      if (call.tool !== pr.policy.tool) return { done: await failBefore(tx, b, `${call.tool} is not the approved tool`, call.tool) };
+      if (call === null) return { done: await failBefore(tx, b, "not_expressible", "the executor cannot express this item", pr.policy.tool) };
+      if (call.tool !== pr.policy.tool) return { done: await failBefore(tx, b, "wrong_tool", `${call.tool} is not the approved tool`, call.tool) };
       const gate = checkCall(pr.policy, item, call.args, ctx);
-      if (!gate.ok) return { done: await failBefore(tx, b, gate.reason, call.tool) };
+      if (!gate.ok) return { done: await failBefore(tx, b, "arguments_differ", gate.reason, call.tool) };
       // Journal before the call: sending + the contacted ledger, committed with this transaction.
       const u = await tx`update batch_items set state = 'sending', tool = ${call.tool}, updated_at = ${new Date(now())}
         where batch_hash = ${hash} and key = ${key} and state = 'pending' returning key`;
@@ -1011,7 +1102,7 @@ export function createBroker(deps: Deps): Broker {
           ${new Date(now())}, 'sending')`;
       await recompute(tx, hash);
       const target: CommitTarget = { connectionId: conn.id, kind: conn.kind, externalRef: conn.externalRef };
-      return { call, executor, target, policy: pr.policy as ToolPolicy, b, policyId: (tk.policy_id as string | null) ?? null };
+      return { call, executor, target, policy: pr.policy as ToolPolicy, b, policyId: (tk.policy_id as string | null) ?? null, recipient: row.recipient };
     });
     if ("done" in prepared) return prepared.done;
     let ok = false;
@@ -1023,6 +1114,8 @@ export function createBroker(deps: Deps): Broker {
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
+    // A provider's error text may quote the recipient: the journal keeps it without the address or its domain.
+    if (error !== null) error = scrubFor(error, [key, prepared.recipient]);
     const state = ok ? "sent" : "unknown";
     await service(tenantId, async (tx) => {
       const t = new Date(now());
@@ -1104,8 +1197,9 @@ export function createBroker(deps: Deps): Broker {
       const policy = await overnightById(tx, policyId, true);
       if (!policy) throw notFound();
       const night = nightOf(now(), await tenantTimezone(tx));
-      await tx`insert into overnight_counters (tenant_id, policy_id, night, dry_run)
-        values (current_setting('app.tenant_id')::uuid, ${policyId}, ${night}::date, false) on conflict do nothing`;
+      // Not evaluated: the night's first batch still decides whether this is a dry-run night.
+      await tx`insert into overnight_counters (tenant_id, policy_id, night, dry_run, evaluated)
+        values (current_setting('app.tenant_id')::uuid, ${policyId}, ${night}::date, false, false) on conflict do nothing`;
       const [c] = await tx`update overnight_counters set sends = sends + ${s.sends ?? 0}, bounces = bounces + ${s.bounces ?? 0},
           negative_replies = negative_replies + ${s.negativeReplies ?? 0}, budget_cents = budget_cents + ${s.costCents ?? 0}
         where policy_id = ${policyId} and night = ${night}::date returning sends, bounces, negative_replies`;
@@ -1169,6 +1263,7 @@ export function createBroker(deps: Deps): Broker {
     reconcile,
     reportNightSignals,
     reportRunResult,
+    policyChanged,
     async idle() {
       while (inflight.size > 0) await Promise.allSettled([...inflight]);
     },

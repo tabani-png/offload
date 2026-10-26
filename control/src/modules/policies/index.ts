@@ -7,9 +7,11 @@ import type { App, AppEnv, Deps, ModuleDef, Principal } from "../../app.ts";
 import { actorOf, body, reply, tenantTx } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
 import { isUuid } from "../../db/tenant.ts";
-import { conflict, invalid, notFound, page, pageParams } from "../../schema/http.ts";
+import { conflict, forbidden, invalid, notFound, page, pageParams } from "../../schema/http.ts";
+import { brokerOf } from "../broker/broker.ts";
 import { OVERNIGHT_LIST, OVERNIGHT_PATCH, readLocal, replyLocal } from "../broker/schemas.ts";
-import type { OvernightPolicy } from "./evaluate.ts";
+import { itemRef } from "../broker/stage1.ts";
+import { trustChange, type OvernightPolicy } from "./evaluate.ts";
 import {
   OVERNIGHT_POLICY,
   ROLE_POLICY,
@@ -53,6 +55,23 @@ async function ownerAccess(tx: Tx, p: Principal, ownerPersonId: string, write: b
   if (ownerPersonId === p.personId && (p.accessRole === "member" || p.accessRole === "dept_lead")) return;
   if (p.accessRole === "dept_lead" && p.departmentScope.includes(o.department_id as string)) return;
   throw notFound();
+}
+
+/** Fewer dry-run nights than this is an owner or admin decision (ADR 0112 §3). */
+export const MIN_DRY_RUN_NIGHTS = 3;
+
+const mayShortenDryRun = (p: Principal) => p.accessRole === "owner" || p.accessRole === "admin";
+
+/** Content-free stand-in for an allowlisted address (the Stage 1 itemRef of the policy's workflow). */
+const emailRef = (policy: OvernightPolicy, email: string) => itemRef(policy.workflowId, email.trim());
+
+/**
+ * Allowlisted addresses are recipients (ADR 0111 §6): only the policy's owner sees them. Everyone else in scope sees
+ * one content-free ref per address, so the count stays readable; domains are organisations and stay.
+ */
+function viewOf(p: Principal, policy: OvernightPolicy): OvernightPolicy {
+  if (p.personId === policy.ownerPersonId) return policy;
+  return { ...policy, recipients: { ...policy.recipients, emails: policy.recipients.emails.map((e) => emailRef(policy, e)) } };
 }
 
 function checkPolicy(p: OvernightPolicy): void {
@@ -108,7 +127,7 @@ function routes(app: App, deps: Deps): void {
             or (${lead} and p.department_id in (select jsonb_array_elements_text(${p.departmentScope}::jsonb)::uuid)))
         order by o.id limit ${limit + 1}`;
       const pg = page(rows.map(overnightDto), limit, (l: OvernightPolicy) => ({ id: l.id }));
-      return pg;
+      return { ...pg, items: pg.items.map((o) => viewOf(p, o)) };
     });
     return replyLocal(c, deps, 200, out, OVERNIGHT_LIST);
   });
@@ -121,6 +140,9 @@ function routes(app: App, deps: Deps): void {
     }
     const out = await tenantTx(c, deps, async (tx, p) => {
       await ownerAccess(tx, p, req.ownerPersonId, true);
+      if (req.dryRunNights < MIN_DRY_RUN_NIGHTS && !mayShortenDryRun(p)) {
+        throw forbidden(`only an owner or admin sets fewer than ${MIN_DRY_RUN_NIGHTS} dry-run nights`);
+      }
       if (await overnightById(tx, req.id)) throw conflict("a policy with this id exists");
       const saved = await insertOvernight(tx, req, deps.clock.now());
       await deps.ports.audit.write(tx, {
@@ -130,7 +152,7 @@ function routes(app: App, deps: Deps): void {
         resource: { type: "overnight_policy", id: saved.id },
         detail: { workflowId: saved.workflowId, version: saved.version, mode: saved.mode, templateHash: saved.templateHash },
       });
-      return saved;
+      return viewOf(p, saved);
     });
     return reply(c, deps, 201, out, OVERNIGHT_POLICY);
   });
@@ -146,24 +168,36 @@ function routes(app: App, deps: Deps): void {
         if (k in patch && JSON.stringify(patch[k]) !== JSON.stringify(cur[k])) throw invalid(`${k} cannot be changed`);
       }
       if (patch.state === "tripped" && cur.state !== "tripped") throw invalid("only a circuit breaker trips a policy");
+      // Someone who sees refs (not the owner) may send them back unchanged: a ref keeps the address it stands for.
+      if (patch.recipients && p.personId !== cur.ownerPersonId) {
+        const byRef = new Map(cur.recipients.emails.map((e) => [emailRef(cur, e), e]));
+        patch.recipients = { ...patch.recipients, emails: patch.recipients.emails.map((e) => byRef.get(e) ?? e) };
+      }
       const next: OvernightPolicy = { ...cur, ...patch };
+      if (next.dryRunNights < MIN_DRY_RUN_NIGHTS && next.dryRunNights < cur.dryRunNights && !mayShortenDryRun(p)) {
+        throw forbidden(`only an owner or admin sets fewer than ${MIN_DRY_RUN_NIGHTS} dry-run nights`);
+      }
       const rearm = cur.state === "tripped" && next.state === "active";
       if (rearm) next.trippedReason = null;
-      // A new template is a new policy as far as trust goes: its dry-run nights start again.
-      if (next.templateHash !== cur.templateHash) next.dryRunNightsDone = 0;
+      // Any trust-widening edit (a new template, more recipients, a wider window, higher caps, attachments, mode
+      // preapproved) is a new policy as far as trust goes: its dry-run nights start again (ADR 0112 §2).
+      const change = trustChange(cur, next);
+      if (change.widened) next.dryRunNightsDone = 0;
       const v = deps.validator.validate(OVERNIGHT_POLICY, next);
       if (!v.ok) throw invalid("policy does not match its schema", v.errors);
       checkPolicy(next);
       const saved = await updateOvernight(tx, next, deps.clock.now(), rearm);
       if (rearm) await tx`update overnight_policies set connection_fingerprint = null where id = ${id}`;
+      // Pausing or narrowing takes back what the policy approved and has not sent (ADR 0112 §1).
+      const unlinked = await brokerOf(deps.ports).policyChanged(tx, id, change);
       await deps.ports.audit.write(tx, {
         actor: actorOf(p),
         action: rearm ? "overnight.rearm" : "overnight.update",
         subjectPersonId: saved.ownerPersonId,
         resource: { type: "overnight_policy", id },
-        detail: { changed: Object.keys(patch).sort(), state: saved.state },
+        detail: { changed: Object.keys(patch).sort(), state: saved.state, narrowed: change.narrowed, widened: change.widened, unlinkedBatches: unlinked },
       });
-      return saved;
+      return viewOf(p, saved);
     });
     return reply(c, deps, 200, out, OVERNIGHT_POLICY);
   });

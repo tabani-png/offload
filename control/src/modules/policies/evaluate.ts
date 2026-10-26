@@ -93,6 +93,54 @@ export function recipientAllowed(policy: Pick<OvernightPolicy, "recipients">, it
   return policy.recipients.repliesToThreadsStartedByIdentity && item.replyToIdentityThread;
 }
 
+/**
+ * What an edit does to the trust a policy grants (ADR 0112 §1-2). `narrowed`: something it allowed before is no
+ * longer allowed, so what it already approved and has not sent loses that approval. `widened`: it allows something it
+ * did not, so its dry-run nights start again. A new template or a switched timezone basis is both. Breakers that get
+ * stricter are neither (they act on signals, not on what was approved); state is handled by the caller (re-arm keeps
+ * the nights, anything but active narrows).
+ */
+export function trustChange(a: OvernightPolicy, b: OvernightPolicy): { narrowed: boolean; widened: boolean } {
+  const set = (xs: readonly string[]) => new Set(xs.map((x) => x.trim().toLowerCase().replace(/^@/, "")));
+  const lost = (x: Set<string>, y: Set<string>) => [...x].some((v) => !y.has(v));
+  const [ea, eb, da, db] = [set(a.recipients.emails), set(b.recipients.emails), set(a.recipients.domains), set(b.recipients.domains)];
+  const [wa, wb] = [a.sendWindow, b.sendWindow];
+  const [daysA, daysB] = [new Set(wa.days.map(String)), new Set(wb.days.map(String))];
+  let narrowed = b.state !== "active";
+  let widened = false;
+  const both = a.templateHash !== b.templateHash || wa.recipientTimezone !== wb.recipientTimezone;
+  narrowed ||=
+    both ||
+    lost(ea, eb) ||
+    lost(da, db) ||
+    (a.recipients.repliesToThreadsStartedByIdentity && !b.recipients.repliesToThreadsStartedByIdentity) ||
+    (a.mode === "preapproved" && b.mode === "drafts_only") ||
+    lost(daysA, daysB) ||
+    wb.startHour > wa.startHour ||
+    wb.endHour < wa.endHour ||
+    b.maxCommitsPerNight < a.maxCommitsPerNight ||
+    b.maxPerRecipientPerWeek < a.maxPerRecipientPerWeek ||
+    b.budgetCentsPerNight < a.budgetCentsPerNight ||
+    (a.attachmentsAllowed && !b.attachmentsAllowed);
+  widened ||=
+    both ||
+    lost(eb, ea) ||
+    lost(db, da) ||
+    (!a.recipients.repliesToThreadsStartedByIdentity && b.recipients.repliesToThreadsStartedByIdentity) ||
+    (a.mode === "drafts_only" && b.mode === "preapproved") ||
+    lost(daysB, daysA) ||
+    wb.startHour < wa.startHour ||
+    wb.endHour > wa.endHour ||
+    b.maxCommitsPerNight > a.maxCommitsPerNight ||
+    b.maxPerRecipientPerWeek > a.maxPerRecipientPerWeek ||
+    b.budgetCentsPerNight > a.budgetCentsPerNight ||
+    (!a.attachmentsAllowed && b.attachmentsAllowed) ||
+    b.circuitBreakers.bounceRatePct > a.circuitBreakers.bounceRatePct ||
+    b.circuitBreakers.negativeReplySpike > a.circuitBreakers.negativeReplySpike ||
+    b.circuitBreakers.consecutiveFailures > a.circuitBreakers.consecutiveFailures;
+  return { narrowed, widened };
+}
+
 export function evaluateOvernight(
   policy: OvernightPolicy,
   item: OvernightItem,

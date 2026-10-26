@@ -264,7 +264,8 @@ export async function overnightPolicy(w: World, over: Record<string, unknown> = 
     ownerPersonId: w.t.people.member.id,
     ...over,
   };
-  const r = await (await client(w, "member")).post("/v1/overnight-policies", body);
+  // Fewer than 3 dry-run nights is an owner/admin decision (ADR 0112 §3); the member owns the policy either way.
+  const r = await (await client(w, body.dryRunNights < 3 ? "admin" : "member")).post("/v1/overnight-policies", body);
   if (r.status !== 201) throw new Error(`policy create ${r.status} ${JSON.stringify(r.json)}`);
   return id;
 }
