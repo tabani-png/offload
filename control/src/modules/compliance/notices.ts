@@ -10,7 +10,7 @@ import { HttpError, conflict, invalid, notFound, page, pageParams } from "../../
 import {
   applies, listNotices, ms, noticeById, noticeDto, offsetOf, personRow, sameSet, uuidParam, type Feature, type NoticeRow,
 } from "./common.ts";
-import { isTemplate } from "./templates.ts";
+import { CUSTOM_TEMPLATE, isTemplate, templateById, unfilledFields } from "./templates.ts";
 import { P, bodyOf, replyLocal } from "./schemas.ts";
 
 const NOTICE = "offload/stage2/notice.schema.json";
@@ -162,6 +162,12 @@ export function noticeRoutes(app: App, deps: Deps): void {
       const n = await noticeById(tx, id);
       if (!n) throw notFound();
       if (n.published_at_ms !== null) throw conflict("this notice version is already published");
+      // Employees must never be asked to acknowledge "{{how}}": a template's fields are all filled before it goes out.
+      const template = n.template === CUSTOM_TEMPLATE ? undefined : templateById(n.template);
+      const unfilled = template ? unfilledFields(template, n.markdown) : [];
+      if (unfilled.length > 0) {
+        throw new HttpError(422, "validation_failed", `fill in every template field before publishing: ${unfilled.join(", ")}`, { fields: unfilled });
+      }
       await tx`update notices set published_at_ms = ${now} where id = ${id}`;
       // The new version replaces every current one whose readers it fully covers.
       const replaced = await tx`update notices set replaced_at_ms = ${now}

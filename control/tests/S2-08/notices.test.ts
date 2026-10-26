@@ -5,6 +5,7 @@ import { HttpError } from "../../src/schema/http.ts";
 import { ulid } from "../../src/schema/encoding.ts";
 import compliance from "../../src/modules/compliance/index.ts";
 import { allowsAt } from "../../src/modules/compliance/consent.ts";
+import { listTemplates } from "../../src/modules/compliance/templates.ts";
 import { noticeBody, publishNotice, signIn, sys, type Who } from "./fixtures.ts";
 
 let h: Harness;
@@ -201,5 +202,42 @@ describe("NOTICE", () => {
     expect(ids(await who.lead.get(`/v1/compliance/notices/${n.id}/acks`))).toEqual([h.a.people.member.id]);
     expect((await who.member.get(`/v1/compliance/notices/${n.id}/acks`)).status).toBe(403);
     expect((await who.owner.get(`/v1/compliance/notices/${crypto.randomUUID()}/acks`)).status).toBe(404);
+  });
+  test("NOTICE: a template notice with a {{field}} left or a required field emptied is not published (422)", async () => {
+    const t = listTemplates().find((x) => x.id === "ontario-esa-policy")!;
+    const values: Record<string, string> = {
+      employer_name: "Acme Ltd",
+      how: "Offload runs on work Macs and records which apps are active.",
+      circumstances: "During working hours on company Macs only.",
+      purposes: "To find repeated work worth automating.",
+      date_prepared: "2026-10-01",
+      dates_changed: "none yet",
+    };
+    const fill = (v: Record<string, string>) => t.body.replace(/\{\{([a-z_]+)\}\}/g, (_, f: string) => v[f]!);
+    const tryPublish = async (markdown: string, template = t.id) => {
+      const created = await who.owner.post("/v1/compliance/notices", noticeBody({ template, markdown, jurisdictions: ["CA-ON"] }));
+      expect(created.status).toBe(201);
+      return who.owner.post(`/v1/compliance/notices/${created.json.id}/publish`);
+    };
+    const raw = await tryPublish(t.body);
+    expect(raw.status).toBe(422);
+    expect(raw.json.error.code).toBe("validation_failed");
+    expect(raw.json.error.details.fields.sort()).toEqual([...t.requiredFields].sort());
+    expect((await tryPublish(fill({ ...values, how: "{{how}}" }))).json.error.details.fields).toEqual(["how"]);
+    // A labelled field left blank, and a field that is a section of its own left blank.
+    expect((await tryPublish(fill({ ...values, date_prepared: "" }))).json.error.details.fields).toEqual(["date_prepared"]);
+    const noHow = await tryPublish(fill({ ...values, how: "" }));
+    expect(noHow.status).toBe(422);
+    expect(noHow.json.error.details.fields).toEqual(["how"]);
+    // Any other placeholder left in is refused too.
+    expect((await tryPublish(fill(values) + "\nContact: {{hr_contact}}\n")).json.error.details.fields).toEqual(["hr_contact"]);
+    // Nothing was published by the refused attempts.
+    const list = (await who.owner.get("/v1/compliance/notices?limit=200")).json.items;
+    expect(list.filter((n: { publishedAt: number | null; markdown: string }) => n.publishedAt !== null && n.markdown.includes("{{")).length).toBe(0);
+    const ok = await tryPublish(fill(values));
+    expect(ok.status).toBe(200);
+    expect(ok.json.publishedAt).not.toBeNull();
+    // A custom notice is the tenant's own text, not a template to fill.
+    expect((await tryPublish("# Our notice\n\nWe use {{braces}} literally here.", "custom")).status).toBe(200);
   });
 });

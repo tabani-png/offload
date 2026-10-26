@@ -67,3 +67,48 @@ export function listTemplates(): Template[] {
 export function isTemplate(id: string): boolean {
   return id === CUSTOM_TEMPLATE || listTemplates().some((t) => t.id === id);
 }
+
+export function templateById(id: string): Template | undefined {
+  return listTemplates().find((t) => t.id === id);
+}
+
+const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The fields a notice drafted from template `t` has not filled in: any `{{field}}` still in the text, a labelled
+ * template line ("**Employer:** {{employer_name}}") whose value is blank, and a field that is a section of its own
+ * (`{{how}}` under "## How we monitor") left with nothing under its heading. In the template's field order.
+ */
+export function unfilledFields(t: Template, markdown: string): string[] {
+  const out = new Set<string>();
+  for (const m of markdown.matchAll(PLACEHOLDER)) out.add(m[1]!);
+  const lines = markdown.split("\n");
+  const tl = t.body.split("\n");
+  tl.forEach((line, i) => {
+    const parts = line.split(PLACEHOLDER);
+    const fields = parts.filter((_, k) => k % 2 === 1);
+    if (fields.length === 0) return;
+    const literals = parts.filter((_, k) => k % 2 === 0);
+    if (fields.length === 1 && literals.every((l) => l.trim() === "")) {
+      const above = tl.slice(0, i).reverse().find((l) => l.trim() !== "");
+      const below = tl.slice(i + 1).find((l) => l.trim() !== "")?.trim();
+      const at = above === undefined ? -1 : lines.findIndex((l) => l.trim() === above.trim());
+      if (at < 0) return;
+      const section: string[] = [];
+      for (let j = at + 1; j < lines.length && lines[j]!.trim() !== below && !lines[j]!.startsWith("#"); j++) section.push(lines[j]!);
+      if (section.every((l) => l.trim() === "")) out.add(fields[0]!);
+      return;
+    }
+    const re = new RegExp(`^${literals.map(escapeRe).join("(.*?)")}$`);
+    for (const l of lines) {
+      const m = re.exec(l);
+      if (!m) continue;
+      fields.forEach((f, k) => {
+        if (m[k + 1]!.trim() === "") out.add(f);
+      });
+    }
+  });
+  const order = [...t.body.matchAll(PLACEHOLDER)].map((m) => m[1]!);
+  return [...out].sort((a, b) => (order.indexOf(a) + 1 || Infinity) - (order.indexOf(b) + 1 || Infinity));
+}
