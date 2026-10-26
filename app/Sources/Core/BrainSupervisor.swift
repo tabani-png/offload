@@ -18,6 +18,13 @@ struct BrainLaunchSpec: Equatable, Sendable {
   var home: URL
 }
 
+/// s25: which bun runs which brain. `root` holds brain/src/cli.ts (the bundle's Resources/offload, or the repo).
+struct BrainLocation: Equatable, Sendable {
+  var bun: URL
+  var root: URL
+  var bundled: Bool
+}
+
 enum BrainLaunch {
   static let listeningPrefix = "brain listening on "
   /// s05c handshake (brain/src/api/types.ts BRAIN_READY_PREFIX): `OFFLOAD_BRAIN_READY {"port":N,"token":"..."}`.
@@ -96,6 +103,40 @@ enum BrainLaunch {
       if exists(dir.appendingPathComponent("brain/src/cli.ts").path) { return dir }
     }
     return nil
+  }
+
+  /// s25: the brain inside the bundle (app/build.sh): a pinned bun in Contents/Helpers and the brain's JS in
+  /// Contents/Resources/offload, laid out like the repo (brain/src, brain/node_modules, schemas).
+  static let bundledBunPath = "Contents/Helpers/bun"
+  static let bundledRootPath = "Contents/Resources/offload"
+
+  static func bundledBrain(bundleURL: URL,
+                           exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+                           isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) -> BrainLocation? {
+    let app = bundleURL.standardizedFileURL
+    let bun = app.appendingPathComponent(bundledBunPath)
+    let root = app.appendingPathComponent(bundledRootPath)
+    guard isExecutable(bun.path), exists(root.appendingPathComponent("brain/src/cli.ts").path) else { return nil }
+    return BrainLocation(bun: bun, root: root, bundled: true)
+  }
+
+  /// s25: the bundled brain first. The repo (OFFLOAD_REPO or up from the bundle) with an installed bun is a dev-only
+  /// fallback; OFFLOAD_BRAIN_SOURCE=repo forces it (to run brain edits without rebuilding the app).
+  static func locate(bundleURL: URL, environment env: [String: String], userHome: String = NSHomeDirectory(),
+                     exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+                     isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) -> BrainLocation? {
+    if env["OFFLOAD_BRAIN_SOURCE"] != "repo",
+       let b = bundledBrain(bundleURL: bundleURL, exists: exists, isExecutable: isExecutable) { return b }
+    guard let repo = findRepo(bundleURL: bundleURL, environment: env, exists: exists),
+          let bun = findBun(environment: env, userHome: userHome, isExecutable: isExecutable) else { return nil }
+    return BrainLocation(bun: bun, root: repo, bundled: false)
+  }
+
+  static func spec(location: BrainLocation, home: URL, token: String, baseEnvironment: [String: String],
+                   observer: URL? = nil, userHome: String = NSHomeDirectory(), model: String? = nil,
+                   logFile: URL? = nil, understanding: [String] = []) -> BrainLaunchSpec {
+    spec(bun: location.bun, repo: location.root, home: home, token: token, baseEnvironment: baseEnvironment,
+         observer: observer, userHome: userHome, model: model, logFile: logFile, understanding: understanding)
   }
 
   /// PATH for the brain: the usual tool folders first (the Agent SDK looks for node and claude on it).

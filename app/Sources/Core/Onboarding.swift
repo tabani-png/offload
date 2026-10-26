@@ -133,6 +133,11 @@ enum DemoWeek {
     return appSupport.appendingPathComponent("Offload Demo", isDirectory: true)
   }
 
+  /// s25: a bundled brain's root is inside the signed app (read-only): the demo week then goes to Application Support.
+  static func home(location: BrainLocation?, appSupport: URL) -> URL {
+    home(repo: location?.bundled == false ? location?.root : nil, appSupport: appSupport)
+  }
+
   /// `bun run brain/fixtures/gen.ts --out DIR --start DAY --encrypted` (raw key files: OFFLOAD_KEYS=file mode).
   static func generatorArguments(repo: URL, out: URL, start: String) -> [String] {
     ["run", repo.appendingPathComponent("brain/fixtures/gen.ts").path, "--out", out.path, "--start", start, "--encrypted"]

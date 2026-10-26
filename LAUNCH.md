@@ -83,10 +83,10 @@ The value is not printed here.
 
 | Item | Detail | Status | Owner |
 |---|---|---|---|
-| Code signing | `app/build.sh` signs ad hoc only (`codesign --sign -`). Other Macs will block the app. Needs an Apple Developer ID certificate. | open | operator |
-| Notarization | No notarytool or stapler step anywhere in the repo. | open | manager |
+| Code signing | `app/build.sh` signs ad hoc by default. s25: with `OFFLOAD_SIGN_IDENTITY` it signs inside-out with the hardened runtime (bun gets `app/brain.entitlements`, ADR 0014). Still needs an Apple Developer ID Application certificate. | open | operator |
+| Notarization | s25: `OFFLOAD_NOTARY_PROFILE` (a `notarytool store-credentials` keychain profile) submits, waits and staples. Untested until a Developer ID exists. | ready, untested | operator |
 | Permissions on a signed app | Today permissions attach to the terminal app when run from a shell (`engine/README.md`). A signed bundle gets its own entries. Retest onboarding then. | open | manager |
-| Install without the repo | The app finds the brain through the repo folder (`OFFLOAD_REPO` or up to six folders above the bundle) and needs Bun installed. A real install needs the brain bundled with the app. | open | manager |
+| Install without the repo | s25 (ADR 0014): the app carries a pinned bun and the brain JS and uses them first; the repo is a dev-only fallback. Proof: `slices/s25-standalone-install/verify.sh` runs the brain from a read-only copy outside the repo with no bun on PATH. Bundle about 395 MB (claude binary 261 MB). | done | manager |
 | Update path | No updater (no Sparkle, no appcast). Users would reinstall by hand. | open | manager |
 | Privacy policy | None in the repo. Needed before any outside user. | open | operator |
 | Terms of service | None in the repo. Stage 2 plan relies on a "purpose lock in terms" (no use of numbers for pay or rankings). | open | operator |
