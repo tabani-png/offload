@@ -4,7 +4,7 @@
 // file (overlapping chunks), failing closed above a hard size cap.
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { truncateSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approveBuild } from "../../src/builder/approval.ts";
 import { runBuild } from "../../src/builder/runner.ts";
@@ -84,14 +84,16 @@ describe("s24 artifact scan reads every byte", () => {
     const rec = await runBuild({ home: p.home, briefId: p.briefId, token, query: f.query, profile: ALLOW, limits: { maxTries: 1 } });
     expect(rec.outcome).not.toBe("PASS");
     expect(rec.reason ?? "").toContain("artifact contains a secret");
+    rmSync(p.home, { recursive: true, force: true });
   }, 60_000);
 
   test("SAFETY: a file above the scan cap fails closed ('too large to scan')", async () => {
     const p = await prepared();
     const { token } = approveBuild(p.home, p.briefId, p.briefHash, p.checkHash, NOW);
-    const f = fakeQuery([{ act: (ws) => { writeSlug("good")(ws); const huge = join(ws, "huge.bin"); writeFileSync(huge, ""); truncateSync(huge, 100 * 1024 * 1024); } }]);
+    const f = fakeQuery([{ act: (ws) => { writeSlug("good")(ws); writeFileSync(join(ws, "huge.bin"), Buffer.alloc(65 * 1024 * 1024, 0x7a)); } }]);
     const rec = await runBuild({ home: p.home, briefId: p.briefId, token, query: f.query, profile: ALLOW, limits: { maxTries: 1 } });
     expect(rec.outcome).not.toBe("PASS");
     expect(rec.reason ?? "").toContain("too large to scan");
+    rmSync(p.home, { recursive: true, force: true });
   }, 120_000);
 });
