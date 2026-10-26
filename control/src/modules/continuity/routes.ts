@@ -3,7 +3,7 @@ import type { App, AppEnv, Deps, Principal } from "../../app.ts";
 import { actorOf, body, reply, tenantTx } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
 import { isUuid } from "../../db/tenant.ts";
-import { personById } from "../../db/people.ts";
+import { lockOwners, personById } from "../../db/people.ts";
 import { conflict, forbidden, invalid, notFound, page, pageParams } from "../../schema/http.ts";
 import {
   HANDOVER_COLUMNS, handoverDto, tenantToday, type Continuity, type HandoverRow, type InboxStep, type InFlight,
@@ -36,7 +36,7 @@ export function continuityRoutes(app: App, deps: Deps, get: () => Continuity): v
     const out = await tenantTx(c, deps, async (tx, p) => {
       // First in S2-10's lock order: one offboarding per tenant at a time, so two owners offboarding each other cannot
       // both see the other as the remaining owner (the check below reads committed rows only).
-      await tx`select pg_advisory_xact_lock(hashtext('owners:' || current_setting('app.tenant_id')))`;
+      await lockOwners(tx);
       const [t] = await tx`select access_role, state from people where id = ${id} for update`;
       if (!t) throw notFound();
       if (id === p.personId) throw conflict("you cannot offboard yourself");

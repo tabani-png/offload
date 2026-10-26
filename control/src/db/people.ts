@@ -1,5 +1,13 @@
 import type { Tx } from "./pool.ts";
 
+/**
+ * The tenant's owners lock: every change that can leave a tenant without an active owner (role change, offboarding,
+ * directory deactivation) takes it FIRST, before any row lock, then re-counts owners. One key, one hash function.
+ */
+export async function lockOwners(tx: Tx): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtextextended('owners:' || current_setting('app.tenant_id'), 0))`;
+}
+
 /** Person DTO (schemas/stage2/person.schema.json). */
 export interface PersonDto {
   id: string;
