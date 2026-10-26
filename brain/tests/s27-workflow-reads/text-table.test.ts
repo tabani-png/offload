@@ -1,6 +1,8 @@
 // s27 review round 7 (PR #35): TEXT answers (screen text, plain-text connector answers) go through the SAME outcome
 // pipeline and invariants as JSON, and every accepted value is exactly what the source shows. Invariants I1-I5 as in
 // parser-table.test.ts, plus:
+//   I8 (round 10) formatting is never data: delimiter and border lines are not rows, and a row whose every cell is
+//      only punctuation, dashes or box characters is never a row;
 //   I6 value fidelity: every accepted value equals the source text exactly, sign and formatting included
 //      ("-25", "−25", "(25)", "+25", "1,234.50", "25.50", "1e3", "-0.0"); nothing is normalised or re-formatted.
 import { describe, expect, test } from "bun:test";
@@ -39,9 +41,16 @@ const RENDER: Record<string, (rows: Array<[string, string]>, ctx: Ctx) => string
   // Round 8: the one accessibility-line format (ax-text.ts): fields with quoted values, context as label-only lines.
   "accessibility fields": (rows, ctx) => [formatAxLine("AXStaticText", "Weekly metrics"), ...ctx.map(([k, v]) => formatAxLine("AXStaticText", `${k}: ${v}`)), formatAxLine("AXTextField", "Signups", rows[0]![0]), formatAxLine("AXTextField", "Profit", rows[0]![1])].join("\n"),
   "accessibility fields, curly quotes": (rows, ctx) => ["AXStaticText “Weekly metrics”", ...ctx.map(([k, v]) => `AXStaticText “${k}: ${v}”`), `AXTextField “Signups” = “${rows[0]![0]}”`, `AXTextField “Profit” = “${rows[0]![1]}”`].join("\n"),
+  // Round 10 (I8): formatting is never data: Markdown tables (outer pipes or not, alignment colons), ASCII boxes,
+  // box-drawing tables, and tab tables with separator and blank lines.
+  "markdown table": (rows, ctx) => [...ctx.map(([k, v]) => `${k}: ${v}`), "| Signups | Profit |", "|---|---:|", ...rows.map(([a, b]) => `| ${a} | ${b} |`)].join("\n"),
+  "markdown, no outer pipes, aligned": (rows, ctx) => [...ctx.map(([k, v]) => `${k}: ${v}`), "Signups | Profit", ":--- | :---:", ...rows.map(([a, b]) => `${a} | ${b}`)].join("\n"),
+  "ascii box": (rows, ctx) => [...ctx.map(([k, v]) => `${k}: ${v}`), "+---------+--------+", "| Signups | Profit |", "+=========+========+", ...rows.flatMap(([a, b]) => [`| ${a} | ${b} |`, "+---------+--------+"])].join("\n"),
+  "box drawing": (rows, ctx) => [...ctx.map(([k, v]) => `${k}: ${v}`), "┌─────────┬────────┐", "│ Signups │ Profit │", "├─────────┼────────┤", ...rows.map(([a, b]) => `│ ${a} │ ${b} │`), "└─────────┴────────┘"].join("\n"),
+  "tab table with separators": (rows, ctx) => [...ctx.map(([k, v]) => `${k}: ${v}`), "Signups\tProfit", "-------\t------", "", ...rows.flatMap(([a, b]) => [`${a}\t${b}`, ""])].join("\n"),
   mixed: (rows, ctx) => [...ctx.map(([k, v]) => `${k}: ${v}`), "Weekly metrics · updated hourly", "Signups | Profit", ...rows.map(([a, b]) => `${a} | ${b}`), "Notes: none"].join("\n"),
 };
-const TABLES = new Set(["pipe table", "tab table", "mixed"]);
+const TABLES = new Set(["pipe table", "tab table", "mixed", "markdown table", "markdown, no outer pipes, aligned", "ascii box", "box drawing", "tab table with separators"]);
 
 interface Case {
   name: string;
@@ -68,6 +77,9 @@ cases.push({ name: "Profit: -25 keeps its sign", text: "Signups: 1\nProfit: -25"
 cases.push({ name: "a row missing a value in a table is skipped", text: "Signups | Profit\n1 | -2\n3 | ", kind: "ok", rows: [["1", "-2"]], skipped: 1 });
 cases.push({ name: "a partial single answer is a skipped row", text: "Signups: 4", kind: "ok", rows: [], skipped: 1 });
 cases.push({ name: "an accessibility field with an empty value is a skipped row", text: `${formatAxLine("AXTextField", "Signups", "")}\n${formatAxLine("AXTextField", "Profit", "-1")}`, kind: "ok", rows: [], skipped: 1 });
+// I8: formatting is never data.
+cases.push({ name: "I8 Codex repro: a Markdown delimiter row is not a row", text: "Signups | Profit\n--- | ---\n42 | 350", kind: "ok", rows: [["42", "350"]] });
+cases.push({ name: "I8 a row of dashes and box characters inside the data is never a row", text: "| Signups | Profit |\n|---|---|\n| 1 | 2 |\n| — | — |\n|===|===|\n| 3 | 4 |", kind: "ok", rows: [["1", "2"], ["3", "4"]], skipped: 1 });
 cases.push({ name: "text with none of the fields is unreadable", text: "Hello\nNothing to see", kind: "unreadable" });
 cases.push({ name: "a period declared in a table column that differs", text: "Signups | Profit | Period\n1 | 2 | last 7 days\n3 | 4 | last 30 days", kind: "wrong_context" });
 
