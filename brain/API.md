@@ -562,9 +562,12 @@ check script exits 0, never "the model says done".
   and OFFLOAD_TOKEN (the app's 127.0.0.1 bearer; no network in the sandbox, and a known value for the artifact scan).
   The launch environment is read as other processes see it (`ps -E`), so unsetting a variable does not help. Start
   Offload from the app (Finder) or keep secrets out of the shell that starts the brain. Before any PASS and in
-  `verifyArtifact`, every byte of every workspace file (outside accept/, .tmp, __pycache__) is scanned in overlapping
-  chunks for exact known secret values and secret-shaped strings; a hit is FAIL "artifact contains a secret", and a
+  `verifyArtifact`, every byte of every workspace file is scanned in overlapping chunks for exact known secret values
+  and secret-shaped strings (accept/, the approved check, for exact known values only); a hit is FAIL "artifact contains a secret", and a
   file over 64 MB fails closed ("artifact file too large to scan").
+  Nothing in the retained artifact is exempt: disposable folders (__pycache__, .pytest_cache, .mypy_cache,
+  .ruff_cache, node_modules/.cache, the builder's .tmp) are scanned for secrets, then deleted after each sweep; every
+  hash covers everything that remains, and `verifyArtifact` fails if a disposable folder reappears.
   The artifact is sized from metadata before any read: a sparse file, a file over 64 MB or a workspace over 256 MB
   is FAIL "artifact rejected"; hashing and scanning then read asynchronously in chunks, bounded by the wall budget
   plus 30 s.

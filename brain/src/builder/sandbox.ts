@@ -401,8 +401,9 @@ const KV = /\b([A-Za-z0-9_]*(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH)[A-Za-
 
 /** The first secret in a text: an exact known value, or a secret-shaped string (keys, tokens, private keys). Used to
  * scan artifacts, so the loose NAME=value pattern of redactSecrets is not applied (it would flag ordinary code). */
-export function findSecret(text: string, known: readonly string[] = []): string | null {
+export function findSecret(text: string, known: readonly string[] = [], patterns = true): string | null {
   for (const v of known) if (v.length >= 8 && text.includes(v)) return "a known secret value";
+  if (!patterns) return null;
   for (const re of SECRET_PATTERNS) {
     re.lastIndex = 0;
     if (re.test(text)) {

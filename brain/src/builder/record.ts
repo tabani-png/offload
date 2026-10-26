@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";
 import type { Stats } from "node:fs";
-import { appendFileSync, closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, mkdirSync, rmSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { briefIdFor } from "../solutions/brief.ts";
 import type { SolutionSet } from "../solutions/types.ts";
@@ -66,7 +66,35 @@ export interface RunRecord {
 
 export const buildsDir = (home: string) => join(home, "builds");
 
-const SKIP_DIRS = new Set([".tmp", "__pycache__"]);
+/** Disposable folders: deleted from the workspace (after the final sweep) before the artifact is hashed; nothing that
+ * remains is exempt from the hash or the secret scan, and verifyArtifact fails if one reappears. */
+const DISPOSABLE_NAMES = new Set(["__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"]);
+const isDisposable = (rel: string, name: string) => DISPOSABLE_NAMES.has(name) || rel === ".tmp" || rel === "node_modules/.cache" || rel.endsWith("/node_modules/.cache");
+
+/** Relative paths of disposable folders in the workspace. */
+export function findDisposables(ws: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string, rel: string) => {
+    for (const name of readdirSync(dir).sort()) {
+      const abs = join(dir, name);
+      const r = rel === "" ? name : `${rel}/${name}`;
+      if (!lstatSync(abs).isDirectory()) continue;
+      if (isDisposable(r, name)) out.push(r);
+      else walk(abs, r);
+    }
+  };
+  walk(ws, "");
+  return out;
+}
+
+/** Deletes the disposable folders (never follows links; rmSync does not). `.tmp` is recreated empty while builds
+ * continue (it is the builder's TMPDIR) and left out at the end. Returns what was removed. */
+export function removeDisposables(ws: string, keepTmp: boolean): string[] {
+  const gone = findDisposables(ws);
+  for (const r of gone) rmSync(join(ws, r), { recursive: true, force: true });
+  if (keepTmp) mkdirSync(join(ws, ".tmp"), { recursive: true, mode: 0o700 });
+  return gone;
+}
 
 /** Deterministic digest of a workspace tree. */
 export function artifactDigest(ws: string): string {
@@ -77,7 +105,6 @@ export function artifactDigest(ws: string): string {
       const r = rel === "" ? name : `${rel}/${name}`;
       const st = lstatSync(abs);
       if (st.isDirectory()) {
-        if (SKIP_DIRS.has(name)) continue;
         h.update(`d\0${r}\n`);
         walk(abs, r);
       } else if (st.isSymbolicLink()) h.update(`l\0${r}\0${readlinkSync(abs)}\n`);
@@ -115,7 +142,6 @@ export function checkArtifactLimits(ws: string): string | null {
       const r = rel === "" ? name : `${rel}/${name}`;
       const st = lstatSync(abs);
       if (st.isDirectory()) {
-        if (SKIP_DIRS.has(name)) continue;
         const hit = walk(abs, r);
         if (hit !== null) return hit;
       } else if (st.isFile()) {
@@ -152,7 +178,7 @@ async function eachFile(ws: string, fn: (abs: string, rel: string, st: Stats) =>
       const r = rel === "" ? name : `${rel}/${name}`;
       const st = lstatSync(abs);
       if (st.isDirectory()) {
-        if (SKIP_DIRS.has(name) || skipRel.has(r)) continue;
+        if (skipRel.has(r)) continue;
         const hit = await fn(abs, r, st);
         if (hit !== null) return hit;
         const sub = await walk(abs, r);
@@ -191,18 +217,18 @@ export async function scanArtifactForSecretsAsync(ws: string, known: readonly st
     async (abs, r, st) => {
     if (!st.isFile()) return null;
     if (st.size > MAX_SCAN_BYTES) return `${r}: too large to scan`;
+    // accept/ is the frozen, approved check: exact known values only (its fixtures may look secret).
+    const patterns = !r.startsWith("accept/");
     let carry = "";
     let what: string | null = null;
     await eachChunk(abs, deadline, (b) => {
       const text = carry + b.toString("latin1");
-      what = findSecret(text, known);
+      what = findSecret(text, known, patterns);
       carry = text.slice(-overlap);
       return what !== null;
     });
     return what === null ? null : `${r}: ${what}`;
     },
-    // accept/ is the frozen, approved check (not builder output).
-    new Set(["accept"]),
   );
 }
 
@@ -211,7 +237,7 @@ export const MAX_SCAN_BYTES = 64 * 1024 * 1024;
 const SCAN_CHUNK = 1 << 20;
 
 /** Scans a whole file in overlapping chunks (overlap >= the longest known secret and any secret shape's prefix). */
-function scanFile(path: string, size: number, known: readonly string[]): string | null {
+function scanFile(path: string, size: number, known: readonly string[], patterns = true): string | null {
   if (size > MAX_SCAN_BYTES) return `too large to scan (${Math.ceil(size / (1024 * 1024))} MB, limit ${MAX_SCAN_BYTES / (1024 * 1024)} MB)`;
   const overlap = Math.max(4096, ...known.map((k) => k.length));
   const fd = openSync(path, "r");
@@ -220,7 +246,7 @@ function scanFile(path: string, size: number, known: readonly string[]): string 
     let carry = "";
     for (let n = readSync(fd, buf, 0, buf.length, null); n > 0; n = readSync(fd, buf, 0, buf.length, null)) {
       const text = carry + buf.subarray(0, n).toString("latin1");
-      const what = findSecret(text, known);
+      const what = findSecret(text, known, patterns);
       if (what !== null) return what;
       carry = text.slice(-overlap);
     }
@@ -232,18 +258,22 @@ function scanFile(path: string, size: number, known: readonly string[]): string 
 
 /** The first workspace file holding a secret (exact known value or secret-shaped string), as "path: what", or null. */
 export function scanArtifactForSecrets(ws: string, known: readonly string[] = []): string | null {
-  const walk = (dir: string, rel: string): string | null => {
+  const walk = (dir: string, rel: string, patterns = true): string | null => {
     for (const name of readdirSync(dir).sort()) {
       const abs = join(dir, name);
       const r = rel === "" ? name : `${rel}/${name}`;
       const st = lstatSync(abs);
       if (st.isDirectory()) {
-        // accept/ is the frozen, approved check (not builder output); .tmp and caches are not the artifact.
-        if (SKIP_DIRS.has(name) || r === "accept") continue;
-        const hit = walk(abs, r);
+        // accept/ is the frozen, approved check: exact known values only (its test fixtures may look secret).
+        if (r === "accept") {
+          const hit = walk(abs, r, false);
+          if (hit !== null) return hit;
+          continue;
+        }
+        const hit = walk(abs, r, patterns);
         if (hit !== null) return hit;
       } else if (st.isFile()) {
-        const what = scanFile(abs, st.size, known);
+        const what = scanFile(abs, st.size, known, patterns);
         if (what !== null) return `${r}: ${what}`;
       }
     }
@@ -257,7 +287,7 @@ export function scanArtifactForSecrets(ws: string, known: readonly string[] = []
 export function verifyArtifact(home: string, runId: string, known: readonly string[] = secretValues(process.env)): boolean {
   const r = readRunRecord(home, runId);
   if (r === null || typeof r.artifactSha256 !== "string" || !existsSync(r.artifactPath)) return false;
-  if (checkArtifactLimits(r.artifactPath) !== null) return false;
+  if (checkArtifactLimits(r.artifactPath) !== null || findDisposables(r.artifactPath).length > 0) return false;
   return artifactDigest(r.artifactPath) === r.artifactSha256 && scanArtifactForSecrets(r.artifactPath, known) === null;
 }
 

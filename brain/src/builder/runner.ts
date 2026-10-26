@@ -27,7 +27,7 @@ import { claimBuildApproval, peekBuildApproval } from "./approval.ts";
 import { GUARD_TS, HARNESS_PY } from "./harness.ts";
 import { startSupervisor, supervisorSocket, type Supervisor } from "./supervisor.ts";
 import { checkSha, identityMask, type CheckFile, type Mask } from "./checks.ts";
-import { artifactDigestAsync, buildsDir, checkArtifactLimits, scanArtifactForSecretsAsync, DEFAULT_LIMITS, truncateOutput, writeRunRecord, type BuildLimits, type BuildOutcome, type RunRecord, type TryRecord } from "./record.ts";
+import { artifactDigestAsync, buildsDir, checkArtifactLimits, removeDisposables, scanArtifactForSecretsAsync, DEFAULT_LIMITS, truncateOutput, writeRunRecord, type BuildLimits, type BuildOutcome, type RunRecord, type TryRecord } from "./record.ts";
 import {
   assertSafeExecutionProfile,
   BASH_ALLOW,
@@ -531,8 +531,21 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         reason = `builder processes could not be stopped before the check (${quiet.why ?? "sweep not clean"})`;
         break;
       }
-      // The artifact going in: sweep -> hash -> check -> sweep -> hash; both hashes must match for a PASS.
+      // Secrets anywhere, disposable folders included, BEFORE they are deleted.
+      const early = await scan();
+      if (early !== null) {
+        rec.ms = now() - t0;
+        tries.push(rec);
+        outcome = "FAIL";
+        reason = leakReason(early);
+        break;
+      }
+      // The artifact going in: sweep -> drop disposables -> hash -> check -> sweep -> drop disposables -> hash; both
+      // hashes must match for a PASS. Nothing that remains is exempt.
+      // Hashed exactly as it would be kept (no disposables, no .tmp); the builder's TMPDIR comes back for the check.
+      removeDisposables(ws, false);
       const before = await hash();
+      mkdirSync(join(ws, ".tmp"), { recursive: true, mode: 0o700 });
       const nonce = randomBytes(16).toString("hex");
       // bun runs the frozen copy (resolution root outside the workspace); python runs accept/<file> (cwd workspace).
       const c = await runCheck({ ws, file: checks.file, checkPath: checks.file === "accept.py" ? checkPath : frozenPath, frozenDir, env: childEnv, harness, sweep, nonce, timeoutMs: Math.min(120_000, left), signal: abort.signal });
@@ -562,7 +575,9 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         reason = `builder processes could not be stopped after the check (${after.why ?? "sweep not clean"})`;
         break;
       }
+      removeDisposables(ws, false);
       const changed = (await hash()) !== before;
+      mkdirSync(join(ws, ".tmp"), { recursive: true, mode: 0o700 });
       if (changed && c.exit === 0 && proof.ok) rec.checkOutput = truncateOutput(`${rec.checkOutput}\n[not a pass: the workspace changed while the check ran; write fixtures and outputs to a temporary folder]`);
       // An exit 0 without a valid proof (or that changed the artifact) is recorded as "did not complete" (null).
       rec.checkExit = c.exit === 0 && (!proof.ok || changed) ? null : c.exit;
@@ -587,6 +602,13 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
 
     // The artifact at the verdict: sweep once more, then hash twice with a gap; any change means something still writes.
     const fin = await supervisor.sweep();
+    // Scan everything (disposables included), then drop the disposable folders for good and hash what remains.
+    const early = outcome === "PASS" ? await scan() : null;
+    if (early !== null) {
+      outcome = "FAIL";
+      reason = leakReason(early);
+    }
+    removeDisposables(ws, false);
     const d1 = await hash();
     await new Promise((r) => setTimeout(r, 150));
     artifactSha256 = await hash();
