@@ -363,3 +363,57 @@ describe("s20 ROUTE review 2: an app's observed bundle id and host reach the com
     expect(seen.find((t) => t.id === target.target)?.hosts).toContain("acme.zendesk.com");
   });
 });
+
+// ---------- (5) verbs: only a positive read is read-only (independent review of 229ed09) ----------
+
+describe("s20 SAVING review 3: unknown or action verbs are never read-only", () => {
+  // verb, object, expected class. "unknown" = a verb no table knows: never read-only, never a zero saving.
+  const VERBS: ReadonlyArray<readonly [string, string, string]> = [
+    ["read", "invoice", "read"], ["view", "page", "read"], ["browse", "list", "read"], ["skim", "doc", "read"], ["check", "inbox", "read"],
+    ["watch", "video", "read"], ["scroll", "feed", "read"], ["reviewing", "content", "read"], ["viewing", "page", "read"], ["watching", "video", "read"],
+    ["attending", "meeting", "read"], ["listening", "call", "read"], ["search", "records", "read"],
+    ["approve", "invoice", "judge"], ["review", "application", "judge"], ["assess", "risk", "judge"], ["decide", "case", "judge"],
+    ["submit", "invoice", "record"], ["submitting", "form", "record"], ["pay", "bill", "record"], ["paying", "bill", "record"], ["publish", "page", "record"],
+    ["delete", "record", "record"], ["export", "report", "record"], ["exporting", "report", "record"], ["download", "statement", "record"], ["run", "script", "record"],
+    ["running", "tests", "record"], ["code", "feature", "record"], ["coding", "feature", "record"], ["fix", "bug", "record"], ["upload", "file", "record"],
+    ["schedule", "meeting", "record"], ["book", "room", "record"], ["file", "expense", "record"], ["merge", "branch", "record"], ["deploy", "site", "record"],
+    ["sign", "contract", "record"], ["import", "contacts", "record"], ["update", "issue", "record"], ["updating", "issue", "record"],
+    ["write", "note", "text"], ["reply", "email", "text"], ["send", "message", "text"], ["typing", "message", "text"], ["writing", "note", "text"],
+    ["frobnicate", "widget", "unknown"], ["glorping", "thing", "unknown"], ["zazzle", "item", "unknown"], ["quux", "page", "unknown"], ["attune", "setting", "unknown"],
+  ];
+
+  test("SAVING: the verb x class table (40+ verbs, made-up ones included): action verbs write, unknown verbs are not reads", () => {
+    expect(VERBS.length).toBeGreaterThanOrEqual(40);
+    const got = VERBS.map(([v, o]) => `${v}=${stepClass({ verb: v, object: o })}`);
+    expect(got).toEqual(VERBS.map(([v, , c]) => `${v}=${c}`));
+  });
+
+  test("SAVING: a task with any action or unknown verb is not read-only and keeps a non-zero saving claim", async () => {
+    const { savingSignals } = await import("../../src/analyze.ts");
+    for (const [v, o, c] of VERBS) {
+      const profile = { understanding: { steps: [{ verb: "reviewing", object: "content", activeMs: 1000 }, { verb: v, object: o, activeMs: 1000 }], surfaces: [] } } as unknown as Parameters<typeof savingSignals>[0];
+      const sig = savingSignals(profile, 0.1);
+      const s = estimateSaving({ instances: 40, daysActive: 7, windowDays: 7, medianMinutes: 3, eventIds: [], activeMinutes: 240, signals: sig });
+      const readOnly = c === "read" || c === "judge";
+      expect(`${v} readOnly=${sig.readOnly === true}`).toBe(`${v} readOnly=${readOnly}`);
+      expect(`${v} zero=${s.weeklyHoursSaved === 0}`).toBe(`${v} zero=${readOnly}`);
+    }
+  });
+
+  test("SAVING: a step of an unknown verb is still never planned as a commit (no write without the gate's commit step)", async () => {
+    const { stepClass: sc } = await import("../../src/plan/steps.ts");
+    // Unknown is its own class: neither a write that would get an unasked commit nor a read for the saving.
+    expect(sc({ verb: "frobnicate", object: "widget" })).toBe("unknown");
+    expect(["text", "record"]).not.toContain(sc({ verb: "frobnicate", object: "widget" }));
+  });
+});
+
+describe("s20 KEYS review 3: a file marker never overrides an observer home", () => {
+  test("KEYS: with a keys/ folder a remembered \"file\" mode is ignored unless OFFLOAD_KEYS=file", () => {
+    const home = tmp();
+    mkdirSync(join(home, "keys"), { recursive: true });
+    writeFileSync(join(home, "brain-key-mode"), "file\n");
+    expect(brainKeyMode({}, home)).toBe("keychain");
+    expect(brainKeyMode({ OFFLOAD_KEYS: "file" }, home)).toBe("file");
+  });
+});
