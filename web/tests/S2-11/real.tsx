@@ -5,6 +5,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { render } from "@testing-library/react";
 import { setDefaultTimeout } from "bun:test";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createHttpClient, type ApiClient } from "../../src/api/client.ts";
 import { App, createAppRouter } from "../../src/app/router.tsx";
@@ -39,7 +40,45 @@ export interface Control {
   close(): Promise<void>;
 }
 
+/** The control test database (control/tests/helpers/db.ts uses the same default). */
+const DEFAULT_PG_URL = "postgres://offload_migrator:offload@127.0.0.1:54329/offload_test";
+
+async function reachable(url: string): Promise<boolean> {
+  const u = new URL(url);
+  try {
+    const sock = await Bun.connect({ hostname: u.hostname, port: Number(u.port || 5432), socket: { data() {} } });
+    sock.end();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function run(cmd: string[], cwd: string, what: string) {
+  const r = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
+  if (r.exitCode !== 0) throw new Error(`${what} failed (${cmd.join(" ")}):\n${r.stderr.toString()}${r.stdout.toString()}`);
+}
+
+/**
+ * What the fixture needs, provided the way slices/S2-common/verify-lib.sh does (s2_install, s2_pg_up), so the web suite
+ * runs anywhere `bun test tests` runs: control's locked dependencies, and the local Postgres from
+ * control/docker-compose.yml when the test database is not reachable. Never a remote database; never a skip: if it
+ * cannot be provided, every test here fails with the reason.
+ */
+let provisioned: Promise<void> | null = null;
+function provision(): Promise<void> {
+  return (provisioned ??= (async () => {
+    if (!existsSync(join(CONTROL, "node_modules"))) run(["bun", "install", "--frozen-lockfile"], CONTROL, "control install");
+    const url = process.env.OFFLOAD_PG_URL ?? DEFAULT_PG_URL;
+    if (!["localhost", "127.0.0.1"].includes(new URL(url).hostname)) throw new Error("OFFLOAD_PG_URL must be local");
+    if (await reachable(url)) return;
+    if (process.env.OFFLOAD_PG_URL) throw new Error(`OFFLOAD_PG_URL is set but nothing answers at ${new URL(url).host}`);
+    run(["docker", "compose", "-f", join(CONTROL, "docker-compose.yml"), "up", "-d", "--wait"], CONTROL, "starting the control test Postgres");
+  })());
+}
+
 export async function startControl(): Promise<Control> {
+  await provision();
   const proc = Bun.spawn(["bun", "tests/S2-11/fixture-server.ts"], { cwd: CONTROL, stdin: "pipe", stdout: "pipe", stderr: "inherit" });
   const reader = proc.stdout.getReader();
   const dec = new TextDecoder();
@@ -49,7 +88,7 @@ export async function startControl(): Promise<Control> {
   while (!state) {
     if (Date.now() > deadline) throw new Error("control fixture did not start");
     const { value, done } = await reader.read();
-    if (done) throw new Error(`control fixture exited: ${await new Response(proc.stderr).text()}`);
+    if (done) throw new Error(`control fixture exited with ${await proc.exited} (its stderr is above)`);
     buf += dec.decode(value);
     const line = buf.split("\n").find((l) => l.startsWith("S2-11-READY "));
     if (line) state = JSON.parse(line.slice("S2-11-READY ".length)) as FixtureState;

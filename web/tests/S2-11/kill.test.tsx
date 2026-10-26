@@ -8,7 +8,7 @@ import { renderReal, startControl, type Control } from "./real.tsx";
 let c: Control;
 beforeAll(async () => {
   c = await startControl();
-}, 90_000);
+}, 180_000);
 afterAll(() => c.close());
 afterEach(cleanup);
 

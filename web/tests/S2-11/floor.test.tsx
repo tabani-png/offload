@@ -9,7 +9,7 @@ import { EVIDENCE_FLOOR_WORDS } from "../../src/screens/Evidence.tsx";
 let c: Control;
 beforeAll(async () => {
   c = await startControl();
-}, 90_000);
+}, 180_000);
 afterAll(() => c.close());
 afterEach(cleanup);
 

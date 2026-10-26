@@ -17,7 +17,7 @@ const NOTICE = { template: "custom", markdown: "# Electronic monitoring policy\n
 
 beforeAll(async () => {
   c = await startControl();
-}, 90_000);
+}, 180_000);
 afterAll(() => c.close());
 afterEach(cleanup);
 

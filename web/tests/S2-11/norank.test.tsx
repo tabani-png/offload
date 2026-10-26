@@ -18,7 +18,7 @@ beforeAll(async () => {
     dpiaAttestation: { completedOn: "2026-10-01", documentHash: "a".repeat(64), documentName: "dpia.pdf", signerName: "Pia Owner", signerTitle: "COO" },
     noticeVersionId: n.id, noticePeriodDays: 0, worksAgreementRef: null, quebecActivationAck: false, purposeLock: "process_improvement",
   });
-}, 90_000);
+}, 180_000);
 afterAll(() => c.close());
 afterEach(cleanup);
 
