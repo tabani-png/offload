@@ -10,10 +10,10 @@ import type { Tx } from "../../db/pool.ts";
 import { msNN, ms as pgMs } from "../../db/pool.ts";
 import { personById } from "../../db/people.ts";
 import { auditDto, type AuditEvent } from "../../audit/audit.ts";
-import { jcs, sha256Hex } from "../../schema/encoding.ts";
 import { HttpError, invalid, page, pageParams } from "../../schema/http.ts";
 import { DAY_MS, addDays, dayIn, personRow } from "./common.ts";
 import { isEnabled } from "./features.ts";
+import { myHoursSaved, runOutcomeOf } from "./hours.ts";
 import { ackDto } from "./notices.ts";
 import { P, bodyOf, replyLocal } from "./schemas.ts";
 
@@ -185,31 +185,7 @@ async function myRuns(tx: Tx, personId: string) {
   if (!(await hasTable(tx, "run_outcomes"))) return [];
   const rows = (await tx`select * from run_outcomes where person_id = ${personId}
     order by ended_at_ms desc, object_id limit 1000`) as Array<Record<string, unknown>>;
-  return rows.map((r) => ({
-    id: r.object_id as string,
-    kind: "run_outcome" as const,
-    createdAt: Number(r.created_at_ms),
-    runId: r.run_id as string,
-    workflowId: r.workflow_id as string,
-    version: Number(r.version),
-    runtime: r.runtime as string,
-    startedAt: Number(r.started_at_ms),
-    endedAt: Number(r.ended_at_ms),
-    outcome: r.outcome as string,
-    items: {
-      total: Number(r.items_total),
-      sent: Number(r.items_sent),
-      failedBeforeSend: Number(r.items_failed_before_send),
-      unknown: Number(r.items_unknown),
-      pending: Number(r.items_pending),
-    },
-    batchHash: (r.batch_hash as string | null) ?? null,
-    approverKind: (r.approver_kind as string | null) ?? null,
-    overnightPolicyId: (r.overnight_policy_id as string | null) ?? null,
-    costCents: Number(r.cost_cents),
-    errorCode: (r.error_code as string | null) ?? null,
-    overnight: Boolean(r.overnight),
-  }));
+  return rows.map(runOutcomeOf);
 }
 
 /** My daily aggregates with their per-workflow rows, newest day first (daily-aggregate.schema.json). */
@@ -251,35 +227,10 @@ async function myWorkingTime(tx: Tx, personId: string) {
   }));
 }
 
-/**
- * hs-1 for me with no inputs. The hs-1 computation lives in the metrics module (S2-05), which this module does not import;
- * my run outcomes themselves are listed under `runs`.
- */
-function hoursSavedReport(personId: string, timezone: string, perPersonDays: number, now: number) {
+/** The days my per-person rows are kept for, ending today (local days in the tenant timezone, `toExclusive` tomorrow). */
+function retentionWindow(timezone: string, perPersonDays: number, now: number) {
   const today = dayIn(timezone, now);
-  const scope = { type: "person", id: personId };
-  const period = { from: addDays(today, -perPersonDays + 1), toExclusive: addDays(today, 1), timezone };
-  const zero = { A: 0, B: 0, C: 0 };
-  return {
-    computation: "hs-1",
-    inputsDigest: sha256Hex(jcs({ computation: "hs-1", scope, period, runs: [], baselines: [] })),
-    scope,
-    period,
-    total: {
-      seconds: 0,
-      hours: 0,
-      byGrade: zero,
-      bySource: { observed: 0, user_estimate: 0 },
-      byRuntime: { mac: 0, cloud: 0 },
-      overnightSeconds: 0,
-      runs: { success: 0, failed: 0, cancelled: 0, rejected: 0, capped: 0 },
-      people: 0,
-    },
-    children: [],
-    topWorkflows: [],
-    anomalies: [],
-    final: false,
-  };
+  return { from: addDays(today, -perPersonDays + 1), toExclusive: addDays(today, 1) };
 }
 
 /** Everything the control plane holds about `personId` (self-view schema). */
@@ -313,7 +264,7 @@ export async function assembleSelfView(tx: Tx, personId: string, now: number) {
       lastSyncAt: pgMs(d.last_sync_at),
       state: d.state,
     })),
-    hoursSaved: hoursSavedReport(personId, tz, perPersonDays, now),
+    hoursSaved: await myHoursSaved(tx, personId, retentionWindow(tz, perPersonDays, now), tz),
     dailyAggregates: await myDailyAggregates(tx, personId),
     workingTime: await myWorkingTime(tx, personId),
     runs: await myRuns(tx, personId),
