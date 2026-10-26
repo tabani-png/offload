@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { approveBuild } from "../../src/builder/approval.ts";
+import { approveBuild, consumeBuildApproval } from "../../src/builder/approval.ts";
 import { runBuild } from "../../src/builder/runner.ts";
 import { decideTool } from "../../src/builder/sandbox.ts";
 import { fakeQuery, NOW, prepared, tmp, writeSlug } from "./setup.ts";
@@ -80,4 +80,18 @@ describe("s24 relative home", () => {
     expect(rec.artifactPath.startsWith("/")).toBe(true);
     expect(f.seen[0]!.options.cwd!.startsWith("/")).toBe(true);
   }, 30_000);
+});
+
+describe("s24 input paths", () => {
+  test("GATE: a brief id that is not a sol_ id (path traversal) is refused before any file is read or written", async () => {
+    const p = await prepared();
+    // A valid brief + checks copied to a folder outside solutions/, reachable only by traversal.
+    require("node:fs").cpSync(join(p.home, "solutions", p.briefId), join(p.home, "evil"), { recursive: true });
+    expect(() => approveBuild(p.home, "../evil", p.briefHash, p.checkHash, NOW)).toThrow(/no brief|brief id/);
+    expect(existsSync(join(p.home, "evil", "build-approval.json"))).toBe(false);
+    for (const bad of ["../x", "../../solutions/" + p.briefId, "sol_ok/../../x", ""]) {
+      expect(() => approveBuild(p.home, bad, p.briefHash, p.checkHash, NOW)).toThrow(/no brief|brief id/);
+      expect(() => consumeBuildApproval(p.home, bad, "t", NOW)).toThrow(/no brief|brief id/);
+    }
+  });
 });
