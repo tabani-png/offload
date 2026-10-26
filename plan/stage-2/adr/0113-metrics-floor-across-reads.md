@@ -72,8 +72,9 @@ pass the floor in the tree of the cell it is shown in.
   minus departments isolate a few people. Anomalies are filtered before the 100-entry cap.
 - Evidence lists raw baseline samples only when at least floor people sent samples for that version; the baseline the
   formula uses (n, median, quartiles, grade) is always shown, since it is in every run's figures.
-- Adoption's residual median from fewer than floor people is 0 (the schema has no per-field marker); the other fields
-  stay when their own contributor sets pass.
+- Adoption: when any field's contributor set fails (for example a residual median from fewer than floor people), the
+  whole cell is suppressed. The frozen schema has no per-field marker, and a 0 would read as a measurement (ADR 0005).
+  The proper future schema change is a nullable field (null = not shown), so the other fields can stay.
 - Inherent limit: "one more person in a suppressed group changes nothing a reader can see" cannot hold when that person
   makes hidden groups cross the floor together (two hidden cells summing to floor no longer need a complementary cell,
   so a visible neighbour reappears). Any floor with complementary suppression has this; it reveals only that a hidden

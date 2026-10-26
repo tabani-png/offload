@@ -86,9 +86,9 @@ async function adoption(c: Context<AppEnv>, deps: Deps) {
         // S2-05 adds, where an empty child hides nothing.
         return !hiddenInTree(h, scope, cells, floor, { ignoreEmpty: i > 0 });
       };
-      // The residual median alone lacking contributors costs only that field (0, not shown: the schema has no marker).
-      if (!contributors.slice(0, 4).every(passes)) return SUPPRESSED;
-      const residualShown = passes(contributors[4]!, 4);
+      // Any field without its contributors suppresses the whole cell: the schema has no per-field marker, and a made-up
+      // 0 (say for the residual median) would read as a measurement (ADR 0005).
+      if (!contributors.every(passes)) return SUPPRESSED;
       const active = new Set([...rows.map((r) => r.personId), ...inDaily.filter((d) => d.active_workflows > 0).map((d) => d.person_id)]);
       const workflows = new Set([...rows.map((r) => r.workflowId), ...inDaily.filter((d) => (d.runs ?? 0) > 0).map((d) => d.workflow_id!)]);
       const head = await headcount(tx, scope, who);
@@ -102,7 +102,7 @@ async function adoption(c: Context<AppEnv>, deps: Deps) {
         runsPerWeek: round((total * 7) / periodDays(period), 2),
         successRate: total === 0 ? 0 : round(runs.success / total, 4),
         rejectionRate: total === 0 ? 0 : round(runs.rejected / total, 4),
-        medianResidualSeconds: residuals.length === 0 || !residualShown ? 0 : median(residuals),
+        medianResidualSeconds: residuals.length === 0 ? 0 : median(residuals),
       };
     })();
     return { scope, period: { from: period.from, toExclusive: period.toExclusive }, value };
