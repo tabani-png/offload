@@ -75,3 +75,22 @@ describe("VERIFY per-device rate limit", () => {
     }
   });
 });
+
+// Codex re-review, PR #9 round 3 item 2: the budget counts accepted objects, not distinct object ids. A run outcome
+// replaced again and again under one id must use the budget up across envelopes like any other accepted object.
+describe("VERIFY rate limit counts replacements", () => {
+  test("VERIFY: repeated accepted updates to one run_outcome id consume the hourly budget across envelopes", async () => {
+    const t = s.h.a;
+    const p = await addPerson(s.h, t, { departmentId: t.departments.sales });
+    s.fc.ackAll([p]);
+    const d = await addDevice(s.h, t, p);
+    const base = runOutcome({ endedAt: at("2026-10-21", 9), sent: 1 });
+    const version = (sent: number) => runOutcome({ id: base.id, runId: base.runId, endedAt: base.endedAt, sent });
+    // Budget 3: the first copy and two replacements are accepted, each in its own envelope.
+    for (const sent of [1, 2, 3]) expect(receipt(await sendObjects(s.h, d, [version(sent)])).accepted).toEqual([base.id]);
+    // The fourth accepted object in the hour would be over budget, even though it is the same object id.
+    expect(receipt(await sendObjects(s.h, d, [version(4)])).rejected).toEqual({ [base.id]: "rate_limited" });
+    const [row] = await s.h.db.migrator`select items_sent from run_outcomes where device_id = ${d.deviceId}`;
+    expect(Number(row!.items_sent)).toBe(3);
+  });
+});

@@ -111,9 +111,10 @@ export async function ingest(c: Context<AppEnv>, deps: Deps): Promise<Receipt> {
       if (Number(last!.last_seq) >= env.seq) throw replay(`seq ${env.seq} is not above the last accepted ${last!.last_seq}`);
     }
 
-    // Per-device budget of accepted objects per rolling hour; the device_seq lock above makes the count exact.
-    const [used] = await tx`select count(*)::int as n from sync_objects
-      where device_id = ${device.deviceId} and received_at > ${new Date(now - SYNC_RATE_WINDOW_MS)}`;
+    // Per-device budget of accepted objects per rolling hour, replacements of a run outcome included (migration 0504);
+    // the device_seq lock above makes the count exact.
+    const [used] = await tx`select coalesce(sum(accepted), 0)::int as n from sync_accepts
+      where device_id = ${device.deviceId} and at > ${new Date(now - SYNC_RATE_WINDOW_MS)}`;
     const budget = { left: (deps.config.syncObjectsPerHour ?? SYNC_OBJECTS_PER_HOUR) - used!.n };
 
     const receipt: Receipt = { seq: env.seq, accepted: [], rejected: [] };
@@ -124,6 +125,10 @@ export async function ingest(c: Context<AppEnv>, deps: Deps): Promise<Receipt> {
       else reject(obj.id, code);
     }
 
+    if (receipt.accepted.length > 0) {
+      await tx`insert into sync_accepts (tenant_id, device_id, seq, at, accepted)
+        values (current_setting('app.tenant_id')::uuid, ${device.deviceId}, ${env.seq}, ${new Date(now)}, ${receipt.accepted.length})`;
+    }
     await tx`update device_seq set last_seq = ${env.seq}, last_sent_at_ms = ${env.sentAt}, updated_at = ${new Date(now)}
       where device_id = ${device.deviceId}`;
     await tx`update devices set last_sync_at = ${new Date(now)} where id = ${device.deviceId}`;
