@@ -104,7 +104,10 @@ async function table(): Promise<Row[]> {
   const rows: Row[] = needs.map((need) => ({ need, cells: {} }));
   for (const m of [...CHAIN_METHODS, null] as const) {
     // simulated: a known product's Composio toolkit is asked as its universe target (as with a demo sign-in).
-    const r = new ChainCapabilityResolver(chainWith(m, tmp(), true));
+    // A connector server on this Mac lists every catalog app, so MCP is in every catalog chain (link.ts order).
+    const home = tmp();
+    writeFileSync(join(home, "connectors.json"), JSON.stringify({ version: 1, servers: { all: { type: "stdio", command: "npx", args: ["-y", "x"], catalog: CONNECTORS.map((c) => c.id) } } }));
+    const r = new ChainCapabilityResolver(chainWith(m, home, true));
     const res = await r.resolve(needs);
     for (const row of rows) {
       const x = res.find((y) => y.target === row.need.target && y.capability === row.need.capability)!;
@@ -164,7 +167,8 @@ describe("s20 ROUTE review: needs are matched to what each method advertises", (
     for (const r of rows) {
       const ct = catalogTarget(r.need.target);
       // Computer use reads any app on screen and does any UI commit (its commit tool is gated like every other).
-      if (r.need.role === "read" || r.need.capability === UI_COMMIT) expect(`${r.need.target} ${r.need.capability} computer=${r.cells.computer}`).toBe(`${r.need.target} ${r.need.capability} computer=Y`);
+      // (A local document's read never reaches the chain: it is read from disk first.)
+      if (r.cells.local !== "Y" && (r.need.role === "read" || r.need.capability === UI_COMMIT)) expect(`${r.need.target} ${r.need.capability} computer=${r.cells.computer}`).toBe(`${r.need.target} ${r.need.capability} computer=Y`);
       // A method that advertises the exact capability always serves it.
       for (const m of CHAIN_METHODS) {
         const t = ct ?? ({ id: r.need.target, name: r.need.targetName, catalog: false, bundleIds: [], hosts: [], toolkit: "", reads: [SCREEN_READ], sends: [UI_COMMIT], logs: [] } as ChainTarget);

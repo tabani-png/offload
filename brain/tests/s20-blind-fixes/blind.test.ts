@@ -48,6 +48,18 @@ function blind() {
   return cached;
 }
 
+let cachedAll: Promise<{ home: string; a: Analysis }> | null = null;
+/** The blind week with every task kept as an insight, including read-only ones that claim no saving (review round):
+ * routing is tested on the looking-only products too (Google Docs). */
+function blindAll() {
+  cachedAll ??= (async () => {
+    const home = tmp("offload-s20-blindall-");
+    writeBlindWeek(home, blindWeek());
+    return { home, a: await analyzeHome(home, { now: () => NOW, understanding: "v2", minWeeklyHoursSaved: 0 }) };
+  })();
+  return cachedAll;
+}
+
 const taskOfShot = (a: Analysis, ts: number) => {
   const span = a.spans.find((s) => ts >= s.start && ts < s.end);
   return span === undefined ? undefined : a.taskOfSpan.get(span.id);
@@ -304,7 +316,7 @@ describe("s20 KEYS: plain-mode homes seal with file keys", () => {
 
 describe("s20 ROUTE: a captioned product is routed to that product before computer use", () => {
   async function plans() {
-    const { a } = await blind();
+    const { a } = await blindAll();
     const out = new Map<string, Awaited<ReturnType<typeof buildPlan>>["plan"]>();
     for (const name of ["Granola", "Linear", "Google Docs"]) out.set(name, (await buildPlan({ analysis: a, insight: insightWith(a, onSurface(name)), model: new StubModel(), models: { ...DEFAULT_MODELS } })).plan);
     const gm = insightWith(a, (x) => onSurface("Gmail")(x) && (x.profile.understanding?.steps ?? []).some((s) => s.verb === "type"));
@@ -323,7 +335,7 @@ describe("s20 ROUTE: a captioned product is routed to that product before comput
   });
 
   test("ROUTE: the chain order for a captioned product is connector, Composio, API, then computer use", async () => {
-    const { a } = await blind();
+    const { a } = await blindAll();
     const home = tmp();
     const granola = targetForProfile(insightWith(a, onSurface("Granola")).profile);
     expect(granola.id).toBe("app-granola");
@@ -363,7 +375,7 @@ describe("s20 ROUTE: a captioned product is routed to that product before comput
   });
 
   test("ROUTE: with the stub model a demo Composio sign-in for the product's toolkit is used, not computer use", async () => {
-    const { a, home: src } = await blind();
+    const { a, home: src } = await blindAll();
     const home = tmp();
     // The analysis is already made; the chain only needs a home for its cache and the demo sign-ins.
     void src;
