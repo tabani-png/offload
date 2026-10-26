@@ -421,7 +421,9 @@ async function runRefusal(tx: Tx, r: RunBinding, conn: ConnRow): Promise<string 
   return null;
 }
 
-const fingerprintOf = (c: ConnRow) => `${c.id}:${c.externalRef}:${c.ownership}:${c.kind}`;
+/** What a policy saw of its commit connection; any change (re-linked account, new owner, re-bound job role, another
+ * provider) trips the breaker (ADR 0106 §3). */
+const fingerprintOf = (c: ConnRow) => sha256Hex(jcs({ v: 2, id: c.id, ref: c.externalRef, ownership: c.ownership, kind: c.kind, provider: c.provider, owner: c.ownerPersonId, jobRole: c.jobRoleId }));
 
 /** The SQLSTATE of a Postgres error ("" for anything else). */
 export function sqlStateOf(err: unknown): string {
@@ -476,16 +478,29 @@ export function createBroker(deps: Deps): Broker {
         or (scope = 'workflow' and target_id = ${wf}::uuid)) limit 1`;
     return r !== undefined;
   }
-  const batchKilled = (tx: Tx, b: BatchRow) =>
-    killActive(tx, { personIds: [b.runnerPersonId, ...(b.identityType === "person" ? [b.identityId] : [])], workflowId: b.workflowId });
+  /** A switch on the tenant, the workflow, the runner, a person identity, or the person who approved (`approver`). */
+  const batchKilled = (tx: Tx, b: BatchRow, approver: string | null = null) =>
+    killActive(tx, {
+      personIds: [b.runnerPersonId, ...(b.identityType === "person" ? [b.identityId] : []), ...(approver !== null ? [approver] : [])],
+      workflowId: b.workflowId,
+    });
+  /** The person behind a token, or null for a policy's approval. */
+  const approverOf = (tk: Record<string, unknown>) => (tk.approver_kind === "person" ? (tk.approved_by as string) : null);
+
+  /** One audit event for a state change of a batch, about its runner. */
+  async function auditBatch(tx: Tx, hash: string, action: string, detail: Record<string, unknown>): Promise<void> {
+    const [b] = await tx`select runner_person_id from batches where hash = ${hash}`;
+    await audit(tx, { actor: SERVICE, action, subjectPersonId: (b?.runner_person_id as string | undefined) ?? null, resource: { type: "batch", id: hash }, detail });
+  }
 
   // ---------- state ----------
 
   /** Expired, never-used tokens no longer authorise their items. */
   async function sweepTokens(tx: Tx, hash: string): Promise<void> {
-    await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${new Date(now())}
+    const it = await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${new Date(now())}
       where batch_hash = ${hash} and state = 'pending' and token_id in (select id from approval_tokens
         where batch_hash = ${hash} and used_at is null and (revoked_at is not null or expires_at <= ${new Date(now())}))`;
+    if (it.count > 0) await auditBatch(tx, hash, "batch.tokens_swept", { items: it.count });
   }
 
   async function recompute(tx: Tx, hash: string): Promise<BatchState> {
@@ -666,8 +681,23 @@ export function createBroker(deps: Deps): Broker {
     const t = new Date(now());
     const r = await tx`update approval_tokens set revoked_at = ${t}, revoked_reason = ${reason}
       where batch_hash = ${hash} and used_at is null and revoked_at is null`;
-    await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${t}
+    const it = await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${t}
       where batch_hash = ${hash} and state = 'pending' and token_id is not null`;
+    if (r.count > 0 || it.count > 0) await auditBatch(tx, hash, "batch.tokens_revoked", { reason: reason.slice(0, 200), tokens: r.count, items: it.count });
+    await recompute(tx, hash);
+    return r.count;
+  }
+
+  /** Revokes one person's approvals in a batch (unspent tokens, and the unsent items of spent ones). */
+  async function revokeApprovals(tx: Tx, hash: string, personId: string, reason: string): Promise<number> {
+    await tx`select 1 from batches where hash = ${hash} for update`;
+    const t = new Date(now());
+    const r = await tx`update approval_tokens set revoked_at = ${t}, revoked_reason = ${reason}
+      where batch_hash = ${hash} and approver_kind = 'person' and approved_by = ${personId} and used_at is null and revoked_at is null`;
+    const it = await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${t}
+      where batch_hash = ${hash} and state = 'pending' and token_id in (select id from approval_tokens
+        where batch_hash = ${hash} and approver_kind = 'person' and approved_by = ${personId})`;
+    if (r.count > 0 || it.count > 0) await auditBatch(tx, hash, "batch.tokens_revoked", { reason: reason.slice(0, 200), tokens: r.count, items: it.count, approver: personId });
     await recompute(tx, hash);
     return r.count;
   }
@@ -716,11 +746,14 @@ export function createBroker(deps: Deps): Broker {
     // Lock order: the caller holds the policy; each batch (by hash) before its tokens and items.
     for (const o of open) {
       await tx`select 1 from batches where hash = ${o.batch_hash} for update`;
-      await tx`update approval_tokens set revoked_at = ${t}, revoked_reason = ${reason.slice(0, 200)}
+      const r = await tx`update approval_tokens set revoked_at = ${t}, revoked_reason = ${reason.slice(0, 200)}
         where batch_hash = ${o.batch_hash} and policy_id = ${policyId} and used_at is null and revoked_at is null`;
-      await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${t}
+      const it = await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${t}
         where batch_hash = ${o.batch_hash} and state = 'pending'
           and token_id in (select id from approval_tokens where policy_id = ${policyId})`;
+      if (r.count > 0 || it.count > 0) {
+        await auditBatch(tx, o.batch_hash as string, "batch.policy_unlinked", { policyId, reason: reason.slice(0, 200), tokens: r.count, items: it.count });
+      }
       await recompute(tx, o.batch_hash as string);
     }
     return open.length;
@@ -931,7 +964,7 @@ export function createBroker(deps: Deps): Broker {
     let b = await loadBatch(tx, hash, true);
     if (!b) throw notFound();
     await mustApprove(tx, p, b);
-    if (await batchKilled(tx, b)) throw new HttpError(409, "kill_switch_active", "a kill switch stops this batch");
+    if (await batchKilled(tx, b, p.personId)) throw new HttpError(409, "kill_switch_active", "a kill switch stops this batch");
     // The runner and the sending identity as they are now (Codex round 3): a freeze after propose revoked the tokens,
     // and a new approval must not mint one for a frozen or offboarded runner.
     const bconn = await connectionOf(tx, b.connectionId);
@@ -1097,7 +1130,7 @@ export function createBroker(deps: Deps): Broker {
         await audit(tx, { actor: SERVICE, action: "batch.tamper_detected", subjectPersonId: b.runnerPersonId, resource: { type: "batch", id: hash }, detail: {} });
         return new HttpError(409, "hash_mismatch", "the batch changed after it was approved");
       }
-      if (await batchKilled(tx, b)) {
+      if (await batchKilled(tx, b, approverOf(tk))) {
         await revokeBatch(tx, hash, "kill switch");
         return new HttpError(409, "kill_switch_active", "a kill switch stops this batch");
       }
@@ -1274,7 +1307,7 @@ export function createBroker(deps: Deps): Broker {
         if (Number(spent?.budget_cents ?? 0) >= cap) return takeBack("night budget spent");
       }
       if (row.scheduledFor !== null && row.scheduledFor > now()) return { done: "waiting" as const };
-      if (await batchKilled(tx, b)) {
+      if (await batchKilled(tx, b, approverOf(tk))) {
         await revokeBatch(tx, hash, "kill switch");
         return { done: "waiting" as const };
       }
@@ -1389,7 +1422,11 @@ export function createBroker(deps: Deps): Broker {
       await tx`update contacted_ledger set outcome = ${answer} where batch_hash = ${hash} and item_key = ${key} and outcome = 'sending'`;
       if (ok && prepared.policyId !== null) {
         const night = nightOf(now(), await tenantTimezone(tx));
-        await tx`update overnight_counters set sends = sends + 1 where policy_id = ${prepared.policyId} and night = ${night}::date`;
+        // Upsert: a send counts even if nothing created tonight's row yet (it is not evaluated: the night's first batch
+        // still decides whether it is a dry run).
+        await tx`insert into overnight_counters (tenant_id, policy_id, night, dry_run, evaluated, sends)
+          values (current_setting('app.tenant_id')::uuid, ${prepared.policyId}, ${night}::date, false, false, 1)
+          on conflict (tenant_id, policy_id, night) do update set sends = overnight_counters.sends + 1`;
       }
       await recompute(tx, hash);
       await audit(tx, {
@@ -1416,6 +1453,8 @@ export function createBroker(deps: Deps): Broker {
         returning batch_hash, key`;
       for (const r of rows) {
         await tx`update contacted_ledger set outcome = 'unknown' where batch_hash = ${r.batch_hash} and item_key = ${r.key} and outcome = 'sending'`;
+        const [wf] = await tx`select workflow_id from batches where hash = ${r.batch_hash}`;
+        await auditBatch(tx, r.batch_hash as string, "batch.item_reconciled", { item: itemRef(wf!.workflow_id as string, r.key as string), from: "sending", to: "unknown" });
         await recompute(tx, r.batch_hash as string);
       }
       return rows.length;
@@ -1460,6 +1499,14 @@ export function createBroker(deps: Deps): Broker {
     // Lock order: the kill switch row (the route), then batches by hash.
     let n = 0;
     for (const h of hashes) n += await revokeBatch(tx, h.hash as string, reason);
+    if (scope === "person") {
+      // The person's own approvals of other people's batches stop too (follow-up 2).
+      const approved = await tx`select distinct t.batch_hash from approval_tokens t where t.approver_kind = 'person' and t.approved_by = ${targetId}
+          and t.revoked_at is null and (t.used_at is null or exists (select 1 from batch_items i
+            where i.tenant_id = t.tenant_id and i.token_id = t.id and i.state = 'pending'))
+        order by t.batch_hash`;
+      for (const h of approved) n += await revokeApprovals(tx, h.batch_hash as string, targetId!, reason);
+    }
     return n;
   }
 
