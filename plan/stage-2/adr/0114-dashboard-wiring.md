@@ -1,4 +1,4 @@
-# 0113 Dashboard wiring: serving the SPA from the control plane, and what the web reads
+# 0114 Dashboard wiring: serving the SPA from the control plane, and what the web reads
 
 Date: 2026-10-26. Status: **proposed** (S2-11). Amends ADR 0110 (stack) and `plan/stage-2/API.md` where they were
 silent. No schema changes; no change to `control/src/app.ts`, `ports.ts` or the RBAC matrix.
@@ -42,3 +42,21 @@ before a module route can run. A module therefore cannot answer `GET /` or `GET 
 - Open, for the metrics owner (S2-05): putting registry names into `topWorkflows[].name` server-side would let the web
   drop decision 5. Times in tables are still shown in UTC; switching `timeText` to the tenant timezone is left for a
   later web change (S2-04 snapshots depend on UTC).
+
+## Amendment (2026-10-26, on main after wave B)
+Renumbered from 0113 (three ADRs held that number). Fitted to the merged S2-05, S2-07 and S2-08 behaviour:
+8. **Hidden cells below the company say what is true of every case.** ADR 0113 (metrics floor) §1 suppresses a
+   department or job role read whose cell is hidden in its parent's report, so the web can no longer tell a small
+   group from the complementary cell, and §5 hides a whole adoption cell when any one figure rests on fewer than 5
+   people. Department, job role, adoption and department working-time cells therefore read "Hidden to protect a group
+   under 5 people" (`TREE_FLOOR_WORDS`); "Fewer than 5 people" stays only where it is certain (company-level single
+   values). The extra own-scope read per hidden row is gone. The S2-04 mock floors department and job role reads the
+   same way.
+9. **Hidden months are not zero.** A suppressed month in the overview trend is drawn as a dashed outline with a dash
+   and named "hidden" in the chart's label.
+10. **Expected refusals are calm.** Evidence `422 group_floor` (too few people ran it in scope, or its baseline comes
+    from fewer than 5 senders) is a note, not an alert; `GET /v1/me/digest` answering 404 (no digest for the day) says
+    so and leaves the kill-switch controls usable.
+11. **Kill-switch rights follow API.md.** "Stop all sending" is offered to owners and admins only. "Clear the stop" is
+    offered to an owner, or to an admin when the stop was not set by an owner (setter's role from the directory; when
+    unknown, not offered). The server stays the authority.

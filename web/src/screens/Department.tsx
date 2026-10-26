@@ -30,10 +30,10 @@ export function DepartmentScreen() {
             <Card className="card-hero">
               {isSuppressed(r.total) ? (
                 <div className="stack">
-                  <SuppressedCell reason={r.total.reason} />
+                  <SuppressedCell reason={r.total.reason} tree />
                   <p className="t-body ink2">
-                    Fewer than 5 people in {dept?.name ?? "this department"} have data for this period, so its numbers are not shown on their own.
-                    Its hours still count in the company total.
+                    {dept?.name ?? "This department"}'s numbers are not shown for this period: fewer than 5 people have
+                    data, or showing them would let a smaller group be worked out. Its hours still count in the company total.
                   </p>
                 </div>
               ) : (
@@ -57,7 +57,7 @@ export function DepartmentScreen() {
               rowKey={(c) => c.scope.id ?? c.label}
               columns={[
                 { key: "role", header: "Job role", cell: (c) => <span className="t-label ink1">{c.label}</span> },
-                { key: "hours", header: "Hours saved", align: "end", cell: (c) => <ChildHoursCell child={c} period={report.data!.period} /> },
+                { key: "hours", header: "Hours saved", align: "end", cell: (c) => <ChildHoursCell child={c} /> },
                 { key: "grade", header: "Confidence A · B · C", cell: (c) => <GradeCell value={c.value} /> },
                 { key: "runs", header: "Successful runs", align: "end", cell: (c) => (isSuppressed(c.value) ? <span className="ink3">—</span> : c.value.runs.success) },
               ]}
@@ -84,7 +84,7 @@ export function DepartmentScreen() {
         </Card>
         <Card title="Adoption">
           <Load q={adoption}>
-            {(a) => isSuppressed(a.value) ? <SuppressedCell reason={a.value.reason} /> : (
+            {(a) => isSuppressed(a.value) ? <SuppressedCell reason={a.value.reason} tree /> : (
               <div className="grid-2">
                 <div className="stat"><span className="stat-value">{a.value.peopleWithActiveWorkflow} of {a.value.peopleTotal}</span><span className="t-callout ink2">people use a workflow</span></div>
                 <div className="stat"><span className="stat-value">{pct(a.value.successRate)}</span><span className="t-callout ink2">of runs succeed</span></div>
@@ -102,7 +102,7 @@ export function DepartmentScreen() {
         ) : (
           <Card>
             <Load q={wtReport}>
-              {(w) => isSuppressed(w.value) ? <SuppressedCell reason={w.value.reason} /> : (
+              {(w) => isSuppressed(w.value) ? <SuppressedCell reason={w.value.reason} tree /> : (
                 <div className="stack">
                   <div className="grid-3">
                     <div className="stat"><span className="stat-value">{minutesText(w.value.medianActiveMinutesPerDay * 60)}</span><span className="t-callout ink2">median active time a day</span></div>

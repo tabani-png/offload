@@ -84,7 +84,7 @@ async function api(state, who, method, p, body) {
 
     // Turn both features on (3-day / 1-day notice), let them become effective, then show the gated views.
     const n = await api(state, "owner", "POST", "/v1/compliance/notices", {
-      template: "ontario-esa-policy", title: "Monitoring policy v2", markdown: "# Policy", jurisdictions: [],
+      template: "custom", title: "Monitoring policy v2", markdown: "# Policy", jurisdictions: [],
       features: ["workflow_metrics", "per_person_views", "working_time"],
     });
     await api(state, "owner", "POST", `/v1/compliance/notices/${n.id}/publish`);

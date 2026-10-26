@@ -27,17 +27,10 @@ export function HoursCell(props: { value: HoursValue | Suppressed }) {
   return isSuppressed(props.value) ? <SuppressedCell reason={props.value.reason} /> : <span className="t-label ink1">{hoursText(props.value.seconds)}</span>;
 }
 
-/**
- * One child row's hours. A group_floor cell whose own report is visible had 5 or more people with data and was hidden
- * only so a smaller sibling cannot be worked out from the total; it says so instead of "Fewer than 5 people".
- */
-export function ChildHoursCell(props: { child: HoursSavedReport["children"][number]; period: HoursSavedReport["period"] }) {
-  const { scope, value } = props.child;
-  const own = useGet<HoursSavedReport>(isSuppressed(value) && value.reason === "group_floor" && scope.id
-    ? `/v1/metrics/hours-saved?scope=${scope.type}:${scope.id}&from=${props.period.from}&to=${props.period.toExclusive}`
-    : null);
-  if (!isSuppressed(value)) return <HoursCell value={value} />;
-  return <SuppressedCell reason={value.reason} complementary={own.data !== undefined && !isSuppressed(own.data.total)} />;
+/** One child row's hours (a department or job role): hidden cells use the words that cover both floor cases. */
+export function ChildHoursCell(props: { child: HoursSavedReport["children"][number] }) {
+  const { value } = props.child;
+  return isSuppressed(value) ? <SuppressedCell reason={value.reason} tree /> : <HoursCell value={value} />;
 }
 
 export function GradeCell(props: { value: HoursValue | Suppressed }) {
@@ -52,13 +45,21 @@ function Trend(props: { period: Period }) {
       return { queryKey: [path], queryFn: () => api.get<HoursSavedReport>(path) };
     }),
   });
+  if (qs.some((q) => q.isError)) return <div className="t-callout ink3" role="note">The monthly trend could not be loaded. Try again shortly.</div>;
   if (qs.some((q) => q.data === undefined)) return <div className="t-callout ink3" role="status">Loading</div>;
   const data = qs.map((q, i) => {
     const t = q.data!.total;
-    return { label: monthName(props.period.trend[i]!.month, true), value: isSuppressed(t) ? 0 : t.seconds, partial: !q.data!.final };
+    // A suppressed month is hidden, not zero (ADR 0005): the bar shows a dash and the label says why.
+    return { label: monthName(props.period.trend[i]!.month, true), value: isSuppressed(t) ? null : t.seconds, partial: !q.data!.final };
   });
+  const words = (v: number | null) => (v === null ? "hidden, fewer than 5 people" : hoursText(v));
   return (
-    <Bars data={data} label={`Hours saved per month: ${data.map((d) => `${d.label} ${hoursText(d.value)}`).join(", ")}`} />
+    <>
+      <Bars data={data} label={`Hours saved per month: ${data.map((d) => `${d.label} ${words(d.value)}`).join(", ")}`} />
+      {data.some((d) => d.value === null) && (
+        <p className="t-callout ink3">A dashed month had fewer than 5 people with data, so its total is not shown.</p>
+      )}
+    </>
   );
 }
 
@@ -138,7 +139,7 @@ export function OverviewScreen() {
                     onOpen={(c) => void navigate({ to: "/departments/$id", params: { id: c.scope.id! } })}
                     columns={[
                       { key: "name", header: "Department", cell: (c) => <span className="t-label ink1">{c.label}</span> },
-                      { key: "hours", header: "Hours saved", align: "end", cell: (c) => <ChildHoursCell child={c} period={r.period} /> },
+                      { key: "hours", header: "Hours saved", align: "end", cell: (c) => <ChildHoursCell child={c} /> },
                       { key: "grade", header: "Confidence A · B · C", cell: (c) => <GradeCell value={c.value} /> },
                       { key: "people", header: "People using", align: "end", cell: (c) => (isSuppressed(c.value) ? <span className="ink3">—</span> : c.value.people) },
                       { key: "overnight", header: "Overnight", align: "end", cell: (c) => (isSuppressed(c.value) ? <span className="ink3">—</span> : pct(share(c.value.overnightSeconds, c.value.seconds))) },
@@ -147,8 +148,8 @@ export function OverviewScreen() {
                   {r.children.some((c) => isSuppressed(c.value)) && (
                     <p className="t-callout ink3">
                       Departments where fewer than 5 people have data in this period are hidden, and so is one more when
-                      only one would be, so no small group can be worked out from the total. Their hours still count in
-                      the company total.
+                      a small group could otherwise be worked out from the total. Their hours still count in the company
+                      total.
                     </p>
                   )}
                 </Card>
@@ -216,6 +217,12 @@ function Quality(props: { report: HoursSavedReport; adoption?: AdoptionReport })
   const a = props.adoption?.value;
   return (
     <Card title="Quality">
+      {a && isSuppressed(a) && (
+        <p className="t-callout ink3">
+          <SuppressedCell reason={a.reason} tree />. Success, rejection and review-time figures are shown only when each
+          comes from at least 5 people.
+        </p>
+      )}
       {a && !isSuppressed(a) && (
         <div className="grid-2">
           <div className="stat"><span className="stat-value">{pct(a.successRate)}</span><span className="t-callout ink2">of runs succeed</span></div>

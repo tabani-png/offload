@@ -200,7 +200,7 @@ export async function buildWorld(): Promise<World> {
 
   // The workflow-metrics notice, published before anyone acknowledges it.
   const notice = ok(await owner.send("POST", "/v1/compliance/notices", {
-    template: "ontario-esa-policy", title: "How Offload is used at Acme",
+    template: "custom", title: "How Offload is used at Acme",
     markdown: "# Electronic monitoring policy\n\nWhat is captured, why, who sees it, how long it is kept, how to pause.",
     features: ["workflow_metrics"], jurisdictions: [],
   }), "notice");
@@ -267,9 +267,12 @@ export async function buildWorld(): Promise<World> {
   // One batch waiting for approval in sales (the role policy names the runner or the dept lead as approvers).
   h.clock.t = NOW - 3600_000;
   ok(await admin.send("PUT", `/v1/policies/job-roles/${jobRoles.sdr}`, rolePolicy(jobRoles.sdr, t.people.admin.id, h.clock.now())), "role policy", [200, 201]);
+  // A person sends only through their own personal-allowed connection (S2-07, ADR 0106 §6).
+  const memberGmail = (await h.db.migrator`insert into connections (tenant_id, kind, ownership, label, owner_person_id, provider, external_ref)
+    values (${t.id}, 'gmail', 'personal-allowed', 'Gmail', ${t.people.member.id}, 'composio', 'acct_s211_member_gmail') returning id`)[0]!.id as string;
   const proposed = await brokerOf(h.deps.ports).proposeBatch(t.id, {
     runId: ulid(h.clock.now()), workflowId: workflows.sales, version: 1, jobRoleId: jobRoles.sdr, runtime: "mac",
-    identity: { type: "person", id: t.people.member.id }, runnerPersonId: t.people.member.id, connectionId: t.connections.company,
+    identity: { type: "person", id: t.people.member.id }, runnerPersonId: t.people.member.id, connectionId: memberGmail,
   }, [{ key: "lead-1@prospect.example", capability: "mail.send", fields: [["to", "lead-1@prospect.example"], ["subject", "Following up"], ["body", "Hi, a short follow-up."]] }]);
   if (!proposed.ok) throw new Error(`proposeBatch: ${proposed.code} ${proposed.message}`);
 

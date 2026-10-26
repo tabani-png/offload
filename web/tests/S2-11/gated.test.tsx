@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { hoursText, minutesText } from "../../src/lib/format.ts";
 import { main, settle, until } from "../helpers/render.tsx";
 import { renderReal, startControl, type Control } from "./real.tsx";
+import { TREE_FLOOR_WORDS } from "../../src/design/components.tsx";
 
 // One story, in order: both features off → the owner turns per-person views on in the compliance sheet (3-day notice)
 // → nothing appears until it is effective → it appears → working time follows the same path → disable hides at once.
@@ -12,7 +13,7 @@ const DAY = 86_400_000;
 const SHA = "a".repeat(64);
 const text = () => main().textContent ?? "";
 const headers = () => Array.from(main().querySelectorAll("th")).map((h) => h.textContent ?? "");
-const NOTICE = { template: "ontario-esa-policy", markdown: "# Electronic monitoring policy\n\nPer-person views and working time.", jurisdictions: [] };
+const NOTICE = { template: "custom", markdown: "# Electronic monitoring policy\n\nPer-person views and working time.", jurisdictions: [] };
 
 beforeAll(async () => {
   c = await startControl();
@@ -162,7 +163,7 @@ describe("GATED per-person and working-time views", () => {
     await renderReal(c, `/departments/${c.state.depts.legal}`, "owner");
     await until(() => !main().querySelector("[data-feature-off=working_time]") && text().includes("Working time"), "working-time section");
     const section = Array.from(main().querySelectorAll("section")).find((s) => s.querySelector("h2")?.textContent === "Working time")!;
-    await until(() => section.textContent!.includes("Fewer than 5 people"), "floor message");
+    await until(() => section.textContent!.includes(TREE_FLOOR_WORDS), "floor message");
     expect(section.textContent).not.toMatch(/\d+ min/);
   });
 

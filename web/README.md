@@ -18,7 +18,7 @@ Mock switches for review: `?features=per_person_views,working_time` turns the se
 default), `?theme=light` shows the light palette.
 
 ## On the real API (S2-11)
-`vite build` output is served by the control plane (`control/src/modules/web`, ADR 0113): `/` and every client route
+`vite build` output is served by the control plane (`control/src/modules/web`, ADR 0114): `/` and every client route
 get `index.html` with a strict CSP (`default-src 'self'`, no inline script or style), hashed `/assets/*` are cached
 immutable, API paths are untouched. `VITE_API=real bun run dev` points the dev server's screens at the control plane.
 The reporting period is this month so far in the tenant's timezone (`src/lib/period.ts`).

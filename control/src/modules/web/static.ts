@@ -1,4 +1,4 @@
-// Serves the admin SPA (web/dist) from the control plane (SPEC S2-11 SERVE, ADR 0113). Pure request -> response: no
+// Serves the admin SPA (web/dist) from the control plane (SPEC S2-11 SERVE, ADR 0114). Pure request -> response: no
 // database, no session. API paths never reach this handler.
 import { existsSync, statSync } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";

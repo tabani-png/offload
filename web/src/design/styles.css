@@ -195,6 +195,7 @@ tr:focus-visible { outline-offset: -2px; }
 .bars { width: 100%; max-width: 520px; }
 .bar { fill: var(--ink3); }
 .bar-partial { fill: var(--ring-strong); }
+.bar-hidden { fill: none; stroke: var(--ink3); stroke-dasharray: 3 3; }
 .bar-value { fill: var(--ink2); font-size: var(--type-micro-size); font-family: var(--font-sans); }
 .bar-label { fill: var(--ink3); font-size: var(--type-footnote-size); font-family: var(--font-sans); }
 

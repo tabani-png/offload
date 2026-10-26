@@ -40,7 +40,7 @@ describe("CSRF on every mutation", () => {
   test("CSRF: every mutation the web client sends carries the session's X-CSRF-Token, and the API accepts it", async () => {
     const owner = await tab("owner");
     await owner.api.post("/v1/compliance/notices", {
-      template: "ontario-esa-policy", title: "Draft v2", markdown: "# Draft", features: ["workflow_metrics"], jurisdictions: [],
+      template: "custom", title: "Draft v2", markdown: "# Draft", features: ["workflow_metrics"], jurisdictions: [],
     });
     await owner.api.patch(`/v1/departments/${w.depts.legal}`, { name: "Legal and compliance" });
     await owner.api.post("/v1/me/correction-requests", { field: "person.displayName", message: "Please use my full name." });
@@ -61,7 +61,7 @@ describe("CSRF on every mutation", () => {
   test("CSRF: a mutation without the header is 403 and changes nothing", async () => {
     const before = (await w.as("owner").get("/v1/compliance/notices?limit=200")).json.items.length;
     const r = await raw("owner", "POST", "/v1/compliance/notices", {
-      template: "ontario-esa-policy", title: "Sneaky", markdown: "# x", features: ["workflow_metrics"], jurisdictions: [],
+      template: "custom", title: "Sneaky", markdown: "# x", features: ["workflow_metrics"], jurisdictions: [],
     });
     expect(r.status).toBe(403);
     expect(r.json.error.code).toBe("forbidden");

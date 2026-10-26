@@ -6,7 +6,7 @@ import { staticSite } from "./static.ts";
 export const DEFAULT_WEB_DIST = join(import.meta.dir, "../../../../web/dist");
 
 /**
- * S2-11: the control plane serves the admin SPA (ADR 0113). The RBAC gate in app.ts answers 404 for every path that is
+ * S2-11: the control plane serves the admin SPA (ADR 0114). The RBAC gate in app.ts answers 404 for every path that is
  * not in the permission matrix, before any module route runs, and app.ts is closed to later slices. So this module
  * puts the static site in front of the app's fetch: GET/HEAD for a non-API path is answered from web/dist (index.html
  * for client routes); every other request, and every request when no build is present, goes to the gate unchanged.

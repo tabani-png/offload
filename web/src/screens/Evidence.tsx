@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import type { ApiClient } from "../api/client.ts";
+import { ApiError, type ApiClient } from "../api/client.ts";
 import type { HoursSavedEvidence, Workflow } from "../api/types.ts";
 import { Card, Chip, GRADE_WORDS, Section, Segmented, StateTag, Table } from "../design/components.tsx";
 import { hoursText, minutesText, timeText } from "../lib/format.ts";
@@ -22,6 +22,15 @@ export async function evidenceAll(api: ApiClient, path: string, pageSize = 200, 
   }
   return { ...first!, runs, page: { nextCursor: cursor } };
 }
+
+/**
+ * 422 group_floor on evidence is expected, not a fault: fewer than 5 people ran the version in the caller's scope, or
+ * its baseline samples come from fewer than 5 senders, so stats and runs would be someone's own timing (ADR 0113
+ * metrics floor §5). Said calmly, as a hidden figure, never as zeros.
+ */
+export const EVIDENCE_FLOOR_WORDS =
+  "Evidence for this version is not shown: fewer than 5 people ran it in what you can see this period, or its baseline " +
+  "comes from fewer than 5 people, so the figures would be one person's timing. Its hours still count in the totals.";
 
 const SOURCE_WORDS = {
   observed: "Observed on employees' Macs",
@@ -55,7 +64,11 @@ export function EvidenceScreen() {
           <Link to="/workflows/$id" params={{ id }} className="link t-callout">Workflow details</Link>
         </div>
       )}
-      <Load q={ev} label="Loading evidence">
+      {ev.error instanceof ApiError && ev.error.code === "group_floor" ? (
+        <Card>
+          <p className="t-body ink2" role="note" data-suppressed="group_floor">{EVIDENCE_FLOOR_WORDS}</p>
+        </Card>
+      ) : <Load q={ev} label="Loading evidence">
         {(e) => {
           const b = e.baseline;
           const success = e.runs.filter((r) => r.outcome === "success");
@@ -102,7 +115,7 @@ export function EvidenceScreen() {
             </>
           );
         }}
-      </Load>
+      </Load>}
     </Page>
   );
 }

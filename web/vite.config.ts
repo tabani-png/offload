@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import { tokenCss } from "./src/design/tokens.ts";
 
 // The design tokens as a real stylesheet (`import "virtual:offload-tokens.css"`), bundled and hashed with the rest of
-// the CSS. The control plane serves the SPA with `style-src 'self'` (S2-11, ADR 0113), so no inline <style> is allowed.
+// the CSS. The control plane serves the SPA with `style-src 'self'` (S2-11, ADR 0114), so no inline <style> is allowed.
 const TOKENS_ID = "virtual:offload-tokens.css";
 function tokens(): Plugin {
   return {

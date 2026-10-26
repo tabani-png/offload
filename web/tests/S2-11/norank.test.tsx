@@ -10,7 +10,7 @@ beforeAll(async () => {
   c = await startControl();
   const owner = await c.as("owner");
   const n = await owner.api.post<{ id: string }>("/v1/compliance/notices", {
-    template: "ontario-esa-policy", title: "Monitoring policy v2", markdown: "# Policy", features: ["workflow_metrics", "per_person_views"], jurisdictions: [],
+    template: "custom", title: "Monitoring policy v2", markdown: "# Policy", features: ["workflow_metrics", "per_person_views"], jurisdictions: [],
   });
   await owner.api.post(`/v1/compliance/notices/${n.id}/publish`);
   await owner.api.post("/v1/compliance/features/per_person_views/enable", {
