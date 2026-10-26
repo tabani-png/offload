@@ -154,3 +154,14 @@ The default digest day is `digestDayOf`: the local calendar day, or the next one
   `processed_at` (SDK 1.3.0 docs), and an event processed late can sort before one already handled, so no time cursor
   is safe. Deployment runs are polled `created_at[gte]` the newest `created_at` seen (the field that filter compares)
   and deduplicated by `deployment_run_ref`.
+
+## 17. A settled cost reaches every consumer once; imported runs keep the platform start time
+- `settleLost` writes the final cost, re-emits the run's outcome (metrics keep the latest seq per run) and adds the
+  cost the run's overnight policy has not counted (`policy_cost_cents`, migration 0906) to that policy's night counter,
+  all in one transaction. `reportPolicy` records the cost it reported in its mark and adds any growth in the same
+  transaction. The counter increment is written here, not through `reportNightSignals`: the broker port cannot join
+  the transaction that moves the mark, and that cost path evaluates no breaker.
+- A scheduled run imported by `pollDeployments` starts at the deployment run's `created_at` (never later than now),
+  so its digest window, its month and its outcome follow the platform's start.
+- `offload_report` says the summary is recorded with the run (the run DTO shows it); the digest schema has no field
+  for it.

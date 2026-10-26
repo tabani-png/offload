@@ -50,7 +50,7 @@ export const CUSTOM_TOOLS: CustomTool[] = [
   {
     type: "custom",
     name: "offload_report",
-    description: "Report what this run did, in plain words, for the morning digest.",
+    description: "Report what this run did, in plain words. It is recorded with the run, where people reviewing it read it.",
     input_schema: {
       type: "object",
       properties: { summary: { type: "string", maxLength: 2000 }, metrics: { type: "object" } },

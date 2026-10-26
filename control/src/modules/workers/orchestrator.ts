@@ -36,9 +36,10 @@ import type { WorkersPort } from "../../ports.ts";
 import { brokerOf } from "../broker/index.ts";
 import type { ProposeRun } from "../broker/index.ts";
 import metrics from "../metrics/index.ts";
+import { nightOf } from "../policies/evaluate.ts";
 import { rolePolicyOf } from "../policies/repo.ts";
 import type { RegistryApi } from "../registry/port.ts";
-import { scheduleProblem } from "./cron.ts";
+import { isTimezone, scheduleProblem } from "./cron.ts";
 import { managedAgentsFromEnv, type ManagedAgentsApi, type SessionEvent, type UserEvent } from "./managed-agents.ts";
 import { loadDeployment, loadRun, loadWorker, runRow, workerRow, type RunRow, type RunState, type StopReason, type WorkerRow } from "./repo.ts";
 import { PROPOSE_INPUT, localValidator } from "./schemas.ts";
@@ -485,9 +486,13 @@ export function createWorkers(deps: Deps): Workers {
   async function insertRun(
     tx: Tx,
     w: WorkerRow,
-    o: StartOpts & { deploymentRunRef?: string; deploymentId?: string; budgetCents?: number; sessionRef?: string; state?: RunState; errorCode?: string },
+    o: StartOpts & { deploymentRunRef?: string; deploymentId?: string; budgetCents?: number; sessionRef?: string; state?: RunState; errorCode?: string; startedAt?: string },
   ): Promise<RunRow> {
-    const id = ulid(now());
+    // A scheduled run imported from the platform started when the platform started it (dr.created_at), not when we
+    // polled: the digest window, the month it is charged to and its outcome follow that time. Never in the future.
+    const given = o.startedAt !== undefined ? Date.parse(o.startedAt) : NaN;
+    const startedAt = Number.isFinite(given) ? Math.min(given, now()) : now();
+    const id = ulid(startedAt);
     const runner = w.identityType === "person" ? w.identityId : o.runnerPersonId;
     const policyId = o.trigger === "schedule" ? await overnightPolicyFor(tx, w, runner) : null;
     // ADR 0105 §7: recipients come from the run's input set; a scheduled run's only set is its overnight allowlist.
@@ -496,7 +501,7 @@ export function createWorkers(deps: Deps): Workers {
     const [r] = await tx`insert into worker_runs (tenant_id, id, worker_id, trigger, runner_person_id, input_recipients, overnight,
         overnight_policy_id, started_at, ended_at, state, stop_reason, error_code, budget_cents, session_ref, deployment_run_ref, deployment_id)
       values (current_setting('app.tenant_id')::uuid, ${id}, ${w.id}, ${o.trigger}, ${runner}, ${recipients}::jsonb,
-        ${o.trigger === "schedule"}, ${policyId}, ${new Date(now())}, ${ended ? new Date(now()) : null}, ${o.state ?? "running"},
+        ${o.trigger === "schedule"}, ${policyId}, ${new Date(startedAt)}, ${ended ? new Date(now()) : null}, ${o.state ?? "running"},
         ${ended ? "error" : null}, ${o.errorCode ?? null}, ${o.budgetCents ?? w.sessionBudgetCents}, ${o.sessionRef ?? ""}, ${o.deploymentRunRef ?? null},
         ${o.deploymentId ?? null})
       returning *`;
@@ -960,7 +965,8 @@ export function createWorkers(deps: Deps): Workers {
         const summary = typeof input.summary === "string" ? input.summary.slice(0, 2000) : null;
         if (summary === null) return reply({ error: "validation_failed", message: "summary must be a string" }, true);
         await service(ctx.tenantId, (tx) => tx`update worker_runs set summary = ${summary} where id = ${ctx.run.id}`);
-        return reply("Recorded for the morning digest.");
+        // The run DTO (GET /v1/worker-runs/{id}) shows the summary; the digest schema has no field for it.
+        return reply("Recorded with this run.");
       }
       case "offload_need_human": {
         const q = typeof input.question === "string" ? input.question.slice(0, 500) : null;
@@ -1170,10 +1176,35 @@ export function createWorkers(deps: Deps): Workers {
         const t2 = await b.reportNightSignals(tenantId, policyId, { costCents });
         if (t2) await recordTrip(tenantId, runId, policyId, t2);
       }
-      await service(tenantId, (tx) => tx`update worker_runs set policy_reported_at = ${new Date(now())} where id = ${runId}`);
+      await service(tenantId, async (tx) => {
+        // The cost this report counted; a cost that grew meanwhile (a settle) is added now, in this transaction.
+        await tx`update worker_runs set policy_reported_at = ${new Date(now())}, policy_cost_cents = ${costCents} where id = ${runId}`;
+        await addPolicyCostDelta(tx, runId);
+      });
     } catch (e) {
       console.error(`workers: reporting run ${runId} to its overnight policy: ${(e as Error).message}`);
     }
+  }
+
+  /**
+   * Adds the cost a run gained after its overnight-policy report to that policy's night counter, and moves the run's
+   * mark (`policy_cost_cents`) in the same transaction: each cent is counted exactly once, also across a crash. The
+   * counter row is the one `reportNightSignals` keeps (the night the run ended, in the tenant's timezone); that cost
+   * path evaluates no breaker, and the broker port cannot join this transaction.
+   */
+  async function addPolicyCostDelta(tx: Tx, runId: string): Promise<void> {
+    const [r] = await tx`select overnight_policy_id, policy_reported_at, policy_cost_cents, cost_cents, ended_at from worker_runs
+      where id = ${runId} for update`;
+    if (!r || r.overnight_policy_id === null || r.policy_reported_at === null || r.policy_cost_cents === null || r.ended_at === null) return;
+    const delta = Number(r.cost_cents) - Number(r.policy_cost_cents);
+    if (delta <= 0) return;
+    const [t] = await tx`select reporting_timezone from tenants where id = current_setting('app.tenant_id')::uuid`;
+    const tz0 = (t?.reporting_timezone as string | undefined) ?? "UTC";
+    const night = nightOf((r.ended_at as Date).getTime(), isTimezone(tz0) ? tz0 : "UTC");
+    await tx`insert into overnight_counters (tenant_id, policy_id, night, dry_run, evaluated)
+      values (current_setting('app.tenant_id')::uuid, ${r.overnight_policy_id}, ${night}::date, false, false) on conflict do nothing`;
+    await tx`update overnight_counters set budget_cents = budget_cents + ${delta} where policy_id = ${r.overnight_policy_id} and night = ${night}::date`;
+    await tx`update worker_runs set policy_cost_cents = cost_cents where id = ${runId}`;
   }
 
   /** Consecutive failures of scheduled runs (ADR 0105 §5): two in a row pause the worker and its deployment. */
@@ -1221,14 +1252,14 @@ export function createWorkers(deps: Deps): Workers {
           await tx`update remote_deployments set last_run_seen_at = greatest(coalesce(last_run_seen_at, ''), ${dr.created_at}) where deployment_id = ${d.deployment_id}`;
           if (dup || !w) return null;
           if (dr.error || !dr.session_id) {
-            const run = await insertRun(tx, w, { trigger: "schedule", runnerPersonId: w.ownerPersonId, inputs: null, deploymentRunRef: dr.id, deploymentId: d.deployment_id, budgetCents: Number(d.budget_cents), state: "failed", errorCode: safeCode(dr.error?.type ?? "no_session") });
+            const run = await insertRun(tx, w, { trigger: "schedule", runnerPersonId: w.ownerPersonId, inputs: null, deploymentRunRef: dr.id, deploymentId: d.deployment_id, budgetCents: Number(d.budget_cents), startedAt: dr.created_at, state: "failed", errorCode: safeCode(dr.error?.type ?? "no_session") });
             const paused = await countResult(tx, w, false);
             await emitOutcome(tx, run, w);
             await audit(tx, { actor: SERVICE, action: "worker.run_end", subjectPersonId: run.runnerPersonId, resource: { type: "worker_run", id: run.id }, detail: { workerId: w.id, state: "failed", errorCode: run.errorCode } });
             return { run, paused, attach: false, policy: run.overnightPolicyId };
           }
           // The session runs with the deployment's budget: that is what it reserves.
-          const run = await insertRun(tx, w, { trigger: "schedule", runnerPersonId: w.ownerPersonId, inputs: null, deploymentRunRef: dr.id, deploymentId: d.deployment_id, budgetCents: Number(d.budget_cents), sessionRef: dr.session_id });
+          const run = await insertRun(tx, w, { trigger: "schedule", runnerPersonId: w.ownerPersonId, inputs: null, deploymentRunRef: dr.id, deploymentId: d.deployment_id, budgetCents: Number(d.budget_cents), startedAt: dr.created_at, sessionRef: dr.session_id });
           await tx`insert into session_cursors (tenant_id, session_id, run_id) values (current_setting('app.tenant_id')::uuid, ${dr.session_id}, ${run.id}) on conflict do nothing`;
           await audit(tx, { actor: SERVICE, action: "worker.run_start", subjectPersonId: run.runnerPersonId, resource: { type: "worker_run", id: run.id }, detail: { workerId: w.id, trigger: "schedule", deploymentRun: dr.id } });
           // The platform already created this session: it passes a manual run's gates or it is stopped at once. The
@@ -1344,8 +1375,20 @@ export function createWorkers(deps: Deps): Workers {
         }
         // The session no longer exists: it is stopped; the cost stays the last one observed.
       }
-      await service(tenantId, (tx) => tx`update worker_runs set session_unsettled = false, cost_cents = greatest(cost_cents, ${cost ?? 0})
-        where id = ${r.id} and session_unsettled`);
+      // One transaction: the final cost, the run's outcome again (metrics keep the latest seq per run) and the cost
+      // its overnight policy has not counted yet. Lock order as in finish: the runner's lock, then the run.
+      await service(tenantId, async (tx) => {
+        const [p] = await tx`select runner_person_id from worker_runs where id = ${r.id}`;
+        if (!p) return;
+        await tx`select pg_advisory_xact_lock(hashtext(${"offload_cloud_device:" + (p.runner_person_id as string)}))`;
+        const run = await loadRun(tx, r.id, true);
+        if (!run || !run.sessionUnsettled) return;
+        const [u] = await tx`update worker_runs set session_unsettled = false, cost_cents = greatest(cost_cents, ${cost ?? 0})
+          where id = ${r.id} returning *`;
+        const settled = runRow(u!);
+        if (settled.costCents !== run.costCents) await emitOutcome(tx, settled, (await loadWorker(tx, settled.workerId))!);
+        await addPolicyCostDelta(tx, r.id);
+      });
     }
   }
 

@@ -70,6 +70,8 @@ export interface RunRow {
   deploymentRunRef: string | null;
   interruptSentAt: number | null;
   outcomeSeq: number;
+  /** Ended because the session was lost; its budget stays reserved until the session is confirmed stopped. */
+  sessionUnsettled: boolean;
 }
 
 export function workerRow(r: Row): WorkerRow {
@@ -135,6 +137,7 @@ export function runRow(r: Row): RunRow {
     deploymentRunRef: (r.deployment_run_ref as string | null) ?? null,
     interruptSentAt: ms(r.interrupt_sent_at as Date | null),
     outcomeSeq: Number(r.outcome_seq),
+    sessionUnsettled: r.session_unsettled === true,
   };
 }
 

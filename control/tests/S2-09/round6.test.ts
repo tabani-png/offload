@@ -59,6 +59,28 @@ describe("BUDGET", () => {
   }, 60_000);
 });
 
+describe("CUSTOM", () => {
+  test("CUSTOM: offload_report promises only what a reader shows: the summary is on the run, not in the digest", async () => {
+    const x = await createWorker(w);
+    const tool = (w.fake.ops("agents.create").at(-1)!.body!.tools as Array<Record<string, any>>).find((t) => t.name === "offload_report")!;
+    expect(tool.description).not.toMatch(/digest/i);
+    w.fake.queue([
+      { await: "user.message" },
+      { emit: [running, { id: "evt_rep_r6", type: "agent.custom_tool_use", name: "offload_report", input: { summary: "Drafted two follow-ups." } }, { type: "session.status_idle", stop_reason: { type: "requires_action", event_ids: ["evt_rep_r6"] } }] },
+      { await: "user.custom_tool_result", where: (e) => e.custom_tool_use_id === "evt_rep_r6" },
+      { emit: [{ type: "session.status_idle", stop_reason: { type: "end_turn" } }] },
+    ]);
+    const c = await w.as("member");
+    const r = await c.post(`/v1/workers/${x.id}/runs`, {});
+    expect(r.status).toBe(201);
+    await w.workers.idle();
+    const sid = [...w.fake.sessions.values()].pop()!.id;
+    const result = w.fake.sent(sid).find((e) => e.type === "user.custom_tool_result")!;
+    expect(result.content[0].text).not.toMatch(/digest/i);
+    expect((await c.get(`/v1/worker-runs/${r.json.id}`)).json.summary).toBe("Drafted two follow-ups.");
+  }, 60_000);
+});
+
 describe("SCHEDULE", () => {
   test("SCHEDULE: a scheduled run imported after downtime starts when the platform started it", async () => {
     const x = await createWorker(w, { schedule: { cron: "0 20 * * *", timezone: "UTC" } });
