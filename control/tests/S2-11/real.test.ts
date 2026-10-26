@@ -38,8 +38,10 @@ describe("REAL screens on the real API", () => {
     expect(r.total.runs.success).toBe(45);
     expect(r.total.seconds).toBeGreaterThan(0);
     expect(r.children.map((c: { label: string }) => c.label)).toEqual(["Finance", "Legal", "Sales"]);
-    // Legal's workflow is run by 4 people: under the floor, so it is not a top workflow.
-    expect(r.topWorkflows.map((t: { workflowId: string }) => t.workflowId).sort()).toEqual([w.workflows.sales, w.workflows.finance].sort());
+    // Legal's workflow is run by 4 people: under the floor, so it is not a top workflow. Finance's is not listed either
+    // (S2-05 follow-ups, ADR 0113 §6): Finance is hidden beside Legal and runs only its workflow, so company − Sales −
+    // that workflow would be Legal's 4-person hours.
+    expect(r.topWorkflows.map((t: { workflowId: string }) => t.workflowId)).toEqual([w.workflows.sales]);
     const a = await read(owner, `/v1/metrics/adoption?scope=company&${P}`, S("adoption-report"));
     expect(a.value.peopleWithActiveWorkflow).toBe(15);
     const pending = await read(owner, "/v1/batches?state=pending", S("batch"), true);

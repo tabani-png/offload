@@ -136,12 +136,14 @@ describe("FLOOR one more person in a suppressed group, running a shared workflow
     expect(diff).toEqual([]);
   });
 
-  test("FLOOR: the company reads move only where H is counted: no child, anomaly or other workflow changes", () => {
+  test("FLOOR: the company reads move only where H is counted: no child or anomaly changes, no workflow of H alone", () => {
     const b = before["company hours"]!.body, a = after["company hours"]!.body;
     expect(a.children).toEqual(b.children);
     expect(a.anomalies).toEqual(b.anomalies);
-    const others = (x: Record<string, unknown>) => (x.topWorkflows as Array<{ workflowId: string }>).filter((w) => w.workflowId !== WF1);
-    expect(others(a)).toEqual(others(b));
+    // Top workflows may move: the company contains H, and with H in Finance, company minus Sales and Ops minus WF3
+    // (Legal and Finance's only workflow) would be H's runs, so the company drops WF3 (floor-span.test.ts checks every
+    // combination). No workflow H alone ran is listed.
+    expect((a.topWorkflows as Array<{ workflowId: string }>).map((w) => w.workflowId)).not.toContain(WF2);
     const ad = (x: Snap) => x["company adoption"]!.body.value as { peopleWithActiveWorkflow: number };
     expect(ad(after).peopleWithActiveWorkflow).toBe(ad(before).peopleWithActiveWorkflow + 1);
     const wt = (x: Snap) => x["company working-time"]!.body.value as { people: number };
