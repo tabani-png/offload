@@ -6,21 +6,16 @@ import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:
 import { join } from "node:path";
 import { createBrain } from "../../src/api/server.ts";
 import { StubModel, type ModelRequest } from "../../src/models/model.ts";
-import * as readMod from "../../src/playbook/read.ts";
 import { PlaybookInputError } from "../../src/playbook/build.ts";
 import { findTextLeaks } from "../../src/playbook/leak.ts";
 import { addressParts, buildIdentity, emptyIdentity, maskText } from "../../src/playbook/mask.ts";
 import { playbookForPromotion } from "../../src/playbook/promote.ts";
-import { ruleRead } from "../../src/playbook/read.ts";
-import * as storeMod from "../../src/playbook/store.ts";
-import { playbookPath, readPlaybook } from "../../src/playbook/store.ts";
+import { MAX_LABEL_CALLS, ruleRead } from "../../src/playbook/read.ts";
+import { IDENTITY_FILE, playbookPath, readPlaybook } from "../../src/playbook/store.ts";
 import type { PlaybookMessage } from "../../src/playbook/types.ts";
 import { FIXTURE_FACTS } from "../../fixtures/sent-mail.ts";
 import { dryRun } from "../../src/workflows/dryrun.ts";
 import { build, containsWord, founderPersona, NOW, world, writeFacts, type World } from "./setup.ts";
-
-const { MAX_LABEL_CALLS } = readMod;
-const { IDENTITY_FILE } = storeMod;
 
 const msg = (i: number, to: string, first: string, line: string): PlaybookMessage => ({
   id: `m${i}`,
