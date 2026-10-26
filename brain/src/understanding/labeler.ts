@@ -6,6 +6,8 @@ import { heuristicJudge, type Judge, type JudgeInput, type JudgeResult } from ".
 import { connectorById } from "../connectors/catalog.ts";
 import type { TaskLabel, TaskProfile, UnderstandingStep } from "../types.ts";
 import { surfaceReach } from "./reach.ts";
+import { knownSurfaceAt } from "./surfaces.ts";
+import { baseVerb } from "./verbs.ts";
 
 const slug = (s: string) =>
   s
@@ -21,9 +23,10 @@ const TRANSFER_VERBS = new Set(["enter", "key in", "copy", "paste", "fill in", "
 const TEMPLATED_REPLY_VERBS = new Set(["reply", "answer", "respond", "send", "triage"]);
 const REVIEW_VERBS = new Set(["review", "screen", "assess", "evaluate", "approve", "decide", "compare"]);
 const LIVE_VERBS = new Set(["attend", "meet", "call", "present"]);
-const READ_VERBS = new Set(["read", "skim", "browse", "view", "watch", "chat", "scroll"]);
+const READ_VERBS = new Set(["read", "skim", "browse", "view", "watch", "chat", "scroll", "reviewing", "comparing", "look at"]);
 
-export const isWriteVerb = (v: string) => WRITE_VERBS.has(v);
+/** s20: gerunds count as their base verb ("writing" is a write). */
+export const isWriteVerb = (v: string) => WRITE_VERBS.has(baseVerb(v));
 
 function mailOnly(p: TaskProfile): boolean {
   const u = p.understanding;
@@ -41,6 +44,9 @@ function appLabel(s: UnderstandingStep): string {
   // A catalog connector knows the product's name (mail.google.com is "Gmail", not "Google").
   const known = surfaceReach({ app: s.app, host: s.host, urlPattern: s.surfaceKey.split("|")[2] ?? "", activeMs: 0 });
   if (known.connectorId !== null) return connectorById(known.connectorId)?.name ?? s.appName;
+  // s20: a known product keeps its own name ("Google Docs", "ChatGPT"), not the host's middle word.
+  const product = knownSurfaceAt(s.app, s.host, s.surfaceKey.split("|")[2] ?? "");
+  if (product !== null && product.routable) return product.name;
   if (s.host === "") return s.appName;
   const parts = s.host.replace(/^www\./, "").split(".");
   const base = parts.length >= 2 ? parts[parts.length - 2]! : parts[0]!;
@@ -72,7 +78,8 @@ export const understandingLabeler = {
 const clamp = (x: number, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, x));
 const round2 = (x: number) => Math.round(x * 100) / 100;
 
-function verbJudgement(verb: string, sameness: number): number {
+function verbJudgement(raw: string, sameness: number): number {
+  const verb = baseVerb(raw);
   if (LIVE_VERBS.has(verb)) return 0.9;
   if (REVIEW_VERBS.has(verb)) return 0.45;
   if (TEMPLATED_REPLY_VERBS.has(verb)) return 0.35;

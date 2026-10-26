@@ -9,6 +9,7 @@ import { connectorById } from "../connectors/catalog.ts";
 import { catalogTarget } from "../connectors/targets.ts";
 import type { UnderstandingStep } from "../types.ts";
 import { surfaceReach } from "../understanding/reach.ts";
+import { knownSurfaceAt } from "../understanding/surfaces.ts";
 
 /** Lowercase letters, digits and single dashes; at most 40 characters; "app" when nothing is left (s13 slugify). */
 export function slugify(s: string): string {
@@ -51,7 +52,9 @@ export interface StepTarget {
 export function targetOf(s: Pick<UnderstandingStep, "app" | "appName" | "host" | "surfaceKey">): StepTarget {
   const r = surfaceReach({ app: s.app, host: s.host, urlPattern: s.surfaceKey.split("|")[2] ?? "", activeMs: 0 });
   if (r.connectorId !== null) return { target: r.connectorId, targetName: connectorById(r.connectorId)?.name ?? s.appName, via: "catalog", connectorId: r.connectorId };
-  return { target: appTargetId(s.app, s.appName, s.host), targetName: surfaceName(s.app, s.appName, s.host), via: r.via, connectorId: null };
+  // s20: a known product keeps its own name ("Google Docs", not "Google" from docs.google.com).
+  const known = knownSurfaceAt(s.app, s.host, s.surfaceKey.split("|")[2] ?? "");
+  return { target: appTargetId(s.app, s.appName, s.host), targetName: known?.routable === true ? known.name : surfaceName(s.app, s.appName, s.host), via: r.via, connectorId: null };
 }
 
 /** Canonical read capability for a target (s13 vocabulary: mail.read, screen.read; s14 adds file.read). */

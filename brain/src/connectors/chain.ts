@@ -265,10 +265,12 @@ export function knownTargets(home: string, now: number = Date.now()): ChainTarge
 
 // ---------- decisions ----------
 
-/** The methods a target is tried with, in order. App targets: composio, api, computer (no server lists them). */
+/** The methods a target is tried with, in order. App targets: composio, api, computer (no server lists them); s20: an
+ * app target of a product a caption named (Granola, Linear, ...) tries a connector on this Mac first, like the catalog. */
 export function chainOrder(t: ChainTarget, home: string): Method[] {
   if (t.catalog) return resolutionMethods(t.id, loadConnectorsConfig(home).config);
-  return ["composio", "api", "computer"];
+  const order = resolutionMethods(t.id, null);
+  return order.length > 0 ? order : ["composio", "api", "computer"];
 }
 
 const offers = (s: ProbeResult, need: readonly string[]) => need.every((c) => s.reads.includes(c) || s.writes.includes(c));

@@ -8,6 +8,7 @@
 import type { CapabilityNeedDTO, OutputType, PlanStepDTO, PlanVariantDTO } from "../api/s14-types.ts";
 import type { TaskUnderstanding, UnderstandingStep } from "../types.ts";
 import type { FrameNote } from "../understanding/frames.ts";
+import { baseVerb } from "../understanding/verbs.ts";
 import { commitCapability, readCapability, targetOf, type StepTarget } from "./capabilities.ts";
 
 export const READ_VERBS = new Set(["read", "view", "browse", "skim", "check", "look up", "find", "open", "search", "watch", "scroll", "look at", "reading", "reviewing", "comparing"]);
@@ -18,12 +19,26 @@ export const TEXT_VERBS = new Set(["reply", "answer", "respond", "write", "send"
 export type VerbClass = "read" | "judge" | "record" | "text";
 
 export function verbClass(verb: string): VerbClass {
-  const v = verb.toLowerCase().trim();
+  // s20: gerunds ("writing", "typing", "filling in") are typed as their base verb, never as reading.
+  const v = baseVerb(verb);
   if (TEXT_VERBS.has(v)) return "text";
   if (RECORD_VERBS.has(v)) return "record";
   if (JUDGE_VERBS.has(v)) return "judge";
   return "read";
 }
+
+/** s20: typing (or editing, creating) a message, note, reply or post writes text: it gets a draft, like "write". */
+const TYPED_TEXT_VERBS = new Set(["type", "edit", "create", "add"]);
+const TEXT_OBJECT_RE = /\b(message|messages|note|notes|reply|replies|email|emails|comment|comments|post|posts|draft|memo|answer|response)\b/i;
+
+/** The verb class of a step: its verb's class, except that typing a text object is a text write. */
+export function stepClass(s: Pick<UnderstandingStep, "verb" | "object">): VerbClass {
+  const c = verbClass(s.verb);
+  return c === "record" && TYPED_TEXT_VERBS.has(baseVerb(s.verb)) && TEXT_OBJECT_RE.test(s.object) ? "text" : c;
+}
+
+/** The word a text write is named by: its verb when that is a text verb ("reply"), else its object ("message"). */
+const textWord = (s: Pick<UnderstandingStep, "verb" | "object">) => (TEXT_VERBS.has(baseVerb(s.verb)) ? s.verb : s.object);
 
 /** Steps seen in fewer instances than this are left out of every variant (noise, one-offs). */
 export const MIN_STEP_SHARE = 0.1;
@@ -62,13 +77,13 @@ export interface PlanInput {
 /** The output type of the task (deterministic, from the commit step's verb, object, surface and frame outputs). */
 export function outputTypeOf(input: PlanInput): OutputType {
   const steps = usable(input.understanding.steps);
-  const writes = steps.filter((s) => verbClass(s.verb) === "text" || verbClass(s.verb) === "record");
+  const writes = steps.filter((s) => stepClass(s) === "text" || stepClass(s) === "record");
   const commit = [...writes].sort((a, b) => Number(b.core) - Number(a.core) || b.activeMs - a.activeMs || (a.id < b.id ? -1 : 1))[0];
   if (commit === undefined) return "record";
   const outs = stepOutputs(input.stepFrames.get(commit.id) ?? []).join(" ");
   const words = `${commit.object} ${commit.surface} ${outs}`.toLowerCase();
   const t = targetOf(commit);
-  if (verbClass(commit.verb) === "text") {
+  if (stepClass(commit) === "text") {
     if (t.connectorId === "gmail" || input.mail || commit.category === "email") return "email";
     if (/\b(ticket|case|support|helpdesk)\b/.test(words) || /zendesk|freshdesk|intercom|helpscout|zoho/.test(commit.host)) return "ticket_reply";
     return "message";
@@ -101,7 +116,7 @@ export function skeleton(input: PlanInput, opts: { coreOnly: boolean }): PlanSte
   };
   const steps = usable(input.understanding.steps).filter((s) => !opts.coreOnly || s.core);
   // A workflow gathers first, then writes: reads and judgements in their order, then the writes in theirs.
-  const isWrite = (s: UnderstandingStep) => verbClass(s.verb) === "text" || verbClass(s.verb) === "record";
+  const isWrite = (s: UnderstandingStep) => stepClass(s) === "text" || stepClass(s) === "record";
   const reads = steps.filter((s) => !isWrite(s));
   const writes = steps.filter(isWrite);
   // A write screen where the item is also read (its frames read before writing: a ticket, the next lead row) is
@@ -116,7 +131,7 @@ export function skeleton(input: PlanInput, opts: { coreOnly: boolean }): PlanSte
   let commits = 0;
   for (const s of [...reads, ...writes]) {
     const t = targetOf(s);
-    const cls = verbClass(s.verb);
+    const cls = stepClass(s);
     const frames = input.stepFrames.get(s.id) ?? [];
     const optional = !s.core;
     const when = optional ? whenText(s, input.stepIdKinds.get(s.id)) : null;
@@ -135,7 +150,8 @@ export function skeleton(input: PlanInput, opts: { coreOnly: boolean }): PlanSte
       const textOut = outs.find((o) => TEXT_FIELD_RE.test(o));
       if (textOut !== undefined) out.push({ id: id("draft"), type: "draft", title: `Draft the ${textOut} in your words`, detail: `Write the ${textOut} from what was read, in your usual style.`, capability: null, ...base, writesText: true });
     } else {
-      out.push({ id: id("draft"), type: "draft", title: `Draft the ${s.verb} in your words`, detail: `Write the ${s.verb} from the ${s.object} and your past ${s.verb === "reply" ? "replies" : "messages"}, in your tone.`, capability: null, ...base, writesText: true });
+      const word = textWord(s);
+      out.push({ id: id("draft"), type: "draft", title: `Draft the ${word} in your words`, detail: word === s.verb ? `Write the ${s.verb} from the ${s.object} and your past ${s.verb === "reply" ? "replies" : "messages"}, in your tone.` : `Write the ${word} from what was read and your past ones, in your tone.`, capability: null, ...base, writesText: true });
     }
     const role = commits === 0 ? "send" : "log";
     commits += 1;
@@ -143,9 +159,9 @@ export function skeleton(input: PlanInput, opts: { coreOnly: boolean }): PlanSte
     out.push({
       id: id("commit"),
       type: "commit",
-      title: cls === "text" ? `Send the ${verb} to the ${s.object} in ${t.targetName}` : `${verb.charAt(0).toUpperCase()}${verb.slice(1)} the ${s.object} in ${t.targetName}`,
+      title: cls === "text" ? (textWord(s) === verb ? `Send the ${verb} to the ${s.object} in ${t.targetName}` : `${s.category === "email" ? "Send" : "Save"} the ${s.object} in ${t.targetName}`) : `${verb.charAt(0).toUpperCase()}${verb.slice(1)} the ${s.object} in ${t.targetName}`,
       detail: `${outs.length > 0 ? `Saves ${outs.join(" and ")}. ` : ""}Waits for your approval of this exact item; nothing is written before.`,
-      capability: need(t, cls === "text" ? `send ${verb} to ${s.object} in ${t.targetName}` : `${verb} ${s.object} in ${t.targetName}`, commitCapability(t, verb), role),
+      capability: need(t, cls === "text" ? (textWord(s) === verb ? `send ${verb} to ${s.object} in ${t.targetName}` : `${s.category === "email" ? "send" : "save"} ${s.object} in ${t.targetName}`) : `${verb} ${s.object} in ${t.targetName}`, commitCapability(t, verb), role),
       ...base,
       gated: true,
     });
@@ -159,7 +175,7 @@ function inputsDetail(frames: readonly FrameNote[], s: UnderstandingStep): strin
 }
 
 function readFields(input: PlanInput, steps: readonly UnderstandingStep[], commit: UnderstandingStep): string {
-  const reads = steps.filter((s) => s.meanPosition <= commit.meanPosition && s.id !== commit.id && verbClass(s.verb) !== "record");
+  const reads = steps.filter((s) => s.meanPosition <= commit.meanPosition && s.id !== commit.id && stepClass(s) !== "record");
   const ins = [...new Set(reads.flatMap((s) => stepInputs(input.stepFrames.get(s.id) ?? [])))];
   return ins.slice(0, 4).join(", ");
 }

@@ -134,6 +134,27 @@ identifiers{items, containers[]} }`. v1 responses never carry it.
 Known-answer fixtures: `bun run brain/fixtures/gen-domains.ts --out DIR [--persona recruiter|bookkeeper|support|salesops|mixed|all]`;
 agreement report: `bun run brain/fixtures/domains-report.ts [--embedder ollama]`.
 
+### Blind-test fixes (s20)
+From a 7-day blind test on screenshot-only data (one synthetic app, captions from a small local vision model):
+- Verbs: captioned gerunds are base verbs (`understanding/verbs.ts baseVerb`: writing → write, typing → type,
+  filling in → fill in, ...) everywhere a verb is classed; typing / editing a message, note, reply or post is a text
+  write (draft + gated commit). Generic looking verbs (reviewing, viewing, reading, ...) are left out of the embedded
+  description text and earn no same-verb bonus in induction.
+- Surfaces: caption surface names are normalised before the vote (`understanding/surfaces.ts`: case, scheme/www, a
+  domain → its product, known aliases → one name: Instagram = instagram.com, Chrome = Google Chrome). On a stand-in
+  app (a browser with no URL, or an app whose captions name >= 2 other known products in >= half of its framed
+  spans) a span whose caption names a known product takes that product's app/host/path/category, so v2 `steps`,
+  `surfaces` and capability targets name Gmail, Granola, Linear, Google Docs instead of the stand-in.
+- Saving: `saving` never claims more than the task's own observed weekly time (`activeMinutes` × 7 / window days):
+  when items × minutes is more than 10% over it, or the saving alone would exceed it, the estimate starts from the
+  observed time and `arithmetic` says "…, capped at the X h/wk observed". Additive `saving.confidence` =
+  `{ level: "low", capped, observedWeeklyHours, reasons[] }`, present only on a low-confidence estimate (capped, < 5
+  instances, one day, one task > 50% of all time across >= 4 apps, >= 50% of its time described only as looking).
+- Plan needs (`serve`): resolved through the connector chain (`plan/chain-resolver.ts`) instead of `pending`. A
+  product a caption named that the catalog lacks tries a connector on this Mac, then Composio through its toolkit
+  (s17 universe target), then its direct API, and only then computer use; `GET /connectors/:id` for such an app target
+  lists `methods: ["mcp","composio","api","computer"]`. Other app targets are unchanged.
+
 ## GET /insights/:id/evidence → `EvidenceResponse`
 The proof behind every number: `figures.<name>.eventIds` (all figures plus `saving`), the task's `instances`
 (with span ids and counterparties) and its `spans` (with their event ids). Use it for "show me the rows".
@@ -166,7 +187,9 @@ Brain keys (s05c, closes REVIEW-1 H4): by default the observer holds them, Keych
 (creates it) or `unwrap-key --name DAY` (binary: `OFFLOAD_OBSERVER_BIN`, else `engine/.build/offload-observer`) and
 keeps it in memory only. A missing or failing observer is an error (sealing fails, a sealed file reads as missing and
 is NOT purged); there is no fallback to raw keys. `OFFLOAD_KEYS=file` (tests, fixtures only) keeps the s05b raw
-32-byte files in `$OFFLOAD_HOME/brain-keys/`. Raw key files left from s05b are wrapped with the same bytes and deleted
+32-byte files in `$OFFLOAD_HOME/brain-keys/`. s20: with `OFFLOAD_KEYS` unset, a plain-mode home (day files
+`days/*.jsonl`, no `.jsonl.enc`, no `keys/` folder: written with `OFFLOAD_PLAIN=1` or by an importer) uses file keys
+too, since no observer Keychain stands behind it; `OFFLOAD_KEYS=keychain` forces the Keychain. Raw key files left from s05b are wrapped with the same bytes and deleted
 when `serve` starts (and when a day with only a raw key is next used); a conflict is logged and the raw file kept.
 States: `drafting` → `ready_for_review` → (approve the dry-run batch) → `active` ⇄ `paused`; `needs_you` is shown on
 top of `active` when a batch waits or a connector is missing. Auto-run is off by default.

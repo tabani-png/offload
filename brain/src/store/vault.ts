@@ -52,8 +52,31 @@ export const isExpired = (day: string, now: number) => {
 };
 
 export type BrainKeyMode = "keychain" | "file";
-/** OFFLOAD_KEYS=file = raw key files; anything else = Keychain-wrapped through the observer. */
-export const brainKeyMode = (env: ObserverEnv = process.env): BrainKeyMode => (env.OFFLOAD_KEYS === "file" ? "file" : "keychain");
+
+/**
+ * s20: a plain-mode home (docs/store-contract.md "Plain mode": day files `days/*.jsonl` without `.enc`, written with
+ * OFFLOAD_PLAIN=1 or by an importer) has no observer and no Keychain master key behind it: its day files are not
+ * encrypted and there is no `keys/` folder. Sealing there used to ask the observer's Keychain and fail.
+ */
+export function isPlainHome(home: string): boolean {
+  if (existsSync(join(home, "keys"))) return false;
+  let names: string[];
+  try {
+    names = readdirSync(join(home, "days"));
+  } catch {
+    // No days folder: nothing says this home is plain.
+    return false;
+  }
+  return names.some((n) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)) && !names.some((n) => n.endsWith(".jsonl.enc"));
+}
+
+/** OFFLOAD_KEYS=file = raw key files; OFFLOAD_KEYS=keychain = Keychain-wrapped through the observer. Unset: file for a
+ * plain-mode home (s20, isPlainHome), else Keychain. */
+export const brainKeyMode = (env: ObserverEnv = process.env, home?: string): BrainKeyMode => {
+  if (env.OFFLOAD_KEYS === "file") return "file";
+  if (env.OFFLOAD_KEYS === "keychain") return "keychain";
+  return home !== undefined && isPlainHome(home) ? "file" : "keychain";
+};
 
 /** Raw key folder (OFFLOAD_KEYS=file, and s05b leftovers waiting for migration). */
 export const brainKeysDir = (home: string) => join(home, "brain-keys");
@@ -169,7 +192,7 @@ function keychainKey(home: string, day: string, create: boolean, env: ObserverEn
 }
 
 function keyFor(home: string, day: string, create: boolean, env: ObserverEnv = process.env): Buffer | null {
-  if (brainKeyMode(env) === "file") return readRaw(home, day) ?? (create ? createRaw(home, day) : null);
+  if (brainKeyMode(env, home) === "file") return readRaw(home, day) ?? (create ? createRaw(home, day) : null);
   return keychainKey(home, day, create, env);
 }
 
@@ -249,7 +272,7 @@ export interface MigrateResult {
  * OFFLOAD_KEYS=file: does nothing. */
 export function migrateBrainKeys(home: string, now: number, env: ObserverEnv = process.env): MigrateResult {
   const res: MigrateResult = { migrated: 0, errors: [] };
-  if (brainKeyMode(env) === "file" || !existsSync(brainKeysDir(home))) return res;
+  if (brainKeyMode(env, home) === "file" || !existsSync(brainKeysDir(home))) return res;
   for (const n of readdirSync(brainKeysDir(home)).sort()) {
     const m = /^(\d{4}-\d{2}-\d{2})\.key$/.exec(n);
     if (m?.[1] === undefined || isExpired(m[1], now)) continue;

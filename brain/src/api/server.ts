@@ -17,6 +17,7 @@ import { BRAIN_READY_PREFIX, CAPTIONER_OFF, MODEL_HEADER, type BrainReadyDTO, ty
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
 import { workflowRoute } from "./workflow-routes.ts";
 import { s14Route } from "./s14-routes.ts";
+import { ChainCapabilityResolver } from "../plan/chain-resolver.ts";
 import { syncRoute } from "./sync-routes.ts";
 import { SyncClient, type SyncDeps } from "../sync/client.ts";
 import { contextStamp, readUserContext } from "../context/store.ts";
@@ -201,6 +202,7 @@ export function createBrain(opts: BrainOptions): Brain {
     chainDeps({ home: opts.home, env, now, simulated, ...(opts.link?.runner === undefined ? {} : { runner: opts.link.runner }), ...(opts.log === undefined ? {} : { log: opts.log }), ...(opts.chain?.deps ?? {}) }),
     opts.chain?.probes,
   );
+  const planResolver = new ChainCapabilityResolver(resolver);
   const sessions = new ComputerSessions();
   // Computer use: injected (tests), or the real driver and Claude planner only when the person turned it on.
   let computer: { driver: ComputerDriver; planner: Planner; sessions: ComputerSessions } | undefined;
@@ -288,7 +290,8 @@ export function createBrain(opts: BrainOptions): Brain {
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
     // s14: context, general drafting and plan choice (api/s14-routes.ts); null = not one of its routes.
-    const s14 = await s14Route(req, path, { home: opts.home, env, model, modelLabel, now, analysis: () => analysis(undefined), ...(router === undefined ? {} : { router }) });
+    // s20: plan needs resolve through the connector chain (stub probes with the stub model), not "pending".
+    const s14 = await s14Route(req, path, { home: opts.home, env, model, modelLabel, now, analysis: () => analysis(undefined), resolver: planResolver, ...(router === undefined ? {} : { router }) });
     if (s14 !== null) return s14;
     // S2-02: company sync (status, connect, pause/resume, preview, notice ack) and POST /workflows/:id/share.
     const sr = await syncRoute(req, path, sync);
