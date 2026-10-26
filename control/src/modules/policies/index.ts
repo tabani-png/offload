@@ -238,14 +238,17 @@ function routes(app: App, deps: Deps): void {
       // preapproved) is a new policy as far as trust goes: its dry-run nights start again (ADR 0112 §2).
       const change = trustChange(cur, next);
       if (change.widened) next.dryRunNightsDone = 0;
-      const wf = await workflowOf(tx, deps, cur.workflowId, cur.version);
-      const rp = await rolePolicyOf(tx, wf.jobRoleId);
-      if (next.budgetCentsPerNight > cur.budgetCentsPerNight && overBudget(rp, next.budgetCentsPerNight)) {
-        throw invalid("budgetCentsPerNight is above the role policy's dailyBudgetCents");
-      }
-      // Making a policy preapproved, or widening one, lets it approve more in a person's place (N1).
-      if (next.mode === "preapproved" && (cur.mode !== "preapproved" || change.widened) && !(await maySignOff(tx, p, wf, rp, cur.ownerPersonId))) {
-        throw forbidden("only an approver under the role policy, a dept lead or an admin makes a policy preapproved or widens it");
+      // Making a policy preapproved, widening one or raising its budget lets it approve more in a person's place (N1):
+      // that needs its live workflow version. Pausing and narrowing never do, so a retired workflow's policy still stops.
+      const raisesBudget = next.budgetCentsPerNight > cur.budgetCentsPerNight;
+      const trustsMore = next.mode === "preapproved" && (cur.mode !== "preapproved" || change.widened);
+      if (raisesBudget || trustsMore) {
+        const wf = await workflowOf(tx, deps, cur.workflowId, cur.version);
+        const rp = await rolePolicyOf(tx, wf.jobRoleId);
+        if (raisesBudget && overBudget(rp, next.budgetCentsPerNight)) throw invalid("budgetCentsPerNight is above the role policy's dailyBudgetCents");
+        if (trustsMore && !(await maySignOff(tx, p, wf, rp, cur.ownerPersonId))) {
+          throw forbidden("only an approver under the role policy, a dept lead or an admin makes a policy preapproved or widens it");
+        }
       }
       const v = deps.validator.validate(OVERNIGHT_POLICY, next);
       if (!v.ok) throw invalid("policy does not match its schema", v.errors);

@@ -12,6 +12,7 @@ import {
   overnightRun,
   propose,
   proposeOk,
+  roleWorkflow,
   setRolePolicy,
   TPL,
   WF,
@@ -133,6 +134,18 @@ describe("S2-07 round 2: who may make a policy preapproved (N1)", () => {
     // WF_AP belongs to the finance job role: the sales member does not run it.
     expect((await admin.post("/v1/overnight-policies", policyBody({ workflowId: WF_AP }))).status).toBe(400);
     expect((await admin.post("/v1/overnight-policies", policyBody())).status).toBe(201);
+  });
+
+  test("POLICY: a policy whose workflow was retired can still be paused and narrowed, but not widened", async () => {
+    const wf = crypto.randomUUID();
+    await roleWorkflow(w.h, w.t, wf, w.t.jobRoles.sdr, w.t.departments.sales);
+    const body = policyBody({ workflowId: wf });
+    expect((await (await client(w, "member")).post("/v1/overnight-policies", body)).status).toBe(201);
+    await db()`update workflows set state = 'retired' where tenant_id = ${w.t.id} and id = ${wf}`;
+    const member = await client(w, "member");
+    expect((await member.patch(`/v1/overnight-policies/${body.id}`, { maxCommitsPerNight: 1 })).status).toBe(200);
+    expect((await member.patch(`/v1/overnight-policies/${body.id}`, { state: "paused" })).status).toBe(200);
+    expect((await member.patch(`/v1/overnight-policies/${body.id}`, { maxCommitsPerNight: 9 })).status).toBe(400);
   });
 
   test("POLICY: the per-night budget is capped by the role policy's daily budget", async () => {
