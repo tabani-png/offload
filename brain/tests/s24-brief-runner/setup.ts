@@ -74,4 +74,17 @@ export function fakeQuery(tries: FakeTry[]) {
   return { query, seen };
 }
 
+/** Runs a (wrapped) builder command through /bin/sh the way Claude Code does: in ANOTHER process, without blocking
+ * this one (the runner in this process owns the command socket). Returns stdout + stderr and the exit code. */
+export function shell(cmd: string, cwd: string, env: Record<string, string | undefined> = process.env): Promise<{ stdout: string; stderr: string; status: number | null }> {
+  return new Promise((done) => {
+    const c = require("node:child_process").spawn("/bin/sh", ["-c", cmd], { cwd, env });
+    let stdout = "";
+    let stderr = "";
+    c.stdout.on("data", (b: Buffer) => (stdout += b));
+    c.stderr.on("data", (b: Buffer) => (stderr += b));
+    c.on("close", (status: number | null) => done({ stdout, stderr, status }));
+  });
+}
+
 export const writeSlug = (which: "good" | "bad") => (ws: string) => copyFileSync(join(REC, `slug-${which}.py`), join(ws, "slug.py"));

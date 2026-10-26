@@ -3,13 +3,12 @@
 // unsandboxed SDK file tools), the whole accept/ listing is locked (a new file there = TAMPER), and a relative --home
 // is made absolute before any path is derived.
 import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { approveBuild, consumeBuildApproval } from "../../src/builder/approval.ts";
 import { runBuild } from "../../src/builder/runner.ts";
 import { decideTool } from "../../src/builder/sandbox.ts";
-import { fakeQuery, NOW, prepared, tmp, writeSlug } from "./setup.ts";
+import { fakeQuery, NOW, prepared, tmp, writeSlug, shell } from "./setup.ts";
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 
@@ -46,7 +45,7 @@ describe("s24 canonical accept/", () => {
           );
           const r = await o.canUseTool!("Bash", { command: "python3 links.py" }, { signal: new AbortController().signal, toolUseID: "t" } as never);
           const cmd = String((r as unknown as { updatedInput: { command: string } }).updatedInput.command);
-          const sh = spawnSync("/bin/sh", ["-c", cmd], { cwd: ws, encoding: "utf8" });
+          const sh = await shell(cmd, ws);
           out = `${sh.stdout}${sh.stderr}`;
         },
       },

@@ -3,7 +3,6 @@
 // no sandbox = refuse to run; secrets never reach the record or a retry prompt; malformed limits are refused before
 // the single-use approval is spent.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approveBuild } from "../../src/builder/approval.ts";
@@ -15,7 +14,7 @@ import { decideTool, UnsafeProfileError } from "../../src/builder/sandbox.ts";
 const checkEnv = (...a: unknown[]) => (sandbox as any).checkEnv(...a) as Record<string, string>;
 const redactSecrets = (...a: unknown[]) => (sandbox as any).redactSecrets(...a) as string;
 import { DEFAULT_MODELS } from "../../src/models/model.ts";
-import { briefHome, fakeQuery, fakeRouted, NOW, prepared, tmp, writeSlug } from "./setup.ts";
+import { briefHome, fakeQuery, fakeRouted, NOW, prepared, tmp, writeSlug, shell } from "./setup.ts";
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 const SENTINEL_KEY = "sk-ant-api03-SENTINELsentinelSENTINEL0123456789abcdef";
@@ -121,7 +120,7 @@ describe("s24 OS sandbox", () => {
           expect(cmd).toContain("/usr/bin/env -i");
           expect(cmd).not.toContain("SENTINEL");
           // Claude Code runs the command through the user's shell with ITS env (which has the SDK auth).
-          const sh = spawnSync("/bin/sh", ["-c", cmd], { cwd: ws, env: PARENT_ENV, encoding: "utf8" });
+          const sh = await shell(cmd, ws, PARENT_ENV);
           ran = `${sh.stdout}${sh.stderr}`;
           const hook = o.hooks!.PreToolUse![0]!.hooks[0]!;
           const h = (await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "python3 evil.py" } } as never, "t", { signal: new AbortController().signal })) as { hookSpecificOutput?: { updatedInput?: { command?: string } } };

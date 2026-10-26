@@ -6,7 +6,6 @@
 // - the artifact is hashed at the verdict and can be verified later;
 // - the approval is consumed last (after setup) and claimed atomically; /opt/homebrew config is unreadable; no FIFOs.
 import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as approval from "../../src/builder/approval.ts";
@@ -15,7 +14,7 @@ import { writeChecks, type CheckFile } from "../../src/builder/checks.ts";
 import * as record from "../../src/builder/record.ts";
 import { runBuild } from "../../src/builder/runner.ts";
 import { DEFAULT_MODELS } from "../../src/models/model.ts";
-import { briefHome, fakeQuery, fakeRouted, NOW, prepared, writeSlug, type FakeTry } from "./setup.ts";
+import { briefHome, fakeQuery, fakeRouted, NOW, prepared, writeSlug, type FakeTry, shell } from "./setup.ts";
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 
@@ -88,7 +87,7 @@ describe("s24 no survivors", () => {
           writeFileSync(join(ws, "tool.py"), DAEMON);
           const r = await o.canUseTool!("Bash", { command: "python3 tool.py" }, { signal: new AbortController().signal, toolUseID: "t" } as never);
           const cmd = String((r as unknown as { updatedInput: { command: string } }).updatedInput.command);
-          spawnSync("/bin/sh", ["-c", cmd], { cwd: ws, encoding: "utf8" });
+          await shell(cmd, ws);
         },
       },
     ]);
