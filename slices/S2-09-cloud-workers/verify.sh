@@ -6,7 +6,7 @@ C="$ROOT/control"; unset OFFLOAD_CMA_REAL
 s2_install "$C"; s2_pg_up; s2_typecheck "$C"
 s2_suite "$C" tests/S2-09 70
 s2_tags "$C" tests/S2-09 PROVISION SESSION CONFIRM CUSTOM BUDGET SCHEDULE KILL INJECTION DIGEST HERMETIC
-for m in $(git -C "$ROOT" diff --name-only "${S2_BASE:-main}"...HEAD -- control/migrations 2>/dev/null); do
+for m in $(s2_changed "${S2_BASE:-main}" control/migrations); do
   case "$(basename "$m")" in 09[0-9][0-9]_*) ;; *) fail "migration outside range 0900-0999: $m";; esac
 done
 if grep -rln "new Anthropic(" "$C/src/modules/workers" "$C/tests/S2-09" 2>/dev/null | grep -v "/workers/managed-agents.ts$" >/dev/null; then

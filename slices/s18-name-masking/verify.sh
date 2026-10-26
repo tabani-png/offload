@@ -18,7 +18,8 @@ command -v bun >/dev/null 2>&1 || { echo "FAIL bun not on PATH"; exit 1; }
 [ -d "$BRAIN/node_modules/typescript" ] || (cd "$BRAIN" && bun install --frozen-lockfile >/dev/null 2>&1) || fail "bun install failed"
 
 echo "== dependencies"
-if git -C "$ROOT" diff --quiet "$BASE" -- brain/package.json brain/bun.lock; then echo "no new dependency"; else fail "brain/package.json or bun.lock changed since $BASE"; fi
+. "$ROOT/scripts/lib/slice-changes.sh"   # this branch's own changes; merges of main are not counted
+if [ -z "$(slice_changes "$BASE" -- brain/package.json brain/bun.lock 2>/dev/null)" ]; then echo "no new dependency"; else fail "brain/package.json or bun.lock changed on this branch since $BASE"; fi
 
 echo "== typecheck"
 tsc_out="$(cd "$BRAIN" && bunx tsc --noEmit 2>&1)" && echo "typecheck ok" || { echo "$tsc_out" | head -20; fail "typecheck (bunx tsc --noEmit)"; }
@@ -60,7 +61,8 @@ fi
 grep -q "names.mask" "$BRAIN/src/models/router.ts" 2>/dev/null || fail "the router does not mask requests"
 
 echo "== scope (files touched by s18 commits since $BASE)"
-touched="$(git -C "$ROOT" log --no-merges --format= --name-only --grep='^s18' "$BASE..HEAD" 2>/dev/null | sort -u)"
+# s18 commits not on main, plus edits made inside merge commits (scripts/lib/slice-changes.sh)
+touched="$(SLICE_GREP='^s18' slice_changes "$BASE" 2>/dev/null)"
 for f in $touched; do
   case "$f" in
     brain/src/privacy/*|brain/src/grouping/normalize.ts|brain/src/models/router.ts|brain/src/models/model.ts) ;;

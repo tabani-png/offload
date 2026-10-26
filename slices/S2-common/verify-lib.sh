@@ -64,10 +64,19 @@ s2_forbid() {
   fi
 }
 
-# s2_untouched <base ref> <path...>: no commit on this branch since <base> changed these paths.
+# s2_changed <integration ref> <path...>: files under <path> this branch itself changed (net; merges of main are not
+# counted, conflict edits are). "main" means origin/main when it exists. See scripts/lib/slice-changes.sh.
+. "$ROOT/scripts/lib/slice-changes.sh"
+s2_changed() {
+  local integ="$1"; shift
+  [ "$integ" = main ] && integ=""
+  SLICE_INTEGRATION="${integ:-${SLICE_INTEGRATION:-}}" slice_changes -- "$@"
+}
+
+# s2_untouched <integration ref> <path...>: this branch's own changes do not touch these paths.
 s2_untouched() {
   local base="$1"; shift
-  local changed; changed="$(git -C "$ROOT" diff --name-only "$base"...HEAD -- "$@" 2>/dev/null)"
+  local changed; changed="$(s2_changed "$base" "$@")"
   [ -z "$changed" ] || { echo "$changed" | head -10; fail "out-of-scope paths changed: $*"; }
 }
 

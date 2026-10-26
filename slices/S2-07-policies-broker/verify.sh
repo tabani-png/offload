@@ -8,7 +8,7 @@ s2_typecheck "$C"
 s2_suite "$C" tests/S2-07 80
 s2_tags "$C" tests/S2-07 HASH TOKEN ITEM EXEC POLICY OVERNIGHT KILL LINKEDIN RBAC AUDIT
 # Migrations of this slice stay in its number range.
-for m in $(git -C "$ROOT" diff --name-only "${S2_BASE:-main}"...HEAD -- control/migrations 2>/dev/null); do
+for m in $(s2_changed "${S2_BASE:-main}" control/migrations); do
   case "$(basename "$m")" in 07[0-9][0-9]_*) ;; *) fail "migration outside range 0700-0799: $m";; esac
 done
 s2_forbid "migrations must not bypass RLS" "BYPASSRLS|SECURITY DEFINER" "$C/migrations"

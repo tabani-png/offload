@@ -148,7 +148,8 @@ fi
 echo "== scope (files touched by s14 commits since $BASE)"
 # Only this slice's own commits (subject starts with "s14"; merges excluded), so other slices' commits that mention s14
 # (s13's capability catalog) and merges from main cannot fail it.
-touched="$(git -C "$ROOT" log --no-merges --format= --name-only --grep='^s14' "$BASE..HEAD" 2>/dev/null | sort -u)"
+. "$ROOT/scripts/lib/slice-changes.sh"   # s14 commits not on main, plus edits made inside merge commits
+touched="$(SLICE_GREP='^s14' slice_changes "$BASE" 2>/dev/null)"
 for f in $touched; do
   case "$f" in
     # vision/{claude,routed,types,worker}.ts are in scope since the Claude captioner scope add (SPEC section 7).

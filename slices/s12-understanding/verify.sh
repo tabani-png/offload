@@ -91,7 +91,8 @@ echo "== agreement report"
 
 echo "== scope (files touched by s12 commits since $BASE)"
 # Only this slice's commits are checked, so other slices (s11 vision, gen.ts work) merging later cannot fail it.
-touched="$(git -C "$ROOT" log --format= --name-only --grep='s12' "$BASE..HEAD" 2>/dev/null | sort -u)"
+. "$ROOT/scripts/lib/slice-changes.sh"   # s12 commits not on main, plus edits made inside merge commits
+touched="$(SLICE_GREP='s12' slice_changes "$BASE" 2>/dev/null)"
 for f in $touched; do
   case "$f" in
     app/*|engine/*|packet/*|schemas/*|brain/src/connectors/*|brain/src/workflows/*|brain/src/vision/*|brain/fixtures/gen.ts) fail "s12 commit touched out-of-scope $f";;

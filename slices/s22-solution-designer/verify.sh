@@ -63,8 +63,9 @@ else
 fi
 
 echo "== scope"
+. "$ROOT/scripts/lib/slice-changes.sh"   # this branch's own net changes; merges of main are not counted
 if git -C "$ROOT" cat-file -e "$BASE" 2>/dev/null; then
-  changed="$(git -C "$ROOT" diff --name-only "$BASE"...HEAD 2>/dev/null)"
+  changed="$(slice_changes "$BASE")"
   for p in $changed; do
     case "$p" in
       engine/*|packet/*|schemas/*|app/*|brain/tools/import-screenwatch.ts|brain/src/understanding/induce.ts|brain/src/understanding/embed.ts|brain/src/plan/steps.ts|brain/src/insights/saving.ts|brain/src/store/vault.ts|brain/src/connectors/chain.ts|brain/src/connectors/targets.ts|brain/src/workflows/gate.ts|brain/src/workflows/allowlist.ts|brain/src/workflows/executor.ts|brain/src/workflows/batch.ts|brain/src/workflows/runner.ts|brain/src/workflows/chain-executor.ts)

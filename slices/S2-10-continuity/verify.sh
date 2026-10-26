@@ -6,7 +6,7 @@ C="$ROOT/control"
 s2_install "$C"; s2_pg_up; s2_typecheck "$C"
 s2_suite "$C" tests/S2-10 50
 s2_tags "$C" tests/S2-10 STATES FREEZE DSYNC HANDOVER SUCCESSOR RESUME INFLIGHT LINKEDIN SOP AUDIT
-for m in $(git -C "$ROOT" diff --name-only "${S2_BASE:-main}"...HEAD -- control/migrations 2>/dev/null); do
+for m in $(s2_changed "${S2_BASE:-main}" control/migrations); do
   case "$(basename "$m")" in 10[0-9][0-9]_*) ;; *) fail "migration outside range 1000-1099: $m";; esac
 done
 o="$(cd "$C" && bun test tests/S2-01 2>&1)"; echo "$o" | grep -qE "^ *0 fail$" || fail "S2-01 suite regressed"

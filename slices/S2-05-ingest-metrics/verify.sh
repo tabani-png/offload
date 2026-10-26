@@ -8,7 +8,7 @@ s2_typecheck "$C"
 s2_suite "$C" tests/S2-05 70
 s2_tags "$C" tests/S2-05 VERIFY REPLAY CONSENT LEAK HOURS FLOOR PERSON EVIDENCE RECOMPUTE RLS
 # Migrations of this slice stay in its number range.
-for m in $(git -C "$ROOT" diff --name-only "${S2_BASE:-main}"...HEAD -- control/migrations 2>/dev/null); do
+for m in $(s2_changed "${S2_BASE:-main}" control/migrations); do
   case "$(basename "$m")" in 05[0-9][0-9]_*) ;; *) fail "migration outside range 0500-0599: $m";; esac
 done
 s2_forbid "migrations must not bypass RLS" "BYPASSRLS|SECURITY DEFINER" "$C/migrations"
