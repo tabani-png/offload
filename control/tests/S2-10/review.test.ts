@@ -61,6 +61,8 @@ describe("SUCCESSOR", () => {
 
 describe("AUDIT", () => {
   test("AUDIT: the named successor sees their assignment in their own access log", async () => {
+    const assigned = await (await w.as("admin")).post(`/v1/handovers/${h2}/assign`, { successor: { type: "person", personId: w.t.people.lead.id } });
+    expect(assigned.status).toBe(200);
     const r = await (await w.as("lead")).get(`/v1/me/access-log?action=handover.successor_named`);
     expect(r.status).toBe(200);
     const evs = r.json.items as Array<{ resource: { id: string }; subjectPersonId: string }>;
@@ -71,6 +73,8 @@ describe("AUDIT", () => {
 
 describe("HANDOVER", () => {
   test("HANDOVER: lock order: close takes the leaver's row before the hand-over row (no person-then-handover cycle with freeze)", async () => {
+    // A ready hand-over (the job role's role identity needs no acceptance).
+    expect((await (await w.as("admin")).post(`/v1/handovers/${h1}/assign`, { successor: { type: "role_identity", roleIdentityId: w.identities.sdr } })).status).toBe(200);
     // Hold the leaver's row from another connection; close must wait on it without holding the hand-over row.
     const held = await w.h.db.migrator.reserve();
     try {
