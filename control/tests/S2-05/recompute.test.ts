@@ -80,14 +80,15 @@ describe("RECOMPUTE nightly equality check (ADR 0109 §11)", () => {
     expect((await alerts()).length).toBe(before);
     const snaps = await snapshots();
     expect(snaps.every((x) => !x.stale)).toBe(true);
-    // The company sees all data: not final until the next run. Below it only a cell whose own inputs moved (October
-    // Sales and SDR) waits; Finance, AP and September Sales keep their flag, or it would tell a department's reader
-    // that someone elsewhere sent data (PR #9 round 5).
+    // The company sees all data: not final until the next run. Below it only a cell whose shown inputs moved waits.
+    // Here Sales (and SDR) are hidden (the empty Finance is under the floor, so hs-1 hides Sales with it): they show
+    // nothing, so they keep their flag like Finance and AP, or it would tell their reader that data arrived.
     const final = Object.fromEntries(snaps.map((x) => [`${x.month} ${x.scope_key}`, x.final]));
     expect(final["2026-10 company:"]).toBe(false);
-    expect(final["2026-09 company:"]).toBe(false);
-    expect(final[`2026-10 department:${s.h.a.departments.sales}`]).toBe(false);
-    expect(final[`2026-10 job_role:${s.h.a.jobRoles.sdr}`]).toBe(false);
+    // September has no data: the company is suppressed there and keeps its flag too.
+    expect(final["2026-09 company:"]).toBe(true);
+    expect(final[`2026-10 department:${s.h.a.departments.sales}`]).toBe(true);
+    expect(final[`2026-10 job_role:${s.h.a.jobRoles.sdr}`]).toBe(true);
     expect(final[`2026-10 department:${s.h.a.departments.finance}`]).toBe(true);
     expect(final[`2026-10 job_role:${s.h.a.jobRoles.ap}`]).toBe(true);
     expect(final[`2026-09 department:${s.h.a.departments.sales}`]).toBe(true);

@@ -9,7 +9,7 @@ import {
 const TEXT_ALLOWED: Record<string, "id" | "enum" | "code"> = {
   object_id: "id", run_id: "id", scope_key: "id", instance_ref: "id",
   kind: "enum", runtime: "enum", outcome: "enum", approver_kind: "enum", decision: "enum", surface: "enum", scope_type: "enum",
-  code: "enum", error_code: "code", batch_hash: "code", digest: "code", inputs_digest: "code", stored_digest: "code",
+  code: "enum", error_code: "code", batch_hash: "code", digest: "code", inputs_digest: "code", scope_digest: "code", stored_digest: "code",
   fresh_digest: "code", month: "code",
 };
 

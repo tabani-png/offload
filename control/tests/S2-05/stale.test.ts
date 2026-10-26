@@ -10,7 +10,6 @@ let s: S205;
 let owner: Client;
 let people: Awaited<ReturnType<typeof populate>>;
 const OCT = "/v1/metrics/hours-saved?scope=company&from=2026-10-01&to=2026-11-01";
-const SEP = "/v1/metrics/hours-saved?scope=company&from=2026-09-01&to=2026-10-01";
 const nightly = () => metrics.jobs!.find((j) => j.name === "metrics.nightly_recompute")!.run(s.h.deps);
 const alerts = async () => (await s.h.db.migrator`select scope_key from metric_alerts where tenant_id = ${s.h.a.id}`) as unknown[];
 
@@ -98,22 +97,23 @@ describe("RECOMPUTE stale marking under concurrency (review wave B #9 item 4)", 
   });
 
   test("RECOMPUTE: an ingest committing while the nightly job runs is not marked final and causes no false mismatch", async () => {
-    // September is the first month the job checks, so its inputs are read while the ingest below is still open.
+    // October (the company with 5 people, visible) is read by the job while the ingest below is still open. A
+    // suppressed cell shows no digest and keeps its flag (PR #9 round 5), so the visible month is the one to check.
     await nightly();
     await nightly();
-    expect((await owner.get(SEP)).json.final).toBe(true);
-    const digestBefore = (await owner.get(SEP)).json.inputsDigest as string;
-    const held = await heldIngest(people[3]!.dev, [runOutcome({ endedAt: at("2026-09-28", 9) })]);
+    expect((await owner.get(OCT)).json.final).toBe(true);
+    const digestBefore = (await owner.get(OCT)).json.inputsDigest as string;
+    const held = await heldIngest(people[3]!.dev, [runOutcome({ endedAt: at("2026-10-28", 9) })]);
     const job = nightly();
     // Whether the job finishes or waits behind the open ingest, the ingest commits now.
     await Promise.race([job, until(async () => (await lockWaiters()) >= 2)]);
     await held.commit();
     await job;
-    expect((await owner.get(SEP)).json.final).toBe(false);
+    expect((await owner.get(OCT)).json.final).toBe(false);
     await nightly();
     expect(await alerts()).toEqual([]);
     await nightly();
-    const r = await owner.get(SEP);
+    const r = await owner.get(OCT);
     expect(r.json.final).toBe(true);
     expect(r.json.inputsDigest).not.toBe(digestBefore);
     expect(await alerts()).toEqual([]);
