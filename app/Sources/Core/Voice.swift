@@ -113,12 +113,15 @@ enum SentenceDiff {
     var changed: Int
     var total: Int
     var signOffDiffers: Bool
+    /// s10f (PR #13 review): sentences you wrote that the draft dropped (beyond the ones it reworded).
+    var missing: Int = 0
 
     var label: String {
-      let sign = signOffDiffers ? "sign-off differs" : ""
-      if changed == 0 { return signOffDiffers ? "Sign-off differs" : "Same as what you sent" }
-      let base = "Changed \(changed) of \(total) sentence\(total == 1 ? "" : "s")"
-      return sign.isEmpty ? base : "\(base) · \(sign)"
+      var parts: [String] = []
+      if changed > 0 { parts.append("Changed \(changed) of \(total) sentence\(total == 1 ? "" : "s")") }
+      if missing > 0 { parts.append(changed > 0 ? "\(missing) missing" : "\(missing) sentence\(missing == 1 ? "" : "s") missing") }
+      if signOffDiffers { parts.append(parts.isEmpty ? "Sign-off differs" : "sign-off differs") }
+      return parts.isEmpty ? "Same as what you sent" : parts.joined(separator: " · ")
     }
   }
 
@@ -201,7 +204,10 @@ enum SentenceDiff {
   static func summary(ours: String, theirs: String) -> Summary {
     let a = parse(ours), b = parse(theirs)
     let changed = changedSentences(a, b).filter { $0 }.count
-    return Summary(changed: changed, total: a.body.count, signOffDiffers: a.sign != b.sign)
+    // Your sentences with no match in the draft: each reworded one accounts for one of them; the rest were dropped.
+    let unmatchedTheirs = changedSentences(b, a).filter { $0 }.count
+    return Summary(changed: changed, total: a.body.count, signOffDiffers: a.sign != b.sign,
+                   missing: max(0, unmatchedTheirs - changed))
   }
 
   /// Our draft as segments whose `changed` runs are the contiguous spans to tint. Joined, the segments are the text.

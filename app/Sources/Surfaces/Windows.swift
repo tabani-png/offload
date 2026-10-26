@@ -233,7 +233,8 @@ final class DashboardWindowController: TitledWindowController {
       return true
     }
     // s10f (M4): ⌘K, the sidebar's Connections link.
-    if e.flags.contains(.command), e.charactersIgnoringModifiers?.lowercased() == "k", let open = model.onOpenConnections {
+    if DashboardSidebarLink.forShortcut(character: e.charactersIgnoringModifiers ?? "", command: e.flags.contains(.command)) == .connections,
+       let open = model.onOpenConnections {
       open()
       return true
     }

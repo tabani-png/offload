@@ -112,17 +112,33 @@ struct ToolsCopy: Equatable, Sendable {
   init(_ t: StepTools, connectors: [Connector] = []) {
     stepId = t.stepId
     suggestion = PlainWords.clean(t.suggestion)
-    options = t.options.map {
+    // s10f (PR #13 review): the plan's `connected` was taken when the plan was drafted; the review's live connector
+    // state wins, so connecting Gmail mid-flow shows it Connected and In use at once.
+    let live = Self.live(t, connectors: connectors)
+    options = live.options.map {
       Option(id: $0.id, name: $0.name, why: PlainWords.clean($0.why), detail: "\(Self.setup($0.setup)) · \($0.cost)",
-             connected: $0.connected, chosen: $0.id == t.chosen, mark: Self.mark($0, tools: t))
+             connected: $0.connected, chosen: $0.id == t.chosen, mark: Self.mark($0, tools: live))
     }
     recommended = t.chosenOption.map { "Recommended: " + Self.reason(PlainWords.clean($0.why)) } ?? ""
     needsYouLine = t.chosenOption?.needsYou.flatMap { $0.isEmpty ? nil : PlainWords.clean($0) }
-    if t.runsWith != t.chosen, let chosen = t.chosenOption {
+    // s10f: only when another tool really stands in (not the chosen tool under its connector id) and the chosen one
+    // is not connected yet.
+    if let chosen = live.chosenOption, t.runsWith != chosen.id, t.runsWith != chosen.connectorId, !chosen.connected {
       runsWithLine = "Sends through \(Self.name(t.runsWith, tools: t, connectors: connectors)) until \(chosen.name) is connected."
     } else {
       runsWithLine = nil
     }
+  }
+
+  /// The step's options with `connected` read from the live connectors (by connector id, else option id).
+  static func live(_ t: StepTools, connectors: [Connector]) -> StepTools {
+    var t = t
+    t.options = t.options.map { o in
+      var o = o
+      if let c = connectors.first(where: { $0.id == (o.connectorId ?? o.id) }) { o.connected = c.connected }
+      return o
+    }
+    return t
   }
 
   /// In use: the runner uses it today (runsWith is its id or its connector) and it is connected. Chosen but not
