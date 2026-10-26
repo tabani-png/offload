@@ -37,7 +37,10 @@ async function isFinal(tx: Tx, scope: Scope, period: Period, digest: string): Pr
   if (month === null || scope.type === "person") return false;
   const [s] = await tx`select final, stale, inputs_digest from metric_snapshots
     where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid`;
-  return !!s && s.final === true && s.stale === false && s.inputs_digest === digest;
+  if (!s || s.final !== true || s.stale !== false || s.inputs_digest !== digest) return false;
+  // New data the nightly job has not taken in yet (migration 0502).
+  const [d] = await tx`select exists (select 1 from metric_dirty where taken_at is null) as pending`;
+  return d!.pending === false;
 }
 
 async function hoursSaved(c: Context<AppEnv>, deps: Deps): Promise<HoursSavedReport> {

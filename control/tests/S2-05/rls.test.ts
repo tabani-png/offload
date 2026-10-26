@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { withTenant } from "../../src/db/tenant.ts";
 import { asPrincipal } from "../helpers/harness.ts";
-import { S205_TABLES, addDevice, addPerson, dailyAggregate, populate, sendObjects, setup, workingTime, type S205 } from "./helpers.ts";
+import { S205_TABLES, addDevice, addPerson, at, dailyAggregate, populate, reviewEvent, runOutcome, sendObjects, setup, workingTime, type S205 } from "./helpers.ts";
 import nightly from "../../src/modules/metrics/index.ts";
 
 const PERSON_TABLES = ["run_outcomes", "review_events", "baseline_samples", "baseline_sample_instances", "daily_aggregates",
@@ -20,13 +20,15 @@ const countAs = (tenantId: string, table: string, flags: { personRead?: boolean;
 beforeAll(async () => {
   s = await setup();
   people = await populate(s, s.h.a, { departmentId: s.h.a.departments.sales, size: 5 });
-  // Every table gets a row in tenant A: daily and working-time aggregates, snapshots (nightly job), an alert.
+  // Every table gets a row in tenant A: daily and working-time aggregates, snapshots (nightly job), an alert, a dirty mark.
   s.fc.workingTime.add(people[0]!.personId);
   s.fc.features.set("CA-ON", ["working_time"]);
   await sendObjects(s.h, people[0]!.dev, [dailyAggregate(), workingTime()]);
   await nightly.jobs![0]!.run(s.h.deps);
   await s.h.db.migrator`update review_events set review_seconds = review_seconds + 1`;
   await nightly.jobs![0]!.run(s.h.deps);
+  // New data after the last nightly run leaves a pending metric_dirty row.
+  await sendObjects(s.h, people[1]!.dev, [reviewEvent(runOutcome({ endedAt: at("2026-10-22") }).runId)]);
 });
 afterAll(() => s.close());
 

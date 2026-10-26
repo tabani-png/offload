@@ -38,9 +38,16 @@ function device(p: Principal): { deviceId: string; personId: string } {
   return { deviceId: p.deviceId, personId: p.personId };
 }
 
-/** New hs-1 inputs: every stored monthly snapshot must be recomputed before it may be final again. */
+/**
+ * New hs-1 inputs: every stored monthly snapshot must be recomputed before it may be final again. One metric_dirty row
+ * per ingest transaction (migration 0502); no snapshot row is touched here, so envelopes never queue on each other or
+ * on the nightly job. The flag is transaction-local and rolls back with the object's savepoint, like the row.
+ */
 async function markStale(tx: Tx): Promise<void> {
-  await tx`update metric_snapshots set stale = true where stale = false`;
+  const [m] = await tx`select coalesce(current_setting('app.metrics_dirty', true), '') as v`;
+  if (m!.v === "on") return;
+  await tx`insert into metric_dirty (tenant_id) values (current_setting('app.tenant_id')::uuid)`;
+  await tx`select set_config('app.metrics_dirty', 'on', true)`;
 }
 
 const runOutcome: SyncHandler = async (tx, object, { principal }) => {

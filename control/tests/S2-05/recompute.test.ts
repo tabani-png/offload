@@ -74,7 +74,8 @@ describe("RECOMPUTE nightly equality check (ADR 0109 §11)", () => {
     const before = (await alerts()).length;
     const run = runOutcome({ endedAt: at("2026-10-24") });
     receipt(await sendObjects(s.h, people[1]!.dev, [run, reviewEvent(run.runId)]));
-    expect((await snapshots()).every((x) => x.stale)).toBe(true);
+    // Ingest records new data in metric_dirty; the report is no longer final until the job took it in.
+    expect((await owner.get(OCT)).json.final).toBe(false);
     await nightly();
     expect((await alerts()).length).toBe(before);
     expect((await snapshots()).every((x) => !x.stale && !x.final)).toBe(true);

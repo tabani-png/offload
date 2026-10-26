@@ -13,7 +13,7 @@ import { createSession, type SeededTenant } from "../helpers/seed.ts";
 /** Every table this slice creates (0500-0599). */
 export const S205_TABLES = [
   "device_seq", "sync_objects", "run_outcomes", "review_events", "baseline_samples", "baseline_sample_instances",
-  "daily_aggregates", "daily_aggregate_workflows", "working_time_aggregates", "metric_snapshots", "metric_alerts",
+  "daily_aggregates", "daily_aggregate_workflows", "working_time_aggregates", "metric_snapshots", "metric_alerts", "metric_dirty",
 ];
 
 /** Consent and features as S2-08 will answer them, held in memory. */

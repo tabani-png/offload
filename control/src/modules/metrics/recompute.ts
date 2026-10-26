@@ -1,5 +1,5 @@
 // Nightly recompute (ADR 0109 §11): per tenant, the current and previous month for every group scope. A snapshot that
-// new data made stale is replaced; otherwise hs-1's recompute() must reproduce it exactly, or an alert row is written
+// new data made stale (metric_dirty) is replaced; otherwise hs-1's recompute() must reproduce it exactly, or an alert row is written
 // and the month loses its "final" badge. Never corrects a number.
 import type { Deps, Job } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
@@ -26,6 +26,12 @@ const reportDigest = (r: HoursSavedReport) => sha256OfString(jcs({ ...r, final: 
 /** One tenant, in its own tenant transaction. */
 export async function recomputeTenant(deps: Deps, tenantId: string): Promise<void> {
   await withTenant(deps.db, { tenantId, accessRole: "system" }, async (tx) => {
+    // One recompute per tenant at a time. New data recorded so far marks every snapshot stale before any input is read;
+    // an ingest committing after this point leaves its metric_dirty row for the next night (migration 0502).
+    await tx`select pg_advisory_xact_lock(hashtextextended('metrics.recompute:' || current_setting('app.tenant_id'), 0))`;
+    if ((await tx`update metric_dirty set taken_at = now() where taken_at is null returning id`).length > 0) {
+      await tx`update metric_snapshots set stale = true where stale = false`;
+    }
     await aggregateRead(tx);
     const { timezone, floor } = await tenantSettings(tx);
     const thisMonth = `${localDay(deps.clock.now(), timezone).slice(0, 7)}-01`;
