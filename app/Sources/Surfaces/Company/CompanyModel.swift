@@ -23,6 +23,10 @@ final class CompanyModel: ObservableObject {
   @Published private(set) var showSource = false
   @Published private(set) var shareQueued = false
   @Published private(set) var busy = false
+  /// Pause/Resume's own in-flight flag: never shared with `busy`, so a slow share or ack can never swallow a Pause.
+  @Published private(set) var pausing = false
+  /// What the in-flight Pause/Resume asked for (true = pause), for the button's "Pausing…"/"Resuming…".
+  @Published private(set) var pausingTo = true
   @Published private(set) var message: String?
   @Published private(set) var workflows: [Automation] = []
   /// The pending sign-in page, while waiting: "Open sign-in page again" reopens it only when the person asks.
@@ -181,11 +185,12 @@ final class CompanyModel: ObservableObject {
   }
 
   func togglePause() {
-    guard !busy else { return }
-    busy = true
+    guard !pausing else { return }
+    pausing = true
     let pause = !CompanyControls.isPaused(status)
+    pausingTo = pause
     Task {
-      defer { busy = false }
+      defer { pausing = false }
       do { status = try await service.setPaused(pause) } catch { message = CompanyError.message(for: error) }
     }
   }

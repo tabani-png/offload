@@ -141,7 +141,7 @@ struct CompanyStatus: Equatable, Sendable {
 
 /// What the rail and the dashboard say about company sync. Colour means state only.
 enum CompanySyncState: Equatable, Sendable {
-  case notSetUp, notConnected, connecting, waitingForNotice, checkingNotice, syncing(last: Date?), paused, revoked
+  case notSetUp, notConnected, connecting, waitingForNotice, checkingNotice, noNoticePublished, syncing(last: Date?), paused, revoked
 
   init(_ s: CompanyStatus) {
     switch s.phase {
@@ -152,6 +152,7 @@ enum CompanySyncState: Equatable, Sendable {
     case .connected, .paused:
       if s.waitingForNotice { self = .waitingForNotice }
       else if s.phase == .paused || s.paused { self = .paused }
+      else if s.noticeState == .noneRequired { self = .noNoticePublished }
       else if s.checkingNotice { self = .checkingNotice }
       else { self = .syncing(last: s.lastSyncAt) }
     }
@@ -159,7 +160,7 @@ enum CompanySyncState: Equatable, Sendable {
 
   var role: StatusRole {
     switch self {
-    case .notSetUp, .notConnected, .paused: return .neutral
+    case .notSetUp, .notConnected, .paused, .noNoticePublished: return .neutral
     case .connecting, .checkingNotice: return .working
     case .waitingForNotice, .revoked: return .needsYou
     case .syncing: return .done
@@ -173,6 +174,7 @@ enum CompanySyncState: Equatable, Sendable {
     case .connecting: return "Finish signing in in your browser"
     case .waitingForNotice: return "Waiting for you to read the notice"
     case .checkingNotice: return "Checking your company's notice…"
+    case .noNoticePublished: return "Your company hasn't published a notice yet"
     case .syncing(let last): return last.map { "Last sync \(Self.ago($0, now: now))" } ?? "Connected, not synced yet"
     case .paused: return "Sync paused"
     case .revoked: return "This Mac was disconnected by your company"
@@ -186,6 +188,7 @@ enum CompanySyncState: Equatable, Sendable {
     case .connecting: return "Signing in"
     case .waitingForNotice: return "Notice to read"
     case .checkingNotice: return "Checking notice"
+    case .noNoticePublished: return "No notice yet"
     case .syncing: return "Syncing"
     case .paused: return "Paused"
     case .revoked: return "Disconnected"
@@ -199,10 +202,8 @@ enum CompanySyncState: Equatable, Sendable {
     case .notConnected: return "Connect to share workflow results with your company. Nothing is shared until you read its notice."
     case .connecting: return "Offload opened your company's sign-in page."
     case .waitingForNotice: return "Nothing leaves this Mac until you read and acknowledge it."
-    case .checkingNotice:
-      return s.noticeState == .noneRequired
-        ? "Your company has not published a notice yet. Nothing is shared until it does and you read it."
-        : "Nothing is shared until Offload has your company's notice and you read it."
+    case .checkingNotice: return "Nothing is shared until Offload has your company's notice and you read it."
+    case .noNoticePublished: return "Nothing is shared until it does and you read it."
     case .syncing:
       if s.failures >= 2 { return "Offload will try again on its own." }
       guard let queued = s.queued else { return "Connected." }
@@ -507,6 +508,8 @@ enum CompanyCopy {
   static let selfView = "See what my company sees"
   static let pause = "Pause sync"
   static let resume = "Resume sync"
+  static let pausing = "Pausing…"
+  static let resuming = "Resuming…"
 
   static func connected(_ s: CompanyStatus) -> String { "Connected to \(s.tenantLabel)" }
 }
@@ -610,7 +613,8 @@ actor CompanyService {
   func refresh() async throws -> CompanyStatus {
     let started = generation
     let s = try await api.status()
-    if started != generation, let current = status { return current }
+    // Odd = a mutation was in flight when the read started; changed = one ran across it. Either way it is stale.
+    if started != generation || started % 2 == 1, let current = status { return current }
     status = s
     return s
   }
@@ -627,7 +631,7 @@ actor CompanyService {
   /// While connected with the notice unknown, it first nudges the brain to read the config, so the first-run notice
   /// shows up without waiting for the brain's next flush.
   func statusQuietly() async -> CompanyStatus {
-    if let s = status, s.isConnected, s.noticeState == .unknown { try? await api.refreshConfig() }
+    if let s = status, s.isConnected, s.notice == nil { try? await api.refreshConfig() }
     do { return try await refresh() } catch { return status ?? .empty }
   }
 

@@ -126,8 +126,11 @@ enum Snapshotter {
     var checking = CompanySamples.status(.connected)
     checking.noticeState = .unknown
     checking.featuresKnown = false
+    // Round 4: the config is read and the company has published no notice: grey, says so, shares nothing.
+    var noNotice = CompanySamples.status(.connected)
+    noNotice.noticeState = .noneRequired
     let states: [(CompanyStatus, CompanySyncState)] = [
-      CompanySamples.status(.notConnected), CompanySamples.status(.connecting), waiting, checking, connected,
+      CompanySamples.status(.notConnected), CompanySamples.status(.connecting), waiting, checking, noNotice, connected,
       CompanySamples.status(.paused, lastSync: lastSync), CompanySamples.status(.revoked),
     ].map { ($0, CompanySyncState($0)) }
     let status = AnyView(Backdrop(padding: 28) {

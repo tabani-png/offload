@@ -142,9 +142,12 @@ struct CompanyView: View {
         Text(m).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.statusInk(.needsYou)).lineLimit(2)
       }
       // Pause never waits for the notice; only Resume does.
+      // Its own in-flight flag: a share or ack in progress never disables or swallows it.
       let paused = CompanyControls.isPaused(model.status)
-      SecondaryButton(title: paused ? CompanyCopy.resume : CompanyCopy.pause) { model.togglePause() }
-        .disabled(paused ? !CompanyControls.resumeEnabled(model.status) : !CompanyControls.pauseEnabled(model.status))
+      let title = model.pausing ? (model.pausingTo ? CompanyCopy.pausing : CompanyCopy.resuming)
+                                : (paused ? CompanyCopy.resume : CompanyCopy.pause)
+      SecondaryButton(title: title) { model.togglePause() }
+        .disabled(model.pausing || (paused ? !CompanyControls.resumeEnabled(model.status) : !CompanyControls.pauseEnabled(model.status)))
     }
   }
 }
