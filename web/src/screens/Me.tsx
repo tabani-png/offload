@@ -1,26 +1,55 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import type { Person, SelfView, Workflow } from "../api/types.ts";
+import type { AuditEvent, Person, SelfView, Workflow } from "../api/types.ts";
 import { isSuppressed } from "../api/types.ts";
 import { Button, Card, ErrorNote, Field, GradeSplit, Row, Section, Sheet, StatHero, StateTag, Table } from "../design/components.tsx";
 import { hoursText, timeText } from "../lib/format.ts";
-import { Load, useDeps, useGet, useList, useKey } from "../app/data.tsx";
+import { Load, useDeps, useGet, useList, useKey, usePeriod, useSession } from "../app/data.tsx";
 import { Page, ROLE_WORDS } from "../app/page.tsx";
 import { confidenceChip } from "./Overview.tsx";
 
 const ACTION_WORDS: Record<string, string> = {
   "person.read": "Opened your record",
+  "person.list": "Listed people, you included",
+  "person.update": "Changed your record",
   "self.export": "Downloaded your data",
   "person.offboard": "Started your offboarding",
+  "notice.ack": "Acknowledged a notice",
+  "device.enrollment_code": "Made a code to connect a Mac",
+  "device.enrolled": "Connected a Mac",
+  "device.revoked": "Disconnected a Mac",
+  "workflow.proposed": "Shared a workflow with the team",
+  "workflow.promoted": "Made your shared workflow a team workflow",
+  "batch.propose": "Prepared a batch for your approval",
 };
+
+/**
+ * Who did it, in words. A member may not list people, so a person the screen cannot name is shown by access role;
+ * "System" is only for the system itself.
+ */
+function actorWords(e: AuditEvent, me: SelfView, name: (id: string) => string | null) {
+  if (e.actor.id === me.person.id) return "You";
+  if (e.actor.type === "device") return me.devices.some((d) => d.id === e.actor.id) ? "Your Mac" : "A Mac";
+  if (e.actor.type === "person") {
+    const n = e.actor.id ? name(e.actor.id) : null;
+    const role = e.actor.accessRole ? ROLE_WORDS[e.actor.accessRole] : "Someone";
+    return n ? <>{n} <span className="ink3">{role}</span></> : role;
+  }
+  if (e.actor.type === "support") return "Offload support";
+  return e.actor.type === "service" ? "A cloud worker" : "System";
+}
 
 export function MeScreen() {
   const { api } = useDeps();
   const q = useGet<SelfView>("/v1/me/data");
-  const people = useList<Person>("/v1/people");
+  const period = usePeriod();
+  // Members may not list people (API.md): don't ask, the access log then names readers by role.
+  const session = useSession();
+  const role = session.data?.person.accessRole;
+  const people = useList<Person>(role && role !== "member" ? "/v1/people" : null);
   const workflows = useList<Workflow>("/v1/workflows");
   const [correcting, setCorrecting] = useState(false);
-  const name = (id: string | null) => people.data?.find((p) => p.id === id)?.displayName ?? "System";
+  const name = (id: string) => people.data?.find((p) => p.id === id)?.displayName ?? null;
   const wfName = (id: string) => workflows.data?.find((w) => w.id === id)?.name ?? "Workflow";
   const exportM = useMutation({
     mutationFn: () => api.get<SelfView>("/v1/me/export"),
@@ -51,14 +80,14 @@ export function MeScreen() {
                 <Table caption="Who viewed my data" rows={[...me.accessLog].reverse()} rowKey={(e) => e.id} empty="Nobody has opened your data."
                   columns={[
                     { key: "when", header: "When", cell: (e) => timeText(e.at) },
-                    { key: "who", header: "Who", cell: (e) => (e.actor.id === me.person.id ? "You" : <>{name(e.actor.id)} <span className="ink3">{e.actor.accessRole ? ROLE_WORDS[e.actor.accessRole] : ""}</span></>) },
+                    { key: "who", header: "Who", cell: (e) => actorWords(e, me, name) },
                     { key: "what", header: "What", cell: (e) => ACTION_WORDS[e.action] ?? e.action },
                   ]} />
               </Card>
             </Section>
 
             <div className="grid-2">
-              <Card title="My hours saved" aside={<span className="t-callout ink3">October so far</span>}>
+              <Card title="My hours saved" aside={<span className="t-callout ink3">{period?.label}</span>}>
                 {isSuppressed(me.hoursSaved.total) ? <span className="ink3">Not available</span> : (
                   <div className="stack">
                     <StatHero value={hoursText(me.hoursSaved.total.seconds)} chip={confidenceChip(me.hoursSaved.total)} label="From the workflows of your job roles." />

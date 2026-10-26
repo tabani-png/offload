@@ -60,7 +60,9 @@ async function take(into: Snap) {
 /** The company read may move only in what H is inside of: the total, its digest, the final flag. */
 function companyShape(x: unknown) {
   const { body } = x as { body: Record<string, unknown> };
-  const { total: _t, inputsDigest: _d, final: _f, ...rest } = body;
+  // Top workflows may move too (follow-ups): with H, company minus WF1 (everyone else's only workflow) would be H's
+  // runs, so the company drops WF1. That H's own workflow is never listed is checked below.
+  const { total: _t, inputsDigest: _d, final: _f, topWorkflows: _w, ...rest } = body;
   return rest;
 }
 
@@ -136,6 +138,8 @@ describe("FLOOR one person more in a suppressed group changes nothing a reader c
     test(`FLOOR: the company read moves only in its total, digest and final flag: no anomaly, child or workflow from H (${phase})`, () => {
       const now = phase === "pending" ? pending : after;
       expect(companyShape(now["hours company"])).toEqual(companyShape(before["hours company"]));
+      const top = ((now["hours company"] as { body: { topWorkflows: Array<{ workflowId: string }> } }).body.topWorkflows).map((w) => w.workflowId);
+      expect(top).not.toContain(WF2);
     });
   }
 });

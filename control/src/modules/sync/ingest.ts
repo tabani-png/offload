@@ -6,7 +6,7 @@ import { SYNC_OBJECTS_PER_HOUR, SYNC_RATE_WINDOW_MS } from "../../config.ts";
 import { loadModules, principalOf, tenantTx, type AppEnv, type Deps, type Principal, type SyncHandler } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
 import { jcs, sha256Hex } from "../../schema/encoding.ts";
-import { forbidden, invalid } from "../../schema/http.ts";
+import { HttpError, forbidden, invalid } from "../../schema/http.ts";
 import {
   SENT_AT_WINDOW_MS, SIGNATURE_HEADER, badSignature, parseEnvelope, parseSignatureHeader, readCapped, replay, verifyBytes,
 } from "./envelope.ts";
@@ -29,8 +29,9 @@ const REJECT_CODES = new Set<string>(["validation_failed", "consent_missing", "f
 const RETRYABLE = new Set<RejectCode>(["rate_limited", "server_error"]);
 
 /**
- * A handler rejects one object (and only that object) by throwing an error carrying `syncCode`; its writes are rolled
- * back to the object's savepoint. Any other error is a retryable server_error for that object.
+ * A handler rejects one object (and only that object) by throwing an error carrying `syncCode`, or an HttpError 4xx
+ * (validation_failed); its writes are rolled back to the object's savepoint. Any other error is a retryable
+ * server_error for that object.
  */
 export class SyncReject extends Error {
   constructor(readonly syncCode: RejectCode, message: string = syncCode) {
@@ -77,7 +78,12 @@ export function siblingHandlers(dir = join(import.meta.dir, "..")): Promise<Read
 
 function syncCodeOf(err: unknown): RejectCode | null {
   const code = (err as { syncCode?: unknown } | null)?.syncCode;
-  return typeof code === "string" && REJECT_CODES.has(code) ? (code as RejectCode) : null;
+  if (typeof code === "string" && REJECT_CODES.has(code)) return code as RejectCode;
+  // A handler that answers like a route (an HttpError 4xx: unknown notice, wrong jurisdiction, bad fields) found the
+  // object itself wrong: rejected for good, like a SyncReject("validation_failed"), never retried. 5xx and anything
+  // else stay a retryable server_error.
+  const status = (err as { status?: unknown } | null)?.status;
+  return err instanceof HttpError && typeof status === "number" && status >= 400 && status < 500 ? "validation_failed" : null;
 }
 
 export async function ingest(c: Context<AppEnv>, deps: Deps): Promise<Receipt> {

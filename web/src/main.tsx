@@ -3,14 +3,10 @@ import { createRoot } from "react-dom/client";
 import { createHttpClient } from "./api/client.ts";
 import { App, createAppRouter } from "./app/router.tsx";
 import type { AppDeps } from "./app/data.tsx";
-import { tokenCss } from "./design/tokens.ts";
+// Tokens are CSS variables from a build-time stylesheet (vite.config.ts), loaded before the component styles. No
+// inline <style>: the control plane's CSP allows styles from its own origin only.
+import "virtual:offload-tokens.css";
 import "./design/styles.css";
-
-// Tokens become CSS variables once, before first paint.
-const style = document.createElement("style");
-style.dataset.tokens = "";
-style.textContent = tokenCss();
-document.head.prepend(style);
 
 const params = new URLSearchParams(location.search);
 if (params.get("theme") === "light") document.documentElement.dataset.theme = "light";

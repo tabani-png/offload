@@ -9,6 +9,7 @@ import {
   type Anomaly, type Grade, type TopWorkflow, type HoursSavedReport, type Period, type ReportInput, type RunInput, type RunRow, type Scope,
 } from "../../../../packages/hours-saved/src/index.ts";
 import { COMPANY, childrenIn, floorNode, hiddenInTree, loadHierarchy, type Cells, type Hierarchy } from "./floor.ts";
+import { familySafe } from "./span.ts";
 import { aggregateRead, loadInputs, loadReviews, loadRuns, loadSamples, withAggregateRead } from "./load.ts";
 import {
   bounds, checkGroupScope, monthOf, parsePeriod, parseScope, personRead, tenantSettings,
@@ -127,6 +128,87 @@ function workflowLister(v: GroupView, floor: number): (scope: Scope, behind: (r:
 }
 
 /**
+ * Top workflows per group scope (S2-05 follow-ups). Every figure a reader can see in hours reports (company, department
+ * and job-role totals, the children cells, top workflows at each level) is a sum over (department, job role, workflow)
+ * cells, and the reader may combine them: company minus Sales minus a listed workflow gave a hidden department. So each
+ * scope adds workflows in rank order only while the family of figures it can be combined with stays safe (span.ts:
+ * no combination isolates 1 to floor-1 people). A job role decides over its own figures, a department over its own
+ * subtree (its total, its role cells, its roles' lists), the company over everything shown; so a department's list
+ * still never moves with another department's data (round 6), and the company decides last with all of it.
+ */
+function topWorkflowLists(v: GroupView, floor: number): (scope: Scope) => TopWorkflow[] {
+  const all = v.cells.over(v.cells.rows);
+  const rows = v.cells.sel(v.cells.rows, COMPANY);
+  const key = (r: RunRow) => `${r.departmentId ?? "-"}|${r.jobRoleId ?? "-"}|${r.workflowId}`;
+  const people = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const set = people.get(key(r)) ?? new Set<string>();
+    set.add(r.personId);
+    people.set(key(r), set);
+  }
+  const fig = (f: (r: RunRow) => boolean) => new Set(rows.filter(f).map(key));
+  const inDept = (id: string) => (r: RunRow) => r.departmentId === id;
+  const inRole = (id: string) => (r: RunRow) => r.jobRoleId === id;
+  const depts = floorNode(COMPANY, null, v.h.departments, all, floor).children.filter((c) => !isSuppressed(c.value)).map((c) => c.scope.id!);
+  const roleLevel = new Map<string, { cells: string[]; readable: string[] }>();
+  const rolesOf = (deptId: string) => {
+    let x = roleLevel.get(deptId);
+    if (!x) {
+      const dept: Scope = { type: "department", id: deptId };
+      const shown = floorNode(dept, COMPANY, childrenIn(v.h, dept), all, floor).children.filter((c) => !isSuppressed(c.value));
+      x = {
+        cells: shown.map((c) => c.scope.id!),
+        // Read directly only with no holder outside the department (floor.ts hiddenInTree).
+        readable: shown.filter((c) => all.cell(c.scope, null).people === (c.value as { people: number }).people).map((c) => c.scope.id!),
+      };
+      roleLevel.set(deptId, x);
+    }
+    return x;
+  };
+  const greedy = (base: Set<string>[], ranked: TopWorkflow[], inScope: (r: RunRow) => boolean): { list: TopWorkflow[]; figs: Set<string>[] } => {
+    const list: TopWorkflow[] = [];
+    const figs: Set<string>[] = [];
+    for (const w of ranked) {
+      if (list.length === MAX_TOP) break;
+      const f = fig((r) => inScope(r) && r.workflowId === w.workflowId);
+      if (familySafe([...base, ...figs, f], people, floor)) {
+        list.push(w);
+        figs.push(f);
+      }
+    }
+    return { list, figs };
+  };
+  const memo = new Map<string, { list: TopWorkflow[]; figs: Set<string>[] }>();
+  const roleList = (id: string) => {
+    const k = `r:${id}`;
+    if (!memo.has(k)) memo.set(k, greedy([fig(inRole(id))], rankedWorkflows(rows.filter(inRole(id)), floor), inRole(id)));
+    return memo.get(k)!;
+  };
+  const deptFamily = (id: string) => {
+    const r = rolesOf(id);
+    return [
+      fig(inDept(id)),
+      ...r.cells.map((role) => fig((x) => x.departmentId === id && x.jobRoleId === role)),
+      ...r.readable.flatMap((role) => roleList(role).figs),
+    ];
+  };
+  const deptList = (id: string) => {
+    const k = `d:${id}`;
+    if (!memo.has(k)) memo.set(k, greedy(deptFamily(id), rankedWorkflows(rows.filter(inDept(id)), floor), inDept(id)));
+    return memo.get(k)!;
+  };
+  const companyList = () => {
+    if (!memo.has("c")) {
+      const base = [fig(() => true), ...depts.flatMap((d) => [...deptFamily(d), ...deptList(d).figs])];
+      memo.set("c", greedy(base, rankedWorkflows(rows, floor), () => true));
+    }
+    return memo.get("c")!;
+  };
+  return (scope) =>
+    scope.type === "company" ? companyList().list : scope.type === "department" ? deptList(scope.id!).list : scope.type === "job_role" ? roleList(scope.id!).list : [];
+}
+
+/**
  * Anomalies a visible group may show. residual_zero_share is dropped: its detail is one person's counts ("residual 0 on
  * 4 of 4"), and no per-person number goes into a group view (round 5). A workflow-keyed one follows workflowLister over
  * the runs behind it (who ran the workflow; for outcome_disagreement, whose runs disagree). Filtered over the whole
@@ -134,8 +216,14 @@ function workflowLister(v: GroupView, floor: number): (scope: Scope, behind: (r:
  */
 function groupAnomalies(scope: Scope, v: GroupView, tz: string, listed: ReturnType<typeof workflowLister>): Anomaly[] {
   const disagrees = (r: RunRow) => r.deviceOutcome !== null && r.deviceOutcome !== r.outcome;
+  // small_baseline is about one version ("version 2: baseline n = ..."): the people behind it ran that version.
+  const versionOf = (a: Anomaly) => (a.code === "small_baseline" ? Number(/^version (\d+):/.exec(a.detail)?.[1] ?? NaN) : null);
   return anomalies(v.cells.sel(v.cells.rows, scope), tz)
-    .filter((a) => a.workflowId !== null && listed(scope, (r) => r.workflowId === a.workflowId && (a.code !== "outcome_disagreement" || disagrees(r))))
+    .filter((a) => {
+      if (a.workflowId === null) return false;
+      const ver = versionOf(a);
+      return listed(scope, (r) => r.workflowId === a.workflowId && (ver === null || r.version === ver) && (a.code !== "outcome_disagreement" || disagrees(r)));
+    })
     .slice(0, MAX_ANOMALIES);
 }
 
@@ -236,9 +324,7 @@ async function hoursSaved(c: Context<AppEnv>, deps: Deps): Promise<HoursSavedRep
         ? floorNode(scope, scope.type === "company" ? null : COMPANY, input.children, all, floor).children.slice(0, MAX_CHILDREN)
         : [];
     const listed = workflowLister(v, floor);
-    const topWorkflows = rankedWorkflows(cells.sel(cells.rows, scope), floor)
-      .filter((w) => listed(scope, (x) => x.workflowId === w.workflowId))
-      .slice(0, MAX_TOP);
+    const topWorkflows = topWorkflowLists(v, floor)(scope);
     return { ...r, inputsDigest, children, topWorkflows, anomalies: groupAnomalies(scope, v, timezone, listed), final };
   });
 }

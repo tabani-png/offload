@@ -67,6 +67,20 @@ export interface Person {
   noticeAckVersionId: Uuid | null;
 }
 
+/** What a department lead sees about a person (ADR 0111 §2, person-summary.schema.json). */
+export interface PersonSummary {
+  id: Uuid;
+  displayName: string;
+  departmentId: Uuid | null;
+  jobRoleIds: Uuid[];
+  state: PersonState;
+}
+
+/** `GET /v1/people` answers full records for owner/admin/auditor and summaries for a dept lead. */
+export type PersonListItem = Person | PersonSummary;
+
+export const isFullPerson = (p: PersonListItem): p is Person => "accessRole" in p;
+
 export interface JobRole {
   id: Uuid;
   name: string;
