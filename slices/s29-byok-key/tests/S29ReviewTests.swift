@@ -203,3 +203,38 @@ struct S29ReviewReplaceTests {
     #expect(f.status == store.status() && f.status == .missing)
   }
 }
+
+// S29 review round 2 (PR #36, Codex P2): the key settings must not hide behind the dashboard's data gate. A brain that
+// cannot start (often because of a bad or missing key) must still leave a way to add, replace or remove the key.
+struct S29ReviewOfflineTests {
+  @Test("OFFLINE: with no dashboard data (brain down, first load failed) every page shows the key settings")
+  func everyPageWhenDown() {
+    for s in DashboardSection.allCases {
+      #expect(DashboardKeyPlacement.showsKeySettings(section: s, dataLoaded: false), "\(s) hides the key with the brain down")
+    }
+  }
+
+  @Test("OFFLINE: with data loaded the key settings live on the Observing page only")
+  func observingWhenUp() {
+    for s in DashboardSection.allCases {
+      #expect(DashboardKeyPlacement.showsKeySettings(section: s, dataLoaded: true) == (s == .observing))
+    }
+  }
+
+  @Test("OFFLINE: brain down and no key -> the add-key path and the notice; brain down with a key -> replace and remove")
+  func actionsWhenDown() {
+    let none = DashboardKeyPlacement.offline(status: .missing)
+    #expect(none.controls.contains(.claudeKey))
+    #expect(none.notice == ClaudeKeyStatus.missing.notice && none.notice != nil)
+    #expect(ClaudeKeyFlow(status: .missing).actions == [.add])
+    let set = DashboardKeyPlacement.offline(status: .set(last4: "WXYZ"))
+    #expect(set.controls.contains(.claudeKey) && set.notice == nil)
+    #expect(ClaudeKeyFlow(status: .set(last4: "WXYZ")).actions == [.replace, .remove])
+  }
+
+  @Test("OFFLINE: the other controls that need no brain come along (Claude screen reading opt-in, show logs)")
+  func otherControls() {
+    let c = DashboardKeyPlacement.offline(status: .missing).controls
+    #expect(c == [.claudeKey, .claudeVision, .showLogs])
+  }
+}
