@@ -2,7 +2,7 @@
 // a looser path. Each case: what used to slip through, and the strict outcome now.
 import { describe, expect, test } from "bun:test";
 import type { ReadQueryDTO } from "../../src/api/s14-types.ts";
-import { readValues, rowsOf } from "../../src/plan/read-source.ts";
+import { readValueParts, readValues, rowsOf } from "../../src/plan/read-source.ts";
 
 const F = [
   { label: "Signups", sourceLabel: "Signups" },
@@ -24,7 +24,7 @@ describe("s27 round 18: tables by shape, and the hostile pass", () => {
     expect(rv('{"columns":["signups","active users"],"rows":[[1,2],"7"]}').skipped).toEqual([{ missing: [], reason: "row 2 is not a row (string)" }]);
   });
   test("FETCH: a column without a name: every row of that table is skipped and named, never read loosely", () => {
-    const r = rv('{"columns":["signups",5],"rows":[[1,2]],"note":"x"}');
+    const r = rv('{"columns":["signups",null],"rows":[[1,2]],"note":"x"}');
     expect(rowsOf(r)).toEqual([]);
     expect(r.kind === "ok" ? r.skipped : []).toEqual([{ missing: [], reason: "column 2 of the table has no name" }]);
   });
@@ -37,6 +37,8 @@ describe("s27 round 18: tables by shape, and the hostile pass", () => {
   test("FETCH: an error next to an empty list is not an empty read ('nothing new'): it is unreadable", () => {
     expect(rv('{"error":"permission denied","results":[]}').kind).toBe("unreadable");
     expect(rv('{"error":null,"results":[]}').kind).toBe("empty");
+    // In a split answer too: a text part reporting an error next to an empty structured part is not "nothing new".
+    expect(readValueParts([{ kind: "text", text: "Error: permission denied" }, { kind: "json", value: { results: [] } }], F).kind).toBe("unreadable");
   });
   test("FETCH: a context nested deeper than can be checked refuses the answer", () => {
     let deep: unknown = { period: "last 30 days" };

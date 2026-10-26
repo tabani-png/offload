@@ -466,6 +466,11 @@ const TEXT_DECLARATIONS = ["report", "insight", "dashboard", "period", "date ran
  */
 /** s27 round 15: a table row with the wrong number of cells: kept in place as a row that is skipped, with this reason. */
 const MALFORMED = Symbol("malformed row");
+const notARow = (n: number, e: unknown): Obj => {
+  const r: Obj = {};
+  (r as Record<symbol, string>)[MALFORMED] = `row ${n} is not a row (${e === null ? "null" : typeof e})`;
+  return r;
+};
 
 function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): Obj {
   const obj: Obj = {};
@@ -504,6 +509,15 @@ function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | 
       }
       i = j - 1;
       continue;
+    }
+    // "Label: value" pairs side by side ("Signups: 1 | Active users: 2"): read cell by cell, never one value
+    // swallowing the next (round 18).
+    if (head !== null && head.length >= 2) {
+      const pairs = head.map((c) => /^([A-Za-z][A-Za-z _-]{0,39}?)\s*[:=]\s*(.*)$/.exec(c));
+      if (pairs.every((m) => m !== null)) {
+        for (const m of pairs) put(m!.at(1)!.trim(), m!.at(2)!);
+        continue;
+      }
     }
     const kv = /^([A-Za-z][A-Za-z _-]{0,39}?)\s*[:=]\s*(.*)$/.exec(line);
     if (kv !== null) {
@@ -551,14 +565,29 @@ const isObj = (x: unknown): x is Obj => x !== null && typeof x === "object" && !
 const MAX_DEPTH = 4;
 
 /** A table answer: { columns: [names | {name}], rows | data: [[...], ...] } -> one object per row. */
+/** The rows array of a table node ({columns: [...], rows|data: [...]}), or null when the node is not a table. */
+const tableBody = (o: Obj): { key: "rows" | "data"; rows: unknown[] } | null => (!Array.isArray(o.columns) ? null : Array.isArray(o.rows) ? { key: "rows", rows: o.rows } : Array.isArray(o.data) ? { key: "data", rows: o.data } : null);
+
+/**
+ * A table is recognised by SHAPE (round 18): a `columns` array and a `rows` (or `data`) array, whatever they hold.
+ * Every row then goes through tableRow; a row that is null, a primitive or holds a nested value, and every row of a
+ * table with an unnamed column, is skipped and named. A table's rows are never read as a plain list.
+ */
 function tableRows(o: Obj): Obj[] | null {
-  const cols = o.columns;
-  const rows = Array.isArray(o.rows) ? o.rows : Array.isArray(o.data) ? o.data : null;
-  if (!Array.isArray(cols) || rows === null || rows.length === 0 || !rows.every((r) => Array.isArray(r) || isObj(r))) return null;
+  const body = tableBody(o);
+  if (body === null) return null;
+  const cols = o.columns as unknown[];
   const names = cols.map((c) => (typeof c === "string" ? c : isObj(c) && typeof c.name === "string" ? c.name : null));
-  if (names.some((n) => n === null)) return null;
-  // Round 16: the same row rule as text tables (tableRow).
-  return rows.map((r, i) => tableRow(names as string[], r as unknown[] | Obj, i + 1));
+  const unnamed = names.findIndex((n) => n === null || n.trim() === "");
+  return body.rows.map((r, i) => {
+    if (unnamed >= 0) {
+      const bad: Obj = {};
+      for (const n of names) if (typeof n === "string" && n.trim() !== "") bad[n] = null;
+      (bad as Record<symbol, string>)[MALFORMED] = `column ${unnamed + 1} of the table has no name`;
+      return bad;
+    }
+    return tableRow(names as string[], r, i + 1);
+  });
 }
 
 /**
@@ -567,7 +596,7 @@ function tableRows(o: Obj): Obj[] | null {
  * columns, else skipped and named. Repeated column names are Repeated (I7); empty and formatting-only cells are judged
  * later by the row pass (cleanValue), the same for both.
  */
-function tableRow(headers: readonly string[], cells: readonly unknown[] | Obj, n: number): Obj {
+function tableRow(headers: readonly string[], cells: unknown, n: number): Obj {
   const r: Obj = {};
   // A row that cannot be read still shows which columns the table has (null), so the table is chosen by presence and
   // the row is skipped and named in the row pass, never dropped.
@@ -580,9 +609,13 @@ function tableRow(headers: readonly string[], cells: readonly unknown[] | Obj, n
   // under one name are Repeated), the same for text and JSON.
   if (Array.isArray(cells)) {
     if (cells.length !== headers.length) return malformed(`row ${n} has ${cells.length} cell${cells.length === 1 ? "" : "s"}, the table has ${headers.length}`);
+    // A cell is a value or empty; a nested object or list in a cell is never flattened into the row.
+    const nested = cells.findIndex((c) => c !== null && typeof c === "object");
+    if (nested >= 0) return malformed(`row ${n}, column ${headers[nested]} holds a nested value`);
     headers.forEach((h, k) => putKey(r, h, typeof cells[k] === "string" ? (cells[k] as string).trim() : cells[k]));
     return r;
   }
+  if (!isObj(cells)) return malformed(`row ${n} is not a row (${cells === null ? "null" : typeof cells})`);
   const allowed = new Set(headers.map(normKey));
   const outside = Object.keys(cells).filter((k) => !allowed.has(normKey(k)));
   if (outside.length > 0) return malformed(`row ${n} has keys outside the columns: ${outside.join(", ")}`);
@@ -623,8 +656,9 @@ function collections(v: unknown): { all: Collection[]; more: boolean } {
   const walk = (x: unknown, depth: number, ctx: Array<[string, string]>) => {
     if (depth > MAX_DEPTH) return;
     if (Array.isArray(x)) {
-      const objs = x.filter(isObj);
-      if (objs.length > 0) all.push({ rows: objs, depth, context: ctx, order: all.length });
+      // A list with objects is a list of rows: an element that is not an object is a row that is skipped and named,
+      // never silently dropped (round 18).
+      if (x.some(isObj)) all.push({ rows: x.map((e, i) => (isObj(e) ? e : notARow(i + 1, e))), depth, context: ctx, order: all.length });
       return;
     }
     if (!isObj(x)) return;
@@ -635,7 +669,7 @@ function collections(v: unknown): { all: Collection[]; more: boolean } {
     // The object itself as one row: its own scalars are the row's, only the envelopes above are context.
     all.push({ rows: [x], depth, context: ctx, order: all.length });
     // A table's own rows are read only through the table (tableRow), never as a second, unchecked list.
-    const tableKey = t === null ? null : Array.isArray(x.rows) ? "rows" : "data";
+    const tableKey = tableBody(x)?.key ?? null;
     for (const k of Object.keys(x)) {
       if (k === tableKey) continue;
       const v = x[k];
@@ -654,6 +688,7 @@ const sameText = (a: string, b: string) => a.toLowerCase().replace(/\s+/g, " ").
 /** A [key, value] that names another report or filter value than the learned query: the reason, else null. */
 function conflictOf(pairs: Iterable<[string, unknown]>, q: ReadQueryDTO): string | null {
   for (const [k, raw] of pairs) {
+    if (k === TOO_DEEP) return `the answer is nested too deeply to confirm it is ${contextWords(q)}`;
     if (typeof raw !== "string" && typeof raw !== "number") continue;
     const v = String(raw).trim();
     if (v === "") continue;
@@ -700,8 +735,15 @@ const ROW_KEYS = new Set(["results", "result", "data", "items", "rows", "records
  * EVERY context declaration in the whole answer (all depths, every object and row, every key alias), collected before
  * anything is chosen or flattened, so a nested declaration can never be overwritten or skipped.
  */
+/** Declarations deeper than this cannot be checked: the answer is refused (a hidden conflict must not slip by). */
+const MAX_DECLARATION_DEPTH = 64;
+const TOO_DEEP = "__offload_too_deep__";
+
 function declarations(v: unknown, out: Array<[string, unknown]> = [], depth = 0): Array<[string, unknown]> {
-  if (depth > 64) return out;
+  if (depth > MAX_DECLARATION_DEPTH) {
+    out.push([TOO_DEEP, "1"]);
+    return out;
+  }
   if (Array.isArray(v)) {
     for (const x of v) declarations(x, out, depth + 1);
     return out;
@@ -721,10 +763,16 @@ function declarations(v: unknown, out: Array<[string, unknown]> = [], depth = 0)
 }
 
 /** A recognised empty collection: the answer is [] or a row key holds [] / a table with no rows. */
+/** True when an answer object reports an error (a non-empty error / errors / fault): never an empty read. */
+const reportsError = (o: Obj): boolean =>
+  Object.entries(o).some(([k, v]) => ["error", "errors", "fault", "error message"].includes(normKey(k)) && v !== null && v !== false && v !== "" && !(Array.isArray(v) && v.length === 0));
+
 function emptyCollection(v: unknown, depth = 0): boolean {
   if (depth > MAX_DEPTH) return false;
   if (Array.isArray(v)) return depth === 0 && v.length === 0;
   if (!isObj(v)) return false;
+  // An error next to an empty list is not "nothing new" (round 18): it is unreadable.
+  if (reportsError(v)) return false;
   if (Array.isArray(v.columns) && (Array.isArray(v.rows) || Array.isArray(v.data)) && ((v.rows ?? v.data) as unknown[]).length === 0) return true;
   for (const [k, x] of Object.entries(v)) {
     if (Array.isArray(x) && x.length === 0 && ROW_KEYS.has(normKey(k))) return true;
@@ -751,14 +799,19 @@ export function readValues(
 /** One part of an answer: text as received (JSON is parsed exactly, else read as text), or a value a connector's
  * software already parsed (MCP structuredContent). */
 export type AnswerPart = { kind: "text"; text: string } | { kind: "json"; value: unknown };
+/** A JSON-looking part that does not parse: it holds nothing readable (never re-read as text). */
+const INVALID_JSON = Object.freeze({}) as unknown;
 
 function partAnswer(p: AnswerPart, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): { answer: unknown; textual: boolean } {
   if (p.kind === "json") return { answer: p.value, textual: false };
+  const t = p.text.trim();
+  // JSON-looking text is JSON or nothing (round 18): cut-off or invalid JSON is never re-read as text lines.
+  const looksJson = (t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]")) || t.startsWith("{\"") || t.startsWith("[{");
   try {
-    const a = parseExact(p.text.trim());
+    const a = parseExact(t);
     if (a !== null && typeof a === "object") return { answer: a, textual: false };
   } catch {
-    // not JSON: read as text below
+    if (looksJson) return { answer: INVALID_JSON, textual: false };
   }
   // Text answers go through the SAME pipeline and invariants as JSON (round 7).
   return { answer: textAnswer(p.text, fields), textual: true };
@@ -803,7 +856,9 @@ export function readValueParts(parts: readonly AnswerPart[], fields: readonly Pi
   }
   const extra = more ? { more: true as const } : {};
   if (best === undefined) {
-    if (answers.some((a) => !a.textual && emptyCollection(a.answer))) return { kind: "empty", ...extra };
+    // Empty only when some part is a recognised empty collection and NO part reports an error (round 18).
+    const erroring = answers.some((a) => isObj(a.answer) && reportsError(a.answer));
+    if (!erroring && answers.some((a) => !a.textual && emptyCollection(a.answer))) return { kind: "empty", ...extra };
     const textual = answers.every((a) => a.textual);
     return { kind: "unreadable", reason: textual ? `did not show ${allMissing().join(", ")}` : `no rows with ${allMissing().join(", ")}`, missing: allMissing() };
   }

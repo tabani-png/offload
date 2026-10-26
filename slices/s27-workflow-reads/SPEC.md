@@ -173,7 +173,13 @@ only saving was the typing.
     typed on that instance's commit screen (`parseCommitRows`: every typed row and the label lines; a row matches when
     it shares at least one field and no shared field differs). Exactly one matching row -> filled; none or several ->
     unfilled, "could not match the source row", and it does not count toward savings. Never the first row.
-25. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+25. **Round 18 (PR #35 review) and a hostile pass on read-source.ts.** No single bad element may push the parser onto a
+    looser path: a table is recognised by shape (`columns` + `rows`/`data` arrays) and its rows are never read as a
+    plain list; null, primitive and nested-value rows and every row of a table with an unnamed column are skipped and
+    named; a plain list keeps its non-object elements as named skipped rows; context nested too deep to check refuses
+    the answer; an error beside an empty list (in any part) is unreadable, not "nothing new"; JSON-looking text that does
+    not parse is unreadable, never re-read as text; "Label: value" pairs side by side are read cell by cell.
+26. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)
