@@ -3,6 +3,8 @@ import type { PersonKey } from "../helpers/seed.ts";
 import { withTenant } from "../../src/db/tenant.ts";
 import type { Tx } from "../../src/db/pool.ts";
 import type { SeededTenant } from "../helpers/seed.ts";
+import { listMigrations } from "../../src/db/migrate.ts";
+import { ulid } from "../../src/schema/encoding.ts";
 
 export const DAY_MS = 86_400_000;
 export const SHA = "a".repeat(64);
@@ -84,4 +86,83 @@ export function enableBody(feature: "per_person_views" | "working_time", noticeV
 /** Runs `fn` inside a system transaction of the tenant (what ports and jobs see). */
 export function sys<T>(h: Harness, fn: (tx: Tx) => Promise<T>, tenant: SeededTenant = h.a): Promise<T> {
   return withTenant(h.db.app, { tenantId: tenant.id, accessRole: "system" }, fn);
+}
+
+/**
+ * Whether this tree carries S2-05's per-person tables (migration 0501). The S2-08 branch alone does not; once S2-05 is
+ * merged the retention and self-view tests below run against its real tables instead of stand-ins.
+ */
+export const INGEST_TABLES = listMigrations().some((m) => /CREATE TABLE run_outcomes\b/.test(m.sql));
+
+
+export interface IngestRow {
+  table: string;
+  objectId: string;
+}
+
+/**
+ * Inserts rows into S2-05's per-person tables as the migrator (what its ingest stores, column for column), each aged by
+ * the given number of days before `now`. Returns what was inserted so tests can look the rows up again.
+ */
+export async function seedIngest(
+  h: Harness,
+  tenantId: string,
+  personId: string,
+  deviceId: string,
+  now: number,
+  ages: { runs?: number[]; reviews?: number[]; baselines?: number[]; daily?: number[]; workingTime?: number[] },
+): Promise<IngestRow[]> {
+  const m = h.db.migrator;
+  const out: IngestRow[] = [];
+  const day = (n: number) => new Date(now - n * DAY_MS).toISOString().slice(0, 10);
+  const wf = crypto.randomUUID();
+  for (const n of ages.runs ?? []) {
+    const at = now - n * DAY_MS;
+    const id = ulid(at);
+    await m`insert into run_outcomes (tenant_id, device_id, run_id, object_id, person_id, seq, created_at_ms, workflow_id,
+        version, runtime, started_at_ms, ended_at_ms, outcome, items_total, items_sent, items_failed_before_send,
+        items_unknown, items_pending, batch_hash, approver_kind, overnight_policy_id, cost_cents, error_code, overnight, received_at)
+      values (${tenantId}, ${deviceId}, ${ulid(at)}, ${id}, ${personId}, 1, ${at}, ${wf}, 1, 'mac', ${at - 60_000}, ${at},
+        'success', 3, 3, 0, 0, 0, ${SHA}, 'person', null, 12, null, false, now())`;
+    out.push({ table: "run_outcomes", objectId: id });
+  }
+  for (const n of ages.reviews ?? []) {
+    const at = now - n * DAY_MS;
+    const id = ulid(at);
+    await m`insert into review_events (tenant_id, device_id, object_id, person_id, seq, created_at_ms, run_id, review_seconds,
+        edit_seconds, fix_seconds, items_edited, decision, surface, received_at)
+      values (${tenantId}, ${deviceId}, ${id}, ${personId}, 1, ${at}, ${ulid(at)}, 30, 0, 0, 0, 'approved', 'mac_review', now())`;
+    out.push({ table: "review_events", objectId: id });
+  }
+  for (const n of ages.baselines ?? []) {
+    const at = now - n * DAY_MS;
+    const id = ulid(at);
+    await m`insert into baseline_samples (tenant_id, device_id, object_id, person_id, seq, created_at_ms, workflow_id, version,
+        window_start, window_end, received_at)
+      values (${tenantId}, ${deviceId}, ${id}, ${personId}, 1, ${at}, ${wf}, 1, ${day(n + 7)}, ${day(n)}, now())`;
+    for (const idx of [0, 1]) {
+      await m`insert into baseline_sample_instances (tenant_id, device_id, object_id, idx, person_id, instance_ref, active_seconds, day)
+        values (${tenantId}, ${deviceId}, ${id}, ${idx}, ${personId}, ${"b".repeat(32)}, 300, ${day(n + idx)})`;
+    }
+    out.push({ table: "baseline_samples", objectId: id });
+  }
+  for (const n of ages.daily ?? []) {
+    const at = now - n * DAY_MS;
+    const id = ulid(at);
+    await m`insert into daily_aggregates (tenant_id, device_id, object_id, person_id, seq, created_at_ms, day, active_workflows, received_at)
+      values (${tenantId}, ${deviceId}, ${id}, ${personId}, 1, ${at}, ${day(n)}, 1, now())`;
+    await m`insert into daily_aggregate_workflows (tenant_id, device_id, object_id, idx, person_id, workflow_id, version, runs,
+        successes, saved_seconds_device)
+      values (${tenantId}, ${deviceId}, ${id}, 0, ${personId}, ${wf}, 1, 2, 2, 600)`;
+    out.push({ table: "daily_aggregates", objectId: id });
+  }
+  for (const n of ages.workingTime ?? []) {
+    const at = now - n * DAY_MS;
+    const id = ulid(at);
+    await m`insert into working_time_aggregates (tenant_id, device_id, object_id, person_id, seq, created_at_ms, day,
+        active_minutes, first_active_quarter, last_active_quarter, notice_version_id, received_at)
+      values (${tenantId}, ${deviceId}, ${id}, ${personId}, 1, ${at}, ${day(n)}, 420, 36, 70, ${crypto.randomUUID()}, now())`;
+    out.push({ table: "working_time_aggregates", objectId: id });
+  }
+  return out;
 }
