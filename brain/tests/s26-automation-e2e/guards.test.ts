@@ -81,6 +81,22 @@ describe("s26 live batch guards", () => {
   });
 });
 
+describe("s26 auto-run", () => {
+  test("LIVE: with auto-run turned on, a plan batch still waits for the person: nothing is saved on its own", async () => {
+    w = world();
+    const { id, dir } = await activeMetricsWorkflow(w);
+    writeFileSync(join(dir, "items.csv"), itemsCsv([["43", "352", "2410", "3"]]));
+    expect((await w.call(`/workflows/${id}/auto-run`, "POST", { enabled: true })).status).toBe(200);
+    const r = await w.call(`/workflows/${id}/run`, "POST", {});
+    expect(r.status).toBe(201);
+    await w.brain.idle();
+    expect(w.driver.pressed).toEqual([]);
+    const pending = [r.body.batch, r.body.held].filter((b: any) => b !== null && b !== undefined);
+    expect(pending.length).toBeGreaterThan(0);
+    for (const b of pending) expect(b.state).toBe("pending");
+  });
+});
+
 describe("s26 execute guards", () => {
   test("EXECUTE: a value changed on screen is never saved: the commit is denied, Save is never pressed, the row is offered again", async () => {
     w = world();
