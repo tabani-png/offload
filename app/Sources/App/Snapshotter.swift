@@ -22,6 +22,8 @@ enum Snapshotter {
         let suffix = scheme == .dark ? "dark" : "light"
         for (name, view) in surfaces() {
           let file = dir.appendingPathComponent("\(name)-\(suffix).png")
+          // S2-13: a name with a folder ("company/notice") writes into that folder.
+          try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
           try render(view, scheme: scheme, to: file)
           written.append(file.lastPathComponent)
         }
@@ -87,7 +89,70 @@ enum Snapshotter {
       ("card-undo", card(undo)),
       ("card-empty", card(empty)),
       ("scene", AnyView(Scene(state: base, now: now, rail: rail))),
-    ] + s08Surfaces() + s09aSurfaces() + s10eSurfaces() + s14Surfaces() + s17Surfaces()
+    ] + s08Surfaces() + s09aSurfaces() + s10eSurfaces() + s14Surfaces() + s17Surfaces() + s213Surfaces()
+  }
+
+  // MARK: S2-13 company
+
+  /// S2-13: the Company window (not connected, signing in, connected), the notice sheet, the share sheet (plain
+  /// words, View source open, queued) and the sync state on the rail and the dashboard. A fictional company on the
+  /// in-memory API; no brain, no control plane, nothing sent. Written to `company/` under the snapshot folder.
+  static func s213Surfaces() -> [(String, AnyView)] {
+    let api = MockCompanyAPI()
+    let lastSync = now.addingTimeInterval(-12 * 60)
+    func model(_ status: CompanyStatus, connect: CompanyModel.Connect = .idle, sheet: CompanyModel.Sheet? = nil,
+               source: Bool = false, queued: Bool = false) -> CompanyModel {
+      let m = CompanyModel(service: CompanyService(api: api))
+      m.preview(status: status, connect: connect, sheet: sheet, showSource: source, queued: queued,
+                workflows: status.isConnected ? CompanySamples.workflows : [])
+      return m
+    }
+    func scene(_ m: CompanyModel, height: CGFloat = 640) -> AnyView {
+      AnyView(Backdrop(padding: 32) {
+        WindowChrome(title: CompanyCopy.title, subtitle: CompanyCopy.subtitle,
+                     toolbarItems: [ToolbarItemLook(symbol: "arrow.clockwise")], width: CompanyView.width,
+                     sheet: m.sheet == nil ? nil : AnyView(CompanySheetHost(model: m))) {
+          CompanyView(model: m, now: now).frame(height: height)
+        }
+      })
+    }
+    let connected = CompanySamples.status(.connected, lastSync: lastSync, queued: 2)
+    let waiting = CompanySamples.status(.connected, acknowledged: false)
+    let share = CompanySamples.share
+    var queuedShare = share
+    queuedShare.confirmed = true
+    let states: [(CompanyStatus, CompanySyncState)] = [
+      CompanySamples.status(.notConnected), CompanySamples.status(.connecting), waiting, connected,
+      CompanySamples.status(.paused, lastSync: lastSync), CompanySamples.status(.revoked),
+    ].map { ($0, CompanySyncState($0)) }
+    let status = AnyView(Backdrop(padding: 28) {
+      HStack(alignment: .top, spacing: 36) {
+        VStack(alignment: .trailing, spacing: Tokens.Space.s12) {
+          ForEach(Array(states.enumerated()), id: \.offset) { _, e in
+            HStack(spacing: Tokens.Space.s8) {
+              CompanyRailLine(state: e.1, now: now)
+              CompanyRailMark(state: e.1)
+            }
+          }
+        }
+        VStack(alignment: .leading, spacing: Tokens.Space.s8) {
+          ForEach(Array(states.enumerated()), id: \.offset) { _, e in
+            CompanySyncRow(status: e.0, state: e.1, now: now)
+          }
+        }
+        .frame(width: 560)
+      }
+    })
+    return [
+      ("company/connect", scene(model(CompanySamples.status(.notConnected)), height: 300)),
+      ("company/connect-waiting", scene(model(CompanySamples.status(.notConnected), connect: .waiting), height: 300)),
+      ("company/connect-connected", scene(model(connected))),
+      ("company/notice", scene(model(waiting, sheet: .notice), height: 860)),
+      ("company/share", scene(model(connected, sheet: .share(share)), height: 700)),
+      ("company/share-source", scene(model(connected, sheet: .share(share), source: true), height: 900)),
+      ("company/share-queued", scene(model(connected, sheet: .share(queuedShare), queued: true), height: 760)),
+      ("company/status", status),
+    ]
   }
 
   // MARK: s14 fixtures

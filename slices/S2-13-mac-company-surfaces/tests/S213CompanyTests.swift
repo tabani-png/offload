@@ -95,7 +95,9 @@ final class S213Transport: BrainTransport, @unchecked Sendable {
   private var queues: [String: [(Int, Data)]] = [:]
   private(set) var requests: [URLRequest] = []
 
-  func on(_ method: String, _ path: String, _ status: Int = 200, _ body: Data) {
+  func on(_ method: String, _ path: String, _ body: Data) { on(method, path, 200, body) }
+
+  func on(_ method: String, _ path: String, _ status: Int, _ body: Data) {
     lock.withLock { queues["\(method) \(path)", default: []].append((status, body)) }
   }
 
