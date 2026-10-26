@@ -31,3 +31,24 @@ expired was checked against facts.md only while reporting "re-checked"; and that
   sentence with such a word is dropped for the baseline.
 - A hashed name set can be tested against a guessed name by someone holding the file and its salt; the file is 0600
   in the user's own home, like the sealed tone pack keys.
+
+## Fix round 2 (independent re-review of PR #11)
+6. **Known contacts in any case (amends §1, §2).** The recipients' names and organisations (from addresses and
+   greetings, not from capitalisation) are masked and counted as leaks whatever their case ("we help alice at
+   northzone"), unless the word is also a common or generic word ("will", "hope"), where only the capitalised form is
+   taken for the name. Role address local parts (`sales@`, `support@`, ...) are not people. The identity digest keeps
+   these contacts as their own hashed set (`contacts`); a digest without it treats every hashed name as a contact.
+7. **Auto-run pin (amends 0011 "auto-run").** Changed files are the union of pinned, current and drafted-with names:
+   a pinned `playbook.json` that is removed, or one a batch was drafted with that the pin never saw, holds the batch.
+8. **Shape.** Links are counted once, as the `[link]` placeholders of the masked core.
+9. **Labeller free text.** A model's `coreClaim` / `positioning` is kept only when, masked, it is a passage of the
+   masked core the model was shown; otherwise the rule read stands. No model wording of its own reaches the playbook
+   through these fields.
+
+### Follow-ups (not fixed in this round)
+- `playbook-identity.json` hashes are salted but the salt sits beside them, so a holder of the file can test a guessed
+  or dictionary name. Proposed: delete the digest with the playbook and when the tone pack is deleted, and expire it
+  with the tone pack's retention (rebuild re-creates it); or key the hashes with a secret from the keychain instead of
+  a stored salt.
+- `buildWorkflowPlaybook` takes no per-workflow lock: two concurrent builds (up to 61 model calls each) can race on
+  `playbook.json` and the digest. Proposed: a per-workflow build lock (409 while one runs).
