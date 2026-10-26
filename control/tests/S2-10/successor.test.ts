@@ -24,7 +24,7 @@ describe("SUCCESSOR", () => {
     for (const p of [w.extra.rep3, w.t.people.member2.id, w.t.people.lead.id]) {
       const r = await admin.post(`/v1/handovers/${h1}/assign`, person(p));
       expect(r.status).toBe(409);
-      expect(r.json.code).toBe("conflict");
+      expect(r.json.error.code).toBe("conflict");
     }
     expect((await handoversOf(w, member)).find((h) => h.id === h1)!.state).toBe("open");
   });

@@ -101,12 +101,12 @@ describe("FREEZE", () => {
   });
 
   test("FREEZE: a WorkersPort failure after commit leaves the pause pending; the sweep retries it", async () => {
-    w.workers.fail = true;
+    w.workers.failAfterCommit = true;
     const r = await offboard(w, w.t.people.member2.id);
     expect(r.status).toBe(200);
     const [o] = await w.h.db.migrator`select pause_pending from offboardings where person_id = ${w.t.people.member2.id}`;
     expect(o!.pause_pending).toBe(true);
-    w.workers.fail = false;
+    w.workers.failAfterCommit = false;
     await w.continuity.sweep(w.t.id);
     const [p] = await w.h.db.migrator`select pause_pending, paused_at from offboardings where person_id = ${w.t.people.member2.id}`;
     expect(p!.pause_pending).toBe(false);

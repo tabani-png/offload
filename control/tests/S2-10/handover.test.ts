@@ -104,7 +104,7 @@ describe("HANDOVER", () => {
     const unaccepted = await handoverFor(w, member, w.wf.sdr2);
     r = await admin.post(`/v1/handovers/${unaccepted}/close`);
     expect(r.status).toBe(409);
-    expect(r.json.code).toBe("conflict");
+    expect(r.json.error.code).toBe("conflict");
   });
 
   test("HANDOVER: an accepted hand-over closes; a closed one cannot close or be reassigned", async () => {

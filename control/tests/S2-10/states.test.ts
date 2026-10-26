@@ -59,7 +59,7 @@ describe("STATES", () => {
   test("STATES: offboarding a frozen person again is 409 conflict", async () => {
     const r = await offboard(w, w.t.people.member.id);
     expect(r.status).toBe(409);
-    expect(r.json.code).toBe("conflict");
+    expect(r.json.error.code).toBe("conflict");
   });
 
   test("STATES: a departed person cannot be offboarded or frozen again", async () => {

@@ -19,13 +19,15 @@ import { createSession, type PersonKey, type SeededTenant } from "../helpers/see
 /** Records every pauseFor call and whether the person's freeze was already committed (seen from another connection). */
 export class PauseSpy implements WorkersPort {
   calls: Array<{ personId: string; committedState: string | null }> = [];
-  fail = false;
+  /** Fail the calls made once the freeze is committed (the workers service is down at follow-up time). The S2-07
+   * broker also calls pauseFor inside the freeze transaction (stopRunsFor); that call is left alone. */
+  failAfterCommit = false;
   constructor(private readonly seen: () => Harness | null) {}
   async pauseFor(_tx: Tx, personId: string): Promise<number> {
     const h = this.seen();
     const [p] = h ? await h.db.migrator`select state from people where id = ${personId}` : [];
     this.calls.push({ personId, committedState: (p?.state as string | undefined) ?? null });
-    if (this.fail) throw new Error("workers unavailable");
+    if (this.failAfterCommit && p?.state === "frozen") throw new Error("workers unavailable");
     return 1;
   }
   /** Calls made once the freeze was committed. */

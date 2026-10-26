@@ -57,11 +57,19 @@ describe("AUDIT", () => {
     const rows = await w.h.db.migrator`select kind, actor_type, actor_id from handover_events where handover_id = ${h1} order by id`;
     expect(rows.map((r: { kind: string }) => r.kind)).toEqual(["opened", "assigned", "accepted", "resumed", "closed"]);
     expect(rows[2]).toMatchObject({ actor_type: "person", actor_id: w.extra.rep2 });
-    await expect(w.h.db.migrator`update handover_events set kind = 'opened' where handover_id = ${h1}`).rejects.toThrow(/append-only/);
-    await expect(w.h.db.migrator`delete from handover_events where handover_id = ${h1}`).rejects.toThrow(/append-only/);
+    const refused = async (q: () => Promise<unknown>) => {
+      try {
+        await q();
+        return "allowed";
+      } catch (e) {
+        return String((e as Error).message);
+      }
+    };
+    expect(await refused(() => w.h.db.migrator.unsafe("update handover_events set kind = 'opened'"))).toMatch(/append-only/);
+    expect(await refused(() => w.h.db.migrator.unsafe("delete from handover_events"))).toMatch(/append-only/);
   });
 
-  test("AUDIT: the offboarding request itself is audited with the admin's note", async () => {
+  test("AUDIT: the offboarding request itself is audited with what was decided (the note stays on the offboarding row)", async () => {
     const [ev] = await audits(w, "person.offboard");
     expect(ev).toMatchObject({ actor_id: w.t.people.admin.id, subject_person_id: member, detail: { reason: "admin", state: "frozen" } });
   });

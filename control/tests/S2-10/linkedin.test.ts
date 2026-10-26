@@ -49,7 +49,7 @@ describe("LINKEDIN", () => {
     const body = { id: ulid(), kind: "workflow_proposal", createdAt: w.h.clock.now(), ...def, definitionHash: definitionHash(def) };
     const r = await admin.post(`/v1/workflows/${w.wf.sdr1}/versions`, body);
     expect(r.status).toBe(409);
-    expect(r.json.code).toBe("forbidden_binding");
+    expect(r.json.error.code).toBe("forbidden_binding");
   });
 
   test("LINKEDIN: nor used by the broker for a commit", async () => {
@@ -68,7 +68,7 @@ describe("LINKEDIN", () => {
       bindings: [{ stepId: "send_intro", connectionId: c!.id, disable: false }],
     });
     expect(r.status).toBe(409);
-    expect(r.json.code).toBe("forbidden_binding");
+    expect(r.json.error.code).toBe("forbidden_binding");
     const p = await w.broker.proposeBatch(w.t.id, run(w, w.wf.sdr2, { type: "person", id: w.extra.rep2 }, w.extra.rep2, c!.id as string), [email(to())]);
     expect(p).toMatchObject({ ok: false });
   });
