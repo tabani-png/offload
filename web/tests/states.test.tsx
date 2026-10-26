@@ -9,6 +9,8 @@ import { findRoute } from "../src/api/mock/server.ts";
 import { adoption, headcount, hoursSavedReport, peopleWithData } from "../src/api/mock/metrics.ts";
 import { isSuppressed, type Batch, type HoursSavedReport, type WorkingTimeReport } from "../src/api/types.ts";
 import { main, renderAt, settle, until } from "./helpers/render.tsx";
+import { TREE_FLOOR_WORDS } from "../src/design/components.tsx";
+import { EVIDENCE_FLOOR_WORDS } from "../src/screens/Evidence.tsx";
 
 afterEach(cleanup);
 
@@ -20,11 +22,12 @@ const rowOf = (label: string) => screen.getAllByRole("row").find((r) => r.queryS
 describe("suppressed cells", () => {
   test("STATES: overview shows the floor message for small departments and no number", async () => {
     await renderAt("/");
+    // A hidden department may be small or the complementary cell; the words are true of both (ADR 0113 floor §1).
     for (const name of ["Legal", "Facilities", "People"]) {
       const row = rowOf(name);
-      expect(row.textContent).toContain("Fewer than 5 people");
+      expect(row.textContent).toContain(TREE_FLOOR_WORDS);
       expect(row.textContent).not.toMatch(NUMBER_HOURS);
-      expect(row.textContent!.replace("Fewer than 5 people", "")).not.toMatch(/\d/);
+      expect(row.textContent!.replace(TREE_FLOOR_WORDS, "")).not.toMatch(/\d/);
     }
     expect(rowOf("Sales").textContent).toMatch(NUMBER_HOURS);
   });
@@ -32,7 +35,7 @@ describe("suppressed cells", () => {
   test("STATES: a department under the floor shows the floor message instead of a hero number", async () => {
     await renderAt(`/departments/${fx.DEPT.legal}`);
     const t = main().textContent!;
-    expect(t).toContain("Fewer than 5 people");
+    expect(t).toContain(TREE_FLOOR_WORDS);
     expect(t).not.toMatch(NUMBER_HOURS);
     expect(main().querySelector("[data-suppressed=group_floor]")).toBeTruthy();
   });
@@ -40,12 +43,16 @@ describe("suppressed cells", () => {
   test("STATES: complementary suppression hides a second job role so the small one cannot be derived", async () => {
     await renderAt(`/departments/${fx.DEPT.finance}`);
     // Controller has fewer than 5 people with data; AP clerk (6) is hidden only so Controller cannot be derived.
-    await until(() => rowOf("AP clerk, Finance").textContent!.includes("Hidden to protect a small group"), "complementary words");
+    // Neither row says which: both carry the same words and no number, and AP clerk's own read is hidden too.
+    await until(() => rowOf("AP clerk, Finance").textContent!.includes(TREE_FLOOR_WORDS), "floor words");
     const ap = rowOf("AP clerk, Finance");
     const controller = rowOf("Controller, Finance");
-    expect(ap.textContent).not.toContain("Fewer than 5 people");
-    expect(controller.textContent).toContain("Fewer than 5 people");
-    for (const r of [ap, controller]) expect(r.textContent).not.toMatch(NUMBER_HOURS);
+    for (const r of [ap, controller]) {
+      expect(r.textContent).toContain(TREE_FLOOR_WORDS);
+      expect(r.textContent).not.toContain("Fewer than 5 people");
+      expect(r.textContent).not.toMatch(NUMBER_HOURS);
+    }
+    expect(isSuppressed(hoursSavedReport({ type: "job_role", id: fx.JR.ap }, "2026-10-01", "2026-10-26").total)).toBe(true);
   });
 
   test("STATES: the floor counts people with data in the period, not headcount", () => {
@@ -67,7 +74,9 @@ describe("suppressed cells", () => {
 describe("evidence and the group floor", () => {
   test("STATES: evidence for a workflow behind fewer than 5 people is refused and shown in plain words", async () => {
     await renderAt(`/workflows/${fx.WF[307]}/evidence`);
-    expect(screen.getByRole("alert").textContent).toBe(ERROR_WORDS.group_floor);
+    await until(() => !!main().querySelector("[data-suppressed=group_floor]"), "floor words");
+    expect(main().querySelector("[data-suppressed=group_floor]")!.textContent).toBe(EVIDENCE_FLOOR_WORDS);
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(main().textContent).not.toContain("samples");
     cleanup();
     await renderAt(`/departments/${fx.DEPT.legal}`);
@@ -160,7 +169,7 @@ describe("sensitive views are gated", () => {
 
   test("STATES: working time for a group under the floor shows the floor message", async () => {
     await renderAt(`/departments/${fx.DEPT.facilities}`, { features: ["working_time"] });
-    expect(main().textContent).toContain("Fewer than 5 people");
+    expect(main().textContent).toContain(TREE_FLOOR_WORDS);
     expect(main().textContent).not.toContain("median active time a day");
   });
 

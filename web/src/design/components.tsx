@@ -213,14 +213,20 @@ export const SUPPRESSED_WORDS: Record<Suppressed["reason"], string> = {
   jurisdiction: "Off in this person's region",
 };
 
-/** A cell of 5 or more hidden only so a smaller sibling cannot be worked out from the total (complementary suppression). */
-export const COMPLEMENTARY_WORDS = "Hidden to protect a small group";
+/**
+ * A group_floor cell that may hide a group of 5 or more. The API hides a department or job role both when fewer than 5
+ * people have data and when it is the complementary cell that keeps a smaller group from being worked out, and reads
+ * of the hidden group itself are suppressed the same way; an adoption cell is hidden whole when any one figure rests on
+ * fewer than 5 people (ADR 0113 metrics floor §1, §5). The reader cannot tell which, so the words are true of every
+ * case and never claim a head count.
+ */
+export const TREE_FLOOR_WORDS = "Hidden to protect a group under 5 people";
 
-/** In place of a number that may not be shown. Never renders the number. */
-export function SuppressedCell(props: { reason: Suppressed["reason"]; complementary?: boolean }) {
+/** In place of a number that may not be shown. Never renders the number. `tree`: see TREE_FLOOR_WORDS. */
+export function SuppressedCell(props: { reason: Suppressed["reason"]; tree?: boolean }) {
   return (
-    <span className="suppressed t-callout ink3" data-suppressed={props.complementary ? "complementary" : props.reason}>
-      {props.complementary ? COMPLEMENTARY_WORDS : SUPPRESSED_WORDS[props.reason]}
+    <span className="suppressed t-callout ink3" data-suppressed={props.reason}>
+      {props.tree && props.reason === "group_floor" ? TREE_FLOOR_WORDS : SUPPRESSED_WORDS[props.reason]}
     </span>
   );
 }
@@ -382,9 +388,10 @@ export function Sheet(props: { open: boolean; title: string; onClose: () => void
 }
 
 /** Our own SVG bars (no chart library). Values in seconds; labels underneath. */
-export function Bars(props: { data: { label: string; value: number; partial?: boolean }[]; label: string; height?: number }) {
+/** A bar per entry. `value: null` is a hidden figure (group floor): an outline with a dash, never a bar of 0. */
+export function Bars(props: { data: { label: string; value: number | null; partial?: boolean }[]; label: string; height?: number }) {
   const h = props.height ?? 120;
-  const max = Math.max(1, ...props.data.map((d) => d.value));
+  const max = Math.max(1, ...props.data.map((d) => d.value ?? 0));
   const w = 36;
   const gap = 20;
   const width = props.data.length * (w + gap) - gap;
@@ -392,8 +399,17 @@ export function Bars(props: { data: { label: string; value: number; partial?: bo
     <figure className="bars">
       <svg width="100%" height={h + 36} viewBox={`0 0 ${width} ${h + 36}`} role="img" aria-label={props.label} preserveAspectRatio="xMinYMid meet">
         {props.data.map((d, i) => {
-          const bh = Math.max(2, (d.value / max) * h);
           const x = i * (w + gap);
+          if (d.value === null) {
+            return (
+              <g key={d.label} data-suppressed="group_floor">
+                <rect x={x + 0.5} y={h - 24} width={w - 1} height={24} rx={3} className="bar-hidden" />
+                <text x={x + w / 2} y={h - 30} textAnchor="middle" className="bar-value">—</text>
+                <text x={x + w / 2} y={h + 18} textAnchor="middle" className="bar-label">{d.label}</text>
+              </g>
+            );
+          }
+          const bh = Math.max(2, (d.value / max) * h);
           return (
             <g key={d.label}>
               <rect x={x} y={h - bh} width={w} height={bh} rx={3} className={d.partial ? "bar bar-partial" : "bar"} />
