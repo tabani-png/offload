@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { Analysis, Insight } from "../analyze.ts";
 import type { TimeBreakdownResponse, TimeFinding, TimeFixKind, TimeMetric, TimeRow } from "../api/types.ts";
 import type { DayLabel, Span } from "../types.ts";
-import { formatHours } from "./format.ts";
+import { formatHours, hoursTenths } from "./format.ts";
 import { kindOfSpan, WORK_KIND_NAMES, WORK_KINDS } from "./kinds.ts";
 
 /** The fix kinds s22 ranks. Anything else from a fix source is shown as no fix kind, never guessed. */
@@ -70,6 +70,22 @@ function taskNames(a: Analysis): Map<string, string> {
   }));
 }
 
+/**
+ * Honest savings (s23, ADR 0005): a fix never frees all of a task. The person keeps the s04 review model's LOW case
+ * share of the time (each item still reviewed, 1.5x slower, and 10% of items done by hand: brain/src/insights/saving.ts,
+ * the same low case s22 uses for image pipelines), so freed <= observed x lowPct, and the fix source's estimate is
+ * capped to that. Shown digits add up by hand: left = observed - freed in tenths, and freed always shows below observed.
+ */
+export function honestFreed(observed: number, estimate: number, lowPct: number): { hours: number; capped: boolean; leftDisplay: string } {
+  const ceiling = Math.max(0, observed * Math.min(1, Math.max(0, lowPct)));
+  const want = Math.max(0, estimate);
+  let hours = Math.min(ceiling, want);
+  const obsT = hoursTenths(observed);
+  if (hoursTenths(hours) >= obsT) hours = Math.max(0, obsT - 1) / 10;
+  const leftT = Math.max(0, obsT - hoursTenths(hours));
+  return { hours, capped: want > hours + 1e-9, leftDisplay: `${(leftT / 10).toFixed(1)} h` };
+}
+
 let s22Loaded: Promise<((a: Analysis) => FixOf) | null> | undefined;
 
 /** s22's rules (no model): the top option of the solution set, as GET /insights/:id/solutions ranks it. */
@@ -119,12 +135,18 @@ export async function timeBreakdown(a: Analysis, opts: TimeOptions = {}): Promis
     const answer = fixOf === null ? null : await fixOf(insight);
     const fixKind = answer === null ? null : fixKindOf(answer.kind);
     const estimate = answer === null ? insight.saving.weeklyHoursSaved : answer.weeklyHoursSaved;
-    const freed = Math.min(observed, Math.max(0, Number.isFinite(estimate) ? estimate : 0));
-    const hoursFreed = weeklyMetric(freed, taskMinutes.eventIds);
-    const source = answer === null ? "estimate" : "best fix";
-    const est = formatHours(Math.max(0, estimate));
-    const seen = windowDays === 7 ? `${taskMinutes.display} in 7 days` : `${taskMinutes.display} in ${windowDays} ${windowDays === 1 ? "day" : "days"} × 7 / ${windowDays}`;
-    const arithmetic = `${seen} = ${observedHoursPerWeek.display} a week; ${source} ${est} a week; min(${observedHoursPerWeek.display}, ${est}) = ${hoursFreed.display}`;
+    const freed = honestFreed(observed, Number.isFinite(estimate) ? estimate : 0, insight.saving.range.low.pct);
+    const hoursFreed = weeklyMetric(freed.hours, taskMinutes.eventIds);
+    const now = windowDays === 7
+      ? `${observedHoursPerWeek.display} a week now`
+      : windowDays === 1
+        ? `${taskMinutes.display} on this day, ${observedHoursPerWeek.display} a week if every day were like this`
+        : `${taskMinutes.display} in ${windowDays} days, ${observedHoursPerWeek.display} a week at that pace`;
+    const source = answer === null ? "the estimate" : "the best fix";
+    const capped = freed.capped ? ` · ${source} says ${formatHours(Math.max(0, estimate))}, capped to leave the checking` : "";
+    const arithmetic = freed.hours > 0
+      ? `${now} · about ${freed.leftDisplay} left for checking${capped} · frees ${hoursFreed.display}`
+      : `${now} · no change worth making yet · frees ${hoursFreed.display}`;
     findings.push({
       id: `tf_${insight.id.replace(/^ins_/, "")}`,
       taskId: insight.taskId,
