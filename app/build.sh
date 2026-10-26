@@ -168,6 +168,26 @@ refuse_adhoc_notary() {
   fi
 }
 
+# A DMG goes to testers: a dev shell's settings must not reach it. OFFLOAD_BUNDLE_BRAIN other than 1 is refused (a
+# brainless app needs the repo). Every other OFFLOAD_* except the build and signing inputs is cleared: the app reads
+# the runtime ones (OFFLOAD_BRAIN_SOURCE, OFFLOAD_REPO, OFFLOAD_BUN, ...) only when it runs, never at build time, but
+# the DMG build should not depend on that.
+dmg_env_guard() {
+  if [ -n "${OFFLOAD_BUNDLE_BRAIN:-}" ] && [ "$OFFLOAD_BUNDLE_BRAIN" != "1" ]; then
+    echo "build.sh: refused: OFFLOAD_BUNDLE_BRAIN=$OFFLOAD_BUNDLE_BRAIN; a DMG must carry the brain (unset it)" >&2
+    exit 1
+  fi
+  local v cleared=""
+  for v in $(compgen -e | grep '^OFFLOAD_' || true); do
+    case "$v" in OFFLOAD_BUILD_DIR|OFFLOAD_SIGN_IDENTITY|OFFLOAD_NOTARY_PROFILE|OFFLOAD_BUN_SOURCE|OFFLOAD_BUNDLE_BRAIN) ;;
+      *) unset "$v"; cleared="$cleared $v" ;;
+    esac
+  done
+  [ -n "$cleared" ] && echo "dmg: cleared dev-only env:$cleared"
+  [ -n "${OFFLOAD_BUN_SOURCE:-}" ] && echo "dmg: bundling bun from OFFLOAD_BUN_SOURCE=$OFFLOAD_BUN_SOURCE (must be bun $PINNED_BUN)"
+  return 0
+}
+
 make_dmg() {
   local version dmg stage
   version="$(dmg_version)"
@@ -243,6 +263,7 @@ case "${1:-}" in
     ;;
   dmg)
     refuse_adhoc_notary   # before any build: ad hoc + notary can never finish
+    dmg_env_guard
     # The observer goes in the bundle (build_app copies engine/.build/offload-observer); build it fresh.
     OFFLOAD_BUILD_DIR="$ROOT/engine/.build" "$ROOT/engine/build.sh" >"$OUT/engine-build.log" 2>&1 \
       || { tail -20 "$OUT/engine-build.log" >&2; echo "build.sh: engine/build.sh failed (log: $OUT/engine-build.log)" >&2; exit 1; }

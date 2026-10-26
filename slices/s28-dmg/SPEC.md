@@ -53,5 +53,13 @@ explains "Open Anyway". When a Developer ID exists the same command signs, notar
 - RELEASE: `app/release.sh --dry-run --dmg DMG` either refuses (dirty tree or HEAD not on origin, when that is the
   state) or prints the tag, the SHA-256, the upload list and the `gh release create` line, and its notes carry the
   commit SHA, the checksum, "unsigned", "Open Anyway" and the private-repo line. It never calls `gh release create`.
+- ENV (PR #34 round 1): `app/build.sh dmg` refuses `OFFLOAD_BUNDLE_BRAIN` other than 1 before any build, and clears
+  every other `OFFLOAD_*` except `OFFLOAD_BUILD_DIR`, `OFFLOAD_SIGN_IDENTITY`, `OFFLOAD_NOTARY_PROFILE` and
+  `OFFLOAD_BUN_SOURCE` (pinned-version checked), printing `dmg: cleared dev-only env: ...`. `app/release.sh`
+  refuses `OFFLOAD_BUNDLE_BRAIN=0` and `OFFLOAD_SIGN_IDENTITY=-`, and mounts the DMG read-only to check that the app
+  carries `Contents/Helpers/bun`, `Contents/Resources/offload/brain/src/cli.ts` and the observer before any upload.
+  Audit: the runtime vars (`OFFLOAD_BRAIN_SOURCE`, `OFFLOAD_REPO`, `OFFLOAD_BUN`, `OFFLOAD_OBSERVER_BIN`,
+  `OFFLOAD_HOME`, ...) are read by the app when it runs, never baked in by the build; a Finder launch does not see a
+  shell's env. `release.sh` works from any clean worktree at origin/main.
 - CLEAN: the DMG, the mount and temp files are gone at the end (TMPDIR /tmp/s28-tmp).
 - s25 verify and `app/build.sh test` still pass (run separately).

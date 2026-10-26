@@ -9,7 +9,9 @@
 # Tag v<CFBundleShortVersionString>-beta.<n>; n is one more than the highest existing v<version>-beta.* tag
 # (OFFLOAD_BETA_N overrides). Uploads the DMG and <dmg>.sha256 (shasum -a 256). The notes are app/INSTALL-TESTERS.md,
 # the commit SHA and the checksum. The repo is private: only collaborators can download the assets.
-# Refuses: tracked changes in the tree, a HEAD on no origin branch, and (real run) a HEAD not on origin/main.
+# Refuses: OFFLOAD_BUNDLE_BRAIN other than 1, OFFLOAD_SIGN_IDENTITY=-, a DMG whose app lacks the bundled brain or the
+# observer, tracked changes in the tree, a HEAD on no origin branch, and (real run) a HEAD not on origin/main.
+# Works from any clean worktree of the repo (paths come from this script's location).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
@@ -26,6 +28,29 @@ while [ $# -gt 0 ]; do
 done
 refuse() { echo "release.sh: refused: $*" >&2; exit 1; }
 [ -n "$dmg" ] && [ $dry -eq 0 ] && refuse "--dmg is for dry runs only; a real release builds its own DMG from this commit"
+# Dev-shell settings that would make a broken release (app/build.sh dmg also clears the runtime-only OFFLOAD_* vars).
+if [ -n "${OFFLOAD_BUNDLE_BRAIN:-}" ] && [ "$OFFLOAD_BUNDLE_BRAIN" != "1" ]; then
+  refuse "OFFLOAD_BUNDLE_BRAIN=$OFFLOAD_BUNDLE_BRAIN; a release must carry the brain (unset it)"
+fi
+[ "${OFFLOAD_SIGN_IDENTITY:-}" = "-" ] && refuse "OFFLOAD_SIGN_IDENTITY=- (ad hoc hardened runtime) is for tests; unset it, or set a Developer ID"
+
+# The app on the image must carry the brain and the observer. Mounted read-only at a private mount point.
+check_dmg() {
+  local img="$1" mnt ok=1 missing=""
+  mnt="$(mktemp -d "${TMPDIR:-/tmp}/offload-release-mnt.XXXXXX")"
+  if ! hdiutil attach -nobrowse -readonly -noverify -mountpoint "$mnt" "$img" >/dev/null 2>&1; then
+    rmdir "$mnt" 2>/dev/null; refuse "could not mount $img"
+  fi
+  local a="$mnt/Offload.app/Contents"
+  [ -x "$a/Helpers/bun" ] || missing="$missing Contents/Helpers/bun"
+  [ -f "$a/Resources/offload/brain/src/cli.ts" ] || missing="$missing Contents/Resources/offload/brain/src/cli.ts"
+  [ -x "$a/MacOS/offload-observer" ] || missing="$missing Contents/MacOS/offload-observer"
+  hdiutil detach "$mnt" -quiet 2>/dev/null || hdiutil detach "$mnt" -force -quiet 2>/dev/null || true
+  rmdir "$mnt" 2>/dev/null || true
+  [ -z "$missing" ] || refuse "the DMG's app has no bundled brain or observer (missing:$missing)"
+  echo "dmg check: bundled brain and observer present"
+}
+[ -n "$dmg" ] && { [ -f "$dmg" ] || refuse "no DMG at $dmg"; check_dmg "$dmg"; }
 
 git -C "$ROOT" fetch -q origin || refuse "git fetch origin failed"
 [ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] || refuse "the tree has uncommitted changes"
@@ -40,6 +65,8 @@ version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$HERE/
 if [ -z "$dmg" ]; then
   "$HERE/build.sh" dmg
   dmg="${OFFLOAD_BUILD_DIR:-$HERE/.build}/Offload-$version.dmg"
+  [ -f "$dmg" ] || refuse "no DMG at $dmg"
+  check_dmg "$dmg"
 fi
 [ -f "$dmg" ] || refuse "no DMG at $dmg"
 name="$(basename "$dmg")"
