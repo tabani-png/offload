@@ -60,10 +60,14 @@ secret.
 10. **Computer use (BRAIN, review round 3)** - `anthropicMessages` resolves the key with the shared
    `resolveAnthropicKey` (serve env + Keychain seam) and the captioner's host guard; with no key it refuses with a
    sentence pointing to Settings instead of building an unauthenticated client. server.ts passes the serve env.
-11. **Check (CHECK)** - `Offload --brain-check` prints `key: set` or `key: missing`, never the key.
+11. **Refit (REFIT, review round 4)** - the first-run window is fixed-size and fits its content. `OnboardingLayout`
+   (Core) is a signature of everything that adds, removes or rewraps rows (key screen, step, key feedback, Save
+   without checking, the checking line, the demo-week note, the permissions note, suggestion chips); the window
+   refits after layout whenever it changes. Dashboard Settings scrolls, so it needs no refit.
+12. **Check (CHECK)** - `Offload --brain-check` prints `key: set` or `key: missing`, never the key.
 
 ## Acceptance (tags = Swift test name prefixes in tests/S29Tests.swift, brain test name prefixes in tests/brain)
-- FORMAT, VALIDATE, FLOW, SETTINGS, LAUNCH, ONBOARD, CHECK, CANCEL, REPLACE, OFFLINE: Swift tests with a fake Keychain and a fake validator.
+- FORMAT, VALIDATE, FLOW, SETTINGS, LAUNCH, ONBOARD, CHECK, CANCEL, REPLACE, OFFLINE, REFIT: Swift tests with a fake Keychain and a fake validator.
 - BRAIN: with only `OFFLOAD_ANTHROPIC_KEYCHAIN` set, the brain reads the key through the Keychain runner (argv holds
   service and account, never the key), the API backend sends it in a request header to api.anthropic.com only, the
   serve path picks the API backend from the reference alone, and process.env never gains it. These pass on main

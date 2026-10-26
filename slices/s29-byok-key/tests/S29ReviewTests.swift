@@ -238,3 +238,55 @@ struct S29ReviewOfflineTests {
     #expect(c == [.claudeKey, .claudeVision, .showLogs])
   }
 }
+
+// S29 review round 4 (PR #36, Codex P2): the first-run window is not resizable and fits its content. Every state that
+// adds, removes or rewraps a row must change its layout signature, so the window refits (key errors, "Save without
+// checking", the checking line, the demo-week note, the permissions note, suggestion chips arriving).
+struct S29ReviewLayoutTests {
+  private let key = "sk-ant-api03-" + String(repeating: "l", count: 80) + "LAY1"
+
+  @Test("REFIT: the key flow's layout changes when feedback or Save without checking appears or goes")
+  func keyLayout() {
+    var f = ClaudeKeyFlow(status: .missing)
+    f.edit(key)
+    let entering = f.layout
+    var bad = f
+    bad.edit("nope")
+    _ = bad.begin()
+    #expect(bad.layout != entering)                    // the format error line appears
+    var g = f
+    let k = g.begin()!
+    #expect(g.layout != entering)                      // "Checking the key…"
+    let checking = g.layout
+    var offline = g
+    offline.apply(.unreachable("Offline."), key: k, store: MemoryKeyStoreForLayout())
+    #expect(offline.layout != checking && offline.layout.saveAnyway)
+    var rejected = g
+    rejected.apply(.rejected("No."), key: k, store: MemoryKeyStoreForLayout())
+    #expect(rejected.layout != checking && !rejected.layout.saveAnyway)
+  }
+
+  @Test("REFIT: the window's signature follows the key screen, the step, the note, the permissions note and the chips")
+  func windowSignature() {
+    var flow = OnboardingFlow()
+    var kf = ClaudeKeyFlow(status: .missing)
+    let base = OnboardingLayout.of(flow: flow, showingKeyStep: true, keyFlow: kf, note: nil)
+    kf.edit("bad")
+    _ = kf.begin()
+    #expect(OnboardingLayout.of(flow: flow, showingKeyStep: true, keyFlow: kf, note: nil) != base)
+    #expect(OnboardingLayout.of(flow: flow, showingKeyStep: false, keyFlow: kf, note: nil) != OnboardingLayout.of(flow: flow, showingKeyStep: true, keyFlow: kf, note: nil))
+    let noNote = OnboardingLayout.of(flow: flow, showingKeyStep: false, keyFlow: nil, note: nil)
+    #expect(OnboardingLayout.of(flow: flow, showingKeyStep: false, keyFlow: nil, note: "The demo week could not load.") != noNote)
+    flow.next()
+    let perms = OnboardingLayout.of(flow: flow, showingKeyStep: false, keyFlow: nil, note: nil)
+    #expect(perms != noNote)
+    flow.update(PermissionState.unknownRows.map { var r = $0; r.grant = .notGranted; return r })
+    #expect(OnboardingLayout.of(flow: flow, showingKeyStep: false, keyFlow: nil, note: nil) != perms)   // the note text changed
+  }
+}
+
+private struct MemoryKeyStoreForLayout: ClaudeKeyStore {
+  func save(_ key: String, last4: String) throws {}
+  func remove() throws {}
+  func status() -> ClaudeKeyStatus { .missing }
+}
