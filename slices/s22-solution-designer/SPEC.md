@@ -36,10 +36,15 @@ For each insight (and each held-back task, below) the designer ranks five kinds 
   object, surface, app name, host; v1 also titles, template, OCR keywords, label kind): `messaging`, `publish`,
   `media_make`, `agent_watch`, `agent_prompt`, `code_manual`, `data_entry`, `copy_between`, `reading`,
   `approval_prompt`. Messaging tags come only from messaging evidence (mail/chat surfaces, reply/send verbs,
-  `email.*` / `chat.*` kinds): nothing else defaults to email.
+  `email.*` / `chat.*` kinds): nothing else defaults to email. An app, domain or keyword alone never decides the
+  kind of work: making and writing tags need the activity (the step's verb for v2, the label kind and name for v1,
+  never OCR words), and a part that only reviews, reads or navigates gets none of them (a Figma review is not image
+  making, reading Gmail is not messaging, reading the LinkedIn feed is not publishing).
 - Observed weekly time (h/wk) = stats `activeMinutes` / 60 x 7 / window days. Every option's weekly saving =
   min(observed, observed x share x factor), where `share` = active-time share of the parts the option replaces and
-  `factor` is a per-kind constant (SOLUTION_FACTORS). The workflow option uses the s04 saving estimate (review
+  `factor` is a per-kind constant (SOLUTION_FACTORS, each at most 0.5: unmeasured shares never claim the larger
+  half); `remove_step`'s factor is the s04 review model's low case on the measured minutes per item of the removed
+  parts (every item still approved). The workflow option uses the s04 saving estimate (review
   model) times its share, also capped at observed. Each option carries the arithmetic string.
 - Confidence (0..1, code): fit (from the tags and figures) x evidence (instances, sameness); level high >= 0.7,
   medium >= 0.45, else low. Effort: per-kind level + setup hours constant (EFFORT); payback weeks = setup hours /
@@ -66,7 +71,10 @@ whole reply is ignored (rules wording stands, `designedBy: "rules"`). The stub m
 - Approval = the s05 gate's rules for a brief: `approve {briefHash}` only for the exact current content hash of a
   draft brief (sha256 of the canonical brief), mints a single-use hand-off token; `handoff {token}` returns the
   builder prompt once and marks the brief `handed_off`; a second use, a stale hash, an edited file or a wrong token
-  is refused. Nothing runs: a brief is text for a builder. `leave_alone` has no brief.
+  is refused. Nothing runs: a brief is text for a builder. `leave_alone` has no brief. No dead ends: approving an
+  approved, unused brief again for its exact hash replaces the token (the old one stops working); choosing the
+  solution again redrafts a brief edited on disk or without a usable approval (voiding it) and, when the content
+  changed, a handed-off brief (the old files move to `history/`).
 
 ### 5. Surfaces (API, CLI)
 - `GET /insights` gains, additively, `solutions` on each insight (rules only, no model call: `{top, options[{kind,

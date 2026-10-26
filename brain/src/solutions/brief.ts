@@ -4,6 +4,9 @@
 // canonical content), only a draft can be approved, and it mints a single-use hand-off token (only its sha256 is
 // stored). The hand-off returns the builder prompt once; a stale hash, an edited file, a wrong or reused token is
 // refused. Nothing here runs anything: a brief is text for a builder.
+// Every state has a way forward: choosing the solution again redrafts a brief whose file was edited or whose approval
+// is gone (voiding any token), approving the same exact approved brief again replaces a lost token (the old one stops
+// working), and a handed-off brief whose content has changed is moved to history/ and a fresh draft starts.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -117,12 +120,43 @@ function saveBrief(home: string, b: SolutionBrief): void {
   writePrivate(join(dir, "BRIEF.md"), renderBriefMd(b));
 }
 
-/** Writes the draft brief for one option. An approved or handed-off brief is kept as it is (created: false). */
+function readApproval(home: string, id: string): Partial<ApprovalFile> | null {
+  const ap = join(briefDir(home, id), "approval.json");
+  if (!existsSync(ap)) return null;
+  try {
+    return JSON.parse(readFileSync(ap, "utf8")) as Partial<ApprovalFile>;
+  } catch {
+    return null;
+  }
+}
+
+/** An unused approval of this exact brief is on disk. */
+function approvalUsable(home: string, b: SolutionBrief): boolean {
+  const rec = readApproval(home, b.id);
+  return rec !== null && typeof rec.tokenSha256 === "string" && rec.briefHash === b.hash && (rec.usedAt === null || rec.usedAt === undefined);
+}
+
+/** Moves a handed-off brief's files to history/ before a new draft takes its place (the record of what was built). */
+function archive(home: string, b: SolutionBrief, now: number): void {
+  const dir = briefDir(home, b.id);
+  const hist = join(dir, "history");
+  ensureDir(hist);
+  const stamp = String(b.handedOffAt ?? now);
+  for (const f of ["brief.json", "BRIEF.md", "approval.json"]) {
+    const src = join(dir, f);
+    if (existsSync(src)) writePrivate(join(hist, `${stamp}-${f}`), readFileSync(src, "utf8"));
+  }
+}
+
+/** Writes the draft brief for one option. A valid approved brief, and a handed-off brief of the same content, are kept
+ * as they are (created: false). A brief edited on disk, an approved brief without a usable approval, or a handed-off
+ * brief whose content changed is redrafted, and any approval of the old content is void. */
 export function writeBrief(home: string, set: SolutionSet, option: SolutionOption, now: number): { brief: SolutionBrief; created: boolean } {
   if (option.handoff.to !== "brief" || option.kind === "workflow" || option.kind === "leave_alone") throw new BriefError(`a ${option.kind} option has no brief`, "bad_request");
   const id = briefIdFor(set.subjectId, option.kind);
   const existing = readBrief(home, id);
-  if (existing !== null && existing.status !== "draft") return { brief: existing, created: false };
+  const intact = existing !== null && briefHash(existing) === existing.hash;
+  if (existing !== null && intact && existing.status === "approved" && approvalUsable(home, existing)) return { brief: existing, created: false };
   const content: Content = {
     version: 1,
     id,
@@ -138,7 +172,8 @@ export function writeBrief(home: string, set: SolutionSet, option: SolutionOptio
     designedBy: set.designedBy,
   };
   const hash = briefHash(content);
-  if (existing !== null && existing.hash === hash) return { brief: existing, created: false };
+  if (existing !== null && intact && existing.status !== "approved" && existing.hash === hash) return { brief: existing, created: false };
+  if (existing !== null && existing.status === "handed_off") archive(home, existing, now);
   const brief: SolutionBrief = { ...content, createdAt: now, hash, status: "draft" };
   saveBrief(home, brief);
   // A redrafted brief voids any approval of the old content.
@@ -149,13 +184,16 @@ export function writeBrief(home: string, set: SolutionSet, option: SolutionOptio
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
-/** Approves the exact current brief. Returns the single-use hand-off token (shown once, stored as its sha256). */
+/** Approves the exact current brief. Returns the single-use hand-off token (shown once, stored as its sha256).
+ * Approving an approved, not yet handed-off brief again for the same exact hash replaces its token (a lost token is
+ * not a dead end); the earlier token stops working. */
 export function approveBrief(home: string, id: string, hash: string, now: number): { brief: SolutionBrief; token: string } {
   const b = readBrief(home, id);
   if (b === null) throw new BriefError(`no brief ${id}`, "not_found");
-  if (briefHash(b) !== b.hash) throw new BriefError("the brief file changed after it was drafted: draft it again", "conflict");
+  if (briefHash(b) !== b.hash) throw new BriefError("the brief file changed after it was drafted: choose the solution again to redraft it", "conflict");
   if (typeof hash !== "string" || hash !== b.hash) throw new BriefError("that hash is not this brief's current content", "conflict");
-  if (b.status !== "draft") throw new BriefError(`brief is ${b.status}, not a draft`, "conflict");
+  if (b.status === "handed_off") throw new BriefError("brief is handed_off: choose the solution again for a new draft", "conflict");
+  if (b.status === "approved" && !approvalUsable(home, b)) throw new BriefError("brief is approved but its approval is gone: choose the solution again to redraft it", "conflict");
   const token = randomBytes(32).toString("base64url");
   const rec: ApprovalFile = { briefHash: b.hash, tokenSha256: sha(token), approvedAt: now, usedAt: null };
   writePrivate(join(briefDir(home, id), "approval.json"), JSON.stringify(rec, null, 2) + "\n");
@@ -168,7 +206,7 @@ export function approveBrief(home: string, id: string, hash: string, now: number
 export function handOffBrief(home: string, id: string, token: string, now: number): { brief: SolutionBrief; builderPrompt: string; briefMd: string } {
   const b = readBrief(home, id);
   if (b === null) throw new BriefError(`no brief ${id}`, "not_found");
-  if (briefHash(b) !== b.hash) throw new BriefError("the brief file changed after it was approved: draft it again", "conflict");
+  if (briefHash(b) !== b.hash) throw new BriefError("the brief file changed after it was approved: choose the solution again to redraft it", "conflict");
   if (b.status !== "approved") throw new BriefError(`brief is ${b.status}, not approved`, "conflict");
   const ap = join(briefDir(home, id), "approval.json");
   const rec = existsSync(ap) ? (JSON.parse(readFileSync(ap, "utf8")) as Partial<ApprovalFile>) : null;
