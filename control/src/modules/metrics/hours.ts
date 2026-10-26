@@ -5,8 +5,8 @@ import { principalOf, reply, tenantTx, type App, type AppEnv, type Deps } from "
 import type { Tx } from "../../db/pool.ts";
 import { HttpError, invalid, page, pageParams } from "../../schema/http.ts";
 import {
-  SUPPRESSED, baselinesFor, buildRows, cellOf, evidence, report, selectRows, type HoursSavedReport, type Period, type ReportInput,
-  type Scope,
+  SUPPRESSED, baselinesFor, buildRows, cellOf, evidence, isSuppressed, report, selectRows, type Anomaly, type HoursSavedReport,
+  type Period, type ReportInput, type RunRow, type Scope,
 } from "../../../../packages/hours-saved/src/index.ts";
 import { hiddenInTree, type CellFor } from "./floor.ts";
 import { aggregateRead, loadInputs, loadReviews, loadRuns, loadSamples, withAggregateRead } from "./load.ts";
@@ -24,11 +24,26 @@ export async function groupInput(tx: Tx, scope: Scope, period: Period, tz: strin
   return { ...rows, estimates: [], workflows: [], scope, children: await childrenOf(tx, scope), period, timezone: tz, floor };
 }
 
-/** Cells of any group scope over the same rows report() uses. */
-function hoursCells(input: ReportInput): CellFor {
+/** The rows report() computes from, and the cells of any group scope over them. */
+function hoursCells(input: ReportInput): { rows: RunRow[]; cellFor: CellFor; sel: (rs: readonly RunRow[], s: Scope) => RunRow[] } {
   const rows = buildRows(input.runs, input.reviews, baselinesFor(input.samples, input.estimates, input.runs));
-  const sel = (rs: typeof rows, s: Scope) => selectRows(rs, s, input.period, input.timezone);
-  return (s, parent) => cellOf(sel(parent === null ? rows : sel(rows, parent), s));
+  const sel = (rs: readonly RunRow[], s: Scope) => selectRows(rs, s, input.period, input.timezone);
+  return { rows, sel, cellFor: (s, parent) => cellOf(sel(parent === null ? rows : sel(rows, parent), s)) };
+}
+
+/**
+ * Anomalies a visible group may show. A workflow-keyed one (small_baseline, outcome_disagreement) is listed only when at
+ * least `floor` people in scope ran that workflow, the rule topWorkflows follows, so it cannot point at one person's
+ * workflow. residual_zero_share carries no workflow or person id and counts within a group of at least `floor` people.
+ */
+function flooredAnomalies(list: readonly Anomaly[], scoped: readonly RunRow[], floor: number): Anomaly[] {
+  const people = new Map<string, Set<string>>();
+  for (const r of scoped) {
+    const set = people.get(r.workflowId) ?? new Set<string>();
+    set.add(r.personId);
+    people.set(r.workflowId, set);
+  }
+  return list.filter((a) => a.workflowId === null || (people.get(a.workflowId)?.size ?? 0) >= floor);
 }
 
 /** A month's report is final when the nightly recompute matched it and nothing arrived since (ADR 0109 §11). */
@@ -60,11 +75,13 @@ async function hoursSaved(c: Context<AppEnv>, deps: Deps): Promise<HoursSavedRep
     const input = await groupInput(tx, scope, period, timezone, floor);
     const r = report(input);
     const final = await isFinal(tx, scope, period, r.inputsDigest);
-    // Hidden in the company tree: shown exactly as an under-floor root (ADR 0103 §5 across reads, floor.ts).
-    if (await hiddenInTree(tx, scope, hoursCells(input), floor)) {
-      return { ...r, total: SUPPRESSED, children: r.children.map((c) => ({ ...c, value: SUPPRESSED })), topWorkflows: [], final };
+    const cells = hoursCells(input);
+    // Under the floor itself, or hidden in the company tree (ADR 0103 §5 across reads, floor.ts): nothing but the
+    // suppression marker. Anomalies are per-row detail ("one person in ...", a workflow id), so they go too.
+    if (isSuppressed(r.total) || (await hiddenInTree(tx, scope, cells.cellFor, floor))) {
+      return { ...r, total: SUPPRESSED, children: r.children.map((c) => ({ ...c, value: SUPPRESSED })), topWorkflows: [], anomalies: [], final };
     }
-    return { ...r, final };
+    return { ...r, anomalies: flooredAnomalies(r.anomalies, cells.sel(cells.rows, scope), floor), final };
   });
 }
 
