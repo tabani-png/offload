@@ -51,7 +51,7 @@ describe("s19 fix 4: ordinary words never join the identity", () => {
   test("LEAK: generator wording is never a leak, whatever the recipients are called", () => {
     // Real people and companies whose names are generator words: Tom Hook at Progress, Kim Stage at Data.
     const id = buildIdentity(mail(() => "Intro", () => `Hi Tom,\n\nWorth a call?\n\nBest,\nDana`, (i) => ["tom.hook@progress.com", "kim.stage@data.com", "lee.voice@issue.io"][i - 1]!));
-    for (const t of ["Open with a line about them (a personal hook).", "Use recent progress as proof.", "Don't copy the original sender's voice.", "Short form of the first message: the details of their issue.", "Stage, team, location and data."]) {
+    for (const t of ["Open with a line about them (a personal hook).", "Use recent progress as proof.", "Don't copy the original sender's voice.", "Short form of the first message: the details of their issue.", "The role's key facts (stage, team, location, pay) and data."]) {
       expect(findTextLeaks(t, id, NONE, "rules[0].text")).toEqual([]);
     }
     const old = { ...emptyIdentity(), company: new Set(["your"]), author: new Set(["the"]) };

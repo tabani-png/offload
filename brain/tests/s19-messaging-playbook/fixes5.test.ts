@@ -70,6 +70,32 @@ describe("s19 fix 5: masking and the leak check agree", () => {
   });
 });
 
+describe("s19 fix 5: generator openers", () => {
+  test("LEAK: a contact named like a generator opener is a leak except where the generator writes the word", () => {
+    const id = buildIdentity([{ ...MAIL[0]!, to: ["ann.short@balderton.com"], body: "Hi Ann,\n\nWorth a call?\n\nBest,\nDana" }, MAIL[1]!, MAIL[2]!]);
+    expect(findTextLeaks("Short form of the first message.", id, NONE, "templates[0].text")).toEqual([]);
+    expect(findTextLeaks("Ask Short for an intro.", id, NONE, "notes").map((l) => l.kind)).toEqual(["name"]);
+    expect(maskText("Ask Short for an intro.", id)).toBe("Ask [name] for an intro.");
+  });
+
+  test("LEAK: every word synth.ts writes capitalised at a sentence start is a known opener (drift guard)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { GENERATOR_OPENERS } = await import("../../src/playbook/mask.ts");
+    const src = readFileSync(join(import.meta.dir, "../../src/playbook/synth.ts"), "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l)).join("\n");
+    const missing = new Set<string>();
+    for (const m of src.matchAll(/"((?:[^"\\\n]|\\.)*)"|`((?:[^`\\]|\\.)*)`/g)) {
+      const s = (m[1] ?? m[2] ?? "").replace(/\$\{[^}]*\}/g, " ");
+      if (!/\s/.test(s)) continue;
+      for (const o of s.matchAll(/(?:^|[.!?:]\s+)(\p{Lu}[\p{L}'’-]*)/gu)) {
+        const w = o[1]!.toLowerCase();
+        if (!GENERATOR_OPENERS.has(w) && !/^(?:json|i)$/.test(w)) missing.add(w);
+      }
+    }
+    expect([...missing]).toEqual([]);
+  });
+});
+
 describe("s19 fix 5: call sites", () => {
   let w: World;
   beforeAll(async () => {

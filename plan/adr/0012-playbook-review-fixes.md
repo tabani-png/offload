@@ -65,3 +65,11 @@ expired was checked against facts.md only while reporting "re-checked"; and that
     so routine subjects or recipients named like generator words ("Tom Hook at Progress") cannot fail the build closed.
     A real name that is also an ordinary word is still masked when capitalised mid-sentence (`[name]`); it is no longer
     matched in lower case, which is the accepted cost.
+
+## Fix round 5 (Codex re-review of adcba7b)
+12. **One decision for masking and the leak check.** `identityHit` (mask.ts) says what a word is (author, company,
+    this recipient, a name, or nothing); `maskText` and `findTextLeaks` both call it, and a property test checks they
+    agree on generated text and that masked text never leaks. A known contact named like an ordinary word ("Will",
+    "Hope") is a name whenever it is capitalised, except a generator opener ("Short") at the start of a sentence,
+    where the generator writes the word itself (`GENERATOR_OPENERS`, drift-tested). Capitalised ordinary words that are
+    not contacts are no longer masked mid-sentence; the leak check never flagged them, so they now agree.

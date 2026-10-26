@@ -139,6 +139,12 @@ const base = (w: string) => w.toLowerCase().replace(/['’]s$/, "").replace(/[-'
 const isCap = (w: string) => /^[\p{Lu}\p{Lt}\p{Lo}]/u.test(w);
 /** A word that is not a name by itself, wherever it stands: generic, common or a contraction of "I". */
 const plainWord = (b: string) => GENERIC.has(b) || COMMON.has(b) || /^i['’]/.test(b);
+/** Words the generator writes capitalised at the start of a sentence (synth.ts; drift-tested in fixes5.test.ts). A known
+ * contact named like one of these ("Anna Short") is not read as a name where the generator would write the word itself:
+ * capitalised at the start of a sentence. Anywhere else it is. */
+export const GENERATOR_OPENERS: ReadonlySet<string> = new Set(
+  "answer back code do don't end figures first follow-up if it keep links name open reply reword say short the when you".split(" "),
+);
 /** A plain word or a word the generator writes: never a name by itself, never masked in lower case, never a leak. */
 export const ordinaryWord = (b: string) => plainWord(b) || GENERATOR_WORDS.has(b);
 /** May this base word name the author or their company (sets matched whatever the case)? Two letters or more, letters
@@ -300,35 +306,47 @@ export interface MaskScope {
   org?: string | null;
 }
 
-/** Masked text: contacts and figures, then the author ({sender}), their company ({company}), this recipient
- * ({first}, {their_org}) and every other identity word or proper noun ([name]): known contacts in any case, any
- * capitalised word mid-sentence that
- * is not generic, and any at the start of a sentence that is not generic, common or written in lower case too. */
-export function maskText(text: string, id: Identity, scope: MaskScope = {}): string {
-  const t = maskContacts(text);
+/** What a word of a text is, for masking and for the leak check alike (one decision, so the two can never disagree):
+ * the author, their company, this recipient ({first}, {their_org}), another person or proper noun ("name"), or null
+ * (an ordinary word, kept). `vocab` is the lower-case vocabulary a sentence-initial capital may come from.
+ * - Ordinary words (common, generic, written by the generator) are never the author or company, and never a name in
+ *   lower case. A known contact (recipients, greeting names, their organisations) is a name when capitalised even if it
+ *   is an ordinary word ("Ask Will"), and in lower case when it is not ("we help alice").
+ * - Any other capitalised word of two letters or more is a name when it is in the identity, when it is not at the start
+ *   of a sentence, or when `vocab` never writes it in lower case. */
+export type IdentityHit = "author" | "company" | "first" | "their_org" | "name" | null;
+export function identityHit(text: string, w: string, offset: number, id: Identity, vocab: ReadonlySet<string>, scope: MaskScope = {}): IdentityHit {
+  if (isPlaceholder(w) || [...w].length < 2) return null;
+  const b = base(w);
+  const ordinary = ordinaryWord(b);
+  if (!ordinary && inIdentity(id, "author", b)) return "author";
+  if (!ordinary && inIdentity(id, "company", b)) return "company";
   const first = scope.first == null ? null : base(scope.first);
   const org = scope.org == null ? null : scope.org.toLowerCase();
+  if (!isCap(w)) {
+    if (ordinary) return null;
+    if (first !== null && b === first) return "first";
+    if (org !== null && b === org) return "their_org";
+    return inIdentity(id, "contacts", b) ? "name" : null;
+  }
+  if (first !== null && b === first) return "first";
+  if (org !== null && b.length >= 3 && (b === org || org.startsWith(b))) return "their_org";
+  if (inIdentity(id, "contacts", b) && !(ordinary && GENERATOR_OPENERS.has(b) && initialAt(text, offset))) return "name";
+  if (ordinary) return null;
+  if (inIdentity(id, "names", b)) return "name";
+  if (!initialAt(text, offset)) return "name";
+  return vocab.has(b) ? null : "name";
+}
+
+const HIT_PLACEHOLDER = { author: "{sender}", company: "{company}", first: "{first}", their_org: "{their_org}", name: "[name]" } as const;
+
+/** Masked text: contacts and figures, then every word identityHit names, as its placeholder. `vocab` defaults to the
+ * identity's message vocabulary (input masking). */
+export function maskText(text: string, id: Identity, scope: MaskScope = {}, vocab: ReadonlySet<string> = id.vocab ?? new Set()): string {
+  const t = maskContacts(text);
   const out = t.replace(TOKEN_RE, (w, offset: number) => {
-    if (isPlaceholder(w)) return w;
-    const b = base(w);
-    // An ordinary word is never the author or the company, even when an older identity digest holds it.
-    const ordinary = ordinaryWord(b);
-    if (!ordinary && inIdentity(id, "author", b)) return "{sender}";
-    if (!ordinary && inIdentity(id, "company", b)) return "{company}";
-    // A known contact is masked whatever its case ("we help alice at northzone"), unless it is also an ordinary word
-    // ("will", "hope"): then only its capitalised form is taken for the name.
-    if (!isCap(w)) {
-      if (ordinary || [...b].length < 2) return w;
-      if (first !== null && b === first) return "{first}";
-      if (org !== null && b === org) return "{their_org}";
-      return inIdentity(id, "contacts", b) ? "[name]" : w;
-    }
-    if (first !== null && b === first) return "{first}";
-    if (org !== null && b.length >= 3 && (b === org || org.startsWith(b))) return "{their_org}";
-    if (inIdentity(id, "names", b)) return "[name]";
-    if (GENERIC.has(b) || /^i['’]/.test(b) || [...w].length < 2) return w;
-    if (!initialAt(t, offset)) return "[name]";
-    return COMMON.has(b) || id.vocab?.has(b) === true ? w : "[name]";
+    const hit = identityHit(t, w, offset, id, vocab, scope);
+    return hit === null ? w : HIT_PLACEHOLDER[hit];
   });
   return out.replace(NESTED_RE, (m, p: string) => (isPlaceholder(p) ? p : m));
 }
@@ -341,4 +359,4 @@ export function maskedCore(m: PlaybookMessage, id: Identity): { core: string; fi
   return { core: maskText(c.core, id, { first, org }), first };
 }
 
-export { EMAIL_RE, HOST_RE, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, base as identityBase, isCap, plainWord, GENERIC };
+export { EMAIL_RE, HOST_RE, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, base as identityBase, initialAt, isCap, plainWord, GENERIC };

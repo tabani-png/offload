@@ -1,7 +1,7 @@
 // De-personalisation check, fail closed: a playbook (or a notes edit, or a model's wording) that still holds a
 // person's name, an address, a phone, a link, a figure that is not one of the playbook's own counts, or the author's
 // name or company is refused. Findings carry the kind and the field path, never the value.
-import { EMAIL_RE, HOST_RE, identityBase, inIdentity, isCap, isPlaceholder, ordinaryWord, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
+import { EMAIL_RE, HOST_RE, identityBase, identityHit, isCap, isPlaceholder, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
 import type { Playbook } from "./types.ts";
 
 export type LeakKind = "author" | "company" | "name" | "email" | "phone" | "link" | "number";
@@ -28,10 +28,9 @@ export function lowerWords(texts: readonly string[]): Set<string> {
   return out;
 }
 
-/** Leaks in one text field. A name is a word of the identity (plain or hashed), a known contact in lower case, or any
- * capitalised word that is not
- * generic, not common and not written in lower case anywhere in `vocab` or this text: a name the identity set never
- * saw (one a model added, or one from mail no longer here) is caught too. */
+/** Leaks in one text field: contact patterns, figures that are not counts, and every word mask.ts identityHit names
+ * (the author, the company, a known contact in any case, or a capitalised word mid-sentence or never written in lower
+ * case in `vocab`): a name the identity set never saw (one a model added, or one from mail no longer here) is caught. */
 export function findTextLeaks(text: string, id: Identity, allowedNumbers: ReadonlySet<string>, path: string, vocab: ReadonlySet<string> = lowerWords([text])): Leak[] {
   const out: Leak[] = [];
   const add = (kind: LeakKind) => {
@@ -41,17 +40,11 @@ export function findTextLeaks(text: string, id: Identity, allowedNumbers: Readon
   if ((text.match(URL_RE) ?? []).length > 0 || (text.match(WWW_RE) ?? []).length > 0 || (text.match(HOST_RE) ?? []).some((h) => !LOCAL.has(h.toLowerCase()) && !/^\d+(?:\.\d+)+$/.test(h))) add("link");
   if ((text.match(PHONE_RE) ?? []).some((p) => p.replace(/\D/g, "").length >= 9)) add("phone");
   for (const n of text.match(NUM_RE) ?? []) if (!allowedNumbers.has(n)) add("number");
-  for (const w of text.match(TOKEN_RE) ?? []) {
-    // Only the defined placeholders are skipped: a word in any other brackets ("{northzone}") is checked as text.
-    if (isPlaceholder(w)) continue;
-    const b = identityBase(w);
-    // An ordinary word (common, generic, or one the generator writes) is never a leak, even when an identity set or an
-    // older digest holds it: the generator's own wording must not fail the build.
-    if (ordinaryWord(b)) continue;
-    if (inIdentity(id, "author", b)) add("author");
-    else if (inIdentity(id, "company", b)) add("company");
-    else if (isCap(w) && [...w].length >= 2 && (inIdentity(id, "names", b) || !vocab.has(b))) add("name");
-    else if (!isCap(w) && [...w].length >= 2 && inIdentity(id, "contacts", b)) add("name");
+  // One decision with maskText (identityHit): a word maskText would mask is a leak, and no other word is.
+  for (const mm of text.matchAll(TOKEN_RE)) {
+    const hit = identityHit(text, mm[0], mm.index ?? 0, id, vocab);
+    if (hit === "author" || hit === "company") add(hit);
+    else if (hit !== null) add("name");
   }
   return out;
 }
