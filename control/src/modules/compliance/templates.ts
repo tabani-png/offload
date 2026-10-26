@@ -54,13 +54,21 @@ export function parseTemplate(text: string): Template {
   return { id: str("id"), jurisdictions: arr("jurisdictions"), title: str("title"), requiredFields: arr("requiredFields"), body: m[2]! };
 }
 
-let cache: Template[] | null = null;
+/** Static files shipped with the build: read once, frozen, so the one copy shared by every app cannot drift. */
+let cache: readonly Template[] | null = null;
 
-export function listTemplates(): Template[] {
-  cache ??= readdirSync(TEMPLATES_DIR)
-    .filter((f) => f.endsWith(".md"))
-    .sort()
-    .map((f) => parseTemplate(readFileSync(join(TEMPLATES_DIR, f), "utf8")));
+export function listTemplates(): readonly Template[] {
+  cache ??= Object.freeze(
+    readdirSync(TEMPLATES_DIR)
+      .filter((f) => f.endsWith(".md"))
+      .sort()
+      .map((f) => {
+        const t = parseTemplate(readFileSync(join(TEMPLATES_DIR, f), "utf8"));
+        Object.freeze(t.jurisdictions);
+        Object.freeze(t.requiredFields);
+        return Object.freeze(t);
+      }),
+  );
   return cache;
 }
 

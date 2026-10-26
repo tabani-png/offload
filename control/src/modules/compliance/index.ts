@@ -1,6 +1,6 @@
-import type { ModuleDef } from "../../app.ts";
+import type { Deps, ModuleDef } from "../../app.ts";
+import type { ConsentPort, FeaturePort } from "../../ports.ts";
 import { pageParams } from "../../schema/http.ts";
-import { useClock, now } from "./clock.ts";
 import { allowsAt } from "./consent.ts";
 import { enabledFor, featureRoutes } from "./features.ts";
 import { noticeRoutes, syncNoticeAck } from "./notices.ts";
@@ -10,13 +10,38 @@ import { P, replyLocal } from "./schemas.ts";
 import { listTemplates } from "./templates.ts";
 
 /**
+ * `ModuleDef.provides` is read before any app (and so any clock) exists, and one module object serves every app in the
+ * process. So `provides` only claims the two ports; mounting swaps each claim in that app's own `deps.ports` for a port
+ * bound to that app's clock. Nothing module-global holds a clock, so two apps never decide by each other's time.
+ * A claim that was never swapped (ports resolved without mounting) refuses to answer rather than guess a time.
+ */
+const unmounted = (): never => {
+  throw new Error("compliance ports answer only once the module is mounted in an app (createApp)");
+};
+const claimed = {
+  consent: { allows: async () => unmounted() } satisfies ConsentPort,
+  features: { enabledFor: async () => unmounted() } satisfies FeaturePort,
+};
+
+/** Binds the ports this module provides to this app's clock, unless the app overrode them (test spies). */
+function bindPorts(deps: Deps): void {
+  const clock = deps.clock;
+  if (deps.ports.consent === claimed.consent) {
+    deps.ports.consent = { allows: (tx, personId, kind) => allowsAt(tx, personId, kind, clock.now()) };
+  }
+  if (deps.ports.features === claimed.features) {
+    deps.ports.features = { enabledFor: (tx, jurisdiction) => enabledFor(tx, jurisdiction, clock.now()) };
+  }
+}
+
+/**
  * Monitoring compliance (SPEC S2-08, ADR 0108): sensitive feature enablement per jurisdiction, notices and acks,
  * employee self-view and access log, retention, and the compliance pack templates. Provides ConsentPort and FeaturePort.
  */
 const compliance: ModuleDef = {
   name: "compliance",
   routes(app, deps) {
-    useClock(deps.clock);
+    bindPorts(deps);
     featureRoutes(app, deps);
     noticeRoutes(app, deps);
     selfRoutes(app, deps);
@@ -30,10 +55,7 @@ const compliance: ModuleDef = {
   },
   syncHandlers: { notice_ack: syncNoticeAck },
   jobs: [retentionJob],
-  provides: {
-    consent: { allows: (tx, personId, kind) => allowsAt(tx, personId, kind, now()) },
-    features: { enabledFor: (tx, jurisdiction) => enabledFor(tx, jurisdiction, now()) },
-  },
+  provides: claimed,
 };
 
 export default compliance;
