@@ -22,7 +22,8 @@ export const rowHash = (r: RecipientRow) => sha(JSON.stringify([r.email.toLowerC
 /** The pinned files, in display order: name -> how to read it. */
 export function pinFiles(home: string, wf: WorkflowJson): Record<string, string> {
   const card = readStyleCard(home, wf.bucket);
-  // s19: playbook.json only when the workflow has one, so pins taken before a playbook existed stay valid.
+  // s19: playbook.json only when the workflow has one, so pins taken before a playbook existed stay valid. A pinned
+  // playbook.json that is gone later is a changed file (changedFiles compares pinned and current names).
   const playbook = readText(home, wf.id, "playbook.json");
   return {
     "facts.md": sha(readText(home, wf.id, "facts.md") ?? ""),
@@ -63,9 +64,12 @@ export function disableAutoRun(home: string, id: string, now: number): WorkflowJ
   }, now);
 }
 
-/** Files whose hash differs from the pin (all of them when there is no pin). */
+/** Pinned and current file names, in display order (a pinned file that is gone is still listed). */
+const fileNames = (pin: AutoRunPin | null | undefined, files: Record<string, string>) => [...new Set([...Object.keys(files), ...Object.keys(pin?.files ?? {})])];
+
+/** Files whose hash differs from the pin, including a pinned file that is gone (all of them when there is no pin). */
 export function changedFiles(pin: AutoRunPin | null | undefined, files: Record<string, string>): string[] {
-  return Object.keys(files).filter((f) => pin?.files[f] !== files[f]);
+  return fileNames(pin, files).filter((f) => pin?.files[f] !== files[f]);
 }
 
 export interface AutoPartition {
@@ -85,8 +89,8 @@ export function partitionForAuto(home: string, wf: WorkflowJson, batch: Batch): 
   const now = pinFiles(home, wf);
   const files = new Set(changedFiles(pin, now));
   if (batch.draftedWith !== undefined) for (const f of changedFiles(pin, batch.draftedWith)) files.add(f);
-  else for (const f of Object.keys(now)) files.add(f); // drafted before s10b: nothing to compare with.
-  const out: AutoPartition = { eligible: [], newItems: [], changedItems: [], changedFiles: Object.keys(now).filter((f) => files.has(f)), stale: pin === null || batch.createdAt < pin.at };
+  else for (const f of fileNames(pin, now)) files.add(f); // drafted before s10b: nothing to compare with.
+  const out: AutoPartition = { eligible: [], newItems: [], changedItems: [], changedFiles: fileNames(pin, now).filter((f) => files.has(f)), stale: pin === null || batch.createdAt < pin.at };
   for (const i of batch.items) {
     const pinned = pin?.rows[addressHash(wf.id, i.key)];
     if (pinned === undefined) out.newItems.push(i);
