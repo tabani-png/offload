@@ -457,18 +457,25 @@ export function createBroker(deps: Deps): Broker {
   const now = () => deps.clock.now();
   // Audit events are queued per transaction and written after its last row lock (lock order step 10): writing one
   // takes the tenant's audit-chain lock until commit, and no transaction may wait for a row while holding it.
-  const pendingAudits = new WeakMap<Tx, AuditInput[]>();
+  // Fail closed: starting a queue inserts a marker row that a deferred constraint trigger refuses to commit
+  // (migration 0703); writing the queue deletes it. A caller that never flushes rolls back, it never drops events.
+  const pendingAudits = new WeakMap<Tx, { marker: string; events: AuditInput[] }>();
   const audit = async (tx: Tx, e: AuditInput): Promise<void> => {
     const q = pendingAudits.get(tx);
-    if (q) q.push(e);
-    else pendingAudits.set(tx, [e]);
+    if (q) {
+      q.events.push(e);
+      return;
+    }
+    const [m] = await tx`insert into broker_audit_pending (tenant_id) values (current_setting('app.tenant_id')::uuid) returning id`;
+    pendingAudits.set(tx, { marker: m!.id as string, events: [e] });
   };
   /** Writes the transaction's queued audit events, in order. The last thing a broker transaction does. */
   async function flushAudits(tx: Tx): Promise<void> {
     const q = pendingAudits.get(tx);
     if (!q) return;
     pendingAudits.delete(tx);
-    for (const e of q) await deps.ports.audit.write(tx, e);
+    for (const e of q.events) await deps.ports.audit.write(tx, e);
+    await tx`delete from broker_audit_pending where id = ${q.marker}`;
   }
   /** A broker entry point run in the caller's transaction: its audit events are written when it is done. */
   const flushed =
