@@ -262,11 +262,22 @@ def serve():
             emit({"id": rid, "nonce": nonce, "type": "data", "b64": base64.b64encode(("command not found: %s\n" % argv[0]).encode()).decode()})
             emit({"id": rid, "nonce": nonce, "type": "exit", "code": 127}); return
         cur["p"], cur["id"] = p, rid
-        for chunk in iter(lambda: p.stdout.read1(65536), b""):
-            emit({"id": rid, "nonce": nonce, "type": "data", "b64": base64.b64encode(chunk).decode()})
+
+        # Output is relayed on its own thread: a background child that inherited stdout must not hold the command
+        # open after the command itself has exited. Wait for the direct child, sweep (which stops any such holder),
+        # then let the relay finish, bounded.
+        def relay():
+            try:
+                for chunk in iter(lambda: p.stdout.read1(65536), b""):
+                    emit({"id": rid, "nonce": nonce, "type": "data", "b64": base64.b64encode(chunk).decode()})
+            except (OSError, ValueError):
+                pass
+        t = threading.Thread(target=relay, daemon=True)
+        t.start()
         rc = p.wait()
         cur["p"], cur["id"] = None, None
         sw = sweep(MODE_SWEEP)
+        t.join(2.0)
         if sw.get("killed"):
             emit({"id": rid, "nonce": nonce, "type": "data", "b64": base64.b64encode(("[offload sandbox: stopped %d leftover process(es)]\n" % sw["killed"]).encode()).decode()})
         emit({"id": rid, "nonce": nonce, "type": "exit", "code": rc})
