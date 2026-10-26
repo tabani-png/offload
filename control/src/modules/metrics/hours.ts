@@ -5,8 +5,8 @@ import { principalOf, reply, tenantTx, type App, type AppEnv, type Deps } from "
 import type { Tx } from "../../db/pool.ts";
 import { HttpError, invalid, page, pageParams } from "../../schema/http.ts";
 import {
-  SUPPRESSED, baselinesFor, buildRows, cellOf, evidence, inScope, isSuppressed, report, selectRows, type Anomaly,
-  type HoursSavedReport, type Period, type ReportInput, type RunRow, type Scope,
+  SUPPRESSED, baselinesFor, buildRows, cellOf, evidence, inScope, isSuppressed, report, reportInputsDigest, selectRows,
+  type Anomaly, type HoursSavedReport, type Period, type ReportInput, type RunInput, type RunRow, type Scope,
 } from "../../../../packages/hours-saved/src/index.ts";
 import { COMPANY, childrenIn, floorNode, hiddenInTree, loadHierarchy, type Cells, type Hierarchy } from "./floor.ts";
 import { aggregateRead, loadInputs, loadReviews, loadRuns, loadSamples, withAggregateRead } from "./load.ts";
@@ -42,27 +42,85 @@ function hoursCells(input: ReportInput): { rows: RunRow[]; sel: (rs: readonly Ru
 }
 
 /**
- * Anomalies a visible group may show. A workflow-keyed one (small_baseline, outcome_disagreement) is listed only when at
- * least `floor` people in scope ran that workflow, the rule topWorkflows follows, so it cannot point at one person's
- * workflow. residual_zero_share carries no workflow or person id and counts within a group of at least `floor` people.
+ * Anomalies a visible group may show (PR #9 round 5). residual_zero_share is dropped: its detail is one person's counts
+ * ("residual 0 on 4 of 4"), and no per-person number goes into a group view. A workflow-keyed one is listed only when
+ * the people behind it (who ran the workflow; for outcome_disagreement, whose runs disagree) are at least `floor` in
+ * scope and, below the company, visible in the tree built from those runs alone, as top workflows are. So a count in
+ * its detail never comes from a group the floor hides, and company minus department never isolates one.
  */
-function flooredAnomalies(list: readonly Anomaly[], scoped: readonly RunRow[], floor: number): Anomaly[] {
-  const people = new Map<string, Set<string>>();
-  for (const r of scoped) {
-    const set = people.get(r.workflowId) ?? new Set<string>();
-    set.add(r.personId);
-    people.set(r.workflowId, set);
-  }
-  return list.filter((a) => a.workflowId === null || (people.get(a.workflowId)?.size ?? 0) >= floor);
+function groupAnomalies(list: readonly Anomaly[], scope: Scope, v: GroupView, floor: number): Anomaly[] {
+  const scoped = v.cells.sel(v.cells.rows, scope);
+  const disagrees = (r: RunRow) => r.deviceOutcome !== null && r.deviceOutcome !== r.outcome;
+  return list.filter((a) => {
+    if (a.workflowId === null) return false;
+    const behind = (r: RunRow) => r.workflowId === a.workflowId && (a.code !== "outcome_disagreement" || disagrees(r));
+    if (new Set(scoped.filter(behind).map((r) => r.personId)).size < floor) return false;
+    return scope.type === "company" || !hiddenInTree(v.h, scope, v.cells.over(v.cells.rows.filter(behind)), floor, { ignoreEmpty: true });
+  });
 }
 
-/** A month's report is final when the nightly recompute matched it and nothing arrived since (ADR 0109 §11). */
-async function isFinal(tx: Tx, scope: Scope, period: Period, digest: string): Promise<boolean> {
+/** Does a stored run fall in a department or job role? (hs-1's inScope on the input side.) */
+function runIn(r: RunInput, scope: Scope): boolean {
+  if (scope.type === "department") return r.departmentId !== null && r.departmentId === scope.id;
+  if (scope.type === "job_role") return r.jobRoleId !== null && r.jobRoleId === scope.id;
+  return true;
+}
+
+/**
+ * The inputsDigest a reader may see (PR #9 round 5): a digest of the inputs behind the cell shown and nothing else, so
+ * it is no change oracle over rows the reader cannot see. A hidden cell gets the digest of no inputs; the company gets
+ * hs-1's digest of every run (all of them are in its total); a department or job role gets the digest of its own runs,
+ * their review events and the baseline samples of their workflow versions (baselines are workflow reference data).
+ */
+function visibleDigest(scope: Scope, input: ReportInput, r: HoursSavedReport, hidden: boolean): string {
+  const none = { estimates: [], workflows: [] };
+  if (hidden) return reportInputsDigest({ ...none, runs: [], reviews: [], samples: [] });
+  if (scope.type === "company") return r.inputsDigest;
+  const runs = input.runs.filter((x) => runIn(x, scope));
+  const ids = new Set(runs.map((x) => x.run.runId));
+  const versions = new Set(runs.map((x) => `${x.run.workflowId}@${x.run.version}`));
+  return reportInputsDigest({
+    ...none,
+    runs,
+    reviews: input.reviews.filter((e) => ids.has(e.runId)),
+    samples: input.samples.filter((x) => versions.has(`${x.workflowId}@${x.version}`)),
+  });
+}
+
+/** A group scope's report, its cells and floor state, and the digest a reader may see. Shared with the nightly job. */
+export interface GroupView {
+  input: ReportInput;
+  r: HoursSavedReport;
+  h: Hierarchy;
+  cells: ReturnType<typeof hoursCells>;
+  hidden: boolean;
+  digest: string;
+}
+
+export async function groupView(tx: Tx, scope: Scope, period: Period, tz: string, floor: number, h?: Hierarchy): Promise<GroupView> {
+  const hier = h ?? (await loadHierarchy(tx));
+  const input = await groupInput(tx, scope, period, tz, floor, hier);
+  const r = report(input);
+  const cells = hoursCells(input);
+  // Under the floor itself, or hidden in the company tree (ADR 0103 §5 across reads, floor.ts).
+  const hidden = isSuppressed(r.total) || hiddenInTree(hier, scope, cells.over(cells.rows), floor);
+  return { input, r, h: hier, cells, hidden, digest: visibleDigest(scope, input, r, hidden) };
+}
+
+/**
+ * A month's report is final when the nightly recompute matched it and nothing arrived since (ADR 0109 §11). For the
+ * visible company "since" is any new data in the tenant (all of it is in its total). Below it, and for any suppressed
+ * cell, only the inputs behind the cell shown count (visibleDigest, stored as scope_digest by the nightly job, migration
+ * 0506): data elsewhere must not move the flag, or it tells the reader that a hidden group sent something.
+ */
+async function isFinal(tx: Tx, scope: Scope, period: Period, digest: string, visible: string, hidden: boolean): Promise<boolean> {
   const month = monthOf(period);
   if (month === null || scope.type === "person") return false;
-  const [s] = await tx`select final, stale, inputs_digest from metric_snapshots
+  const [s] = await tx`select final, stale, inputs_digest, scope_digest from metric_snapshots
     where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid`;
-  if (!s || s.final !== true || s.stale !== false || s.inputs_digest !== digest) return false;
+  if (!s || s.final !== true) return false;
+  if (scope.type !== "company" || hidden) return s.scope_digest === visible;
+  if (s.stale !== false || s.inputs_digest !== digest) return false;
   // New data the nightly job has not taken in yet (migration 0502).
   const [d] = await tx`select exists (select 1 from metric_dirty where taken_at is null) as pending`;
   return d!.pending === false;
@@ -82,17 +140,15 @@ async function hoursSaved(c: Context<AppEnv>, deps: Deps): Promise<HoursSavedRep
     }
     await checkGroupScope(c, tx, p, scope);
     await aggregateRead(tx);
-    const h = await loadHierarchy(tx);
-    const input = await groupInput(tx, scope, period, timezone, floor, h);
-    const r = report(input);
-    const final = await isFinal(tx, scope, period, r.inputsDigest);
-    const cells = hoursCells(input);
+    const v = await groupView(tx, scope, period, timezone, floor);
+    const { input, r, h, cells } = v;
     const all = cells.over(cells.rows);
-    // Under the floor itself, or hidden in the company tree (ADR 0103 §5 across reads, floor.ts): nothing but the
-    // suppression marker. Anomalies are per-row detail ("one person in ...", a workflow id), so they go too.
-    if (isSuppressed(r.total) || hiddenInTree(h, scope, all, floor)) {
+    const final = await isFinal(tx, scope, period, r.inputsDigest, v.digest, v.hidden);
+    const inputsDigest = v.digest;
+    // Hidden: nothing but the suppression marker, and a digest of no inputs.
+    if (v.hidden) {
       const children = r.children.slice(0, MAX_CHILDREN).map((c) => ({ ...c, value: SUPPRESSED }));
-      return { ...r, total: SUPPRESSED, children, topWorkflows: [], anomalies: [], final };
+      return { ...r, inputsDigest, total: SUPPRESSED, children, topWorkflows: [], anomalies: [], final };
     }
     // Children floored over the complete set and the remainder (floor.ts), and only then cut to what the schema holds.
     const children =
@@ -108,7 +164,7 @@ async function hoursSaved(c: Context<AppEnv>, deps: Deps): Promise<HoursSavedRep
             const runsOfW = cells.over(cells.rows.filter((x) => x.workflowId === w.workflowId));
             return !hiddenInTree(h, scope, runsOfW, floor, { ignoreEmpty: true });
           });
-    return { ...r, children, topWorkflows, anomalies: flooredAnomalies(r.anomalies, cells.sel(cells.rows, scope), floor), final };
+    return { ...r, inputsDigest, children, topWorkflows, anomalies: groupAnomalies(r.anomalies, scope, v, floor), final };
   });
 }
 

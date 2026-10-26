@@ -53,19 +53,40 @@ async function adoption(c: Context<AppEnv>, deps: Deps) {
     const withData = peopleWithData({ rows, daily: inDaily });
     const value = await (async () => {
       if (withData.size < floor) return SUPPRESSED;
-      // Floored where the scope sits in the company tree, so a hidden department is not company minus the others.
-      const cells: Cells = {
-        cell: (s, parent) => peopleCell(peopleWithData(of(s, parent)).size),
-        rest: (parent, kids) => {
-          const x = of(parent, null);
-          const outside = (a: ReturnType<typeof who.get>, id: string) => !kids.some((k) => member(a, id, k));
-          return peopleCell(peopleWithData({
-            rows: x.rows.filter((r) => !kids.some((k) => inScope(r, k))),
-            daily: x.daily.filter((d) => outside(who.get(d.person_id), d.person_id)),
-          }).size);
-        },
+      // Every field is floored on the people who contribute to it (PR #9 round 5), each set where the scope sits in the
+      // company tree, so a hidden department is not company minus the others. People with data floor the cell; the
+      // others may also be empty (nothing from anyone). Rates and run counts come from people with runs only, and the
+      // residual median from people with a reviewed success, so 5 people with daily aggregates and 1 with runs show
+      // nothing (the rates would be that one person's).
+      type Part = ReturnType<typeof of>;
+      const restOf = (parent: Scope, kids: readonly Scope[]): Part => {
+        const x = of(parent, null);
+        return {
+          rows: x.rows.filter((r) => !kids.some((k) => inScope(r, k))),
+          daily: x.daily.filter((d) => !kids.some((k) => member(who.get(d.person_id), d.person_id, k))),
+        };
       };
-      if (hiddenInTree(await loadHierarchy(tx), scope, cells, floor)) return SUPPRESSED;
+      const contributors: Array<(x: Part) => Set<string>> = [
+        peopleWithData,
+        (x) => new Set([...x.rows.map((r) => r.personId), ...x.daily.filter((d) => d.active_workflows > 0).map((d) => d.person_id)]),
+        (x) => new Set([...x.rows.map((r) => r.personId), ...x.daily.filter((d) => (d.runs ?? 0) > 0).map((d) => d.person_id)]),
+        (x) => new Set(x.rows.map((r) => r.personId)),
+        (x) => new Set(x.rows.filter((r) => r.outcome === "success" && r.residual !== null).map((r) => r.personId)),
+      ];
+      const h = await loadHierarchy(tx);
+      const passes = (set: (x: Part) => Set<string>, i: number) => {
+        const n = set(of(scope, null)).size;
+        if (i > 0 && n === 0) return true;
+        if (n < floor) return false;
+        const cells: Cells = {
+          cell: (s, parent) => peopleCell(set(of(s, parent)).size),
+          rest: (parent, kids) => peopleCell(set(restOf(parent, kids)).size),
+        };
+        // The people-with-data tree is the cell's own (empty children count as hs-1 counts them); the others are trees
+        // S2-05 adds, where an empty child hides nothing.
+        return !hiddenInTree(h, scope, cells, floor, { ignoreEmpty: i > 0 });
+      };
+      if (!contributors.every(passes)) return SUPPRESSED;
       const active = new Set([...rows.map((r) => r.personId), ...inDaily.filter((d) => d.active_workflows > 0).map((d) => d.person_id)]);
       const workflows = new Set([...rows.map((r) => r.workflowId), ...inDaily.filter((d) => (d.runs ?? 0) > 0).map((d) => d.workflow_id!)]);
       const head = await headcount(tx, scope, who);
