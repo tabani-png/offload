@@ -184,6 +184,9 @@ struct ReviewCopy: Equatable, Sendable {
   var emptyDryRun: String
   /// s14: "With Instantly and Google Sheets": the tools this dry run stood for.
   var dryRunWith: String?
+  /// s23 (PR #13 F3): the connector chips, from the same live connectors the tool picker reads, so the Google Sheets
+  /// chip is green exactly when the picker says Google Sheets is connected.
+  var chips: [ConnectorChipModel] = []
   /// s14: each step's tool suggestion, by step id.
   var tools: [String: ToolsCopy] = [:]
 
@@ -237,7 +240,10 @@ struct ReviewCopy: Equatable, Sendable {
       dryRunTrailing = running ? "Re-doing last week's real examples…" : ""
     }
     emptyDryRun = running ? "Re-doing last week's real examples…" : "No dry run yet. Press R to run one."
-    dryRunWith = ToolsCopy.with(dryRun?.tools)
+    // s23 (PR #13 F1): the tools the run really used (runsWith), named from the step's options and connectors, so
+    // the header never says Instantly while Gmail does the sending. Without step tools, the dry run's own names.
+    dryRunWith = ToolsCopy.with(dryRun?.tools, steps: w.tools, connectors: w.connectors)
+    chips = w.connectors.map(ConnectorChipModel.init)
     if let with = dryRunWith, dryRun != nil { dryRunTrailing = "\(with) · \(dryRunTrailing)" }
     for t in w.tools { tools[t.stepId] = ToolsCopy(t, connectors: w.connectors) }
     items = (dryRun?.items ?? []).map {
