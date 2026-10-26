@@ -150,3 +150,12 @@ expired was checked against facts.md only while reporting "re-checked"; and that
     Accepted cost: a name-like line in those positions is masked even when it is a word that happens to be a lexicon
     name ("Thanks,\nfrank" and "Thanks,\nFrank" alike, but also "Best,\nhope"); a sign name that is all known non-name
     words ("The Team") stays.
+
+## Fix round 11 (independent review of bed5b7d)
+19. **Initials and bullets.** In the name-like test a single letter with a period ("b.", "F.") is an initial, not
+    sentence punctuation: "frank b.", "f. baker" are name-like, and a line that is only an initial after a closing
+    ("Best,\nf.") is masked; a sign-off line is masked whole, initials included. A bullet marker at the start of a line
+    (-, *, •, –, —; numbered items already end in ".") starts a sentence, so a capitalised verb after it stays ("- Send
+    invoice") while a name there is still masked by the sentence-start rules. Lower-case "will"/"may" next to a name
+    stay verbs ("[name] will send it").
+    Accepted cost: a short sign-off line made of initials and words ("P.S." alone after a closing) is masked.

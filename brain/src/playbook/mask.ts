@@ -246,6 +246,12 @@ const stripRe = (s: string) => s.replace(/^\s*(?:(?:re|fwd?|fw|aw)\s*:\s*)+/i, "
 function initialAt(text: string, offset: number): boolean {
   let i = offset - 1;
   while (i >= 0 && /[ \t"'“‘(]/.test(text[i]!)) i--;
+  if (i >= 0 && /[-*•–—]/.test(text[i]!)) {
+    // A bullet marker at the start of a line ("- Send invoice", "* Confirm", "• Call") starts a sentence.
+    let j = i - 1;
+    while (j >= 0 && /[ \t]/.test(text[j]!)) j--;
+    if (j < 0 || text[j] === "\n") return true;
+  }
   return i < 0 || /[.!?:\n]/.test(text[i]!);
 }
 
@@ -440,6 +446,8 @@ const reEsc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const CLOSING_LINE_RE = new RegExp(`^(?:${CLOSINGS.map(reEsc).join("|")})[ \\t]*[,.!]*$`, "iu");
 /** The words of the closing phrases are vocabulary ("Saludos," is kept, the name after it is not). */
 const CLOSING_WORDS: ReadonlySet<string> = new Set(CLOSINGS.flatMap((c) => c.split(" ")));
+/** A single-letter initial with its period ("b.", "F."). */
+const INITIAL_RE = /(?<![\p{L}\p{N}])\p{L}\.(?![\p{L}\p{N}])/gu;
 const lineWords = (line: string) => (line.match(TOKEN_RE) ?? []).filter((w) => !isPlaceholder(w));
 
 /** A name-like line: one to three words, no sentence punctuation (? ! . : ;), no digits, not a closing, and at least
@@ -447,9 +455,14 @@ const lineWords = (line: string) => (line.match(TOKEN_RE) ?? []).filter((w) => !
  * "Zentrix" are; "Call me.", "Will do.", "ASAP", "CEO" are not. */
 function nameLikeLine(line: string): boolean {
   const l = line.trim().replace(/^[-–—~][ \t]*/, "").replace(/,$/, "").trim();
-  if (l === "" || /[?!.:;\d@]/.test(l) || CLOSING_LINE_RE.test(l)) return false;
-  const ws = lineWords(l);
-  if (ws.length < 1 || ws.length > 3) return false;
+  if (l === "" || CLOSING_LINE_RE.test(l)) return false;
+  // Initials ("b.", "F.") are part of a name, not sentence punctuation.
+  const initials = (l.match(INITIAL_RE) ?? []).length;
+  const rest = l.replace(INITIAL_RE, " ").trim();
+  if (/[?!.:;\d@]/.test(rest)) return false;
+  const ws = lineWords(rest);
+  if (ws.length + initials < 1 || ws.length + initials > 3) return false;
+  if (ws.length === 0) return initials > 0;
   return ws.some((w) => {
     const b = base(w);
     return !knownWord(b) || personWord(b);
@@ -553,8 +566,9 @@ export function identityHit(text: string, w: string, offset: number, id: Identit
   if (first !== null && b === first) return "first";
   if (!isCap(w) && org !== null && b === org) return "their_org";
   if (isCap(w) && org !== null && b.length >= 3 && (b === org || org.startsWith(b))) return "their_org";
-  if ([...w].length < 2) return null;
+  // A sign-off line is masked whole, its initials too ("frank b.", "f. baker").
   if (signOffName(text, offset)) return "name";
+  if ([...w].length < 2) return null;
   // A lexicon name (s18 GIVEN, FAMILY or ambiguous): capitalised anywhere (a month only outside a date; the
   // generator's own sentence openers stay), or in lower case next to a person or a cue word.
   if (lexName(b) && isCap(w)) {
@@ -566,7 +580,8 @@ export function identityHit(text: string, w: string, offset: number, id: Identit
   } else if (personWord(b) && !isCap(w) && !MODALS.has(b) && lowerLexName(text, w, offset, id)) return "name";
   if (addressOrg(text, w, offset, id)) return "name";
   if (!knownWord(b)) return "name";
-  const adjacent = () => (GIVEN.has(b) || AMBIGUOUS_GIVEN.has(b)) && (nextIsName(text, offset + w.length, id) || neighbourIsName(text, prevWord(text, offset), id));
+  // Lower-case "will" / "may" next to a name are the verbs ("[name] will send it").
+  const adjacent = () => (GIVEN.has(b) || AMBIGUOUS_GIVEN.has(b)) && !(MODALS.has(b) && !isCap(w)) && (nextIsName(text, offset + w.length, id) || neighbourIsName(text, prevWord(text, offset), id));
   if (!isCap(w)) {
     if (ordinary) return adjacent() ? "name" : null;
     if (inIdentity(id, "contacts", b)) return "name";
