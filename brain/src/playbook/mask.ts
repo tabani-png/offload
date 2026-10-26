@@ -3,6 +3,7 @@
 // links and figures. The playbook keeps patterns; these never leave this file unmasked. Pure string code.
 import { createHash } from "node:crypto";
 import { cleanEmail } from "../tone/clean.ts";
+import type { ContactEntry } from "../privacy/names.ts";
 import { SLOTS, type PlaybookMessage } from "./types.ts";
 
 export interface Identity {
@@ -231,9 +232,25 @@ function initialAt(text: string, offset: number): boolean {
   return i < 0 || /[.!?:\n]/.test(text[i]!);
 }
 
-/** Every personal name, organisation and proper noun of these messages, plus the author's facts. */
-export function buildIdentity(messages: readonly PlaybookMessage[], facts = ""): Identity {
+/** The s18 name registry (privacy/policy.ts readNamePolicy): every workflow's recipients and the user's own name. */
+export interface NameRegistry {
+  contacts?: readonly ContactEntry[];
+  self?: readonly string[];
+}
+
+/** Every personal name, organisation and proper noun of these messages, plus the author's facts and the s18 registry
+ * (a contact s18 masks on the way to a model is a known contact here too; the user's own name is the author). */
+export function buildIdentity(messages: readonly PlaybookMessage[], facts = "", registry: NameRegistry = {}): Identity {
   const id = emptyIdentity();
+  for (const c of registry.contacts ?? []) {
+    for (const part of [c.firstName ?? "", c.lastName ?? ""].join(" ").split(/[\s-]+/)) if (nameLike(base(part))) id.people.add(base(part));
+    if (c.email !== undefined) {
+      const p = addressParts(c.email);
+      for (const n of p.people) if (nameLike(n)) id.people.add(n);
+      if (p.org !== null) id.orgs.add(p.org);
+    }
+  }
+  for (const s of registry.self ?? []) for (const w of s.split(/[\s,]+/)) addIf(id.author, base(w));
   const f = factLines(facts);
   for (const w of (f.sign ?? "").split(/[\s,]+/)) addIf(id.author, base(w));
   for (const w of (f.company ?? "").split(/[\s,]+/)) if (!GENERIC.has(w.toLowerCase())) addIf(id.company, base(w));

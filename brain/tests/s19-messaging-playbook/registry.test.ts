@@ -28,13 +28,15 @@ describe("s19 x s18: the contact registry joins the playbook identity", () => {
   test("KNOWN: every name s18 masks for a contact is a leak for s19, and is masked by s19", () => {
     const id = identityForWorkflow(w.home, w.outreach, NOW);
     const names = new NameMap(readNamePolicy(w.home));
-    for (const t of ["Ask Zorblax for an intro.", "Mention Quéllin first.", "Write like zorblax does.", "Ask Will for an intro.", "Copy the Kestrel tone.", "Sign as Muhammad."]) {
+    for (const t of ["Ask Zorblax for an intro.", "Mention Quéllin first.", "Write like zorblax does.", "Ask Will for an intro.", "Sign as Muhammad."]) {
       // s18 masks it on the way to a model ...
       expect([t, names.mask(t) !== t]).toEqual([t, true]);
       // ... and s19 refuses it in a playbook and masks it in a message.
       expect([t, findTextLeaks(t, id, NONE, "notes").length > 0]).toEqual([t, true]);
       expect([t, maskText(t, id) !== t]).toEqual([t, true]);
     }
+    // s18 masks people only; the contact's organisation (address domain) is a known contact for s19 as well.
+    expect(findTextLeaks("Copy the Kestrel tone, like kestrel does.", id, NONE, "notes").length).toBeGreaterThan(0);
     // Ordinary wording stays clean.
     expect(findTextLeaks("We will keep it short.", id, NONE, "notes")).toEqual([]);
   });

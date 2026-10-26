@@ -73,3 +73,7 @@ expired was checked against facts.md only while reporting "re-checked"; and that
     "Hope") is a name whenever it is capitalised, except a generator opener ("Short") at the start of a sentence,
     where the generator writes the word itself (`GENERATOR_OPENERS`, drift-tested). Capitalised ordinary words that are
     not contacts are no longer masked mid-sentence; the leak check never flagged them, so they now agree.
+13. **s18 registry (merge of PR #7).** The playbook identity takes s18's name registry (`readNamePolicy`: every
+    workflow's recipients.csv and the user's own name in privacy.json) at build time and for notes and promotion
+    re-checks, so a contact s18 masks on the way to a model is a known contact (masked and a leak in any case) for s19,
+    its address domain is a known organisation, and the user's own name is the author. The digest keeps them.
