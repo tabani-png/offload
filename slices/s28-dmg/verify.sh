@@ -36,8 +36,16 @@ fi
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$ROOT/app/Info.plist" 2>/dev/null)"
 [ -n "$VERSION" ] || fail "no CFBundleShortVersionString in app/Info.plist"
 
-echo "== BUILD (app/build.sh dmg, outside the repo)"
-b="$(OFFLOAD_BUILD_DIR="$T/build" "$ROOT/app/build.sh" dmg 2>&1)"; bcode=$?
+echo "== ENV (a dev shell's OFFLOAD_BUNDLE_BRAIN=0 never makes a DMG)"
+nb="$(OFFLOAD_BUNDLE_BRAIN=0 OFFLOAD_BUILD_DIR="$T/nobrain" "$ROOT/app/build.sh" dmg 2>&1)" && fail "build.sh dmg accepted OFFLOAD_BUNDLE_BRAIN=0" \
+  || { echo "$nb" | grep -q "OFFLOAD_BUNDLE_BRAIN" && echo "dmg refuses OFFLOAD_BUNDLE_BRAIN=0" || fail "build.sh dmg failed without naming OFFLOAD_BUNDLE_BRAIN: $(echo "$nb" | tail -1)"; }
+[ -e "$T/nobrain/Offload.app" ] && fail "build.sh dmg built the app before refusing OFFLOAD_BUNDLE_BRAIN=0"
+rm -rf "$T/nobrain"
+
+echo "== BUILD (app/build.sh dmg, outside the repo, with dev-only runtime vars set that must be cleared)"
+b="$(OFFLOAD_BRAIN_SOURCE=repo OFFLOAD_REPO=/nonexistent OFFLOAD_BUN=/nonexistent/bun OFFLOAD_BUILD_DIR="$T/build" "$ROOT/app/build.sh" dmg 2>&1)"; bcode=$?
+echo "$b" | grep -E "^dmg: cleared dev-only env:" | grep -q "OFFLOAD_BRAIN_SOURCE" && echo "$b" | grep -E "^dmg: cleared dev-only env:" | grep -q "OFFLOAD_REPO" \
+  || fail "build.sh dmg did not report clearing OFFLOAD_BRAIN_SOURCE and OFFLOAD_REPO"
 [ $bcode -eq 0 ] || { echo "$b" | tail -20; fail "app/build.sh dmg exited $bcode"; }
 echo "$b" | grep -E "^dmg:" | sed "s|$T|\$T|g"
 echo "$b" | grep -qF "dmg: not signed and not notarized (ad hoc build" || fail "no ad hoc skip line for the DMG"
@@ -130,6 +138,21 @@ else
       fail "release.sh --notes-out wrote no notes"
     fi
   fi
+  # release.sh refuses OFFLOAD_BUNDLE_BRAIN=0 and a DMG whose app has no bundled brain.
+  rb="$(OFFLOAD_BUNDLE_BRAIN=0 PATH="$FG:$PATH" "$ROOT/app/release.sh" --dry-run --dmg "$DMG" 2>&1)" \
+    && fail "release.sh accepted OFFLOAD_BUNDLE_BRAIN=0" \
+    || { echo "$rb" | grep -q "refused: .*OFFLOAD_BUNDLE_BRAIN" && echo "release refuses OFFLOAD_BUNDLE_BRAIN=0" || fail "release.sh did not name OFFLOAD_BUNDLE_BRAIN when refusing"; }
+  FS="$T/fake-stage"; mkdir -p "$FS/Offload.app/Contents/MacOS"
+  printf '#!/bin/sh\n' > "$FS/Offload.app/Contents/MacOS/Offload"; chmod +x "$FS/Offload.app/Contents/MacOS/Offload"
+  ln -s /Applications "$FS/Applications"
+  hdiutil create -quiet -volname Offload -srcfolder "$FS" -format ULFO -ov "$T/brainless.dmg" || fail "could not make the brainless test image"
+  rm -rf "$FS"
+  rl="$(PATH="$FG:$PATH" "$ROOT/app/release.sh" --dry-run --dmg "$T/brainless.dmg" 2>&1)" \
+    && fail "release.sh accepted a DMG whose app has no bundled brain" \
+    || { echo "$rl" | grep -q "refused: .*brain" && echo "release refuses a brainless DMG" || fail "release.sh refused the brainless DMG for another reason: $(echo "$rl" | tail -1)"; }
+  hdiutil info 2>/dev/null | grep -qF "$T/brainless.dmg" && fail "release.sh left the brainless image attached"
+  rm -f "$T/brainless.dmg" "$T/brainless.dmg.sha256"
+  grep -q 'OFFLOAD_SIGN_IDENTITY.*-' "$ROOT/app/release.sh" || fail "release.sh has no guard against OFFLOAD_SIGN_IDENTITY=- (ad hoc hardened, dev only)"
   [ -e "$T/gh-create-called" ] && fail "release.sh --dry-run called gh release create"
   grep -q "status --porcelain" "$ROOT/app/release.sh" && grep -q "origin/main" "$ROOT/app/release.sh" \
     || fail "release.sh has no clean-tree / origin/main guard"
