@@ -5,7 +5,7 @@
 //   reads (which contain H, so only H's own count may move there).
 // - Evidence lists raw baseline samples only when at least floor people sent samples for that version.
 // - Anomalies are filtered before the 100-entry cap, so dropped residual_zero_share entries cannot push others out.
-// - Adoption keeps its other fields when only the residual median lacks contributors.
+// - Adoption is suppressed whole when the residual median lacks contributors (no fabricated 0).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { asPrincipal, type Client } from "../helpers/harness.ts";
 import {
@@ -221,7 +221,7 @@ describe("FLOOR anomalies are filtered before the 100-entry cap", () => {
   });
 });
 
-describe("FLOOR adoption keeps its fields when only the residual median lacks contributors", () => {
+describe("FLOOR adoption is suppressed whole when the residual median lacks contributors", () => {
   let s: S205;
   let owner: Client;
 
@@ -237,9 +237,10 @@ describe("FLOOR adoption keeps its fields when only the residual median lacks co
   }, 60_000);
   afterAll(() => s.close());
 
-  test("FLOOR: company adoption shows its rates; the residual median, from 1 person, is 0 (not shown)", async () => {
+  test("FLOOR: company adoption with fewer than floor people with a reviewed success is fully suppressed, never a made-up 0", async () => {
+    // The schema has no per-field marker, and a 0 median would read as a measurement (ADR 0005), so the whole cell goes.
     const r = await owner.get(`/v1/metrics/adoption?scope=company&${Q}`);
     expect(r.status).toBe(200);
-    expect(r.json.value).toMatchObject({ peopleWithActiveWorkflow: 5, successRate: 1, medianResidualSeconds: 0 });
+    expect(r.json.value).toEqual(SUPPRESSED);
   });
 });
