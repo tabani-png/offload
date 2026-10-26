@@ -169,7 +169,11 @@ only saving was the typing.
     cell per column (too many or too few: skipped and named, later rows continue); object rows inside a columns table
     may only use the declared columns (else skipped and named); a table's rows are read only through the table, never
     also as a plain list; empty, formatting-only and repeated cells are judged the same way in both.
-24. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+24. **Round 17 (PR #35 review).** The dry run fills a past instance only from the source row that matches the values
+    typed on that instance's commit screen (`parseCommitRows`: every typed row and the label lines; a row matches when
+    it shares at least one field and no shared field differs). Exactly one matching row -> filled; none or several ->
+    unfilled, "could not match the source row", and it does not count toward savings. Never the first row.
+25. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)

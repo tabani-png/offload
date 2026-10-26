@@ -850,16 +850,65 @@ export interface SourceFilled {
 }
 
 /** One past instance: the values its source showed right before it (code) next to what the person typed. */
+/**
+ * s27 round 17: every set of values typed on a commit screen: each row of each table under a label header, and the
+ * "Label: value" lines as one more set. Used as evidence to match a source row to a past instance (never "the first").
+ */
+export function parseCommitRows(texts: readonly string[]): Array<Map<string, string>> {
+  const out: Array<Map<string, string>> = [];
+  for (const t of texts) {
+    const lines = t.split("\n").map((l) => l.replace(/\r$/, "")).filter((l) => l.trim() !== "" && !isFormattingLine(l));
+    const kv = new Map<string, string>();
+    for (let i = 0; i < lines.length; i++) {
+      const head = cellsOf(lines[i]!);
+      if (head !== null && head.length >= 2 && head.every((c) => plainLabel(c) !== null)) {
+        const outer = outerPipes(lines[i]!);
+        let j = i + 1;
+        for (; j < lines.length; j++) {
+          const cells = cellsOf(lines[j]!, outer);
+          if (cells === null) break;
+          if (cells.length !== head.length || cells.every((x) => plainLabel(x) !== null)) continue;
+          out.push(new Map(head.map((h, k) => [h, cells[k]!] as [string, string]).filter(([, v]) => v !== "")));
+        }
+        i = j - 1;
+        continue;
+      }
+      const m = /^([A-Za-z][A-Za-z ]{0,39}):\s*(\S.*)$/.exec(lines[i]!.trim());
+      if (m !== null && plainLabel(m[1]!) !== null && !kv.has(m[1]!.trim())) kv.set(m[1]!.trim(), m[2]!.trim());
+    }
+    if (kv.size > 0) out.push(kv);
+  }
+  return out;
+}
+
+/** A source row matches a typed set when they share at least one field and no shared field differs. */
+const rowMatches = (row: ValueRow, typed: ReadonlyMap<string, string>): boolean => {
+  let shared = 0;
+  for (const [l, v] of row) {
+    const t = typed.get(l);
+    if (t === undefined) continue;
+    if (t !== v) return false;
+    shared += 1;
+  }
+  return shared > 0;
+};
+
+export const NO_MATCH_WORDS = (name: string) => `could not match the source row: ${name} showed no single row that fits what was typed here; left for you`;
+
 export function fillFromSource(src: ReadSourceDTO, sourceText: string, commitOcr: readonly string[], o: { outputType: OutputType; verb: string; object: string }): SourceFilled {
   const rows = rowsOf(readValues(sourceText, src.fields));
-  const got = new Map(rows[0] ?? []);
+  // The source row for THIS instance: the one row that matches the values typed on its commit screen (recorded
+  // evidence). None or several -> unfilled, said plainly, and it saves nothing (it is not doable from the source).
+  const typedRows = parseCommitRows(commitOcr);
+  const matching = rows.filter((r) => typedRows.some((t) => rowMatches(r, t)));
+  const got = new Map(matching.length === 1 ? matching[0]! : []);
   const ours: OutputFieldDTO[] = src.fields.map((f) => ({ label: f.label, value: got.get(f.label) ?? null }));
-  const typed = new Map(parseCommitValues(commitOcr));
+  const typed = matching.length === 1 ? (typedRows.find((t) => rowMatches(matching[0]!, t)) ?? new Map<string, string>()) : new Map(parseCommitValues(commitOcr));
   const theirs: OutputFieldDTO[] = src.fields.filter((f) => typed.has(f.label)).map((f) => ({ label: f.label, value: typed.get(f.label)! }));
   let matched = 0;
   for (const t of theirs) if (ours.find((x) => x.label === t.label)?.value === t.value) matched += 1;
   const filled = ours.filter((f) => f.value !== null);
-  const warnings = ours.filter((f) => f.value === null).map((f) => `${f.label}: not on ${src.targetName} before this one; left for you`);
+  const warnings = matching.length === 1 ? ours.filter((f) => f.value === null).map((f) => `${f.label}: not on ${src.targetName} before this one; left for you`) : [NO_MATCH_WORDS(src.targetName)];
   const value = theirs.length === 0 ? 0 : Math.round((matched / theirs.length) * 1000) / 1000;
   const verb = o.verb;
   return {

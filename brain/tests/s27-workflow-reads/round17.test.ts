@@ -2,11 +2,10 @@
 // recorded evidence (the values the person then typed on the commit screen). Exactly one matching row -> filled; none
 // or several -> left unfilled, said plainly, and not counted toward savings. Never "the first row".
 import { describe, expect, test } from "bun:test";
-import { fillFromSource, type SkippedRow } from "../../src/plan/read-source.ts";
+import { fillFromSource } from "../../src/plan/read-source.ts";
 import { producesNothing } from "../../src/plan/dryrun.ts";
 import type { ReadSourceDTO } from "../../src/api/s14-types.ts";
 
-void (null as unknown as SkippedRow);
 const SRC = {
   targetName: "PostHog",
   fields: [
