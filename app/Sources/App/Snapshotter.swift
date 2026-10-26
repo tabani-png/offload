@@ -22,6 +22,8 @@ enum Snapshotter {
         let suffix = scheme == .dark ? "dark" : "light"
         for (name, view) in surfaces() {
           let file = dir.appendingPathComponent("\(name)-\(suffix).png")
+          // S2-13: a name with a folder ("company/notice") writes into that folder.
+          try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
           try render(view, scheme: scheme, to: file)
           written.append(file.lastPathComponent)
         }
@@ -87,7 +89,132 @@ enum Snapshotter {
       ("card-undo", card(undo)),
       ("card-empty", card(empty)),
       ("scene", AnyView(Scene(state: base, now: now, rail: rail))),
-    ] + s08Surfaces() + s09aSurfaces() + s10eSurfaces() + s14Surfaces() + s17Surfaces()
+    ] + s08Surfaces() + s09aSurfaces() + s10eSurfaces() + s14Surfaces() + s17Surfaces() + s213Surfaces() + s23Surfaces()
+  }
+
+  // MARK: S2-13 company
+
+  /// S2-13: the Company window (not connected, signing in, connected), the notice sheet, the share sheet (plain
+  /// words, View source open, queued) and the sync state on the rail and the dashboard. A fictional company on the
+  /// in-memory API; no brain, no control plane, nothing sent. Written to `company/` under the snapshot folder.
+  static func s213Surfaces() -> [(String, AnyView)] {
+    let api = MockCompanyAPI()
+    let lastSync = now.addingTimeInterval(-12 * 60)
+    func model(_ status: CompanyStatus, connect: CompanyModel.Connect = .idle, sheet: CompanyModel.Sheet? = nil,
+               source: Bool = false, queued: Bool = false) -> CompanyModel {
+      let m = CompanyModel(service: CompanyService(api: api))
+      m.preview(status: status, connect: connect, sheet: sheet, showSource: source, queued: queued,
+                workflows: status.isConnected ? CompanySamples.workflows : [],
+                signIn: connect == .waiting ? CompanySamples.control.appendingPathComponent("auth/login") : nil)
+      return m
+    }
+    func scene(_ m: CompanyModel, height: CGFloat = 640) -> AnyView {
+      AnyView(Backdrop(padding: 32) {
+        WindowChrome(title: CompanyCopy.title, subtitle: CompanyCopy.subtitle,
+                     toolbarItems: [ToolbarItemLook(symbol: "arrow.clockwise")], width: CompanyView.width,
+                     sheet: m.sheet == nil ? nil : AnyView(CompanySheetHost(model: m))) {
+          CompanyView(model: m, now: now).frame(height: height)
+        }
+      })
+    }
+    let connected = CompanySamples.status(.connected, lastSync: lastSync, queued: 2)
+    let waiting = CompanySamples.status(.connected, acknowledged: false)
+    let share = CompanySamples.share
+    var queuedShare = share
+    queuedShare.confirmed = true
+    // Round 3: signed in, the brain has not read the notice yet: blue "Checking", never green.
+    var checking = CompanySamples.status(.connected)
+    checking.noticeState = .unknown
+    checking.featuresKnown = false
+    // Round 4: the config is read and the company has published no notice: grey, says so, shares nothing.
+    var noNotice = CompanySamples.status(.connected)
+    noNotice.noticeState = .noneRequired
+    let states: [(CompanyStatus, CompanySyncState)] = [
+      CompanySamples.status(.notConnected), CompanySamples.status(.connecting), waiting, checking, noNotice, connected,
+      CompanySamples.status(.paused, lastSync: lastSync), CompanySamples.status(.revoked),
+    ].map { ($0, CompanySyncState($0)) }
+    let status = AnyView(Backdrop(padding: 28) {
+      HStack(alignment: .top, spacing: 36) {
+        VStack(alignment: .trailing, spacing: Tokens.Space.s12) {
+          ForEach(Array(states.filter { CompanyEntry.railState($0.1) != nil }.enumerated()), id: \.offset) { _, e in
+            HStack(spacing: Tokens.Space.s8) {
+              Text(e.1.label(now: now)).textStyle(Tokens.TypeScale.label).monospacedDigit()
+              CompanyRailMark(state: e.1)
+            }
+          }
+        }
+        VStack(alignment: .leading, spacing: Tokens.Space.s8) {
+          ForEach(Array(states.filter { CompanyEntry.showsOnDashboard($0.1) }.enumerated()), id: \.offset) { _, e in
+            CompanySyncRow(status: e.0, state: e.1, now: now)
+          }
+        }
+        .frame(width: 560)
+      }
+    })
+    return [
+      ("company/connect", scene(model(CompanySamples.status(.notConnected)), height: 300)),
+      ("company/connect-waiting", scene(model(CompanySamples.status(.notConnected), connect: .waiting), height: 300)),
+      ("company/connect-connected", scene(model(connected), height: 760)),
+      ("company/notice", scene(model(waiting, sheet: .notice), height: 640)),
+      ("company/share", scene(model(connected, sheet: .share(share)), height: 700)),
+      ("company/share-source", scene(model(connected, sheet: .share(share), source: true), height: 780)),
+      ("company/share-queued", scene(model(connected, sheet: .share(queuedShare), queued: true), height: 760)),
+      ("company/status", status),
+      ("company/rail", companyRail(lastSync: lastSync)),
+      ("company/dashboard", companyDashboard(CompanySamples.status(.notConnected))),
+      ("company/dashboard-connected", companyDashboard(connected)),
+    ]
+  }
+
+  /// S2-13: the live rail with the company mark under the tools (only once a company is in play), waiting for the
+  /// notice and syncing; and with no company, where it shows nothing.
+  static func companyRail(lastSync: Date) -> AnyView {
+    let r = RailModel(status: ObserverStatus(state: .watching, daysStored: 3, windowDays: 7, nextPurge: now, insightsWaiting: 1),
+                      automations: [], micRecording: false)
+    let states: [CompanyStatus] = [CompanySamples.status(.notConnected), CompanySamples.status(.connected, acknowledged: false),
+                                   CompanySamples.status(.connected, lastSync: lastSync)]
+    return AnyView(Backdrop(padding: 28) {
+      HStack(alignment: .top, spacing: 36) {
+        ForEach(Array(states.enumerated()), id: \.offset) { _, s in
+          RailView(rail: r, hoveringStatus: false, company: CompanyEntry.railState(CompanySyncState(s)))
+        }
+      }
+    })
+  }
+
+  /// S2-13: the overview with the company row last, under where your time goes.
+  static func companyDashboard(_ s: CompanyStatus) -> AnyView {
+    let m = dashboardModel()
+    m.updateCompany(CompanyGlance(status: s, state: CompanySyncState(s)))
+    return dashboardScene(m)
+  }
+
+  // MARK: s23 fixtures
+
+  /// s23: "Your time", the dashboard's home, on the NEUTRAL sample week (NeutralWeek, never the outreach week): the
+  /// week, one day, the week without the solution designer (no fix kinds) and an empty week. No automations are on,
+  /// so the sidebar carries no badge that belongs to another week.
+  static func s23Surfaces() -> [(String, AnyView)] {
+    func time(_ b: TimeBreakdown, weekDays: [String] = NeutralWeek.days) -> AnyView {
+      var calm = MockBrainClient.sampleDashboard
+      calm.automations = []
+      calm.hours = HoursSaved(estimated: 0, measured: nil)
+      let m = dashboardModel(section: .time, data: calm)
+      m.previewTime(b, weekDays: weekDays)
+      // A flat backdrop: the gradient wallpaper alone costs more than the 400 KB capture budget (F5) at this height.
+      return AnyView(WindowChrome(title: "Offload", subtitle: m.section.title, width: dashboardWidth,
+                                  sidebar: AnyView(DashboardSidebar(model: m))) {
+        DashboardDetail(model: m, frozenNow: reviewNow)
+      }
+      .padding(32)
+      .background(FlatBackdrop()))
+    }
+    return [
+      ("time-week", time(NeutralWeek.breakdown)),
+      ("time-day", time(NeutralWeek.day)),
+      ("time-nofix", time(NeutralWeek.noFix)),
+      ("time-empty", time(.empty, weekDays: [])),
+    ]
   }
 
   // MARK: s14 fixtures
@@ -126,6 +253,14 @@ enum Snapshotter {
       _ = f.primary()
     }
     server.serverText = "https://mcp.linear.app/mcp"
+    // s10f: the run confirm before a command server is started.
+    let runConfirm = sheet("tk-linear") { f in
+      f.chooseNumber(3)
+      _ = f.primary()
+      f.serverText = "npx -y @linear/mcp-server"
+      _ = f.primary()
+    }
+    runConfirm.serverText = "npx -y @linear/mcp-server"
     let built = sheet("tk-linear") { f in
       f.signedIn()
       _ = f.primary()
@@ -134,10 +269,12 @@ enum Snapshotter {
     return [
       ("connections", scene(list(selected: "tk-linear"))),
       ("connections-search", scene(list("lin"))),
+      ("connections-search-tool", scene(list("invoice"))),
       ("connections-detail", scene(list(selected: "tk-linear", sheet: sheet("tk-linear")))),
       ("connections-key", scene(list(selected: "tk-linear", sheet: keyed))),
       ("connections-server", scene(list(selected: "tk-linear", sheet: server))),
       ("connections-built", scene(list(selected: "tk-linear", sheet: built))),
+      ("connections-run-confirm", scene(list(selected: "tk-linear", sheet: runConfirm))),
     ]
   }
 
@@ -318,7 +455,8 @@ enum Snapshotter {
                                          startedAt: reviewNow)
     let crm = MockBrainClient.dashboardAutomations.first { $0.state == .needsYou }!
     let rowTarget = DashboardModel.pointerTarget(for: crm)
-    let rowPointer = PointerRequest(targetId: rowTarget.id, originId: "lead.\(crm.id)", label: rowTarget.label, startedAt: reviewNow)
+    let rowPointer = PointerRequest(targetId: rowTarget.id, originId: "lead.\(crm.id)", label: rowTarget.label, startedAt: reviewNow,
+                                    rowId: "rowband.\(crm.id)")
     let holdAt = reviewNow.addingTimeInterval(1.4 + 1.5)
 
     func confirmScene(_ m: ReviewModel) -> AnyView {
@@ -459,6 +597,12 @@ struct Backdrop<Content: View>: View {
       .padding(padding)
       .background(BackdropFill())
   }
+}
+
+/// s23: one flat colour behind a window (no gradient), so a tall window still fits the snapshot size budget.
+struct FlatBackdrop: View {
+  @Environment(\.colorScheme) private var scheme
+  var body: some View { Color(hex: scheme == .dark ? 0x1E2130 : 0xE4E7EE) }
 }
 
 struct BackdropFill: View {

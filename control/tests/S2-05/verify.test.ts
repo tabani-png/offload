@@ -126,4 +126,38 @@ describe("VERIFY envelope signatures", () => {
     const r = await sendObjects(s.h, dev, big, { body: (e) => jcs(e) + " ".repeat(1024 * 1024) });
     expect(r.status).toBe(400);
   });
+
+  /** POST a streamed body of `total` bytes (no Content-Length unless given) and count how much the server pulled. */
+  const streamed = async (total: number, headers: Record<string, string> = {}) => {
+    let pulled = 0;
+    const chunk = new Uint8Array(64 * 1024).fill(0x20);
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (pulled >= total) return c.close();
+        pulled += chunk.byteLength;
+        c.enqueue(chunk);
+      },
+    });
+    const res = await s.h.app.request("http://control.test/v1/sync/batches", {
+      method: "POST",
+      body,
+      duplex: "half",
+      headers: { Authorization: `Bearer ${dev.token}`, "Content-Type": "application/json", "Offload-Signature": `keyid=${dev.deviceId}, sig=AAAA`, ...headers },
+    } as RequestInit);
+    return { status: res.status, json: (await res.json()) as { error: { code: string } }, pulled };
+  };
+
+  test("VERIFY: an oversize body without Content-Length is rejected without being read in full", async () => {
+    const r = await streamed(64 * 1024 * 1024);
+    expect(r.status).toBe(400);
+    expect(r.json.error.code).toBe("validation_failed");
+    // The cap is 1 MiB; the reader stops within a chunk or two of it instead of buffering 64 MiB.
+    expect(r.pulled).toBeLessThan(2 * 1024 * 1024);
+  });
+
+  test("VERIFY: a Content-Length over 1 MiB is rejected before the body is read", async () => {
+    const r = await streamed(8 * 1024 * 1024, { "Content-Length": String(8 * 1024 * 1024) });
+    expect(r.status).toBe(400);
+    expect(r.pulled).toBeLessThanOrEqual(256 * 1024);
+  });
 });

@@ -8,9 +8,9 @@ import type { Tx } from "../../db/pool.ts";
 import { ulid } from "../../schema/encoding.ts";
 import { HttpError, conflict, invalid, notFound, page, pageParams } from "../../schema/http.ts";
 import {
-  applies, listNotices, ms, noticeById, noticeDto, offsetOf, personRow, sameSet, uuidParam, type Feature, type NoticeRow,
+  applies, listNotices, liveAt, ms, noticeById, noticeDto, offsetOf, personRow, sameSet, uuidParam, type Feature, type NoticeRow,
 } from "./common.ts";
-import { isTemplate } from "./templates.ts";
+import { CUSTOM_TEMPLATE, isTemplate, templateById, unfilledFields } from "./templates.ts";
 import { P, bodyOf, replyLocal } from "./schemas.ts";
 
 const NOTICE = "offload/stage2/notice.schema.json";
@@ -65,33 +65,55 @@ async function ackOf(tx: Tx, personId: string, noticeId: string): Promise<AckRow
   return (a as AckRow | undefined) ?? null;
 }
 
-/** Inserts one acknowledgement, points the person at it and audits it, in the caller's transaction. */
+/**
+ * Inserts one acknowledgement, points the person at it and audits it, in the caller's transaction. Concurrent acks of
+ * one notice by one person (two web requests, or web and device sync) race to the (person, notice) unique key: the
+ * loser inserts nothing and gets the winner's ack back, with `created: false`.
+ */
 async function recordAck(
   tx: Tx,
   deps: Deps,
   principal: Principal,
   n: NoticeRow,
-  ack: { id: string; acknowledgedAt: number; jurisdiction: string; channel: "mac_app" | "web" },
-): Promise<AckRow> {
+  ack: { id: string; acknowledgedAt: number; deviceAcknowledgedAt: number | null; jurisdiction: string; channel: "mac_app" | "web" },
+): Promise<{ row: AckRow; created: boolean }> {
   const now = deps.clock.now();
   const deviceId = principal.kind === "device" ? principal.deviceId : null;
   const [row] = await tx`insert into notice_acks (tenant_id, id, person_id, notice_id, acknowledged_at_ms, created_at_ms,
-      jurisdiction, features, channel, device_id)
+      jurisdiction, features, channel, device_id, device_acknowledged_at_ms)
     values (current_setting('app.tenant_id')::uuid, ${ack.id}, ${principal.personId}, ${n.id}, ${ack.acknowledgedAt}, ${now},
-      ${ack.jurisdiction}, ${n.features}::jsonb, ${ack.channel}, ${deviceId})
+      ${ack.jurisdiction}, ${n.features}::jsonb, ${ack.channel}, ${deviceId}, ${ack.deviceAcknowledgedAt})
+    on conflict do nothing
     returning *`;
-  await tx`update people set notice_ack_version_id = ${n.id} where id = ${principal.personId}`;
+  if (!row) {
+    const prior = await ackOf(tx, principal.personId, n.id);
+    if (!prior) throw conflict("this acknowledgement id is already taken");
+    return { row: prior, created: false };
+  }
+  // The person's recorded notice is the latest-published one they acknowledged, whatever order the acks arrive in
+  // (a late device sync of an older notice must not move it back), so it matches the current notice once acked.
+  await tx`update people pe set notice_ack_version_id = ${n.id} where pe.id = ${principal.personId}
+    and (pe.notice_ack_version_id is null
+      or coalesce((select o.publish_seq from notices o where o.id = pe.notice_ack_version_id), 0)
+        < (select m.publish_seq from notices m where m.id = ${n.id}))`;
   await deps.ports.audit.write(tx, {
     actor: actorOf(principal),
     action: "notice.ack",
     subjectPersonId: principal.personId,
     resource: { type: "notice", id: n.id },
-    detail: { version: n.version, channel: ack.channel, features: n.features, jurisdiction: ack.jurisdiction },
+    detail: {
+      version: n.version, channel: ack.channel, features: n.features, jurisdiction: ack.jurisdiction,
+      ...(ack.deviceAcknowledgedAt === null ? {} : { deviceAcknowledgedAt: ack.deviceAcknowledgedAt }),
+    },
   });
-  return row as AckRow;
+  return { row: row as AckRow, created: true };
 }
 
-/** `syncHandlers.notice_ack`: an acknowledgement made in the Mac app. Idempotent on the object id and on (person, notice). */
+/**
+ * `syncHandlers.notice_ack`: an acknowledgement made in the Mac app. Idempotent on the object id and on (person, notice).
+ * The device's acknowledgedAt is checked and kept as `device_acknowledged_at_ms`, but the ack counts from when the server
+ * received it: a device clock cannot move consent earlier than the server knew of it.
+ */
 export const syncNoticeAck: SyncHandler = async (tx, object, { principal, deps }) => {
   const v = deps.validator.validate(ACK, object);
   if (!v.ok) throw invalid("notice_ack does not match its schema", v.errors);
@@ -113,7 +135,9 @@ export const syncNoticeAck: SyncHandler = async (tx, object, { principal, deps }
   const replaced = ms(n.replaced_at_ms);
   if (replaced !== null && o.acknowledgedAt >= replaced) throw conflict("a newer notice replaced this one");
   if (await ackOf(tx, principal.personId, n.id)) return;
-  await recordAck(tx, deps, principal, n, { id: o.id, acknowledgedAt: o.acknowledgedAt, jurisdiction: p.jurisdiction, channel: "mac_app" });
+  await recordAck(tx, deps, principal, n, {
+    id: o.id, acknowledgedAt: deps.clock.now(), deviceAcknowledgedAt: o.acknowledgedAt, jurisdiction: p.jurisdiction, channel: "mac_app",
+  });
 };
 
 export function noticeRoutes(app: App, deps: Deps): void {
@@ -162,7 +186,14 @@ export function noticeRoutes(app: App, deps: Deps): void {
       const n = await noticeById(tx, id);
       if (!n) throw notFound();
       if (n.published_at_ms !== null) throw conflict("this notice version is already published");
-      await tx`update notices set published_at_ms = ${now} where id = ${id}`;
+      // Employees must never be asked to acknowledge "{{how}}": a template's fields are all filled before it goes out.
+      const template = n.template === CUSTOM_TEMPLATE ? undefined : templateById(n.template);
+      const unfilled = template ? unfilledFields(template, n.markdown) : [];
+      if (unfilled.length > 0) {
+        throw new HttpError(422, "validation_failed", `fill in every template field before publishing: ${unfilled.join(", ")}`, { fields: unfilled });
+      }
+      await tx`update notices set published_at_ms = ${now},
+        publish_seq = (select coalesce(max(publish_seq), 0) + 1 from notices) where id = ${id}`;
       // The new version replaces every current one whose readers it fully covers.
       const replaced = await tx`update notices set replaced_at_ms = ${now}
         where id <> ${id} and published_at_ms is not null and replaced_at_ms is null
@@ -211,15 +242,17 @@ export function noticeRoutes(app: App, deps: Deps): void {
     const now = deps.clock.now();
     const res = await tenantTx(c, deps, async (tx, principal) => {
       const n = await noticeById(tx, id);
-      if (!n || n.published_at_ms === null) throw notFound();
+      if (!n || n.published_at_ms === null || Number(n.published_at_ms) > now) throw notFound();
       const prior = await ackOf(tx, principal.personId, id);
       if (prior) return { status: 200 as const, ack: ackDto(prior) };
       const p = await personRow(tx, principal.personId);
       if (!p) throw notFound();
       if (!applies(n, p.jurisdiction)) throw conflict("this notice does not apply to your jurisdiction");
-      if (n.replaced_at_ms !== null) throw new HttpError(409, "conflict", "a newer notice replaced this one; acknowledge the current notice");
-      const row = await recordAck(tx, deps, principal, n, { id: ulid(now), acknowledgedAt: now, jurisdiction: p.jurisdiction, channel: "web" });
-      return { status: 201 as const, ack: ackDto(row) };
+      if (!liveAt(n, now)) throw new HttpError(409, "conflict", "a newer notice replaced this one; acknowledge the current notice");
+      const { row, created } = await recordAck(tx, deps, principal, n, {
+        id: ulid(now), acknowledgedAt: now, deviceAcknowledgedAt: null, jurisdiction: p.jurisdiction, channel: "web",
+      });
+      return { status: created ? (201 as const) : (200 as const), ack: ackDto(row) };
     });
     return reply(c, deps, res.status, res.ack, ACK);
   });

@@ -61,7 +61,7 @@ export function syncKey(home: string, name: string, opts: { create: boolean; env
   const ck = `${home}\u0000${name}`;
   const hit = cache.get(ck);
   if (hit !== undefined) return hit;
-  const k = brainKeyMode(env) === "file" ? rawKey(home, name, opts.create) : observerKey(home, name, opts.create, env);
+  const k = brainKeyMode(env, home) === "file" ? rawKey(home, name, opts.create) : observerKey(home, name, opts.create, env);
   if (k !== null) cache.set(ck, k);
   return k;
 }

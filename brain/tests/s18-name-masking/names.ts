@@ -14,6 +14,13 @@ export const FIXTURE_LAST = [
   "Doe", "Raman", "Berg", "Khan", "Meyer", "Adeyemi", "Weber", "Patel",
 ];
 
+/** A map's placeholders without its random run tag (<person:qzkt.1> -> <person:1>), so a test can state the numbering. */
+export const untag = (s: string) => s.replace(/<person:[a-z]{4}\./g, "<person:");
+/** The run tag of the placeholders in `s` ("qzkt"), "" when there are none. */
+export const tagOf = (s: string) => /<person:([a-z]{4})\./.exec(s)?.[1] ?? "";
+/** A fake model's reply written with untagged placeholders (<person:1>), in the tag of the prompt it answers. */
+export const retag = (reply: string, prompt: string) => reply.replace(/<person:(?=\d|me)/g, `<person:${tagOf(prompt)}.`);
+
 const re = (n: string) => new RegExp(`(?<![\\p{L}\\p{N}_])${n}(?![\\p{L}\\p{N}_])`, "u");
 const cache = new Map<string, RegExp>();
 

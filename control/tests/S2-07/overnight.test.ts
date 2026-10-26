@@ -200,7 +200,9 @@ describe("S2-07 overnight policies in the broker", () => {
     const pid = await overnightPolicy(w, { dryRunNights: 3 });
     expect((await member.patch(`/v1/overnight-policies/${pid}`, { state: "tripped" })).status).toBe(400);
     await w.h.db.migrator`update overnight_policies set state = 'tripped', tripped_reason = 'bounce_rate', dry_run_nights_done = 3 where id = ${pid}`;
-    const rearm = await member.patch(`/v1/overnight-policies/${pid}`, { state: "active" });
+    // Re-arming is above the owner (fix round 2, N3): the member's dept lead does it.
+    expect((await member.patch(`/v1/overnight-policies/${pid}`, { state: "active" })).status).toBe(403);
+    const rearm = await (await client(w, "lead")).patch(`/v1/overnight-policies/${pid}`, { state: "active" });
     expect(rearm.status).toBe(200);
     expect(rearm.json).toMatchObject({ state: "active", trippedReason: null, dryRunNightsDone: 3 });
     const newTpl = await member.patch(`/v1/overnight-policies/${pid}`, { templateHash: "e".repeat(64) });

@@ -64,11 +64,31 @@ s2_forbid() {
   fi
 }
 
-# s2_untouched <base ref> <path...>: no commit on this branch since <base> changed these paths.
+# s2_files <integration ref> <path...>: sets SLICE_FILES to the files under <path> this branch itself changed (net;
+# merges of main are not counted, conflict edits are). "main" means origin/main when it exists. Returns non-zero with
+# SLICE_ERROR on any helper error; callers FAIL then. See scripts/lib/slice-changes.sh.
+. "$ROOT/scripts/lib/slice-changes.sh"
+s2_files() {
+  local integ="$1"; shift
+  [ "$integ" = main ] && integ=""
+  SLICE_INTEGRATION="${integ:-${SLICE_INTEGRATION:-}}" slice_files -- "$@"
+}
+
+# s2_untouched <integration ref> <path...>: this branch's own changes do not touch these paths.
 s2_untouched() {
   local base="$1"; shift
-  local changed; changed="$(git -C "$ROOT" diff --name-only "$base"...HEAD -- "$@" 2>/dev/null)"
-  [ -z "$changed" ] || { echo "$changed" | head -10; fail "out-of-scope paths changed: $*"; }
+  if ! s2_files "$base" "$@"; then fail "scope check could not run ($SLICE_ERROR): $*"; return; fi
+  [ -z "$SLICE_FILES" ] || { printf '%s\n' "$SLICE_FILES" | head -10; fail "out-of-scope paths changed: $*"; }
+}
+
+# s2_migrations_in <NN> <range label>: every migration this branch changed is named NN[0-9][0-9]_*.
+s2_migrations_in() {
+  local m
+  if ! s2_files "${S2_BASE:-main}" control/migrations; then fail "migration range check could not run ($SLICE_ERROR)"; return; fi
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    case "$(basename "$m")" in "$1"[0-9][0-9]_*) ;; *) fail "migration outside range $2: $m";; esac
+  done <<< "$SLICE_FILES"
 }
 
 # s2_schemas_frozen: schemas/stage2 matches main (contract changes go through the coordinator).

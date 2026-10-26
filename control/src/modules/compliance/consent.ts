@@ -65,6 +65,20 @@ export async function allowsAt(tx: Tx, personId: string, kind: string, at: numbe
   return allowedBy(await state(tx, personId, at), kind);
 }
 
+/** The notice to show the person at `at` (device-config `requiredNotice`); null when no published notice applies. */
+export async function requiredNoticeAt(tx: Tx, personId: string, at: number) {
+  return noticeShape((await state(tx, personId, at)).notice);
+}
+
+/** When working time may start for the person at `at` (device-config `workingTimeStartsAt`); null when it may not. */
+export async function workingTimeStartsAt(tx: Tx, personId: string, at: number): Promise<number | null> {
+  return (await state(tx, personId, at)).workingTimeSince;
+}
+
+function noticeShape(n: NoticeRow | null) {
+  return n ? { noticeVersionId: n.id, title: n.title, markdown: n.markdown, features: n.features } : null;
+}
+
 /**
  * The consent part of `GET /v1/sync/config` (device-config schema), for the sync slice to serve: the notice to show,
  * what may be sent now, the features on for this person and when working time may start.
@@ -73,9 +87,7 @@ export async function deviceConsent(tx: Tx, personId: string, at: number) {
   const s = await state(tx, personId, at);
   const j = s.jurisdiction;
   return {
-    requiredNotice: s.notice
-      ? { noticeVersionId: s.notice.id, title: s.notice.title, markdown: s.notice.markdown, features: s.notice.features }
-      : null,
+    requiredNotice: noticeShape(s.notice),
     allowedKinds: SYNC_KINDS.filter((k) => allowedBy(s, k)),
     features: {
       workflow_metrics: true,

@@ -11,7 +11,18 @@ final class DashboardModel: ObservableObject {
   /// Why the dashboard could not load, as one calm sentence (s09a).
   @Published private(set) var problem: String?
   /// s10d: the sidebar's place, the files kept until you delete them, and the auto-send sheet.
-  @Published var section: DashboardSection = .overview
+  @Published var section: DashboardSection = DashboardSection.home
+  /// s23: where the time goes (GET /time), for the week or one stored day (`timeDay`), and why it could not load.
+  /// PR #29 review: one value so a reload keeps the day, a failure clears the numbers and stale answers are dropped.
+  @Published private(set) var timeLoads = TimeLoads()
+  var time: TimeBreakdown? { timeLoads.time }
+  var timeDay: String? { timeLoads.day }
+  var timeProblem: String? { timeLoads.problem }
+  var timeWeekDays: [String] { timeLoads.weekDays }
+  /// A Draft workflow that could not start, in plain words (the numbers on screen stay; cleared on a day change).
+  var timeNotice: String? { timeLoads.notice }
+  /// s23: the breakdown's dimension (task, app, kind of work).
+  @Published var timeDimension: TimeDimension = .task
   @Published private(set) var keptFiles: [KeptFile] = []
   @Published private(set) var autoSend: AutoSendSheet?
   @Published private(set) var autoSendWorking = false
@@ -46,9 +57,18 @@ final class DashboardModel: ObservableObject {
   }
 
   var onOpenWorkflow: ((String) -> Void)?
+  /// s10f (M4): the sidebar's Connections link (⌘K).
+  var onOpenConnections: (() -> Void)?
   /// s10e: the inbox (the empty Automations page's one action).
   var onOpenInbox: (() -> Void)?
   var onTogglePause: ((Bool) -> Void)?
+  /// S2-13: company sync for the overview's last row (set by the app from the live Company model), and its action.
+  @Published private(set) var company: CompanyGlance?
+  var onOpenCompany: (() -> Void)?
+
+  func updateCompany(_ glance: CompanyGlance?) {
+    if glance != company { company = glance }
+  }
 
   private let client: BrainClient
   private let clock: () -> Date
@@ -73,6 +93,37 @@ final class DashboardModel: ObservableObject {
       problem = BrainError.message(for: error)
     }
     keptFiles = (try? await client.keptFiles()) ?? keptFiles
+    // A reload (after approve or connect) keeps the day on screen.
+    await loadTime(day: timeLoads.reloadDay)
+  }
+
+  /// s23: GET /time for the week (`day` nil) or one stored day. Reading time drafts nothing.
+  func loadTime(day: String? = nil) async {
+    let token = timeLoads.start(day: day)
+    do {
+      let b = try await client.timeBreakdown(day: day)
+      timeLoads.finish(token, breakdown: b, problem: nil)
+    } catch {
+      timeLoads.finish(token, breakdown: nil, problem: BrainError.message(for: error))
+      // The day could not be read (e.g. it left the stored week): show the week instead, once.
+      if timeLoads.retryWeek && timeLoads.latest == token { await loadTime(day: nil) }
+    }
+  }
+
+  func showTimeDay(_ day: String?) { Task { await loadTime(day: day) } }
+
+  /// s23: a workflow is opened only from a finding whose best fix is a workflow, and only when the person asks: the
+  /// existing draft flow (POST /workflows/draft), then the review window.
+  func openInsight(_ insightId: String) {
+    Task {
+      do {
+        let w = try await client.workflow(forInsight: insightId)
+        timeLoads.note(nil)
+        onOpenWorkflow?(w.id)
+      } catch {
+        timeLoads.note(BrainError.message(for: error))
+      }
+    }
   }
 
   func show(_ s: DashboardSection) { section = s }
@@ -211,7 +262,7 @@ final class DashboardModel: ObservableObject {
 
   func point(at a: DashboardAutomation) {
     let t = Self.pointerTarget(for: a)
-    startPointer(PointerRequest(targetId: t.id, originId: "lead.\(a.id)", label: t.label, startedAt: clock()))
+    startPointer(PointerRequest(targetId: t.id, originId: "lead.\(a.id)", label: t.label, startedAt: clock(), rowId: "rowband.\(a.id)"))
   }
 
   /// "Show the evidence" on the timeline: fly to the span the top insight is built on.
@@ -244,6 +295,13 @@ final class DashboardModel: ObservableObject {
   }
 
   // MARK: snapshot support
+
+  /// s23 snapshots: the time screen on a fixed breakdown.
+  func previewTime(_ b: TimeBreakdown, weekDays: [String] = NeutralWeek.days, dimension: TimeDimension = .task) {
+    timeLoads.preview(b, weekDays: weekDays)
+    timeDimension = dimension
+    section = .time
+  }
 
   func preview(_ d: DashboardData, pointer: PointerRequest? = nil, section: DashboardSection = .overview,
                keptFiles: [KeptFile] = MockBrainClient.sampleKeptFiles, autoSend: AutoSendSheet? = nil,

@@ -43,6 +43,7 @@ Match explanations to the user's technical level unless they ask otherwise. Neve
 - **Vertical, not horizontal.** A slice delivers a user-visible behavior, not a layer.
 - **Explicit scope.** Every slice spec lists `paths_in_scope` and `paths_out_of_scope`.
 - **No silent scope expansion.** Touching a path outside scope requires updating the spec first, with a `## Scope changes` note.
+- **Scope checks use the shared helper.** A `verify.sh` scope check lists changed files with `slice_changes "$BASE"` from `scripts/lib/slice-changes.sh` (or `s2_changed` / `s2_untouched` for S2 slices), never `git diff "$BASE"...HEAD`. A fixed-BASE diff counts main's files once the branch merges main and false-fails.
 
 ## Test rules (strict TDD ownership)
 

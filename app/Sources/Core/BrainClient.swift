@@ -51,6 +51,9 @@ protocol BrainClient: Sendable {
   func setupConnection(id: String, _ setup: ConnectionSetup) async throws -> ConnectionDetail
   func testConnection(id: String) async throws -> ConnectionTest
   func buildWorkflow(connectionId: String) async throws -> ConnectionBuild
+
+  // s23: where your time goes (GET /time[?day=]). Defaults (an older brain) say "not found".
+  func timeBreakdown(day: String?) async throws -> TimeBreakdown
 }
 
 enum BrainError: Error, Equatable {

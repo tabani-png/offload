@@ -21,3 +21,7 @@ dashboard-light
 dashboard-week
 dashboard-automations
 dashboard-observing
+glass-dark-over-color
+glass-light-over-color
+time-week
+time-day

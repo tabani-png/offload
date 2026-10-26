@@ -112,7 +112,7 @@ struct S10EConnectTests {
     _ = f.receive(link(.connected), at: t0)
     let done = ConnectCopy(flow: f, returnsToConfirm: true)
     #expect(done.status == "Gmail connected")
-    #expect(done.primary == "Back to Turn on")
+    #expect(done.primary == "Back to review")
     #expect(ConnectCopy(flow: f, returnsToConfirm: false).primary == "Done")
     for s in intro.allStrings + waiting.allStrings + done.allStrings { #expect(S10EFixture.plain(s), "\(s)") }
   }

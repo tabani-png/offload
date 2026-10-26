@@ -6,9 +6,19 @@ import Foundation
 enum ReviewPrimary: Equatable, Sendable {
   /// A step needs a connector that is not connected: connect it first; Approve is secondary.
   case connect(Connector)
+  /// s10f (DESIGN-REVIEW-4 M3): the dry run came from the offline sample model, so nothing on screen is in your
+  /// voice yet: run it again with your voice before anything else. Approve and Connect are secondary.
+  case runWithVoice
   case approve
+  /// s23 (PR #13 F4): the workflow is on. Nothing is left to approve or re-voice: the primary closes the review.
+  case done
 
-  static func forWorkflow(_ w: Workflow) -> ReviewPrimary {
+  /// s10f (M8): below this window width the primary uses its short title, so it never truncates.
+  static let compactBelow: Double = 720
+
+  static func forWorkflow(_ w: Workflow, sample: Bool = false) -> ReviewPrimary {
+    if w.state == .active { return .done }
+    if sample { return .runWithVoice }
     for s in w.steps {
       guard let id = s.connectorId, let c = w.connectors.first(where: { $0.id == id }), c.state != .connected else { continue }
       return .connect(c)
@@ -16,10 +26,39 @@ enum ReviewPrimary: Equatable, Sendable {
     return .approve
   }
 
-  var title: String {
+  var title: String { title(compact: false) }
+
+  /// "Connect Google Sheets"; compact: "Connect Sheets" (a vendor prefix dropped). Sign-in, Run with my voice and
+  /// Approve are short already.
+  func title(compact: Bool) -> String {
     switch self {
-    case .connect(let c): return c.state == .missingEnv ? "Sign in to \(c.name)" : "Connect \(c.name)"
+    case .connect(let c):
+      if c.state == .missingEnv { return "Sign in to \(c.name)" }
+      return "Connect \(compact ? Self.shortName(c.name) : c.name)"
+    case .runWithVoice: return "Run with my voice"
     case .approve: return "Approve"
+    case .done: return "Done"
+    }
+  }
+
+  static func shortName(_ name: String) -> String {
+    for prefix in ["Google ", "Microsoft ", "Apple ", "Zoho "] where name.hasPrefix(prefix) && name.count > prefix.count {
+      return String(name.dropFirst(prefix.count))
+    }
+    return name
+  }
+}
+
+/// s23 (PR #13 F4): the review footer's secondary buttons, in order. After Turn on there is no Approve and no
+/// "Run with my voice": the workflow is on, and Done is the primary.
+enum ReviewFooterButtons {
+  static func secondary(_ w: Workflow, sample: Bool) -> [String] {
+    let primary = ReviewPrimary.forWorkflow(w, sample: sample)
+    switch primary {
+    case .done: return ["Run again", "Edit"]
+    case .runWithVoice: return ["Discard", "Edit", "Approve"]
+    case .connect: return ["Discard", "Run again", "Edit", "Approve"]
+    case .approve: return ["Discard", "Run again", "Edit"]
     }
   }
 }

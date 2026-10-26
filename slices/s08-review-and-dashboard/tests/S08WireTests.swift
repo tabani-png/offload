@@ -134,7 +134,7 @@ struct S08WireTests {
     let w = try decode(WorkflowDTO.self, workflowJSON).toWorkflow()
     #expect(w.nextBatch.map(\.email) == ["tomas@northline.fund", "grace@larchmontseed.com"])
     #expect(w.nextBatch[0].name == "Tomás Ibarra")
-    #expect(FirstRunPlan(workflow: w).headline == "Send 2 emails to these recipients")
+    #expect(FirstRunPlan(workflow: w).headline == "First batch: 2 recipients (drafted, then held for you)")
   }
 
   @Test("with no pending items the plan says the first run picks them and you see each one first")

@@ -7,8 +7,14 @@ enum ReviewMessages {
     if !w.needsYou.isEmpty {
       return "Turned on. Before it can send: " + w.needsYou.map { BrainError.sentence($0) }.joined(separator: " ")
     }
-    if let next = w.schedule.nextRunAt { return "Turned on. First run \(Format.runTime(next, now: now, past: false))." }
+    // s23 (PR #13 F4): mid-sentence, "today" and "tomorrow" are lower case ("First run tomorrow 09:00.").
+    if let next = w.schedule.nextRunAt { return "Turned on. First run \(midSentence(Format.runTime(next, now: now, past: false)))." }
     return "Turned on. It runs when you start it; nothing is sent without your approval."
+  }
+
+  static func midSentence(_ s: String) -> String {
+    for word in ["Today", "Tomorrow", "Yesterday"] where s.hasPrefix(word) { return word.lowercased() + s.dropFirst(word.count) }
+    return s
   }
 
   /// The brain refused: say its reason (409 "connect Gmail first") and that nothing changed.

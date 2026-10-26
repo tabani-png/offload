@@ -19,10 +19,10 @@ import { generalDryRun } from "../plan/dryrun.ts";
 import type { GeneralDryRunDTO } from "../api/s14-types.ts";
 import type { UserContext } from "../types.ts";
 import { readUserContext } from "../context/store.ts";
-import { NameMap } from "../privacy/names.ts";
-import { readNamePolicy, signNames } from "../privacy/policy.ts";
 import { checkPlaybook } from "../playbook/check.ts";
 import { readPlaybook } from "../playbook/store.ts";
+import { NameMap } from "../privacy/names.ts";
+import { readNamePolicy, signNames } from "../privacy/policy.ts";
 
 export class DryRunError extends Error {}
 
@@ -66,10 +66,10 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
 
   const items: BatchItem[] = [];
   const out: DryRunInstanceDTO[] = [];
+  // s19: an email workflow with a messaging playbook drafts with it, and each draft says whether it follows it.
+  const playbook = emailWorkflow && general === null ? readPlaybook(o.home, wf.id, warnings) : null;
   // s18: one name map per dry run (stable placeholders across instances); the facts `sign:` line is the user's name.
   const names = new NameMap(readNamePolicy(o.home, signNames(factsText)));
-  // s19: an email workflow with a messaging playbook drafts with it, and each draft says whether it follows it.
-  const playbook = emailWorkflow && general === null ? readPlaybook(o.home, wf.id) : null;
   for (const ob of observed) {
     let draft: string | null = null;
     let examplesUsed: string[] = [];
@@ -77,7 +77,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
     let verdict: DryRunInstanceDTO["playbook"];
     if (emailWorkflow) {
       // The observed subject stands in for the template so the two sides are the same email.
-      const d = await draftInTone({ pack, bucket: wf.bucket, recipient: ob.recipient, subject: ob.subject, facts: factsText, model: o.model, models, names, playbook });
+      const d = await draftInTone({ pack, bucket: wf.bucket, recipient: ob.recipient, subject: ob.subject, facts: factsText, model: o.model, models, playbook, names });
       draft = d.body;
       if (playbook !== null) verdict = checkPlaybook(d.body, playbook);
       examplesUsed = d.examplesUsed;
