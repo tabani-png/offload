@@ -114,6 +114,9 @@ enum NeutralWeek {
     .sorted { $0.minutes.value != $1.minutes.value ? $0.minutes.value > $1.minutes.value : $0.id < $1.id }
   }
 
+  /// The s04 low case's freed share on these sample tasks (review 1.5x slower, 10% of items by hand).
+  static let lowPct = 0.8
+
   static func make(_ blocks: [Block], _ specs: [FindingSpec], days: [String], kind: TimeBreakdown.WindowKind, fixKinds: Bool) -> TimeBreakdown {
     let total = blocks.reduce(0) { $0 + $1.minutes }
     let kindName = Dictionary(uniqueKeysWithValues: kindNames)
@@ -125,15 +128,22 @@ enum NeutralWeek {
     var findings: [TimeFinding] = specs.compactMap { s in
       guard let row = taskRow[s.taskId] else { return nil }
       let observed = row.minutes.value / 60 * 7 / windowDays
-      let freed = min(observed, max(0, s.estimate))
+      // The brain's honest-savings rule (brain/src/time/breakdown.ts honestFreed): the person keeps the s04 low case's
+      // share for checking (about a fifth on these tasks), and freed always shows below observed.
+      let obsT = HoursFormat.tenths(hours: observed)
+      var freed = min(observed * lowPct, max(0, s.estimate))
+      if HoursFormat.tenths(hours: freed) >= obsT { freed = Double(max(0, obsT - 1)) / 10 }
+      let capped = max(0, s.estimate) > freed + 1e-9
+      let leftT = max(0, obsT - HoursFormat.tenths(hours: freed))
       let ids = row.minutes.eventIds
       let o = TimeMetric(value: observed, unit: "hours_per_week", display: HoursFormat.display(hours: observed), eventIds: ids)
       let h = TimeMetric(value: freed, unit: "hours_per_week", display: HoursFormat.display(hours: freed), eventIds: ids)
       let n = Int(windowDays)
-      let source = fixKinds ? "best fix" : "estimate"
-      let est = HoursFormat.display(hours: s.estimate)
-      let seen = n == 7 ? "\(row.minutes.display) in 7 days" : "\(row.minutes.display) in \(n) \(n == 1 ? "day" : "days") × 7 / \(n)"
-      let arithmetic = "\(seen) = \(o.display) a week; \(source) \(est) a week; min(\(o.display), \(est)) = \(h.display)"
+      let source = fixKinds ? "the best fix" : "the estimate"
+      let now = n == 7 ? "\(o.display) a week now"
+        : "\(row.minutes.display) on this day, \(o.display) a week if every day were like this"
+      let cap = capped ? " · \(source) says \(HoursFormat.display(hours: s.estimate)), capped to leave the checking" : ""
+      let arithmetic = "\(now) · about \(leftT / 10).\(leftT % 10) h \(capped ? "left for checking" : "still yours")\(cap) · frees \(h.display)"
       let fix = fixKinds ? s.fixKind : nil
       return TimeFinding(id: "tf_\(s.taskId.dropFirst(2))", taskId: s.taskId, insightId: "ins_\(s.taskId.dropFirst(2))", name: row.name,
                          taskMinutes: row.minutes, observedHoursPerWeek: o, hoursFreed: h, arithmetic: arithmetic, fixKind: fix,

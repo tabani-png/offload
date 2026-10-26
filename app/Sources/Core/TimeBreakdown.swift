@@ -215,7 +215,8 @@ struct TimeScreen: Equatable {
       let label = f.fixKind?.label
       return Finding(
         id: f.id, taskId: f.taskId, insightId: f.insightId, name: f.name,
-        hoursLine: "Frees \(f.hoursFreed.display) a week",
+        // A day's weekly figure is an extrapolation: say so (the arithmetic line spells it out).
+        hoursLine: isDay ? "Frees \(f.hoursFreed.display) a week at this pace" : "Frees \(f.hoursFreed.display) a week",
         taskHours: rowHours[f.taskId] ?? f.taskMinutes.display,
         spentLine: "\(rowHours[f.taskId] ?? f.taskMinutes.display) \(isDay ? "on this day" : "this week")",
         arithmetic: f.arithmetic,
