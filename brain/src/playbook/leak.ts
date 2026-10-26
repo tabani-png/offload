@@ -1,7 +1,7 @@
 // De-personalisation check, fail closed: a playbook (or a notes edit, or a model's wording) that still holds a
 // person's name, an address, a phone, a link, a figure that is not one of the playbook's own counts, or the author's
 // name or company is refused. Findings carry the kind and the field path, never the value.
-import { EMAIL_RE, HOST_RE, identityBase, identityHit, isCap, isPlaceholder, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
+import { EMAIL_RE, handleLeaks, HOST_RE, identityBase, identityHit, isCap, isPlaceholder, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
 import type { Playbook } from "./types.ts";
 
 export type LeakKind = "author" | "company" | "name" | "email" | "phone" | "link" | "number";
@@ -56,6 +56,8 @@ export function findTextLeaks(text: string, id: Identity, allowedNumbers: Readon
     if (path === "notes" && /^\d{1,3}$/.test(n) && !/[#\p{L}\d_+-]/u.test(before) && !/[\p{L}\d_-]/u.test(after)) continue;
     add("number", n);
   }
+  // Handles, snake_case names and paths: the same patterns maskContacts masks.
+  for (const h of handleLeaks(text)) add("name", h);
   // One decision with maskText (identityHit): a word maskText would mask is a leak, and no other word is.
   for (const mm of text.matchAll(TOKEN_RE)) {
     const hit = identityHit(text, mm[0], mm.index ?? 0, id, vocab);

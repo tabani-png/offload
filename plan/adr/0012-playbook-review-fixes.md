@@ -93,3 +93,19 @@ expired was checked against facts.md only while reporting "re-checked"; and that
     name at a sentence start goes with it ("[name] [name] for an intro" for "Ask Will for an intro"); a lone unknown
     Latin-script name at the start of a sentence with no other evidence ("Njeri replied.") in notes or model wording
     is not caught (in mail it is, through the identity's proper nouns).
+
+## Fix round 7 (independent review of 9437da5)
+15. **Vocabulary default deny (amends 14).** Capitalisation alone failed seven rounds, so a word of mail is now kept
+    only when it is known vocabulary: the bundled common-English list (SCOWL 2020.12.07, size 50, lower-case entries
+    of the english/american/british/canadian/australian lists; 63,900 words; permissive licence kept in
+    `brain/src/playbook/wordlist/SCOWL-Copyright.txt`; minus every unambiguous given or family name of the s18 lexicon),
+    a short hand-reviewed supplement of business words SCOWL lacks (app, signup, saas, ...), this file's common and
+    generic words, the generator's words, or `CAP_ALLOW`. Anything else is a name in any case ("priya raman",
+    "o'brien"). On top: handles, snake_case names and paths (`@x`, `a_b`, `[link]/in/x`, any token with `/`) are
+    masked and are leaks; round 6's capital rules stay for known words; a month is kept only before a figure or after
+    in/on/by/... with no name after it; a given name that is also a word ("grace", "Will") next to a name goes with it.
+    `maskText` repeats until nothing changes, so masked text is never a leak; masking still never adds to the identity
+    set, so builds do not fail.
+    Accepted cost: lower-case names that are dictionary words ("will", "grace", "mark"; surnames such as "smith" and
+    "lee" are stripped from the list) stay when used alone as plain words; jargon, typos and new words outside the list are masked
+    (`[name]`), and "and/or" style tokens become `[name]`.

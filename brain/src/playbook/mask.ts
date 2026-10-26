@@ -4,6 +4,8 @@
 import { createHash } from "node:crypto";
 import { cleanEmail } from "../tone/clean.ts";
 import { AMBIGUOUS_GIVEN, FAMILY, GIVEN } from "../privacy/lexicon.ts";
+import { COMMON_WORDS_TEXT } from "./wordlist/common-words.ts";
+import { SUPPLEMENT_WORDS } from "./wordlist/supplement.ts";
 import type { ContactEntry } from "../privacy/names.ts";
 import { SLOTS, type PlaybookMessage } from "./types.ts";
 
@@ -321,14 +323,14 @@ export function buildIdentity(messages: readonly PlaybookMessage[], facts = "", 
 
 /** Contact patterns and figures -> placeholders. No identity needed. */
 export function maskContacts(text: string): string {
-  return text
+  return maskHandles(text
     .replace(EMAIL_RE, "[email]")
     .replace(URL_RE, "[link]")
     .replace(WWW_RE, "[link]")
     .replace(HOST_RE, (m) => (LOCAL_FILES.has(m.toLowerCase()) || /^\d+(?:\.\d+)+$/.test(m) ? m : "[link]"))
     .replace(PHONE_RE, (m) => (m.replace(/\D/g, "").length >= 9 ? "[phone]" : m))
     .replace(NUMBER_RE, (m) => (/\d/.test(m) ? "[number]" : m))
-    .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "");
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, ""));
 }
 
 export interface MaskScope {
@@ -337,78 +339,147 @@ export interface MaskScope {
   org?: string | null;
 }
 
-/** May this capitalised word stand unmasked mid-sentence? The allow list, "I" and its contractions, and a month only in
- * a date ("by May 5", "in April"). */
+/** Vocabulary default deny: a word of mail is kept only when it is a common English word (the bundled SCOWL size-50
+ * list, wordlist/README.md) that is not an unambiguous given or family name of s18's lexicon, a common or generic word
+ * of this file, a word the generator writes, or allowed (CAP_ALLOW). Anything else (a name in any case: "priya raman",
+ * "o'brien", "Zorblax", a word in another script) is masked. */
+const DICTIONARY: ReadonlySet<string> = (() => {
+  const out = new Set([...COMMON_WORDS_TEXT.split("\n"), ...SUPPLEMENT_WORDS]);
+  for (const n of [...GIVEN, ...FAMILY]) if (!AMBIGUOUS_GIVEN.has(n)) out.delete(n);
+  return out;
+})();
+/** Is this base word known vocabulary? A hyphenated word is known when every part is ("time-boxed"). */
+export function knownWord(b: string): boolean {
+  if (ordinaryWord(b) || CAP_ALLOW.has(b) || DICTIONARY.has(b) || /^i(?:['’]\p{L}+)?$/u.test(b)) return true;
+  const parts = b.split("-").filter((x) => x !== "");
+  return parts.length > 1 && parts.every((x) => ordinaryWord(x) || CAP_ALLOW.has(x) || DICTIONARY.has(x));
+}
+
+/** Handles, snake_case names and paths: "@priyaraman", "priya_raman", "[link]/in/priya-raman", "and/or". Placeholders
+ * ({sign_off}, [link]) are not touched. Shared by masking (maskContacts) and the leak check (handleLeaks). */
+const HANDLE_RE = /(?<![\p{L}\p{N}.])@[\p{L}\p{N}_.-]*[\p{L}\p{N}]/gu;
+const SNAKE_RE = /(?<![{[\p{L}\p{N}_])[\p{L}\p{N}]+(?:_[\p{L}\p{N}]+)+(?![}\]\p{L}\p{N}_])/gu;
+const PATH_RE = /[^\s,;()<>"'`]*(?:[\p{L}\p{N}\]]\/|\/[\p{L}\p{N}])[^\s,;()<>"'`]*/gu;
+const trimPath = (m: string) => m.replace(/[.!?:]+$/, "");
+function maskHandles(text: string): string {
+  return text
+    .replace(HANDLE_RE, "[name]")
+    .replace(SNAKE_RE, "[name]")
+    .replace(PATH_RE, (m) => {
+      const core = trimPath(m);
+      return (core.startsWith("[link]") ? "[link]" : "[name]") + m.slice(core.length);
+    });
+}
+/** The handles, snake_case names and paths of a text (the leak check's view of maskHandles). */
+export function handleLeaks(text: string): string[] {
+  return [...(text.match(HANDLE_RE) ?? []), ...(text.match(SNAKE_RE) ?? []), ...(text.match(PATH_RE) ?? []).map(trimPath)];
+}
+
+/** May this capitalised word stand unmasked mid-sentence? The allow list and "I" and its contractions. A month only
+ * in a date (monthKept). */
 function allowedCap(text: string, w: string, offset: number): boolean {
   const b = base(w);
   if (CAP_ALLOW.has(b) || /^i(?:['’]\p{L}+)?$/u.test(b)) return true;
-  if (!MONTHS.has(b)) return false;
-  if (/^[ \t]+\d/.test(text.slice(offset + w.length))) return true;
-  return /(?:^|[^\p{L}])(?:in|on|by)[ \t]+$/iu.test(text.slice(Math.max(0, offset - 4), offset));
+  return MONTHS.has(b) && monthKept(text, w, offset);
 }
 
-/** Is the next word (spaces only between) a capitalised word that is not allowed, or a [name] placeholder? A word
- * at the start of a sentence followed by one ("Will Smith", "Hope Lee") is part of a name. */
-function nextIsName(text: string, end: number): boolean {
-  const m = /^[ \t]+(\[name\]|\p{L}[\p{L}\p{M}'’-]*)/u.exec(text.slice(end));
-  if (m === null) return false;
-  const n = m[1]!;
-  if (n === "[name]") return true;
-  return isCap(n) && [...n].length >= 2 && !allowedCap(text, n, end + m[0].length - n.length);
+/** A month is kept before a figure ("May 5", "May [number]"), or after in/on/by/since/until/before/after/from/of when no
+ * name follows ("in April and", "by June."); "in April Smith's office", "on May Chen", "April said yes" are names. */
+function monthKept(text: string, w: string, offset: number): boolean {
+  const after = text.slice(offset + w.length);
+  if (/^[ \t]+(?:\d|\[number\])/.test(after)) return true;
+  if (!/(?:^|[^\p{L}])(?:in|on|by|since|until|before|after|from|of)[ \t]+$/iu.test(text.slice(Math.max(0, offset - 8), offset))) return false;
+  return !nextIsName(text, offset + w.length);
 }
+
+/** The word after `end` (spaces only between), with its offset, or null. */
+function nextWord(text: string, end: number): { w: string; at: number } | null {
+  const m = /^[ \t]+(\[name\]|\p{L}[\p{L}\p{M}'’-]*)/u.exec(text.slice(end));
+  return m === null ? null : { w: m[1]!, at: end + m[0].length - m[1]!.length };
+}
+/** The word before `start` (spaces only between), with its offset, or null. */
+function prevWord(text: string, start: number): { w: string; at: number } | null {
+  const m = /(\[name\]|\p{L}[\p{L}\p{M}'’-]*)[ \t]+$/u.exec(text.slice(0, start));
+  return m === null ? null : { w: m[1]!, at: m.index };
+}
+/** Does this neighbour read as a name on its own: a [name] placeholder, an unknown word, or a capitalised word that is
+ * not allowed (months only before a figure)? Contacts and identity words count too. */
+function neighbourIsName(text: string, n: { w: string; at: number } | null, id?: Identity): boolean {
+  if (n === null) return false;
+  if (n.w === "[name]") return true;
+  if ([...n.w].length < 2) return false;
+  const b = base(n.w);
+  if (!knownWord(b)) return true;
+  if (id !== undefined && (inIdentity(id, "contacts", b) || inIdentity(id, "names", b)) && isCap(n.w)) return true;
+  if (!isCap(n.w)) return false;
+  if (CAP_ALLOW.has(b) || /^i(?:['’]\p{L}+)?$/u.test(b)) return false;
+  if (MONTHS.has(b)) return !/^[ \t]+(?:\d|\[number\])/.test(text.slice(n.at + n.w.length));
+  return !initialAt(text, n.at);
+}
+const nextIsName = (text: string, end: number, id?: Identity) => neighbourIsName(text, nextWord(text, end), id);
 
 /** What a word of a text is, for masking and for the leak check alike (one decision, so the two can never disagree):
  * the author, their company, this recipient ({first}, {their_org}), another person or proper noun ("name"), or null
- * (an ordinary word, kept). `vocab` is the lower-case vocabulary a sentence-initial capital may come from.
- * - Ordinary words (common, generic, written by the generator) are never the author or company, and never a name in
- *   lower case. A known contact (recipients, greeting names, their organisations) is a name when capitalised even if it
- *   is an ordinary word ("Ask Will"), and in lower case when it is not ("we help alice").
- * - Any other capitalised word of two letters or more is a name when it is in the identity, when it is not at the start
- *   of a sentence, or when `vocab` never writes it in lower case. */
+ * (a known word, kept).
+ * - Vocabulary default deny: a word that is not known vocabulary (knownWord) is a name in any case.
+ * - Known words: never the author or company when ordinary. A known contact is a name when capitalised ("Ask Will"),
+ *   and in lower case when it is not an ordinary word. A capitalised known word mid-sentence is a name unless allowed
+ *   (weekdays, languages, acronyms; a month only in a date). At the start of a sentence it is a name when the next
+ *   word is one ("Will Smith", "April Smith"), when it is a month outside a date, or on evidence (a name of these
+ *   messages, an unambiguous s18 given or family name, the same word capitalised mid-sentence in this text).
+ * - A given name that is also a word ("grace", "Will") next to a name goes with it ("grace raman", "Raman Will").
+ * `vocab` is kept for callers; vocabulary default deny no longer needs it. */
 export type IdentityHit = "author" | "company" | "first" | "their_org" | "name" | null;
 export function identityHit(text: string, w: string, offset: number, id: Identity, vocab: ReadonlySet<string>, scope: MaskScope = {}): IdentityHit {
-  if (isPlaceholder(w) || [...w].length < 2) return null;
+  void vocab;
+  if (isPlaceholder(w)) return null;
   const b = base(w);
   const ordinary = ordinaryWord(b);
   if (!ordinary && inIdentity(id, "author", b)) return "author";
   if (!ordinary && inIdentity(id, "company", b)) return "company";
   const first = scope.first == null ? null : base(scope.first);
   const org = scope.org == null ? null : scope.org.toLowerCase();
-  if (!isCap(w)) {
-    if (ordinary) return null;
-    if (first !== null && b === first) return "first";
-    if (org !== null && b === org) return "their_org";
-    return inIdentity(id, "contacts", b) ? "name" : null;
-  }
   if (first !== null && b === first) return "first";
-  if (org !== null && b.length >= 3 && (b === org || org.startsWith(b))) return "their_org";
+  if (!isCap(w) && org !== null && b === org) return "their_org";
+  if (isCap(w) && org !== null && b.length >= 3 && (b === org || org.startsWith(b))) return "their_org";
+  if ([...w].length < 2) return null;
+  if (!knownWord(b)) return "name";
+  const adjacent = () => (GIVEN.has(b) || AMBIGUOUS_GIVEN.has(b)) && (nextIsName(text, offset + w.length, id) || neighbourIsName(text, prevWord(text, offset), id));
+  if (!isCap(w)) {
+    if (ordinary) return adjacent() ? "name" : null;
+    if (inIdentity(id, "contacts", b)) return "name";
+    return adjacent() ? "name" : null;
+  }
   const initial = initialAt(text, offset);
   if (inIdentity(id, "contacts", b) && !(ordinary && GENERATOR_OPENERS.has(b) && initial)) return "name";
-  // Default deny: mid-sentence, a capitalised word is a name unless it is allowed (allowedCap).
+  // Mid-sentence: a capitalised word is a name unless it is allowed (allowedCap).
   if (!initial) return allowedCap(text, w, offset) ? null : "name";
-  // At the start of a sentence: a name when the next word is one too ("Will Smith"). A lone word needs evidence: a
-  // name of these messages, a given or family name of s18's lexicon (not an ordinary or ambiguous one: "Mark the
-  // date"), the same word capitalised mid-sentence elsewhere in this text ("Łukasz said yes. I met Łukasz"), or a word
-  // in a script without Latin letters that the vocabulary never writes in lower case.
-  if (nextIsName(text, offset + w.length)) return "name";
-  if (ordinary || allowedCap(text, w, offset)) return null;
+  if (MONTHS.has(b)) return monthKept(text, w, offset) ? null : "name";
+  if (nextIsName(text, offset + w.length, id)) return "name";
+  if (ordinary || CAP_ALLOW.has(b) || /^i(?:['’]\p{L}+)?$/u.test(b)) return null;
   if (inIdentity(id, "names", b)) return "name";
   if ((GIVEN.has(b) || FAMILY.has(b)) && !AMBIGUOUS_GIVEN.has(b)) return "name";
   for (const m of text.matchAll(TOKEN_RE)) if (m.index !== offset && base(m[0]) === b && isCap(m[0]) && !initialAt(text, m.index ?? 0)) return "name";
-  return !/\p{Script=Latin}/u.test(b) && !vocab.has(b) ? "name" : null;
+  return null;
 }
 
 const HIT_PLACEHOLDER = { author: "{sender}", company: "{company}", first: "{first}", their_org: "{their_org}", name: "[name]" } as const;
 
-/** Masked text: contacts and figures, then every word identityHit names, as its placeholder. `vocab` defaults to the
- * identity's message vocabulary (input masking). */
+/** Masked text: contacts, figures, handles and paths, then every word identityHit names, as its placeholder, repeated
+ * until nothing changes (a word next to a name masked in the first pass is masked in the next), so masked text is
+ * never itself a leak. `vocab` is kept for callers. */
 export function maskText(text: string, id: Identity, scope: MaskScope = {}, vocab: ReadonlySet<string> = id.vocab ?? new Set()): string {
-  const t = maskContacts(text);
-  const out = t.replace(TOKEN_RE, (w, offset: number) => {
-    const hit = identityHit(t, w, offset, id, vocab, scope);
-    return hit === null ? w : HIT_PLACEHOLDER[hit];
-  });
-  return out.replace(NESTED_RE, (m, p: string) => (isPlaceholder(p) ? p : m));
+  let t = maskContacts(text);
+  for (let pass = 0; pass < 8; pass++) {
+    const cur = t;
+    const out = cur.replace(TOKEN_RE, (w, offset: number) => {
+      const hit = identityHit(cur, w, offset, id, vocab, scope);
+      return hit === null ? w : HIT_PLACEHOLDER[hit];
+    });
+    t = out.replace(NESTED_RE, (m, p: string) => (isPlaceholder(p) ? p : m));
+    if (t === cur) break;
+  }
+  return t;
 }
 
 /** The masked core of one message (greeting, sign-off, quotes and signature removed) and its greeting name. */
