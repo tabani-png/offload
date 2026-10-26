@@ -13,6 +13,9 @@ import type { PersonKey, SeededTenant } from "../helpers/seed.ts";
 export const TPL = "c".repeat(64);
 export const WF = "0b6c2f1e-9a3d-4c1b-8e7f-1234567890ab";
 export const WF2 = "1b6c2f1e-9a3d-4c1b-8e7f-1234567890ab";
+export const WF3 = "2b6c2f1e-9a3d-4c1b-8e7f-1234567890ab";
+/** A role workflow of the finance job role (ap): the sales member does not run it. */
+export const WF_AP = "3b6c2f1e-9a3d-4c1b-8e7f-1234567890ab";
 
 export interface Conns {
   memberGmail: string;
@@ -105,6 +108,8 @@ export async function world(): Promise<World> {
   conns.roleIdentity = ri!.id as string;
   await db`insert into job_role_holders (tenant_id, job_role_id, person_id) values (${t.id}, ${t.jobRoles.sdr}, ${member})`;
   await setRolePolicy(h, t, t.jobRoles.sdr, {});
+  for (const wf of [WF, WF2, WF3]) await roleWorkflow(h, t, wf, t.jobRoles.sdr, t.departments.sales);
+  await roleWorkflow(h, t, WF_AP, t.jobRoles.ap, t.departments.finance);
   const broker = brokerOf(h.deps.ports);
   const composio = new FakeComposio();
   const mcp = new FakeMcp();
@@ -132,6 +137,17 @@ export async function world(): Promise<World> {
       await h.close();
     },
   };
+}
+
+/** A role workflow (S2-06 registry) owned by a job role, with versions 1..`versions`. */
+export async function roleWorkflow(h: Harness, t: SeededTenant, id: string, jobRoleId: string, departmentId: string, versions = 2): Promise<void> {
+  const db = h.db.migrator;
+  await db`insert into workflows (tenant_id, id, name, state, job_role_id, department_id, latest_version, created_at_ms)
+    values (${t.id}, ${id}, 'Investor outreach', 'role', ${jobRoleId}, ${departmentId}, ${versions}, 0)`;
+  for (let v = 1; v <= versions; v++) {
+    await db`insert into workflow_versions (tenant_id, workflow_id, version, definition, definition_hash, baseline_carry_over, created_by, created_at_ms)
+      values (${t.id}, ${id}, ${v}, '{}'::jsonb, ${"a".repeat(64)}, false, ${t.people.admin.id}, 0)`;
+  }
 }
 
 export async function setRolePolicy(

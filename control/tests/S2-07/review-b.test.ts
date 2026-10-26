@@ -186,7 +186,7 @@ describe("S2-07 review B: the night's dry-run decision (fix 3, fix 6)", () => {
     ["window days added", { sendWindow: { startHour: 8, endHour: 18, days: [1, 2, 3, 4, 5, 6], recipientTimezone: true } }],
     ["night cap raised", { maxCommitsPerNight: 50 }],
     ["weekly cap raised", { maxPerRecipientPerWeek: 3 }],
-    ["budget raised", { budgetCentsPerNight: 5000 }],
+    ["budget raised", { budgetCentsPerNight: 1500 }],
     ["attachments allowed", { attachmentsAllowed: true }],
     ["mode drafts_only → preapproved", { mode: "preapproved" }],
   ];
