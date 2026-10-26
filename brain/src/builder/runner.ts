@@ -83,7 +83,7 @@ export function tryPrompt(b: SolutionBrief, file: CheckFile, prior: { n: number;
 export interface CheckRun {
   exit: number | null;
   output: string;
-  /** The harness's JSON completion proof (fd 3), if it wrote one. */
+  /** The harness's JSON completion proof (its "OFFLOAD_PROOF" stdout line with this run's nonce), if any. */
   proof?: string;
 }
 export interface CheckRunArgs {
@@ -100,7 +100,7 @@ export interface CheckRunArgs {
   harness: string[];
   /** "sweep" under sandbox-exec, "nosweep" in a declared container. */
   sweep: "sweep" | "nosweep";
-  /** Random per check run; only the harness gets it (fd 4) and must echo it in the proof (fd 3). */
+  /** Random per check run; only the harness gets it (stdin) and must echo it in its proof line. */
   nonce: string;
   /** Never above the remaining wall budget. */
   timeoutMs: number;
@@ -136,23 +136,16 @@ export const runCheckProcess: CheckRunner = (a) =>
   new Promise<CheckRun>((done) => {
     const argv = checkArgv(a);
     let out = "";
-    let proof = "";
     let finished = false;
     let killed: string | null = null;
-    const child = spawn(argv[0]!, argv.slice(1), { cwd: a.ws, env: a.env, detached: true, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] });
+    const child = spawn(argv[0]!, argv.slice(1), { cwd: a.ws, env: a.env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
     const add = (b: Buffer) => {
       if (out.length < MAX_OUT) out += b.toString("utf8");
     };
     child.stdout!.on("data", add);
     child.stderr!.on("data", add);
-    const proofIn = child.stdio[3] as NodeJS.ReadableStream | null;
-    proofIn?.on("data", (b: Buffer) => {
-      if (proof.length < 64 * 1024) proof += b.toString("utf8");
-    });
-    proofIn?.on("error", () => {});
-    const nonceOut = child.stdio[4] as NodeJS.WritableStream | null;
-    nonceOut?.on("error", () => {});
-    nonceOut?.end(a.nonce);
+    child.stdin!.on("error", () => {});
+    child.stdin!.end(a.nonce);
     const signalGroup = (sig: NodeJS.Signals) => {
       try {
         if (child.pid !== undefined) process.kill(-child.pid, sig);
@@ -170,8 +163,13 @@ export const runCheckProcess: CheckRunner = (a) =>
       finished = true;
       clearTimeout(timer);
       a.signal?.removeEventListener("abort", onAbort);
-      for (const s of [child.stdout, child.stderr, proofIn as unknown as { destroy?: () => void } | null]) (s as { destroy?: () => void } | null)?.destroy?.();
-      done({ exit: killed === null ? exit : null, output: out + extra + (killed === null ? "" : `\n[check stopped: ${killed}]`), proof });
+      child.stdout!.destroy();
+      child.stderr!.destroy();
+      // The proof is the harness's stdout line with this nonce; every OFFLOAD_PROOF line is cut from the output.
+      const lines = out.split("\n");
+      const proof = lines.filter((l) => l.startsWith("OFFLOAD_PROOF ")).map((l) => l.slice("OFFLOAD_PROOF ".length)).filter((j) => j.includes(`"${a.nonce}"`)).pop();
+      const shown = lines.filter((l) => !l.startsWith("OFFLOAD_PROOF ")).join("\n");
+      done({ exit: killed === null ? exit : null, output: shown + extra + (killed === null ? "" : `\n[check stopped: ${killed}]`), ...(proof === undefined ? {} : { proof }) });
     };
     const onAbort = () => stop("wall time");
     const timer = setTimeout(() => stop(`timeout ${a.timeoutMs} ms`), Math.max(0, a.timeoutMs));
@@ -180,7 +178,9 @@ export const runCheckProcess: CheckRunner = (a) =>
     child.on("error", (err) => finish(null, `\n${err.message}`));
     child.on("exit", (code) => {
       signalGroup("SIGKILL");
-      setTimeout(() => finish(code), 100);
+      // Normally "close" (all output read) comes first; the harness stopped every process that could hold the pipes,
+      // so this bounded fallback only matters if something still does.
+      setTimeout(() => finish(code), 2000);
     });
     child.on("close", (code) => finish(code));
   });

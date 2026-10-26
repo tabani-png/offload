@@ -1,13 +1,14 @@
 // s24 trusted harness (written read-only into builds/<run>/frozen/, runs inside the OS sandbox). Two jobs:
 //
-// 1. COMPLETION PROOF. Exit 0 alone is never PASS. The runner hands the harness a random nonce on fd 4 and reads a
-//    JSON proof on fd 3. The harness runs the check in a child process that NEVER loads builder code (python: an
+// 1. COMPLETION PROOF. Exit 0 alone is never PASS. The runner hands the harness a random nonce on stdin (read in
+//    full, then closed; no child gets it) and reads a final "OFFLOAD_PROOF {json}" stdout line; only a line carrying
+//    the nonce counts, so builder output cannot forge one. The harness runs the check in a child process that NEVER loads builder code (python: an
 //    audit hook + import guard refuse any module, compile, exec or dlopen of a file in the workspace outside accept/;
 //    bun: a preload plugin refuses resolving workspace files), so the check runs the built tool as a subprocess and
 //    builder code cannot reach the check's memory or exit early on its behalf. Python: the child writes "DONE <code>"
 //    on a private non-inheritable pipe only after the check's own code returned (SystemExit included, os._exit not).
-//    Bun: bun's JUnit report (written after all tests finish) is parsed, never stdout. The harness writes
-//    {nonce, status, ...} on fd 3; the runner accepts PASS only for exit 0 + its nonce + status "pass" + a clean sweep.
+//    Bun: bun's JUnit report (written after all tests finish) is parsed, never stdout. The harness prints
+//    {nonce, status, ...} as that line; the runner accepts PASS only for exit 0 + its nonce + status "pass" + a clean sweep.
 //
 // 2. NO SURVIVORS. After the check or a builder command ends (or on SIGTERM), the harness SIGSTOPs then SIGKILLs every
 //    pid it may signal. The sandbox only allows signals to processes of the SAME sandbox instance, i.e. exactly the
@@ -121,20 +122,22 @@ def sweep(enabled):
 def read_nonce():
     try:
         data = b""
-        while True:
-            b = os.read(4, 256)
+        while len(data) < 256:
+            b = os.read(0, 256)
             if not b:
                 break
             data += b
-        os.close(4)
+        devnull = os.open(os.devnull, os.O_RDONLY)
+        os.dup2(devnull, 0)
+        os.close(devnull)
         return data.decode().strip()
     except OSError:
         return ""
 
 def write_proof(obj):
     try:
-        os.write(3, (json.dumps(obj) + "\n").encode())
-        os.close(3)
+        sys.stdout.flush(); sys.stderr.flush()
+        os.write(1, ("\nOFFLOAD_PROOF " + json.dumps(obj) + "\n").encode())
     except OSError:
         pass
 
@@ -201,7 +204,6 @@ if mode == "run":
     sys.exit(rc)
 
 nonce = read_nonce()
-os.set_inheritable(3, False)
 r, w = os.pipe()
 if mode == "check-py":
     check, ws = sys.argv[3], sys.argv[4]
@@ -214,7 +216,7 @@ elif mode == "check-bun":
 else:
     print("unknown harness mode", file=sys.stderr)
     sys.exit(2)
-CHILD["p"] = subprocess.Popen(argv, pass_fds=(w,), env=env)
+CHILD["p"] = subprocess.Popen(argv, pass_fds=(w,), env=env, stdin=subprocess.DEVNULL)
 os.close(w)
 rc = CHILD["p"].wait()
 CHILD["p"] = None

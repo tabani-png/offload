@@ -478,7 +478,8 @@ check script exits 0, never "the model says done".
   check executes as `workspace/accept/<file>` (so artifact imports resolve from the workspace) and is hashed against
   the frozen master before and after every run; it gets only the remaining wall budget and a result after the
   deadline is CAP, never PASS. PASS needs exit 0 AND a completion proof from the trusted harness
-  (`builds/<run>/frozen/harness.py`) carrying a per-run nonce: the check never loads builder code into its own
+  (`builds/<run>/frozen/harness.py`) carrying a per-run nonce (given on stdin, echoed in a final `OFFLOAD_PROOF` stdout
+  line that is cut from the stored output): the check never loads builder code into its own
   process (it runs the built tool as a subprocess; workspace imports are refused), and when the check or any builder
   command ends the harness stops every process left in that sandbox instance (fork + setsid daemons included).
   `RunRecord.artifactSha256` is the workspace hash at the verdict; an install step must refuse when
