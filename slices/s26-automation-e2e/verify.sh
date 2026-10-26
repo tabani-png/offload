@@ -21,17 +21,23 @@ tsc_out="$(cd "$BRAIN" && bunx tsc --noEmit 2>&1)" && echo "typecheck ok" || { e
 
 echo "== s26 suite"
 [ -f "$BRAIN/src/workflows/plan-live.ts" ] || fail "brain/src/workflows/plan-live.ts does not exist"
-out="$(cd "$BRAIN" && env -u OFFLOAD_BUILDER_ENABLED bun test tests/s26-automation-e2e 2>&1)"; code=$?
-echo "$out" | grep -E "^\s*[0-9]+ (pass|fail|skip)$|^Ran [0-9]+ tests" || true
+JUNIT="$(mktemp "${TMPDIR:-/tmp}/offload-s26-junit-XXXXXX")"
+trap 'rm -f "$JUNIT"' EXIT
+# One run of the whole suite: the path tests are ordered steps sharing one world, so tags are read from the report
+# (a -t filter would run a step without the steps before it).
+out="$(cd "$BRAIN" && env -u OFFLOAD_BUILDER_ENABLED bun test tests/s26-automation-e2e --reporter=junit --reporter-outfile="$JUNIT" 2>&1)"; code=$?
 [ $code -eq 0 ] || { echo "$out" | grep -E "\(fail\)|error:" | head -20; fail "s26 tests exited $code"; }
-ran="$(echo "$out" | sed -n 's/^Ran \([0-9][0-9]*\) tests.*/\1/p' | tail -1)"
+tags="$(bun "$ROOT/slices/s26-automation-e2e/tags.ts" "$JUNIT" "$TAGS" 2>&1)" || fail "could not read the s26 test report"
+ran="$(echo "$tags" | sed -n 's/^total \([0-9][0-9]*\) .*/\1/p')"
+skipped="$(echo "$tags" | sed -n 's/^total [0-9]* skipped \([0-9][0-9]*\)$/\1/p')"
+echo "s26 tests: ${ran:-0} (skipped ${skipped:-?})"
 [ "${ran:-0}" -ge "$MIN_TESTS" ] || fail "only ${ran:-0} s26 tests ran, need $MIN_TESTS"
-echo "$out" | grep -qE "^\s*[1-9][0-9]* skip$" && fail "s26 tests were skipped"
+[ "${skipped:-1}" = "0" ] || fail "s26 tests were skipped"
 for tag in $TAGS; do
   grep -rqE "test\(\"$tag: " "$BRAIN"/tests/s26-automation-e2e 2>/dev/null || { fail "no test named \"$tag: ...\""; continue; }
-  t="$(cd "$BRAIN" && env -u OFFLOAD_BUILDER_ENABLED bun test tests/s26-automation-e2e -t "$tag: " 2>&1)"
-  n="$(echo "$t" | sed -n 's/^ *\([0-9][0-9]*\) pass$/\1/p' | tail -1)"
-  echo "$t" | grep -qE "^ *0 fail$" && [ "${n:-0}" -gt 0 ] && echo "$tag: $n passing" || fail "tests for $tag did not pass"
+  line="$(echo "$tags" | grep -E "^$tag [0-9]+ [0-9]+$")"
+  n="$(echo "$line" | cut -d' ' -f2)"; b="$(echo "$line" | cut -d' ' -f3)"
+  [ "${n:-0}" -gt 0 ] && [ "${b:-1}" -eq 0 ] && echo "$tag: $n passing" || fail "tests for $tag did not pass (${n:-0} passing, ${b:-?} failing)"
 done
 
 echo "== full brain suite"
