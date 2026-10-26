@@ -87,6 +87,7 @@ The value is not printed here.
 | Notarization | s25: `OFFLOAD_NOTARY_PROFILE` (a `notarytool store-credentials` keychain profile) submits, waits and staples. Untested until a Developer ID exists. | ready, untested | operator |
 | Permissions on a signed app | Today permissions attach to the terminal app when run from a shell (`engine/README.md`). A signed bundle gets its own entries. Retest onboarding then. | open | manager |
 | Install without the repo | s25 (ADR 0014): the app carries a pinned bun and the brain JS and uses them first; the repo is a dev-only fallback. Proof: `slices/s25-standalone-install/verify.sh` runs the brain from a read-only copy outside the repo with no bun on PATH. Bundle about 395 MB (claude binary 261 MB). | done | manager |
+| Tester DMG | s28: `app/build.sh dmg` makes `Offload-<version>.dmg` (app, /Applications link, `app/INSTALL-TESTERS.md`). Ad hoc until a Developer ID exists, so testers use "Open Anyway". `app/release.sh` (from main) uploads it with a .sha256 to a GitHub prerelease; the repo is private, so only collaborators can download it. | done (unsigned) | manager |
 | Update path | No updater (no Sparkle, no appcast). Users would reinstall by hand. | open | manager |
 | Privacy policy | None in the repo. Needed before any outside user. | open | operator |
 | Terms of service | None in the repo. Stage 2 plan relies on a "purpose lock in terms" (no use of numbers for pay or rankings). | open | operator |

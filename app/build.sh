@@ -6,6 +6,8 @@
 #   app/build.sh test [args]     build and run the S06 … S10F, S14, S17, S2-13, S23, S25 and S29 Swift Testing suites (extra args go to the runner)
 #   app/build.sh snapshot DIR    build, then render every component and surface to PNGs in DIR
 #   app/build.sh sign APP        (re)sign an existing Offload.app with the env below (s25)
+#   app/build.sh dmg             build the engine and the app, then app/.build/Offload-<version>.dmg for testers (s28)
+#   app/build.sh sign-dmg DMG    (re)sign (and, with a notary profile, notarize) an existing DMG with the env below (s28)
 #
 # s25 (plan ADR 0014): the app carries its brain. Contents/Helpers/bun is the pinned bun (PINNED_BUN), the brain's
 # JS sits in Contents/Resources/offload laid out like the repo (brain/src, brain/node_modules production only,
@@ -18,6 +20,10 @@
 # app/brain.entitlements (JIT). OFFLOAD_NOTARY_PROFILE=NAME (a `xcrun notarytool store-credentials NAME` keychain
 # profile; no secret is read or printed here) also submits to notarytool, waits, and staples the ticket.
 # OFFLOAD_SIGN_IDENTITY=- signs ad hoc with the hardened runtime (used by slices/s25 to test the entitlements).
+#
+# s28 DMG: plain hdiutil, compressed (ULFO), volume "Offload": the app, an /Applications link, INSTALL-TESTERS.md.
+# The version is CFBundleShortVersionString in app/Info.plist. With OFFLOAD_SIGN_IDENTITY the DMG is signed too; with
+# OFFLOAD_NOTARY_PROFILE it is notarized and stapled after the app is. Ad hoc builds skip both and say so.
 #
 # Layout: Sources/Core is Foundation-only (models, BrainClient, formatting, keyboard + undo state machine,
 # token values). The test binary is Core + the tests of slices s06, s07, s08 and s09a.
@@ -151,6 +157,89 @@ notarize() {
   echo "notarized and stapled $app"
 }
 
+# s28: the tester DMG. See the header.
+dmg_version() { /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$HERE/Info.plist"; }
+
+refuse_adhoc_notary() {
+  local id="${OFFLOAD_SIGN_IDENTITY:-}"
+  if [ -n "${OFFLOAD_NOTARY_PROFILE:-}" ] && { [ -z "$id" ] || [ "$id" = "-" ]; }; then
+    echo "build.sh: OFFLOAD_NOTARY_PROFILE needs OFFLOAD_SIGN_IDENTITY set to a Developer ID Application identity; ad hoc builds cannot be notarized" >&2
+    exit 1
+  fi
+}
+
+# A DMG goes to testers: a dev shell's settings must not reach it. OFFLOAD_BUNDLE_BRAIN other than 1 is refused (a
+# brainless app needs the repo). Every other OFFLOAD_* except the build and signing inputs is cleared: the app reads
+# the runtime ones (OFFLOAD_BRAIN_SOURCE, OFFLOAD_REPO, OFFLOAD_BUN, ...) only when it runs, never at build time, but
+# the DMG build should not depend on that.
+dmg_env_guard() {
+  if [ -n "${OFFLOAD_BUNDLE_BRAIN:-}" ] && [ "$OFFLOAD_BUNDLE_BRAIN" != "1" ]; then
+    echo "build.sh: refused: OFFLOAD_BUNDLE_BRAIN=$OFFLOAD_BUNDLE_BRAIN; a DMG must carry the brain (unset it)" >&2
+    exit 1
+  fi
+  local v cleared=""
+  for v in $(compgen -e | grep '^OFFLOAD_' || true); do
+    case "$v" in OFFLOAD_BUILD_DIR|OFFLOAD_SIGN_IDENTITY|OFFLOAD_NOTARY_PROFILE|OFFLOAD_BUN_SOURCE|OFFLOAD_BUNDLE_BRAIN) ;;
+      *) unset "$v"; cleared="$cleared $v" ;;
+    esac
+  done
+  [ -n "$cleared" ] && echo "dmg: cleared dev-only env:$cleared"
+  [ -n "${OFFLOAD_BUN_SOURCE:-}" ] && echo "dmg: bundling bun from OFFLOAD_BUN_SOURCE=$OFFLOAD_BUN_SOURCE (must be bun $PINNED_BUN)"
+  return 0
+}
+
+make_dmg() {
+  local version dmg stage
+  version="$(dmg_version)"
+  [ -n "$version" ] || { echo "build.sh: no CFBundleShortVersionString in app/Info.plist" >&2; exit 1; }
+  dmg="$OUT/Offload-$version.dmg"
+  stage="$OUT/dmg-stage"
+  rm -rf "$stage" "$dmg"
+  mkdir -p "$stage"
+  clone_dir "$APP" "$stage/Offload.app"
+  ln -s /Applications "$stage/Applications"
+  cp "$HERE/INSTALL-TESTERS.md" "$stage/INSTALL-TESTERS.md"
+  if ! hdiutil create -quiet -volname Offload -srcfolder "$stage" -fs HFS+ -format ULFO -ov "$dmg"; then
+    rm -rf "$stage"
+    echo "build.sh: hdiutil create failed for $dmg" >&2
+    exit 1
+  fi
+  rm -rf "$stage"
+  sign_dmg "$dmg"
+  echo "dmg: built $dmg ($(du -h "$dmg" | cut -f1))"
+}
+
+# Ad hoc (no identity): nothing. Identity set: sign the image. Notary profile set: notarize and staple it.
+sign_dmg() {
+  local dmg="$1" id="${OFFLOAD_SIGN_IDENTITY:-}"
+  refuse_adhoc_notary
+  if [ -z "$id" ]; then
+    echo "dmg: not signed and not notarized (ad hoc build; testers use Open Anyway, see app/INSTALL-TESTERS.md)"
+    return 0
+  fi
+  local ts="--timestamp"; [ "$id" = "-" ] && ts="--timestamp=none"
+  codesign --force "$ts" --sign "$id" "$dmg"
+  codesign --verify --strict "$dmg"
+  if [ -z "${OFFLOAD_NOTARY_PROFILE:-}" ]; then
+    echo "dmg: signed $([ "$id" = "-" ] && echo "ad hoc" || echo "with OFFLOAD_SIGN_IDENTITY"), not notarized (OFFLOAD_NOTARY_PROFILE is not set)"
+    return 0
+  fi
+  notarize_dmg "$dmg"
+}
+
+notarize_dmg() {
+  local dmg="$1" out
+  out="$(xcrun notarytool submit "$dmg" --keychain-profile "$OFFLOAD_NOTARY_PROFILE" --wait 2>&1)" || true
+  echo "$out" | grep -E "^\s*(id|status):" || true
+  if ! echo "$out" | grep -qE "^\s*status: Accepted"; then
+    echo "build.sh: notarization of the DMG was not accepted. See: xcrun notarytool log <id> --keychain-profile \"\$OFFLOAD_NOTARY_PROFILE\"" >&2
+    exit 1
+  fi
+  xcrun stapler staple "$dmg"
+  xcrun stapler validate "$dmg"
+  echo "dmg: signed, notarized and stapled $dmg"
+}
+
 build_tests() {
   local main="$OUT/TestMain.swift"
   printf 'import Testing\n@main struct OffloadTestRunner { static func main() async { await Testing.__swiftPMEntryPoint() as Never } }\n' > "$main"
@@ -171,6 +260,19 @@ case "${1:-}" in
     ;;
   sign)
     sign_app "${2:?usage: app/build.sh sign PATH/Offload.app}"
+    ;;
+  dmg)
+    refuse_adhoc_notary   # before any build: ad hoc + notary can never finish
+    dmg_env_guard
+    # The observer goes in the bundle (build_app copies engine/.build/offload-observer); build it fresh.
+    OFFLOAD_BUILD_DIR="$ROOT/engine/.build" "$ROOT/engine/build.sh" >"$OUT/engine-build.log" 2>&1 \
+      || { tail -20 "$OUT/engine-build.log" >&2; echo "build.sh: engine/build.sh failed (log: $OUT/engine-build.log)" >&2; exit 1; }
+    build_app
+    echo "built $APP"
+    make_dmg
+    ;;
+  sign-dmg)
+    sign_dmg "${2:?usage: app/build.sh sign-dmg PATH/Offload-VERSION.dmg}"
     ;;
   snapshot)
     dir="${2:?usage: app/build.sh snapshot DIR}"

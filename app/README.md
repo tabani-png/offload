@@ -11,6 +11,8 @@ app/build.sh                    # build app/.build/Offload.app (bundles engine/.
 app/build.sh test [--filter S08]  # Swift Testing suites from slices/s06, s07 and s08 tests
 app/build.sh snapshot DIR       # build, then render every component and surface to PNGs (light + dark)
 app/build.sh sign PATH.app      # (re)sign with OFFLOAD_SIGN_IDENTITY / OFFLOAD_NOTARY_PROFILE (s25, ADR 0014)
+app/build.sh dmg                # engine + app, then app/.build/Offload-<version>.dmg for testers (s28; signed/notarized only with the env above)
+app/release.sh [--dry-run]      # from a clean main on origin: DMG + .sha256 on a GitHub prerelease v<version>-beta.<n> (s28)
 open app/.build/Offload.app     # run it
 ```
 
