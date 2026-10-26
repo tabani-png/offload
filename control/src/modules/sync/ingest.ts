@@ -2,6 +2,7 @@
 // feature re-check, dispatch to the owning module's syncHandlers[kind], idempotent ledger, one transaction.
 import { join } from "node:path";
 import type { Context } from "hono";
+import { SYNC_OBJECTS_PER_HOUR, SYNC_RATE_WINDOW_MS } from "../../config.ts";
 import { loadModules, principalOf, tenantTx, type AppEnv, type Deps, type Principal, type SyncHandler } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
 import { jcs, sha256Hex } from "../../schema/encoding.ts";
@@ -110,10 +111,15 @@ export async function ingest(c: Context<AppEnv>, deps: Deps): Promise<Receipt> {
       if (Number(last!.last_seq) >= env.seq) throw replay(`seq ${env.seq} is not above the last accepted ${last!.last_seq}`);
     }
 
+    // Per-device budget of accepted objects per rolling hour; the device_seq lock above makes the count exact.
+    const [used] = await tx`select count(*)::int as n from sync_objects
+      where device_id = ${device.deviceId} and received_at > ${new Date(now - SYNC_RATE_WINDOW_MS)}`;
+    const budget = { left: (deps.config.syncObjectsPerHour ?? SYNC_OBJECTS_PER_HOUR) - used!.n };
+
     const receipt: Receipt = { seq: env.seq, accepted: [], rejected: [] };
     const reject = (id: string, code: RejectCode) => receipt.rejected.push({ id, code, retryable: RETRYABLE.has(code) });
     for (const obj of env.objects) {
-      const code = await one(tx, deps, device, handlers, obj, env.seq, now);
+      const code = await one(tx, deps, device, handlers, obj, env.seq, now, budget);
       if (code === null) receipt.accepted.push(obj.id);
       else reject(obj.id, code);
     }
@@ -125,7 +131,7 @@ export async function ingest(c: Context<AppEnv>, deps: Deps): Promise<Receipt> {
   });
 }
 
-/** One object: schema, duplicate, consent, feature, handler, ledger. Returns null when accepted. */
+/** One object: schema, duplicate, rate limit, consent, feature, handler, ledger. Returns null when accepted. */
 async function one(
   tx: Tx,
   deps: Deps,
@@ -134,6 +140,7 @@ async function one(
   obj: Record<string, unknown> & { id: string },
   seq: number,
   now: number,
+  budget: { left: number },
 ): Promise<RejectCode | null> {
   const kind = typeof obj.kind === "string" ? obj.kind : "";
   const schema = KIND_SCHEMAS[kind];
@@ -143,6 +150,7 @@ async function one(
   const [prev] = await tx`select kind, digest from sync_objects where device_id = ${p.deviceId} and object_id = ${obj.id}`;
   // Idempotent on (tenant, device, object id). A run outcome may come again under its id with a newer state (ADR 0111 §4).
   if (prev && (prev.digest === digest || prev.kind !== kind || kind !== "run_outcome")) return "duplicate";
+  if (budget.left <= 0) return "rate_limited";
   if (!(await deps.ports.consent.allows(tx, p.personId, kind))) return "consent_missing";
   if (kind === "working_time_aggregate" && !(await deps.ports.features.enabledFor(tx, p.jurisdiction)).has("working_time")) {
     return "feature_disabled";
@@ -164,5 +172,6 @@ async function one(
     console.error(`sync: ${kind} handler failed`, err);
     return "server_error";
   }
+  budget.left--;
   return null;
 }
