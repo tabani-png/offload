@@ -14,7 +14,7 @@ import type { ComputerDriver } from "../connectors/computer/driver.ts";
 import { computerPolicies } from "../connectors/computer/executor.ts";
 import { computerServer } from "../connectors/computer/probe.ts";
 import { loadConnectorsConfig, toMcpServers, type Env } from "../connectors/config.ts";
-import type { LinkRunner, Method } from "../connectors/link.ts";
+import { linkEnv, type LinkRunner, type Method } from "../connectors/link.ts";
 import type { SecretReader } from "../connectors/secrets.ts";
 import type { ChainTarget } from "../connectors/targets.ts";
 import { confirmOnScreen, contextWords, mentionsContext, parseExact, queryArgs, queryOf, readValues, sourceTarget, type ReadOutcome, type SkippedRow } from "../plan/read-source.ts";
@@ -320,8 +320,11 @@ export class ComposioSourceReader implements SourceReader {
     if (tool === null || parts === null || account === undefined) throw new Error("no Composio read for this app");
     return job.call(tool, job.args, async () => {
       if (job.signal?.aborted === true) throw new ReadCancelled("stopped");
-      const env = Object.fromEntries(Object.entries(this.o.env).filter((e): e is [string, string] => typeof e[1] === "string"));
-      const r = await this.o.runner.run(["composio", "execute", parts.tool, "-d", JSON.stringify(job.args), "--account", account], { timeoutMs: this.o.timeoutMs ?? 30_000, env });
+      // Round 11: the same allowlist the Composio probes and executors use (linkEnv): never OFFLOAD_TOKEN, a model
+      // login or a connector secret. The output cap is the read limit + 1, so an answer over it is told apart and
+      // refused explicitly, never cut and parsed.
+      const r = await this.o.runner.run(["composio", "execute", parts.tool, "-d", JSON.stringify(job.args), "--account", account], { timeoutMs: this.o.timeoutMs ?? 30_000, env: linkEnv(this.o.env), maxBytes: MAX_ANSWER_CHARS + 1 });
+      if (r.stdout.length > MAX_ANSWER_CHARS) throw new Error("Composio's answer is larger than Offload reads at once; nothing was read");
       if (r.spawnError !== undefined || r.timedOut || r.code !== 0) throw new Error(r.timedOut ? "Composio did not answer in time" : "Composio did not read it");
       // The CLI's raw text goes to the shared exact parser unchanged (round 9): no JSON.parse/stringify round trip,
       // so decimals (25.50), big integers and duplicate keys reach it as Composio sent them. Only `successful` is

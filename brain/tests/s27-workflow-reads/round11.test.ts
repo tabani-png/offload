@@ -32,14 +32,14 @@ describe("s27 round 11: the Composio read child", () => {
   });
 
   test("FETCH: the output cap is the read limit + 1; a 200 KB answer reads in full", async () => {
-    const big = answer(4000);
+    const big = answer(6000);
     expect(big.length).toBeGreaterThan(200 * 1024);
     const r = fakeRunner(big);
     const text = await new ComposioSourceReader({ runner: r, env: { PATH: "/usr/bin" } }).read(job);
     expect(r.seen[0]!.maxBytes).toBe(MAX_ANSWER_CHARS + 1);
     const out = readValues(text, [{ label: "Signups", sourceLabel: "Signups" }, { label: "Active", sourceLabel: "Active users" }]);
     expect(out.kind).toBe("ok");
-    if (out.kind === "ok") expect(out.rows).toHaveLength(4000);
+    if (out.kind === "ok") expect(out.rows).toHaveLength(6000);
   });
 
   test("FETCH: an answer over the limit is refused with a plain reason, never cut and parsed", async () => {

@@ -136,7 +136,11 @@ only saving was the typing.
     the commit-screen parse; Markdown tables with or without outer pipes, ASCII boxes and box-drawing tables are read
     (outer borders are dropped only when the header has them, so a trailing `|` stays an empty cell); a cell of only
     punctuation, dashes or box characters is not a value, so such a row is never a row (it is skipped, named).
-18. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+18. **Round 11 (PR #35 review).** The Composio read child gets `linkEnv` (the allowlist the Composio probes and
+    executors use: PATH, HOME, USER, LOGNAME, SHELL, TMPDIR, LANG, LC_*), never OFFLOAD_TOKEN, a model login or a
+    connector secret; its output cap is the read limit + 1 (`MAX_ANSWER_CHARS + 1`) and an answer over the limit is
+    refused explicitly, never cut and parsed. The brain-wide audit of child processes is in the PR thread.
+19. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)
