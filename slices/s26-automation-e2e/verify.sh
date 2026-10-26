@@ -77,7 +77,7 @@ esac
 while IFS= read -r p; do
   [ -n "$p" ] || continue
   case "$p" in
-    brain/tests/s26-automation-e2e/*|slices/s26-automation-e2e/*|brain/src/workflows/plan-live.ts|brain/src/workflows/runner.ts|brain/src/workflows/dryrun.ts|brain/src/plan/dryrun.ts|brain/API.md|plan/adr/0013-safe-builder.md|plan/plan.md) ;;
+    brain/tests/s26-automation-e2e/*|slices/s26-automation-e2e/*|brain/src/workflows/plan-live.ts|brain/src/workflows/runner.ts|brain/src/solutions/left-alone.ts|brain/src/solutions/routes.ts|brain/src/solutions/service.ts|brain/src/api/server.ts|brain/src/workflows/service.ts|brain/src/workflows/dryrun.ts|brain/src/plan/dryrun.ts|brain/API.md|plan/adr/0013-safe-builder.md|plan/plan.md) ;;
     *) fail "out-of-scope path changed: $p" ;;
   esac
 done <<< "$SLICE_FILES"

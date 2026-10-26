@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { OutputType } from "../api/s14-types.ts";
-import { commitVerbOf } from "../connectors/computer/actions.ts";
+import { canonicalForm, commitVerbOf } from "../connectors/computer/actions.ts";
 import { chosenVariant } from "../plan/build.ts";
 import { addressHash } from "./autorun.ts";
 import type { BatchItem } from "./batch.ts";
@@ -87,9 +87,14 @@ export function readItemRows(text: string, file: string): { labels: string[]; ro
   return { labels: header, rows };
 }
 
-/** Stable key of one row of one workflow: the same values are the same item, whatever line they are on. */
+/**
+ * Stable key of one row of one workflow, from the row's canonical form: the SAME normalisation the computer-use gate
+ * compares a commit with (`canonicalForm`: label keys normalised, values canonicalised, empty fields dropped, sorted).
+ * Two rows the gate would treat as the same commit are the same item, whatever the column order, line or label case.
+ */
 export function rowKey(workflowId: string, fields: ReadonlyArray<readonly [string, string]>): string {
-  return `row-${createHash("sha256").update(JSON.stringify({ workflowId, fields })).digest("hex").slice(0, 16)}`;
+  const form = canonicalForm(fields.map(([label, value]) => ({ label, value })));
+  return `row-${createHash("sha256").update(JSON.stringify({ workflowId, form })).digest("hex").slice(0, 16)}`;
 }
 
 /**

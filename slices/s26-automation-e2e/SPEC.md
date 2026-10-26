@@ -5,7 +5,7 @@ depends_on: [s05/s05b (gate, runner), s13 (chain, computer use), s14 (general pl
 parallel_safe: true (one small seam in runner.ts prepareLiveBatch; new files otherwise)
 human_gated: false
 verify: bash slices/s26-automation-e2e/verify.sh
-paths_in_scope: [brain/tests/s26-automation-e2e/**, brain/src/workflows/plan-live.ts (new), brain/src/workflows/runner.ts (prepareLiveBatch seam only), brain/src/workflows/dryrun.ts (general totals only), brain/src/plan/dryrun.ts (per-instance saved minutes only), brain/API.md, plan/adr/0013-safe-builder.md, plan/plan.md (ADR list + s26 row), slices/s26-automation-e2e/**]
+paths_in_scope: [brain/tests/s26-automation-e2e/**, brain/src/workflows/plan-live.ts (new), brain/src/workflows/runner.ts (prepareLiveBatch seam only), brain/src/workflows/dryrun.ts (general totals only), brain/src/plan/dryrun.ts (per-instance saved minutes only), brain/src/solutions/left-alone.ts (new), brain/src/solutions/{routes,service}.ts (leave_alone choice, leftAlone flag), brain/src/api/server.ts (one argument), brain/src/workflows/service.ts (dashboard suggestions filter), brain/API.md, plan/adr/0013-safe-builder.md, plan/plan.md (ADR list + s26 row), slices/s26-automation-e2e/**]
 paths_out_of_scope: [engine/**, app/**, control/**, web/**, packet/**, schemas/**, brain/src/workflows/{gate,allowlist,executor,batch,chain-executor}.ts, brain/src/connectors/**, brain/src/builder/** (the builder stays OFF by default), brain/fixtures/**, every other slice's tests]
 ---
 
@@ -46,17 +46,21 @@ connector chain and the in-memory computer-use driver. No network, no real model
 | setup | held-back "Coding with Claude Code" (neutral week) | SETUP | brief drafted, approve exact hash, one-time hand-off of the builder prompt; checks written; building is refused (builder off) and the approval is kept; no saving is claimed on the dashboard |
 | remove_step | s22 LinkedIn image fixture (the neutral week has none) | REMOVE | same as setup |
 | tool | metrics task's tool option | TOOL | same brief path; build refused while the builder is off |
-| leave_alone | "Inbox triage" (neutral week, top kind leave_alone) | LEAVE | choosing it is a 409 "nothing to build"; nothing is written; the time screen shows the finding with fix kind leave_alone |
+| leave_alone | "Inbox triage" (neutral week, top kind leave_alone) | LEAVE | choosing it builds nothing and is remembered (`left-alone.json`, 0600): `solutions.leftAlone` on GET /insights, gone from dashboard suggestions, across restarts; choosing another kind later takes it back; the time screen shows fix kind leave_alone |
 
 ## Fixes made here (small, inside the brain)
 1. **Live batches for general plan workflows** (`workflows/plan-live.ts`, one seam in `runner.ts prepareLiveBatch`).
    Before: `live batches for generic workflows are not built yet` (400) - every non-email workflow stopped after the
    dry run. Now, for output types `rows | form_fields | record | stage_change`: the items are the rows of the
    workflow's own `items.csv` (header = field labels, one row per item; the person fills it, or exports it), next N not
-   done yet (done-log + live batches + ledger), each item `{ key: row-<sha>, commit: { verb, fields } }`. The verb is
+   done yet (done-log + live batches + ledger), each item `{ key: row-<sha>, commit: { verb, fields } }`. The key hashes
+   the row's canonical form, the same `canonicalForm` the computer-use gate checks (PR #32 review P2): column order,
+   label case and trailing spaces do not make a done row new. The verb is
    the UI verb of the plan's commit when it has one (send, save, submit, create, ...), else `save`. Values are copied
    by code (ADR 0005). No model call. Missing / empty list = 409 with plain words. Text outputs (ticket_reply,
    message, email) still refuse plainly: drafting live replies for general workflows is not built.
+3. **leave_alone is remembered** (operator, PR #32 round 1): `POST .../solutions/choose {kind: leave_alone}` answers
+   200 `{kind, leftAlone: {taskId, insightId, at}, message}` and writes `$OFFLOAD_HOME/left-alone.json`.
 2. **Honest dry-run saving for field outputs** (`plan/dryrun.ts`, `workflows/dryrun.ts`). Before: an instance where
    the workflow filled 0 of N fields still claimed its full minutes as saved. Now that instance saves 0 min with the
    warning "nothing to fill from what was on screen: this one stays with you", and the totals count only the
@@ -65,7 +69,7 @@ connector chain and the in-memory computer-use driver. No network, no real model
 ## Written down, not fixed (big)
 See the "Gaps" section of the PR and `plan/adr/0013-safe-builder.md`. In short: the read side of a general workflow
 (new source data through a connector) is not wired, so live items come from `items.csv`; live text replies for
-general workflows; a choice of leave_alone is not remembered; the builder stays off (ADR 0013).
+general workflows; the builder stays off (ADR 0013).
 
 ## Done-signal
 `slices/s26-automation-e2e/verify.sh`: brain typecheck; the s26 suite (>= 20 tests) with every tag above present and

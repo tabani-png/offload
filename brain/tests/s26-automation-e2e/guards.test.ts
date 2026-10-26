@@ -69,7 +69,10 @@ describe("s26 live batch guards", () => {
   test("LIVE: a row's identity is its canonical form (the gate's): reordered columns, label case and spacing do not make a new row", () => {
     const a = rowKey("wf_a", [["Week", "43"], ["Signups", "352"]]);
     expect(rowKey("wf_a", [["Signups", "352"], ["Week", "43"]])).toBe(a);
-    expect(rowKey("wf_a", [[" signups ", " 352 "], ["WEEK", "43"]])).toBe(a);
+    // Label case and spacing, and trailing space in a value, as the gate's form check normalises them.
+    expect(rowKey("wf_a", [[" signups: ", "352  "], ["WEEK", "43"]])).toBe(a);
+    // What the gate tells apart stays apart: a value with leading space would be typed differently.
+    expect(rowKey("wf_a", [["Signups", " 352"], ["Week", "43"]])).not.toBe(a);
     // The gate's form check sees these two rows as the same commit, so they are the same row.
     expect(expectedCommit({ key: "k", to: "k", subject: "", body: "", warnings: [], commit: { verb: "save", fields: [["Signups", "352"], ["Week", "43"]] } }).fields).toEqual(
       expectedCommit({ key: "k", to: "k", subject: "", body: "", warnings: [], commit: { verb: "save", fields: [["Week", "43"], ["Signups", "352"]] } }).fields,
