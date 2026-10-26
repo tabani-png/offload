@@ -100,7 +100,10 @@ git -C "$ROOT" diff --quiet "$BASE" HEAD -- brain/package.json brain/bun.lock ||
 
 echo "== scope (files touched by s19 commits since $BASE)"
 touched="$(git -C "$ROOT" log --no-merges --format= --name-only --grep='^s19' "$BASE..HEAD" 2>/dev/null | sort -u)"
+# Only paths that still differ from BASE: a file an s19 commit created and a later one renamed away is not a change.
+net="$(git -C "$ROOT" diff --name-only "$BASE" HEAD 2>/dev/null)"
 for f in $touched; do
+  echo "$net" | grep -qxF "$f" || continue
   case "$f" in
     brain/src/playbook/*|brain/fixtures/playbook-personas.ts|brain/tests/s19-messaging-playbook/*|slices/s19-messaging-playbook/*) ;;
     brain/src/models/model.ts|brain/src/models/router.ts|brain/src/tone/draft.ts|brain/src/workflows/dryrun.ts|brain/src/workflows/runner.ts|brain/src/workflows/autorun.ts) ;;
