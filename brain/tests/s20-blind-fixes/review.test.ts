@@ -152,13 +152,14 @@ describe("s20 ROUTE review: needs are matched to what each method advertises", (
     expect(x!.reason).toContain("reading the file on this Mac");
   });
 
-  test("ROUTE: an app's direct API with its own operations serves the app's screen read and its gated commit", async () => {
+  test("ROUTE: an app's direct API with its own operations serves the app's screen read, but never its UI commit", async () => {
+    // Review 4: a write of another name (item.update) cannot stand in for a UI commit whose verb it may not do.
     const r = new ChainCapabilityResolver(chainWith("api", tmp()));
     const res = await r.resolve([
       { need: "read issue from Linear", target: "web-linear-app", targetName: "Linear", capability: SCREEN_READ, role: "read", via: "computer_use" },
-      { need: "update issue in Linear", target: "web-linear-app", targetName: "Linear", capability: UI_COMMIT, role: "send", via: "computer_use" },
+      { need: "delete issue in Linear", target: "web-linear-app", targetName: "Linear", capability: UI_COMMIT, role: "send", via: "computer_use" },
     ]);
-    expect(res.map((x) => `${x.capability}:${x.status}:${x.method}`)).toEqual([`${SCREEN_READ}:resolved:api`, `${UI_COMMIT}:resolved:api`]);
+    expect(res.map((x) => `${x.capability}:${x.status}:${x.method}`)).toEqual([`${SCREEN_READ}:resolved:api`, `${UI_COMMIT}:unavailable:null`]);
   });
 
   test("ROUTE: a catalog commit is never served by a method that only reads (no loose match for commits)", async () => {
@@ -433,5 +434,75 @@ describe("s20 SAVING review 3: the judge never calls an action or unknown step r
       expect(j.reasons.join(" ")).not.toContain("reading only");
     }
     expect(judge("attend", "meeting").reasons.join(" ")).toContain("reading only");
+  });
+});
+
+// ---------- (6) a commit's capability matches its verb; one verb table (independent review of acfbf38) ----------
+
+describe("s20 ROUTE review 4: a commit capability matches the step's verb, else a gated UI commit", () => {
+  const ACTIONS = ["delete", "archive", "pay", "refund", "publish", "run", "test", "build", "submit", "remove", "export", "download", "merge", "deploy", "sign", "share", "transfer", "order", "rename"];
+
+  test("ROUTE: verb x catalog target: an action verb never resolves to another write (delete is not mail.send, pay is not accounting.bill)", () => {
+    const bad: string[] = [];
+    for (const c of CONNECTORS) {
+      const t: StepTarget = { target: c.id, targetName: c.name, via: "catalog", connectorId: c.id };
+      for (const v of ACTIONS) {
+        const cap = commitCapability(t, v);
+        if (cap !== UI_COMMIT && !cap.includes(v)) bad.push(`${c.id} ${v} -> ${cap}`);
+      }
+    }
+    expect(bad).toEqual([]);
+    const at = (id: string, v: string) => commitCapability({ target: id, targetName: id, via: "catalog", connectorId: id }, v);
+    expect([at("gmail", "delete"), at("gmail", "archive"), at("xero", "pay"), at("xero", "delete")]).toEqual([UI_COMMIT, UI_COMMIT, UI_COMMIT, UI_COMMIT]);
+    // Verbs a catalog capability really does keep it.
+    expect([at("gmail", "reply"), at("gmail", "send"), at("xero", "enter"), at("google-sheets", "append"), at("greenhouse", "move"), at("slack", "post"), at("hubspot", "note"), at("zendesk", "reply")]).toEqual(["mail.send", "mail.send", "accounting.bill", "sheet.append", "ats.move_stage", "chat.post", "crm.note", "ticket.reply"]);
+  });
+
+  test("ROUTE: a UI commit on a catalog app runs without that app's connector (the legacy send step names no connector)", async () => {
+    const { legacySteps, planConnectors } = await import("../../src/plan/build.ts");
+    const v = { id: "a", label: "", summary: "", steps: [
+      { id: "read_1", type: "read", title: "Read the email in Gmail", detail: "", capability: { need: "read", target: "gmail", targetName: "Gmail", capability: "mail.read", role: "read", via: "catalog" }, gated: false, when: null, writesText: false, sourceSteps: [] },
+      { id: "commit_1", type: "commit", title: "Delete the email in Gmail", detail: "", capability: { need: "delete email in Gmail", target: "gmail", targetName: "Gmail", capability: UI_COMMIT, role: "send", via: "catalog" }, gated: true, when: null, writesText: false, sourceSteps: [] },
+    ] } as unknown as Parameters<typeof legacySteps>[0];
+    const send = legacySteps(v).find((s) => s.type === "send")!;
+    expect(send.title).toBe("Delete the email in Gmail");
+    expect(send.connector).toBeNull();
+    expect(planConnectors(v).filter((c) => c.required)).toEqual([]);
+  });
+
+  test("ROUTE: a catalog app's UI commit is not served by its connector's send tool", async () => {
+    const home = tmp();
+    const probe = (method: Method): MethodProbe => ({ method, probe: async () => (method === "composio" ? result("ok", "ok", null, { reads: ["mail.read"], writes: ["mail.send"] }, 0) : result("skipped", "no_server", "none")) });
+    const r = new ChainCapabilityResolver(new ChainResolver(chainDeps({ home, env: {}, simulated: false }), new Map(CHAIN_METHODS.map((m) => [m, probe(m)]))));
+    const [x] = await r.resolve([{ need: "delete email in Gmail", target: "gmail", targetName: "Gmail", capability: UI_COMMIT, role: "send", via: "catalog" }]);
+    expect(x!.status).toBe("unavailable");
+  });
+});
+
+describe("s20 TYPER review 4: phrases and one shared verb table", () => {
+  test("TYPER: in a phrase of several verbs a write wins; sign in, log in and share screen are reads", async () => {
+    const { baseVerb } = await import("../../src/understanding/verbs.ts");
+    expect(["reading and replying", "checking and submitting form", "reviewing, then updating the issue", "signing in", "sign up", "logging in", "sharing screen", "reviewing the post"].map(baseVerb)).toEqual(["reply", "submit", "update", "sign in", "sign up", "log in", "share screen", "reviewing"]);
+    for (const v of ["signing in", "logging in", "sharing screen", "sign out"]) expect(`${v} ${isReadOnlyStep({ verb: v, object: "account" })}`).toBe(`${v} true`);
+    expect(isReadOnlyStep({ verb: "checking and submitting", object: "form" })).toBe(false);
+  });
+
+  test("TYPER: plan, judge and saving agree on every verb (one table): writes are writes, reads are reading only", async () => {
+    const { isWriteVerb, understandingJudge } = await import("../../src/understanding/labeler.ts");
+    const judge = (verb: string, counterparts: string[] = []) =>
+      understandingJudge.judge({ profile: { app: "x", appName: "X", host: "", urlPattern: "", understanding: { steps: [{ verb, object: "item", activeMs: 1000, surface: "X", category: "other" }], counterparts, sources: { frames: 3 } } }, sameness: 0.5 } as unknown as Parameters<typeof understandingJudge.judge>[0]);
+    const verbs = ["chat", "read", "view", "watch", "attend", "listen", "review", "approve", "post", "message", "comment", "send", "reply", "write", "note", "enter", "update", "file", "pay", "delete", "publish", "refund", "submit", "run", "sign in", "share screen", "frobnicate"];
+    const disagree: string[] = [];
+    for (const v of verbs) {
+      const cls = stepClass({ verb: v, object: "item" });
+      const planWrite = cls === "text" || cls === "record";
+      if (isWriteVerb(v) !== planWrite) disagree.push(`${v}: plan ${cls}, judge write=${isWriteVerb(v)}`);
+      const readingOnly = judge(v).reasons.join(" ").includes("reading only");
+      if (readingOnly !== isReadOnlyStep({ verb: v, object: "item" })) disagree.push(`${v}: judge reading-only=${readingOnly}, plan read-only=${!readingOnly}`);
+    }
+    expect(disagree).toEqual([]);
+    // Text to a person is risk 0.5 whatever the verb; money, deletion and publishing are 0.5 too.
+    for (const v of ["post", "message", "comment", "send", "reply"]) expect(`${v} ${judge(v, ["Ann"]).risk}`).toBe(`${v} 0.5`);
+    for (const v of ["pay", "delete", "publish", "refund"]) expect(`${v} ${judge(v).risk}`).toBe(`${v} 0.5`);
   });
 });
