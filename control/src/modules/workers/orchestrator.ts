@@ -423,8 +423,26 @@ export function createWorkers(deps: Deps): Workers {
       }
       return;
     }
+    // The budget a deployment's sessions run with: the worker's, capped by the job role's current role policy.
+    const eff = await service(tenantId, (tx) => effectiveBudget(tx, w));
+    if (d.deploymentId && d.remote !== "archived" && eff !== null) {
+      const [rd] = await service(tenantId, (tx) => tx`select budget_cents from remote_deployments where deployment_id = ${d.deploymentId}`);
+      if (rd && Number(rd.budget_cents) > eff) {
+        // Made above the current cap (the role policy was lowered since): replaced. A deployment's budget is fixed
+        // at creation, so the old one is archived (it stays polled until drained) and a new one is made at the cap.
+        const [moved] = await service(tenantId, (tx) => tx`update deployments set stale_deployment_ids = stale_deployment_ids || to_jsonb(deployment_id),
+            deployment_id = null, remote_status = 'none', updated_at = ${new Date(now())}
+          where worker_id = ${workerId} and deployment_id = ${d.deploymentId} returning worker_id`);
+        if (moved) {
+          await service(tenantId, (tx) => audit(tx, { actor: SERVICE, action: "worker.deployment_replaced", resource: { type: "worker", id: w.id },
+            detail: { deploymentId: d.deploymentId, budgetCents: Number(rd.budget_cents), roleCapCents: eff } }));
+          return syncDeployment(tenantId, workerId);
+        }
+      }
+    }
     if (!d.deploymentId) {
       if (w.state !== "ready" || d.desired !== "active" || d.holdReason !== null || !w.agentId || !w.environmentId) return;
+      if (eff === null) return;
       // A create started earlier never got its answer recorded: the platform may run a deployment Offload does not
       // know. Never create a second one; a person resolves it (ADR 0112 §13).
       if (d.createKey !== null) return unconfirmedDeployment(tenantId, w.id, d);
@@ -440,7 +458,7 @@ export function createWorkers(deps: Deps): Workers {
           agent: { type: "agent", id: w.agentId, version: w.agentVersion ?? 1 },
           environment_id: w.environmentId,
           vault_ids: w.vaultId ? [w.vaultId] : [],
-          budget: budgetOf(w.sessionBudgetCents),
+          budget: budgetOf(eff),
           schedule: { type: "cron", expression: d.cron, timezone: d.timezone },
           initial_events: [runMessage({ runId: "", workflow: w.workflowId, inputs: null, scheduled: true })],
           metadata: { offload_worker_id: w.id, offload_create_key: key },
@@ -461,7 +479,7 @@ export function createWorkers(deps: Deps): Workers {
             create_started_at = null, updated_at = ${new Date(now())} where worker_id = ${workerId} and create_key = ${key}`;
         // Tracked until drained, with the budget its sessions are created with.
         await tx`insert into remote_deployments (tenant_id, deployment_id, worker_id, budget_cents, created_at)
-          values (current_setting('app.tenant_id')::uuid, ${created.id}, ${workerId}, ${w.sessionBudgetCents}, ${new Date(now())}) on conflict do nothing`;
+          values (current_setting('app.tenant_id')::uuid, ${created.id}, ${workerId}, ${eff}, ${new Date(now())}) on conflict do nothing`;
       });
       await service(tenantId, (tx) => audit(tx, { actor: SERVICE, action: "worker.deployment", resource: { type: "worker", id: w.id }, detail: { deploymentId: created.id, cron: d.cron, timezone: d.timezone } }));
       return;
@@ -592,10 +610,29 @@ export function createWorkers(deps: Deps): Workers {
    * Why a scheduled session may not run, by the gates a manual run passes, in startRun's order: kill switch, worker
    * state, eligibility, the monthly cap (a session the platform already started counts at its budget).
    */
-  async function scheduledRefusal(tx: Tx, w: WorkerRow, runner: string, run: RunRow): Promise<"kill_switch_active" | "worker_not_ready" | "ineligible" | "budget_exceeded" | null> {
+  /**
+   * The session budget a new session of this worker gets: the worker's, never above its job role's current role-policy
+   * cap (an admin may lower the cap after the worker was made). Null when the job role has no role policy.
+   */
+  async function effectiveBudget(tx: Tx, w: WorkerRow): Promise<number | null> {
+    const policy = await rolePolicyOf(tx, w.jobRoleId);
+    return policy ? Math.min(w.sessionBudgetCents, policy.sessionBudgetCents) : null;
+  }
+
+  async function scheduledRefusal(
+    tx: Tx,
+    w: WorkerRow,
+    runner: string,
+    run: RunRow,
+  ): Promise<"kill_switch_active" | "worker_not_ready" | "ineligible" | "budget_above_role_cap" | "budget_exceeded" | null> {
     if (await killedFor(tx, w, runner)) return "kill_switch_active";
     if (w.state !== "ready") return "worker_not_ready";
     if (!(await eligible(tx, w))) return "ineligible";
+    // The platform made this session with its deployment's budget; above the current role cap it is stopped (its
+    // budget cannot be lowered), and the sync replaces the deployment at the cap.
+    const eff = await effectiveBudget(tx, w);
+    if (eff === null) return "ineligible";
+    if (run.budgetCents > eff) return "budget_above_role_cap";
     const { spent, cap } = await monthSpent(tx, run.id);
     return spent + run.budgetCents > cap ? "budget_exceeded" : null;
   }
@@ -603,8 +640,10 @@ export function createWorkers(deps: Deps): Workers {
   /** What holds a ready worker's active deployment paused now (budget, eligibility), or null. */
   async function holdOf(tx: Tx, w: WorkerRow): Promise<"budget_exceeded" | "ineligible" | null> {
     if (!(await eligible(tx, w))) return "ineligible";
+    const eff = await effectiveBudget(tx, w);
+    if (eff === null) return "ineligible";
     const { spent, cap } = await monthSpent(tx);
-    return spent + w.sessionBudgetCents > cap ? "budget_exceeded" : null;
+    return spent + eff > cap ? "budget_exceeded" : null;
   }
 
   /**
@@ -641,18 +680,21 @@ export function createWorkers(deps: Deps): Workers {
     const runnable = await registry().isRunnableBy(tx, w.workflowId, w.version, w.identityType === "person" ? { personId: w.identityId } : { identityId: w.identityId });
     if (!runnable) throw conflict("this workflow version can no longer run as this identity");
     // Check and reservation (the insert below) under the tenant's admission lock; the route took it first already.
+    // The session budget: the worker's, capped by the job role's current role policy.
+    const budget = await effectiveBudget(tx, w);
+    if (budget === null) throw conflict("this job role has no role policy, so no cloud worker can run for it");
     await lockBudget(tx);
     const { spent, cap } = await monthSpent(tx);
-    if (spent + w.sessionBudgetCents > cap) {
+    if (spent + budget > cap) {
       throw new HttpError(409, "budget_exceeded", "this month's cloud budget would be exceeded by one more session");
     }
-    const run = await insertRun(tx, w, o);
+    const run = await insertRun(tx, w, { ...o, budgetCents: budget });
     await audit(tx, {
       actor: SERVICE,
       action: "worker.run_start",
       subjectPersonId: run.runnerPersonId,
       resource: { type: "worker_run", id: run.id },
-      detail: { workerId: w.id, trigger: o.trigger, budgetCents: w.sessionBudgetCents },
+      detail: { workerId: w.id, trigger: o.trigger, budgetCents: budget },
     });
     return run;
   }
@@ -1467,8 +1509,25 @@ export function createWorkers(deps: Deps): Workers {
     // A running session also stops when its worker is no longer eligible (the registry gate of startRun).
     await interruptRuns(tenantId, async (tx, r, w) => (await killedFor(tx, w, r.runnerPersonId)) || !(await eligible(tx, w)));
     await settleLost(tenantId);
+    await replaceOverCap(tenantId);
     await pauseDeploymentsWhere(tenantId, (tx, w) => killedFor(tx, w, w.identityType === "person" ? w.identityId : w.ownerPersonId), "kill_switch");
     await refreshHolds(tenantId);
+  }
+
+  /** Syncs every worker whose live deployment was made above its job role's current cap (syncDeployment replaces it). */
+  async function replaceOverCap(tenantId: string): Promise<void> {
+    const over = await service(tenantId, async (tx) => {
+      const out: string[] = [];
+      for (const row of await tx`select w.*, rd.budget_cents as deployed_budget_cents from workers w
+          join deployments d on d.tenant_id = w.tenant_id and d.worker_id = w.id
+          join remote_deployments rd on rd.tenant_id = d.tenant_id and rd.deployment_id = d.deployment_id
+          where d.remote_status <> 'archived' and d.desired_status <> 'archived' order by w.id`) {
+        const eff = await effectiveBudget(tx, workerRow(row));
+        if (eff !== null && Number(row.deployed_budget_cents) > eff) out.push(row.id as string);
+      }
+      return out;
+    });
+    for (const id of over) await syncWorker(tenantId, id, false);
   }
 
   /**
@@ -1640,7 +1699,8 @@ export function createWorkers(deps: Deps): Workers {
     async startRunUnchecked(tenantId, workerId, o) {
       const run = await service(tenantId, async (tx) => {
         await lockBudget(tx);
-        return insertRun(tx, (await loadWorker(tx, workerId))!, o);
+        const wk = (await loadWorker(tx, workerId))!;
+        return insertRun(tx, wk, { ...o, budgetCents: (await effectiveBudget(tx, wk)) ?? wk.sessionBudgetCents });
       });
       const w = await service(tenantId, async (tx) => (await loadWorker(tx, workerId))!);
       void track(openSession(tenantId, run.id, runMessage({ runId: run.id, workflow: w.workflowId, inputs: o.inputs, scheduled: false })));

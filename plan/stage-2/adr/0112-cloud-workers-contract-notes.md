@@ -222,3 +222,14 @@ to it, and a run being opened is left to `openSession`, which consumes it.
 - `sendFirst` checks `first_sent_at` with the interrupt and the end, and sets it, under that row lock in the send's
   transaction: two processes recovering one session send the first message once. The event-log check in
   `pendingFirst` stays (a first message already in the log counts as sent).
+
+## 23. The role policy's session budget is a ceiling read at every admission and sync
+SPEC S2-09 does not say whether a lowered role cap refuses or caps a worker made under a higher one. Offload caps:
+a session's budget is `min(worker budget, current role cap)` (`effectiveBudget`), so lowering the cap never silently
+stops a worker, and no session can exceed it.
+- Manual admission reserves, checks the monthly cap with, and creates the session at the effective budget.
+- A scheduled session already runs with its deployment's budget (it cannot be lowered): above the current cap it is
+  stopped at import (`budget_above_role_cap`).
+- A deployment made above the current cap is replaced: archived (still polled until drained) and made again at the
+  cap, by the sync that follows a refusal and by every kill sweep (`replaceOverCap`). Audit `worker.deployment_replaced`.
+- Holds and new deployments use the effective budget. A job role with no role policy runs nothing (`ineligible`).
