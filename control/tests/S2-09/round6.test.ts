@@ -1,8 +1,10 @@
 // Codex review of 86d4dd0: a lost session's settled cost reaches metrics and its overnight policy's counter (the
 // unreported delta, once); a scheduled run imported late starts when the platform started it.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { digestDayOf } from "../../src/modules/workers/digest.ts";
+import type { Step } from "../../src/modules/workers/fake-managed-agents.ts";
 import type { ManagedAgentsApi } from "../../src/modules/workers/managed-agents.ts";
-import { createWorker, overnightPolicy, running, world, type World } from "./setup.ts";
+import { DIGEST, WORKER_RUN, createWorker, overnightPolicy, running, world, type World } from "./setup.ts";
 
 let w: World;
 let base: ManagedAgentsApi;
@@ -78,6 +80,52 @@ describe("CUSTOM", () => {
     const result = w.fake.sent(sid).find((e) => e.type === "user.custom_tool_result")!;
     expect(result.content[0].text).not.toMatch(/digest/i);
     expect((await c.get(`/v1/worker-runs/${r.json.id}`)).json.summary).toBe("Drafted two follow-ups.");
+  }, 60_000);
+});
+
+describe("CUSTOM", () => {
+  const ask = (id: string, question: string): Step[] => [
+    { emit: [running, { id, type: "agent.custom_tool_use", name: "offload_need_human", input: { question } }, { type: "session.status_idle", stop_reason: { type: "requires_action", event_ids: [id] } }] },
+    { await: "user.custom_tool_result", where: (e) => e.custom_tool_use_id === id },
+  ];
+
+  test("CUSTOM: offload_need_human's question is on the run and in the digest, with its run, workflow and time; only then is the agent told a person sees it", async () => {
+    const x = await createWorker(w);
+    w.fake.queue([{ await: "user.message" }, ...ask("evt_q_1", "Which pricing tier should I quote?"), { emit: [{ type: "session.status_idle", stop_reason: { type: "end_turn" } }] }]);
+    const c = await w.as("member");
+    const t0 = w.h.clock.now();
+    const r = await c.post(`/v1/workers/${x.id}/runs`, {});
+    expect(r.status).toBe(201);
+    await w.workers.idle();
+    const sid = [...w.fake.sessions.values()].pop()!.id;
+    const result = w.fake.sent(sid).find((e) => e.type === "user.custom_tool_result")!;
+    expect(result.content[0].text).toMatch(/person will see/i);
+    const run = (await c.get(`/v1/worker-runs/${r.json.id}`)).json;
+    expect(w.h.deps.validator.validate(WORKER_RUN, run)).toEqual({ ok: true });
+    expect(run.questions).toHaveLength(1);
+    expect(run.questions[0].question).toBe("Which pricing tier should I quote?");
+    expect(run.questions[0].askedAt).toBeGreaterThanOrEqual(t0);
+    const d = (await c.get(`/v1/me/digest?day=${digestDayOf(w.h.clock.now(), "UTC")}`)).json;
+    expect(w.h.deps.validator.validate(DIGEST, d)).toEqual({ ok: true });
+    expect(d.questions).toContainEqual({ runId: r.json.id, workflowId: w.wf.id, question: "Which pricing tier should I quote?", askedAt: run.questions[0].askedAt });
+  }, 60_000);
+
+  test("CUSTOM: a question that cannot be stored (the run's 20 are used) is not promised to a person", async () => {
+    const x = await createWorker(w);
+    const steps: Step[] = [{ await: "user.message" }];
+    for (let i = 1; i <= 21; i++) steps.push(...ask(`evt_q_many_${i}`, `Question ${i}?`));
+    steps.push({ emit: [{ type: "session.status_idle", stop_reason: { type: "end_turn" } }] });
+    w.fake.queue(steps);
+    const c = await w.as("member");
+    const r = await c.post(`/v1/workers/${x.id}/runs`, {});
+    await w.workers.idle();
+    const sid = [...w.fake.sessions.values()].pop()!.id;
+    const results = w.fake.sent(sid).filter((e) => e.type === "user.custom_tool_result");
+    expect(results).toHaveLength(21);
+    expect(results[19]!.content[0].text).toMatch(/person will see/i);
+    expect(results[20]!.content[0].text).not.toMatch(/person will see/i);
+    expect(results[20]!.is_error).toBe(true);
+    expect((await c.get(`/v1/worker-runs/${r.json.id}`)).json.questions).toHaveLength(20);
   }, 60_000);
 });
 
