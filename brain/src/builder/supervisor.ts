@@ -27,7 +27,12 @@ export interface Supervisor {
   socket: string;
   /** Stops every process left in the supervisor's sandbox instance (any running command included). */
   sweep(): Promise<SweepResult>;
+  /** Closes the command socket, lets the supervisor sweep its instance and exit (bounded), then kills its group and
+   * removes the socket folder. Safe to call more than once. */
   stop(): Promise<void>;
+  /** Synchronous part of stop() for a signal handler: resume a stopped supervisor (it sweeps and exits when our exit
+   * closes its stdin) and remove the socket folder. */
+  releaseNow(): void;
 }
 
 /** A short socket path (macOS limits unix socket paths to 104 bytes), in a private 0700 folder. */
@@ -198,12 +203,36 @@ export async function startSupervisor(o: { argv: string[]; cwd: string; env: Rec
     async stop() {
       for (const c of conns) c.destroy();
       await new Promise<void>((res) => server.close(() => res()));
+      if (alive()) {
+        // EOF on its stdin: the supervisor sweeps its sandbox instance and exits (resume it if a builder stopped it).
+        try {
+          if (child.pid !== undefined) process.kill(child.pid, "SIGCONT");
+          child.stdin!.end();
+        } catch {
+          // gone
+        }
+        await new Promise<void>((res) => {
+          const t = setTimeout(res, 3000);
+          child.once("exit", () => {
+            clearTimeout(t);
+            res();
+          });
+        });
+      }
+      killAll();
+      rmSync(o.dir, { recursive: true, force: true });
+    },
+    releaseNow() {
       try {
-        child.stdin!.end();
+        if (child.pid !== undefined) process.kill(child.pid, "SIGCONT");
       } catch {
         // gone
       }
-      killAll();
+      try {
+        server.close();
+      } catch {
+        // already closed
+      }
       rmSync(o.dir, { recursive: true, force: true });
     },
   };

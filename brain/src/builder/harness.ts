@@ -170,19 +170,38 @@ def on_signal(signum, frame):
     sweep(MODE_SWEEP)
     os._exit(128 + signum)
 
-def drain(fd):
-    os.set_blocking(fd, False)
-    out = b""
-    while True:
-        try:
-            b = os.read(fd, 65536)
-        except BlockingIOError:
-            break
-        if not b:
-            break
-        out += b
-    os.close(fd)
-    return out.decode("utf8", "replace")
+REPORT_CAP = 8 * 1024 * 1024
+
+def start_reader(fd):
+    # Reads the report pipe WHILE the child runs (a big JUnit report would otherwise fill the pipe and block bun).
+    # Past the cap it keeps reading and discards, so the writer never blocks; the report then counts as too large.
+    import threading
+    state = {"chunks": [], "size": 0, "too_large": False}
+    def loop():
+        while True:
+            try:
+                b = os.read(fd, 65536)
+            except OSError:
+                break
+            if not b:
+                break
+            if state["size"] + len(b) > REPORT_CAP:
+                state["too_large"] = True
+            else:
+                state["chunks"].append(b)
+            state["size"] += len(b)
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    return t, state
+
+def finish_reader(t, state, fd):
+    # Bounded: a builder process that inherited the write end could hold it open forever.
+    t.join(2.0)
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return b"".join(state["chunks"]).decode("utf8", "replace"), state["too_large"]
 
 def junit_pass(xml):
     import xml.etree.ElementTree as ET
@@ -347,11 +366,14 @@ else:
     sys.exit(2)
 CHILD["p"] = subprocess.Popen(argv, pass_fds=(w,), env=env, stdin=subprocess.DEVNULL, cwd=CHILD_CWD[0])
 os.close(w)
+reader, rstate = start_reader(r)
 rc = CHILD["p"].wait()
 CHILD["p"] = None
-report = drain(r)
+report, too_large = finish_reader(reader, rstate, r)
 sw = sweep(MODE_SWEEP)
-if mode == "check-py":
+if too_large:
+    completed, why = False, "report too large (over %d MB)" % (REPORT_CAP // (1024 * 1024))
+elif mode == "check-py":
     completed = report.strip().splitlines()[:1] == ["DONE 0"]
     why = "the check finished" if completed else ("the check did not finish normally" if "DONE" not in report else "the check reported failure")
 else:

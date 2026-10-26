@@ -556,6 +556,10 @@ check script exits 0, never "the model says done".
   ANTHROPIC_AUTH_TOKEN in its own environment refuses to build (403 / exit 2): use the Keychain. Before any PASS
   and in `verifyArtifact`, every workspace file (outside accept/, .tmp, __pycache__) is scanned for exact known
   secret values and secret-shaped strings; a hit is FAIL "artifact contains a secret", never PASS.
+  Every exit path (PASS, FAIL, CAP, TAMPER, an error, an unreadable artifact, SIGTERM/SIGINT/SIGHUP to the brain)
+  releases the supervisor (it sweeps its sandbox instance first), the command socket and its /tmp/ofl-* folder, and
+  `cred/`; any error after setup is a recorded FAIL (an unreadable workspace file: "artifact unreadable"). A check's
+  report (JUnit / DONE marker) is read while the check runs, capped at 8 MB ("report too large" = not a pass).
   Residual (routed to S2-12): macOS lets any same-user process read another non-platform process's argv and
   environment (sysctl KERN_PROCARGS2); the sandbox does not filter it and unsetting a variable does not erase it.
   Builds keep nothing secret in argv or environment, but any OTHER same-user process that holds a credential in its

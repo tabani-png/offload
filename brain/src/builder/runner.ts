@@ -142,8 +142,12 @@ export const runCheckProcess: CheckRunner = (a) =>
     let finished = false;
     let killed: string | null = null;
     const child = spawn(argv[0]!, argv.slice(1), { cwd: a.ws, env: a.env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    // The first MAX_OUT of output is kept for the record; the proof line comes last, so a rolling tail is kept too.
+    let tail = "";
     const add = (b: Buffer) => {
-      if (out.length < MAX_OUT) out += b.toString("utf8");
+      const t = b.toString("utf8");
+      if (out.length < MAX_OUT) out += t;
+      tail = (tail + t).slice(-256 * 1024);
     };
     child.stdout!.on("data", add);
     child.stderr!.on("data", add);
@@ -169,9 +173,16 @@ export const runCheckProcess: CheckRunner = (a) =>
       child.stdout!.destroy();
       child.stderr!.destroy();
       // The proof is the harness's stdout line with this nonce; every OFFLOAD_PROOF line is cut from the output.
-      const lines = out.split("\n");
-      const proof = lines.filter((l) => l.startsWith("OFFLOAD_PROOF ")).map((l) => l.slice("OFFLOAD_PROOF ".length)).filter((j) => j.includes(`"${a.nonce}"`)).pop();
-      const shown = lines.filter((l) => !l.startsWith("OFFLOAD_PROOF ")).join("\n");
+      const proof = tail
+        .split("\n")
+        .filter((l) => l.startsWith("OFFLOAD_PROOF "))
+        .map((l) => l.slice("OFFLOAD_PROOF ".length))
+        .filter((j) => j.includes(`"${a.nonce}"`))
+        .pop();
+      const shown = out
+        .split("\n")
+        .filter((l) => !l.startsWith("OFFLOAD_PROOF "))
+        .join("\n");
       done({ exit: killed === null ? exit : null, output: shown + extra + (killed === null ? "" : `\n[check stopped: ${killed}]`), ...(proof === undefined ? {} : { proof }) });
     };
     const onAbort = () => stop("wall time");
@@ -370,8 +381,42 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   let reason: string | null = null;
   let prior: { n: number; output: string } | null = null;
   let passedSha: string | null = null;
+  let artifactSha256 = "";
+  // Hashing and scanning read every workspace file; builder code can make one unreadable (chmod 0). That is a
+  // recorded FAIL, never an escape from the run's cleanup.
+  class ArtifactUnreadable extends Error {}
+  const hash = () => {
+    try {
+      return artifactDigest(ws);
+    } catch (err) {
+      throw new ArtifactUnreadable(String((err as Error)?.message ?? err));
+    }
+  };
+  const scan = () => {
+    try {
+      return scanArtifactForSecrets(ws, known);
+    } catch (err) {
+      throw new ArtifactUnreadable(String((err as Error)?.message ?? err));
+    }
+  };
+  // SIGTERM / SIGINT / SIGHUP to this process: release what can be released synchronously (the socket folder, cred/,
+  // a stopped supervisor is resumed so it sees its stdin close at our exit, sweeps its instance and exits), then let
+  // the signal take its normal course.
+  const SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+  const onSignal = (sig: NodeJS.Signals) => {
+    supervisor.releaseNow();
+    try {
+      rmSync(join(runDir, "cred"), { recursive: true, force: true });
+    } catch {
+      // best effort
+    }
+    for (const s of SIGNALS) process.off(s, onSignal);
+    process.kill(process.pid, sig);
+  };
+  for (const s of SIGNALS) process.on(s, onSignal);
 
   try {
+   try {
     for (let n = 1; ; n++) {
       if (n > limits.maxTries) {
         reason = `${limits.maxTries} tries without a passing check`;
@@ -467,7 +512,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         break;
       }
       // The artifact going in: sweep -> hash -> check -> sweep -> hash; both hashes must match for a PASS.
-      const before = artifactDigest(ws);
+      const before = hash();
       const nonce = randomBytes(16).toString("hex");
       // bun runs the frozen copy (resolution root outside the workspace); python runs accept/<file> (cwd workspace).
       const c = await runCheck({ ws, file: checks.file, checkPath: checks.file === "accept.py" ? checkPath : frozenPath, frozenDir, env: childEnv, harness, sweep, nonce, timeoutMs: Math.min(120_000, left), signal: abort.signal });
@@ -497,12 +542,12 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         reason = `builder processes could not be stopped after the check (${after.why ?? "sweep not clean"})`;
         break;
       }
-      const changed = artifactDigest(ws) !== before;
+      const changed = hash() !== before;
       if (changed && c.exit === 0 && proof.ok) rec.checkOutput = truncateOutput(`${rec.checkOutput}\n[not a pass: the workspace changed while the check ran; write fixtures and outputs to a temporary folder]`);
       // An exit 0 without a valid proof (or that changed the artifact) is recorded as "did not complete" (null).
       rec.checkExit = c.exit === 0 && (!proof.ok || changed) ? null : c.exit;
       tries.push(rec);
-      const leak = c.exit === 0 && proof.ok && !changed ? scanArtifactForSecrets(ws, known) : null;
+      const leak = c.exit === 0 && proof.ok && !changed ? scan() : null;
       if (leak !== null) {
         outcome = "FAIL";
         reason = `artifact contains a secret (${leak})`;
@@ -516,17 +561,15 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
       }
       prior = { n, output: rec.checkOutput };
     }
-  } finally {
+   } finally {
     clearTimeout(timer);
-  }
+   }
 
-  // The artifact at the verdict: sweep once more, then hash twice with a gap; any change means something still writes.
-  let artifactSha256 = "";
-  try {
+    // The artifact at the verdict: sweep once more, then hash twice with a gap; any change means something still writes.
     const fin = await supervisor.sweep();
-    const d1 = artifactDigest(ws);
+    const d1 = hash();
     await new Promise((r) => setTimeout(r, 150));
-    artifactSha256 = artifactDigest(ws);
+    artifactSha256 = hash();
     if (outcome === "PASS" && !fin.clean) {
       outcome = "FAIL";
       reason = `builder processes could not be stopped after the check (${fin.why ?? "sweep not clean"})`;
@@ -534,15 +577,27 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
       outcome = "FAIL";
       reason = "the workspace was still changing after the check";
     } else if (outcome === "PASS") {
-      const leak = scanArtifactForSecrets(ws, known);
+      const leak = scan();
       if (leak !== null) {
         outcome = "FAIL";
         reason = `artifact contains a secret (${leak})`;
       }
     }
+  } catch (err) {
+    // Any error after setup is a recorded FAIL; the run record below is always written.
+    outcome = "FAIL";
+    const msg = scrub(String((err as Error)?.message ?? err)).slice(0, 300);
+    reason = err instanceof ArtifactUnreadable ? `artifact unreadable (${msg})` : `the run stopped on an error: ${msg}`;
   } finally {
-    await supervisor.stop();
-    rmSync(join(runDir, "cred"), { recursive: true, force: true });
+    clearTimeout(timer);
+    for (const s of SIGNALS) process.off(s, onSignal);
+    // Always: the supervisor sweeps and goes (stop() also removes the socket folder), and cred/ is removed.
+    await supervisor.stop().catch(() => {});
+    try {
+      rmSync(join(runDir, "cred"), { recursive: true, force: true });
+    } catch {
+      // best effort; checked by the tests
+    }
   }
 
   const totals = tries.reduce(
