@@ -7,7 +7,6 @@ import type { App, Deps } from "../../app.ts";
 import { reply, tenantTx } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
 import { invalid } from "../../schema/http.ts";
-import { brokerOf } from "../broker/index.ts";
 import { localDay, localInstant } from "./cron.ts";
 import { outcomeOf } from "./orchestrator.ts";
 import type { RunState } from "./repo.ts";
@@ -45,9 +44,8 @@ export function windowOf(day: string, tz: string): { from: number; to: number } 
 /** The digest that covers `t`: the local day of t + 12 h. */
 export const digestDayOf = (t: number, tz: string) => localDay(t + 12 * 3600_000, tz);
 
-export async function buildDigest(tx: Tx, deps: Deps, personId: string, day: string, tz: string): Promise<Digest> {
+export async function buildDigest(tx: Tx, _deps: Deps, personId: string, day: string, tz: string): Promise<Digest> {
   const { from, to } = windowOf(day, tz);
-  const broker = brokerOf(deps.ports);
   const runs = await tx`select r.id, r.state, r.cost_cents, w.workflow_id,
       coalesce((select sum(b.items) from worker_run_batches b where b.tenant_id = r.tenant_id and b.run_id = r.id), 0)::int as drafts
     from worker_runs r join workers w on w.tenant_id = r.tenant_id and w.id = r.worker_id
@@ -57,13 +55,18 @@ export async function buildDigest(tx: Tx, deps: Deps, personId: string, day: str
     const outcome = outcomeOf(r.state as RunState);
     return outcome === null ? [] : [{ runId: r.id as string, workflowId: r.workflow_id as string, outcome, drafts: Number(r.drafts), costCents: Number(r.cost_cents) }];
   });
-  const waiting: Digest["waiting"] = [];
-  for (const b of await tx`select distinct b.batch_hash, b.items, w.workflow_id from worker_run_batches b
+  // Filtered in SQL before the limit (the broker's stored batch state), so 200 is 200 pending batches.
+  const waiting: Digest["waiting"] = (await tx`select distinct b.batch_hash, b.items, w.workflow_id from worker_run_batches b
       join worker_runs r on r.tenant_id = b.tenant_id and r.id = b.run_id join workers w on w.tenant_id = r.tenant_id and w.id = r.worker_id
-      where r.runner_person_id = ${personId} order by b.batch_hash`) {
-    const batch = await broker.loadBatch(tx, b.batch_hash as string);
-    if (batch?.state === "pending" && waiting.length < 200) waiting.push({ batchHash: batch.hash, workflowId: b.workflow_id as string, items: Number(b.items) });
-  }
+      join batches bt on bt.tenant_id = b.tenant_id and bt.hash = b.batch_hash
+      where r.runner_person_id = ${personId} and bt.state = 'pending' order by b.batch_hash limit 200`).map((b: Record<string, unknown>) => ({
+    batchHash: b.batch_hash as string,
+    workflowId: b.workflow_id as string,
+    items: Number(b.items),
+  }));
+  // Every ended run of the window, not only the 200 listed.
+  const [total] = await tx`select coalesce(sum(cost_cents), 0)::bigint as c from worker_runs
+    where runner_person_id = ${personId} and ended_at is not null and started_at >= ${new Date(from)} and started_at < ${new Date(to)}`;
   const auto = await tx`select b.batch_hash, b.policy_id, b.auto_approved from worker_run_batches b
       join worker_runs r on r.tenant_id = b.tenant_id and r.id = b.run_id
     where r.runner_person_id = ${personId} and b.auto_approved > 0 and b.policy_id is not null
@@ -79,7 +82,7 @@ export async function buildDigest(tx: Tx, deps: Deps, personId: string, day: str
     trips: trips.map((t: Record<string, unknown>) => ({ policyId: t.policy_id as string, reason: t.reason as string })),
     // Tonight's suggestions come from the person's Mac in a later sync kind (ADR 0112 §9).
     suggestions: [],
-    totalCostCents: ran.reduce((s, r) => s + r.costCents, 0),
+    totalCostCents: Number(total!.c),
   };
 }
 

@@ -346,7 +346,7 @@ export function createWorkers(deps: Deps): Workers {
       return;
     }
     if (!d.deploymentId) {
-      if (w.state !== "ready" || d.desired !== "active" || !w.agentId || !w.environmentId) return;
+      if (w.state !== "ready" || d.desired !== "active" || d.holdReason !== null || !w.agentId || !w.environmentId) return;
       // A create started earlier never got its answer recorded: the platform may run a deployment Offload does not
       // know. Never create a second one; a person resolves it (ADR 0112 §13).
       if (d.createKey !== null) return unconfirmedDeployment(tenantId, w.id, d);
@@ -383,7 +383,7 @@ export function createWorkers(deps: Deps): Workers {
       await service(tenantId, (tx) => audit(tx, { actor: SERVICE, action: "worker.deployment", resource: { type: "worker", id: w.id }, detail: { deploymentId: created.id, cron: d.cron, timezone: d.timezone } }));
       return;
     }
-    const want = w.state === "ready" && d.desired === "active" ? "active" : "paused";
+    const want = w.state === "ready" && d.desired === "active" && d.holdReason === null ? "active" : "paused";
     if (want === "paused" && d.remote === "active") {
       await api.pauseDeployment(d.deploymentId);
       await set({ remote: "paused" });
@@ -485,6 +485,51 @@ export function createWorkers(deps: Deps): Workers {
         ${ended ? "error" : null}, ${o.errorCode ?? null}, ${w.sessionBudgetCents}, ${o.sessionRef ?? ""}, ${o.deploymentRunRef ?? null})
       returning *`;
     return runRow(r!);
+  }
+
+  /** The registry gate a manual run passes (startRun): the version is live and the worker's identity runs it. */
+  function eligible(tx: Tx, w: WorkerRow): Promise<boolean> {
+    return registry().isRunnableBy(tx, w.workflowId, w.version, w.identityType === "person" ? { personId: w.identityId } : { identityId: w.identityId });
+  }
+
+  /**
+   * Why a scheduled session may not run, by the gates a manual run passes, in startRun's order: kill switch, worker
+   * state, eligibility, the monthly cap (a session the platform already started counts at its budget).
+   */
+  async function scheduledRefusal(tx: Tx, w: WorkerRow, runner: string, runId: string): Promise<"kill_switch_active" | "worker_not_ready" | "ineligible" | "budget_exceeded" | null> {
+    if (await killedFor(tx, w, runner)) return "kill_switch_active";
+    if (w.state !== "ready") return "worker_not_ready";
+    if (!(await eligible(tx, w))) return "ineligible";
+    const { spent, cap } = await monthSpent(tx, runId);
+    return spent + w.sessionBudgetCents > cap ? "budget_exceeded" : null;
+  }
+
+  /** What holds a ready worker's active deployment paused now (budget, eligibility), or null. */
+  async function holdOf(tx: Tx, w: WorkerRow): Promise<"budget_exceeded" | "ineligible" | null> {
+    if (!(await eligible(tx, w))) return "ineligible";
+    const { spent, cap } = await monthSpent(tx);
+    return spent + w.sessionBudgetCents > cap ? "budget_exceeded" : null;
+  }
+
+  /**
+   * Keeps enforcing the scheduled-run gates on active deployments: a deployment is held paused while its worker is
+   * ineligible or the cap leaves no session, and released when it may run again. The remote pause/unpause is the
+   * sync's (durable: desired vs remote, retried every tick).
+   */
+  async function refreshHolds(tenantId: string): Promise<void> {
+    const changed = await service(tenantId, async (tx) => {
+      const out: string[] = [];
+      for (const row of await tx`select w.*, d.hold_reason from workers w join deployments d on d.tenant_id = w.tenant_id and d.worker_id = w.id
+          where d.desired_status = 'active' and w.state = 'ready' order by w.id`) {
+        const w = workerRow(row);
+        const hold = await holdOf(tx, w);
+        if (hold === ((row.hold_reason as string | null) ?? null)) continue;
+        await tx`update deployments set hold_reason = ${hold}, updated_at = ${new Date(now())} where worker_id = ${w.id}`;
+        out.push(w.id);
+      }
+      return out;
+    });
+    for (const id of changed) await syncWorker(tenantId, id, false);
   }
 
   async function killedFor(tx: Tx, w: { workflowId: string; identityType: string; identityId: string }, runner: string): Promise<boolean> {
@@ -782,7 +827,9 @@ export function createWorkers(deps: Deps): Workers {
       const stop = await service(ctx.tenantId, async (tx) => {
         const [r] = await tx`select interrupt_sent_at from worker_runs where id = ${ctx.run.id}`;
         if (r?.interrupt_sent_at) return "interrupted";
-        return (await killedFor(tx, ctx.w, ctx.run.runnerPersonId)) ? "kill" : null;
+        if (await killedFor(tx, ctx.w, ctx.run.runnerPersonId)) return "kill";
+        // The registry gate keeps holding while a session runs (workflow retired, identity left the job role).
+        return (await eligible(tx, ctx.w)) ? null : "ineligible";
       });
       if (stop !== null) {
         await interrupt(ctx);
@@ -1133,12 +1180,17 @@ export function createWorkers(deps: Deps): Workers {
           const run = await insertRun(tx, w, { trigger: "schedule", runnerPersonId: w.ownerPersonId, inputs: null, deploymentRunRef: dr.id, sessionRef: dr.session_id });
           await tx`insert into session_cursors (tenant_id, session_id, run_id) values (current_setting('app.tenant_id')::uuid, ${dr.session_id}, ${run.id}) on conflict do nothing`;
           await audit(tx, { actor: SERVICE, action: "worker.run_start", subjectPersonId: run.runnerPersonId, resource: { type: "worker_run", id: run.id }, detail: { workerId: w.id, trigger: "schedule", deploymentRun: dr.id } });
-          // The platform already created this session: if the month's cap is gone, stop it at once.
-          const { spent, cap } = await monthSpent(tx, run.id);
-          const overCap = spent + w.sessionBudgetCents > cap;
-          // Over the cap: the stop is requested with the run (durable) and delivered below, retried by the sweep.
-          if (overCap) await tx`update worker_runs set error_code = 'budget_exceeded', interrupt_sent_at = ${new Date(now())} where id = ${run.id}`;
-          return { run, paused: false, attach: true, overCap, policy: run.overnightPolicyId };
+          // The platform already created this session: it passes a manual run's gates or it is stopped at once. The
+          // stop is requested with the run (durable), delivered below and retried by the sweep; a budget or
+          // eligibility refusal also holds the deployment paused so it fires no more paid sessions.
+          const refusal = await scheduledRefusal(tx, w, run.runnerPersonId, run.id);
+          if (refusal) {
+            await tx`update worker_runs set error_code = ${refusal}, interrupt_sent_at = ${new Date(now())} where id = ${run.id}`;
+            if (refusal === "budget_exceeded" || refusal === "ineligible") {
+              await tx`update deployments set hold_reason = ${refusal}, updated_at = ${new Date(now())} where worker_id = ${w.id}`;
+            }
+          }
+          return { run, paused: false, attach: true, refused: refusal !== null, policy: run.overnightPolicyId };
         });
         if (!started) continue;
         if (started.paused) await syncWorker(tenantId, d.worker_id, false);
@@ -1146,7 +1198,10 @@ export function createWorkers(deps: Deps): Workers {
           if (started.policy) await reportPolicy(tenantId, started.run.id, started.policy, false, 0);
           continue;
         }
-        if ("overCap" in started && started.overCap) await deliverInterrupt(tenantId, started.run.id, started.run.sessionRef);
+        if ("refused" in started && started.refused) {
+          await deliverInterrupt(tenantId, started.run.id, started.run.sessionRef);
+          await syncWorker(tenantId, d.worker_id, false);
+        }
         void consume(tenantId, started.run.id);
       }
     }
@@ -1199,8 +1254,10 @@ export function createWorkers(deps: Deps): Workers {
 
   async function sweep(tenantId: string): Promise<void> {
     // interruptRuns requests the new ones and delivers every due request (kill switch, person stopped, budget, lost).
-    await interruptRuns(tenantId, (tx, r, w) => killedFor(tx, w, r.runnerPersonId));
+    // A running session also stops when its worker is no longer eligible (the registry gate of startRun).
+    await interruptRuns(tenantId, async (tx, r, w) => (await killedFor(tx, w, r.runnerPersonId)) || !(await eligible(tx, w)));
     await pauseDeploymentsWhere(tenantId, (tx, w) => killedFor(tx, w, w.identityType === "person" ? w.identityId : w.ownerPersonId), "kill_switch");
+    await refreshHolds(tenantId);
   }
 
   async function interruptAll(tenantId: string, scope: { tenant: true } | { personId: string } | { workflowId: string }): Promise<number> {

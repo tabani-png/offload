@@ -45,6 +45,8 @@ export interface DeploymentRow {
   /** A remote create was started with this key and its answer not recorded (migration 0902). */
   createKey: string | null;
   createAlertedAt: number | null;
+  /** The system holds the deployment paused (migration 0903). */
+  holdReason: "budget_exceeded" | "ineligible" | null;
 }
 
 export interface RunRow {
@@ -107,6 +109,7 @@ export function deploymentRow(r: Row): DeploymentRow {
     lastRunSeenAt: (r.last_run_seen_at as string | null) ?? null,
     createKey: (r.create_key as string | null) ?? null,
     createAlertedAt: r.create_alerted_at ? (r.create_alerted_at as Date).getTime() : null,
+    holdReason: (r.hold_reason as DeploymentRow["holdReason"]) ?? null,
   };
 }
 

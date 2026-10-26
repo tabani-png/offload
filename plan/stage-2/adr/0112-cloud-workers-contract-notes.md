@@ -108,3 +108,18 @@ calls for deployments, sessions, agents, environments or vaults. So every create
 | vault credentials | `offload_worker_provision:<tenant>` | recorded one by one: at most the one in flight is created again in the same vault |
 Gap (contract): an unconfirmed deployment is detected and flagged but cannot be found or paused automatically until the
 contract offers a list or idempotent create; it is the one orphan that can schedule paid sessions.
+
+## 14. A scheduled run passes the gates a manual run passes, and keeps passing them
+| gate | manual run (route, `startRun`) | scheduled run, at admission (deployment polling) | active deployment / running session (every sweep, every actionable event) |
+|---|---|---|---|
+| kill switch (tenant, person, workflow) | 409 `kill_switch_active` | run stopped (`kill_switch_active`) | sweep interrupts sessions and pauses the worker and its deployment; events are not acted on |
+| worker state `ready` | 409 | run stopped (`worker_not_ready`) | the sync pauses the deployment of a worker that is not ready |
+| eligibility (`registry.isRunnableBy`: live version, identity runs it) | 409 | run stopped (`ineligible`), deployment held (`hold_reason = ineligible`) | sweep interrupts sessions of an ineligible worker and holds its deployment; released when eligible again; events are not acted on |
+| tenant monthly cap | 409 `budget_exceeded` (admission lock) | run stopped (`budget_exceeded`), deployment held (`hold_reason = budget_exceeded`) | sweep holds the deployment while one more session would exceed the cap; released next month or on a raised cap |
+| role session budget | at worker create / PATCH | fixed in the deployment's budget | the platform enforces `max_list_cost` |
+| consent, overnight policy, approval, commit binding | the broker, at propose and before every call | the broker, same | the broker, same |
+A stop is an interrupt requested with the run and confirmed on delivery (§12); a hold is `deployments.hold_reason`,
+which the sync turns into a remote pause (desired vs remote, retried every tick).
+Gap (contract): read credentials live in the job role's vault and the recorded contract has no credential delete, so
+an ineligible worker's access is cut by pausing its deployment, interrupting its sessions and refusing admission;
+the credentials are not revoked.

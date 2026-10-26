@@ -68,12 +68,17 @@ export function workerRoutes(app: App, deps: Deps, workers: () => Workers): void
     const { limit, cursor } = pageParams(c);
     const after = typeof cursor?.id === "string" && isUuid(cursor.id) ? cursor.id : null;
     const out = await tenantTx(c, deps, async (tx, p) => {
-      const rows = await tx`select * from workers where (${after}::uuid is null or id > ${after}::uuid) order by id limit 1000`;
+      // canSee in SQL, before the limit: a page is never cut short by rows the caller cannot see.
+      const all = p.accessRole === "owner" || p.accessRole === "admin" || p.accessRole === "auditor";
+      const lead = p.accessRole === "dept_lead";
+      const rows = await tx`select * from workers where (${after}::uuid is null or id > ${after}::uuid)
+          and (${all} or (${lead} and department_id::text in (select jsonb_array_elements_text(${p.departmentScope}::jsonb)))
+            or (not ${all} and not ${lead} and job_role_id in (select job_role_id from job_role_holders where person_id = ${p.personId}::uuid)))
+        order by id limit ${limit + 1}`;
       const items = [];
       for (const r of rows) {
         const w = workerRow(r);
-        if (await canSee(tx, p, w)) items.push(workerDto(w, await loadDeployment(tx, w.id), deps.clock.now()));
-        if (items.length > limit) break;
+        items.push(workerDto(w, await loadDeployment(tx, w.id), deps.clock.now()));
       }
       return page(items, limit, (l) => ({ id: l.id }));
     });
