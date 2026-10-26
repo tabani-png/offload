@@ -1042,6 +1042,18 @@ export function createBroker(deps: Deps): Broker {
     return summary;
   }
 
+  /** Does the job role's current policy still allow the capability and, for a person's approval, name its approver? */
+  async function roleStillAllows(tx: Tx, b: BatchRow, capability: string, approvedBy: string | null): Promise<boolean> {
+    const rp = await rolePolicyOf(tx, b.jobRoleId);
+    if (!rp || !rp.allowedCapabilities.includes(capability)) return false;
+    if (approvedBy === null) return true;
+    if (approvedBy === b.runnerPersonId && (rp.approvers === "runner" || rp.approvers === "runner_or_dept_lead")) return true;
+    if (rp.approvers === "runner") return false;
+    const [lead] = await tx`select 1 from people where id = ${approvedBy} and access_role = 'dept_lead'
+      and dept_lead_of @> ${[b.departmentId]}::jsonb and state in ('active', 'leaving')`;
+    return lead !== undefined;
+  }
+
   /** One item through the gate and the journal. Returns what became of it. */
   async function executeItem(tenantId: string, hash: string, key: string): Promise<"sent" | "unknown" | "failed_before_send" | "waiting"> {
     let named: string[] = [key];
@@ -1094,6 +1106,11 @@ export function createBroker(deps: Deps): Broker {
       if (!intact(b, rows)) {
         await revokeBatch(tx, hash, "tampered");
         await audit(tx, { actor: SERVICE, action: "batch.tamper_detected", subjectPersonId: b.runnerPersonId, resource: { type: "batch", id: hash }, detail: {} });
+        return { done: "waiting" as const };
+      }
+      // The role policy as it is now (N4): a capability taken away, or an approver no longer named, takes the approval back.
+      if (!(await roleStillAllows(tx, b, row.capability, tk.approver_kind === "person" ? (tk.approved_by as string) : null))) {
+        await revokeBatch(tx, hash, "role policy changed");
         return { done: "waiting" as const };
       }
       // Send window: never outside it; a late item is moved to the next opening.
