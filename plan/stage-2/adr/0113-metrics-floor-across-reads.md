@@ -51,7 +51,9 @@ devices of one person, or a day sent again under a new object id, count once.
 An ingest that stores hs-1 inputs appends one `metric_dirty` row per transaction instead of updating snapshot rows.
 The nightly job takes a per-tenant advisory lock, takes in the pending rows and marks snapshots stale before it reads
 any input. A row that commits later stays pending for the next night. A month is `final` only while no row is
-pending. `metric_dirty` has no person column and no DELETE grant. Pruning taken rows is a retention concern (S2-08).
+pending. The pass runs in one REPEATABLE READ transaction, so the markers it takes and the inputs it loads are one
+snapshot; an ingest committing during the pass is in neither and waits for the next (a serialization failure re-runs the
+pass). `metric_dirty` has no person column and no DELETE grant. Pruning taken rows is a retention concern (S2-08).
 
 ## 5. Every value comes from inputs the floor lets through (PR #9 round 5)
 A value in a metrics response (number, anomaly detail, digest, flag) is computed only from inputs whose contributors
