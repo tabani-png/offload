@@ -12,6 +12,8 @@
 //   bun run brain/src/cli.ts solutions (--insight N|ins_… | --held N) --home DIR [--choose KIND] [--model stub|real] [--json]
 //     (s22) ranks the five kinds of fix; --choose workflow drafts it (same as `draft`), tool|setup|remove_step writes a
 //     draft brief. `solutions approve --brief sol_… --hash H` / `solutions handoff --brief sol_… --token T`.
+//   bun run brain/src/cli.ts build --solution N|ins_… --option n --home DIR | build approve|run|record … (s24, builder/cli.ts)
+//     frozen acceptance checks, the exact single-use build approval, a dry-run build in a sandboxed workspace.
 //   analyze/serve --understanding v1|v2 (s12; default v1 until s15): v2 = span descriptions + local embeddings + task
 //     induction. --embedder stub|ollama (v2 only; default stub = deterministic offline; ollama = 127.0.0.1:11434,
 //     --embed-model qwen3-embedding:0.6b|bge-m3). --role R --industry I: optional user context (prompts only).
@@ -48,6 +50,8 @@ import { StubCaptioner } from "./vision/stub.ts";
 import { SpawnLinkRunner } from "./connectors/link.ts";
 import { fetchSchema, readUniverse, syncUniverse, UniverseSyncError, universeStatus } from "./connectors/universe.ts";
 import { CaptionWorker } from "./vision/worker.ts";
+import { buildCommand, BuildUsageError } from "./builder/cli.ts";
+import { UnsafeProfileError } from "./builder/sandbox.ts";
 import { approveBrief, BriefError, handOffBrief } from "./solutions/brief.ts";
 import { ChooseError, chooseSolution, designSolutions, parseKind, withSolutions } from "./solutions/service.ts";
 import type { SolutionSet } from "./solutions/types.ts";
@@ -64,6 +68,8 @@ const USAGE = `usage:
   bun run brain/src/cli.ts purge --home DIR [--json]
   bun run brain/src/cli.ts solutions (--insight N|ins_ID | --held N) --home DIR [--choose workflow|tool|setup|remove_step] [--model stub|real] [--json]
   bun run brain/src/cli.ts solutions approve --brief sol_ID --hash H --home DIR | solutions handoff --brief sol_ID --token T --home DIR
+  bun run brain/src/cli.ts build --solution N|ins_ID --option n --home DIR [--model stub|real] [--json]
+  bun run brain/src/cli.ts build approve --brief sol_ID --brief-hash H --check-hash C --home DIR | build run --brief sol_ID --token T --home DIR | build record --run run_ID --home DIR
   bun run brain/src/cli.ts universe sync|status|schema SLUG --home DIR [--json]   (s17, read-only Composio listing)
   serve also takes --log-file FILE, --captioner off|stub|ollama|claude|auto, --vision-model TAG|auto, --claude-vision-model M, --ollama-url URL`;
 
@@ -421,6 +427,15 @@ async function solutionsBriefCommand(argv: readonly string[]): Promise<number> {
 }
 
 async function main(argv: readonly string[]): Promise<number> {
+  if (argv[0] === "build") {
+    try {
+      return await buildCommand(argv.slice(1));
+    } catch (err) {
+      if (!(err instanceof BuildUsageError) && !(err instanceof BriefError) && !(err instanceof NotFoundError) && !(err instanceof ChooseError) && !(err instanceof UnsafeProfileError)) throw err;
+      console.error(`brain: ${err.message}`);
+      return 2;
+    }
+  }
   if (argv[0] === "solutions" && (argv[1] === "approve" || argv[1] === "handoff")) {
     try {
       return await solutionsBriefCommand(argv.slice(1));

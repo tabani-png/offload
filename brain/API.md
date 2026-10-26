@@ -441,6 +441,34 @@ kind, the order, a figure or holds a digit is ignored (`designedBy: "rules"`).
   model unless `--model` is given, like `draft`); `solutions approve --brief sol_ID --hash H --home DIR`;
   `solutions handoff --brief sol_ID --token T --home DIR`. `analyze --json` carries the same additive fields.
 
+## Builds (s24): build a brief until its frozen checks pass (dry run, additive)
+A tool / setup / remove_step brief is built by the brief runner (`src/builder/`). Outcome-based: done means the
+check script exits 0, never "the model says done".
+- `POST /solutions/:id/checks` (no body) -> 201 `{set: CheckSet, content, buildMd}`. A separate model call (role
+  `build_checks`, router route `draft`, Sonnet) turns the brief's `acceptance` lines into ONE check script
+  (`accept.py` or `accept.test.ts`), stored at `solutions/<id>/checks/` with its sha256 and shown in
+  `solutions/<id>/BUILD.md`. `CheckSet = {version, briefId, briefHash, file, sha256, model, createdAt}`.
+- `POST /solutions/:id/build/approve {briefHash, checkHash}` -> `{briefHash, checkHash, token}` (token shown once,
+  single use). 409 when either hash is not the current one or a file changed; same rules as the s05 / s22 gates.
+- `POST /solutions/:id/build {token}` -> 201 `RunRecord` (403 no / wrong approval or bypass outside a container,
+  409 token used or check changed after approval). Fresh workspace `builds/<run_id>/workspace`; each try is one Agent
+  SDK `query()` (tools Read, Write, Edit, Glob, Grep, Bash with a command allowlist; no network tools; cwd locked;
+  `accept/` read-only); the runner checks the script's sha256 and runs it; a failure's exact output feeds the next
+  try. Caps: 3 tries, $1, 30 turns per try, 10 min. DRY RUN: files stay in the workspace (`artifactPath`);
+  installing them is a separate approval, not offered here.
+- `GET /builds/:runId` -> `RunRecord`: `{version, id, briefId, briefHash, checkHash, checkFile, dryRun: true,
+  models {checkWriter, builder, reported[]}, versions {sdk, claudeCode}, profile {mode, containerSandbox, tools,
+  disallowedTools, bashAllow, limits}, tries[{n, result, turns, costUsd, tokens, checkExit, checkOutput (last 4k),
+  checkHashOk, ms}], totals {costUsd, tokens, turns}, startedAt, wallMs, outcome: PASS|FAIL|CAP|TAMPER, reason,
+  artifactPath, denials[]}`. Records are written once (`builds/<run_id>.json`) plus a line in `builds/runs.jsonl`.
+- `GET /insights/:id/solutions`: each built brief option gains, additively, `build {runId, outcome, costUsd, tries,
+  totalCostUsd}` (hours saved vs cost).
+- CLI: `build --solution N|ins_ID|held:N --option n --home DIR [--model stub|real] [--json]` (brief + checks, prints both
+  hashes); `build approve --brief sol_ID --brief-hash H --check-hash C --home DIR`; `build run --brief sol_ID --token T
+  --home DIR [--max-tries N] [--max-usd X]` (exit 0 only on PASS); `build record --run run_ID --home DIR`.
+- Env: `OFFLOAD_BUILDER_SANDBOX=container` allows bypass mode (inside a throwaway container only). Claude Code
+  subprocesses get `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`.
+
 ## Company sync (S2-02, ADR 0103)
 The brain's sync client (`src/sync/`) connects this Mac to the company control plane (`OFFLOAD_CONTROL_URL`, https;
 http only on 127.0.0.1). It can emit only the seven sync objects of `schemas/stage2` (`notice_ack`, `run_outcome`,

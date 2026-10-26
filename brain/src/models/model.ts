@@ -8,8 +8,9 @@ import { join } from "node:path";
 /** draft = per-recipient emails (best model); bucket and style_card = cheap steps.
  * s14: workflow_design = the general workflow builder rewriting step text (best model); step = one text step of a
  * general workflow, e.g. a ticket reply (cheap model). Both see masked text only, never images (ADR 0007).
- * s22: solution_design = the solution designer wording each kind of fix and its builder brief (best model). */
-export type ModelRole = "draft" | "bucket" | "style_card" | "workflow_design" | "step" | "label" | "refine" | "explain" | "solution_design";
+ * s22: solution_design = the solution designer wording each kind of fix and its builder brief (best model).
+ * s24: build_checks = turning a brief's acceptance lines into an executable check script (code writing, cheap model). */
+export type ModelRole = "draft" | "bucket" | "style_card" | "workflow_design" | "step" | "label" | "refine" | "explain" | "solution_design" | "build_checks";
 
 export interface ModelRequest {
   role: ModelRole;
@@ -90,6 +91,8 @@ export class StubModel implements Model {
     // s14: the design model echoes the rules variants (so stub plans equal the rules plans); a step draft is built
     // from the source text and the facts only (plan/text-step.ts stubStepDraft).
     if (req.role === "workflow_design" || req.role === "solution_design") return tagged(req.prompt, "baseline") ?? "{}";
+    // s24: the deterministic fallback check script the prompt carries.
+    if (req.role === "build_checks") return tagged(req.prompt, "fallback") ?? "";
     if (req.role === "step") return stubStepDraft(req.prompt);
     const examples = parseExamples(tagged(req.prompt, "examples") ?? "");
     if (req.role === "style_card") return stubStyleCard(examples);
