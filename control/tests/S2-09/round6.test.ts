@@ -31,7 +31,8 @@ const counted = async () =>
 
 describe("BUDGET", () => {
   test("BUDGET: a lost scheduled session's settled cost reaches metrics and its overnight policy's counter, once", async () => {
-    const x = await createWorker(w, { schedule: { cron: "0 22 * * *", timezone: "UTC" } });
+    // Runs as the member, the policy's owner (a run only takes a policy its runner owns).
+    const x = await createWorker(w, { identityId: w.t.people.member.id, schedule: { cron: "0 22 * * *", timezone: "UTC" } });
     const dep = x.externalRefs.deploymentId as string;
     // The scheduled session works (cost 50 so far) and never idles; no stream to it can be opened.
     w.fake.queue([{ await: "user.message" }, { emit: [running, { type: "session.usage", list_cost: { amount: "50", currency: "USD" } }], cost: 50 }]);
