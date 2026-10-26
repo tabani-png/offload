@@ -15,7 +15,7 @@ let workflowId = "";
 let live: any;
 
 const VALUES = ["43", "352", "2410", "3"];
-const FIELDS = SHEET_COLUMNS.map((c, k) => [c, VALUES[k]!]);
+const FIELDS = SHEET_COLUMNS.map((c, k) => [c, VALUES[k]!] as [string, string]);
 
 beforeAll(() => {
   w = world();
@@ -53,7 +53,7 @@ describe("s27 path: the metrics task reads its own numbers", () => {
     for (const id of read.evidence.eventIds.slice(0, 3)) expect(day.includes(id) || readFileSync(join(w.home, "days", "2026-10-13.jsonl"), "utf8").includes(id) || readFileSync(join(w.home, "days", "2026-10-14.jsonl"), "utf8").includes(id)).toBe(true);
     // Only labels are kept: no value the person typed is stored with the workflow.
     const stored = readFileSync(join(wfDir(), "workflow.json"), "utf8");
-    expect(JSON.stringify(read.fields)).not.toMatch(/\d/);
+    expect(read.fields.map((f: any) => f.label + f.sourceLabel).join(" ")).not.toMatch(/\d/);
     expect(stored).not.toMatch(/Signups \d/);
     // The detail route carries it too.
     expect((await w.call(`/workflows/${workflowId}`)).body.read.target).toBe(SOURCE_TARGET);

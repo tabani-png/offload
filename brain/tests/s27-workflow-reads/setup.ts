@@ -70,7 +70,7 @@ export function withDashboard(days: readonly FixtureDay[]): FixtureDay[] {
       const e = evs[i]!;
       if (e.kind === "focus" && e.title === METRICS_TITLE) {
         const ocr = evs.slice(i + 1).find((x) => x.kind === "ocr");
-        const values = ocr?.kind === "ocr" ? sheetValues(ocr.text) : null;
+        const values = ocr?.kind === "ocr" ? sheetValues(ocr.text ?? "") : null;
         if (values !== null) {
           const t0 = e.ts - READ_SECONDS * 1000;
           out.push({ id: ulidAt(t0, `dash-focus-${e.id}`), ts: t0, kind: "focus", app: "com.google.Chrome", appName: "Google Chrome", title: DASHBOARD_TITLE, url: DASHBOARD_URL, host: "us.posthog.com" } as OffloadEvent);

@@ -56,7 +56,7 @@ describe("s27 read source", () => {
   test("SOURCE: a dashboard before every update whose screen never shows the typed numbers is not a source", async () => {
     const days = dashboardDays()
       .slice(0, 3)
-      .map((d) => ({ day: d.day, events: d.events.map((e) => (e.kind === "ocr" && e.text.startsWith("Weekly metrics") ? { ...e, text: "Weekly metrics\nRetention cohort\nNo data for this range" } : e)) }));
+      .map((d) => ({ day: d.day, events: d.events.map((e) => (e.kind === "ocr" && (e.text ?? "").startsWith("Weekly metrics") ? { ...e, text: "Weekly metrics\nRetention cohort\nNo data for this range" } : e)) }));
     expect(await sourceOf(days)).toBeNull();
   });
 
