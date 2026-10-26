@@ -3,13 +3,13 @@
 //   its own inputs: Ops lost WF1 when a Finance person started it, because the workflow tree spanned every department.
 //   It also covers person-scope reads, a lead reading another department, and the company adoption and working-time
 //   reads (which contain H, so only H's own count may move there).
-// - Evidence lists raw baseline samples only when at least floor people sent samples for that version.
+// - Evidence shows a baseline (samples, stats, run baselines) only when at least floor people sent samples for it.
 // - Anomalies are filtered before the 100-entry cap, so dropped residual_zero_share entries cannot push others out.
 // - Adoption is suppressed whole when the residual median lacks contributors (no fabricated 0).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { asPrincipal, type Client } from "../helpers/harness.ts";
 import {
-  WF1, WF2, addDevice, addPerson, at, baselineSample, dailyAggregate, populate, receipt, reviewEvent, runOutcome, sendObjects,
+  WF1, WF2, addDevice, asPerson, addPerson, at, baselineSample, dailyAggregate, populate, receipt, reviewEvent, runOutcome, sendObjects,
   setup, workingTime, type Dev, type S205,
 } from "./helpers.ts";
 
@@ -180,13 +180,24 @@ describe("EVIDENCE raw baseline samples need floor senders", () => {
   }, 60_000);
   afterAll(() => s.close());
 
-  test("EVIDENCE: one sender's raw samples are never listed; the baseline the formula uses still is", async () => {
+  test("EVIDENCE: with fewer than floor baseline senders nothing of the baseline shows: no samples, no stats, no run baselines", async () => {
+    // One sender's median is their own timing, and every listed run carries it as baselineSeconds (round 7).
     const r = await lead.get(`/v1/metrics/hours-saved/evidence?workflowId=${WF4}&version=1&${Q}`);
+    expect(r.status).toBe(422);
+    expect(r.json.error.code).toBe("group_floor");
+    expect(JSON.stringify(r.json)).not.toContain("420");
+  });
+
+  test("EVIDENCE: the sender reads their own runs' evidence (member scope) whatever the count", async () => {
+    const t = s.h.a;
+    const solo = await person(s, t.departments.finance);
+    receipt(await sendObjects(s.h, solo.dev, [baselineSample([500, 510, 520], { workflowId: WF3 })]));
+    const run = runOutcome({ workflowId: WF3, endedAt: at("2026-10-22", 9) });
+    receipt(await sendObjects(s.h, solo.dev, [run, reviewEvent(run.runId)]));
+    const me = await asPerson(s.h, t, solo.personId);
+    const r = await me.get(`/v1/metrics/hours-saved/evidence?workflowId=${WF3}&version=1&${Q}`);
     expect(r.status).toBe(200);
-    expect(r.json.runs.length).toBe(5);
-    expect(r.json.baseline.n).toBe(5);
-    expect(r.json.baseline.medianSeconds).toBe(420);
-    expect(r.json.baseline.samples).toEqual([]);
+    expect(r.json.runs.length).toBe(1);
   });
 });
 
@@ -242,5 +253,55 @@ describe("FLOOR adoption is suppressed whole when the residual median lacks cont
     const r = await owner.get(`/v1/metrics/adoption?scope=company&${Q}`);
     expect(r.status).toBe(200);
     expect(r.json.value).toEqual(SUPPRESSED);
+  });
+});
+
+describe("FLOOR a job role listing a workflow its department does not list leaves no residue at the company", () => {
+  let s: S205;
+  let owner: Client;
+  let ops: string;
+  let legal: string;
+  const roles: string[] = [];
+
+  beforeAll(async () => {
+    s = await setup();
+    const t = s.h.a;
+    const db = s.h.db.migrator;
+    ops = (await db`insert into departments (tenant_id, name) values (${t.id}, 'Ops') returning id`)[0]!.id as string;
+    legal = (await db`insert into departments (tenant_id, name) values (${t.id}, 'Legal') returning id`)[0]!.id as string;
+    for (const n of ["R1", "R2", "R3"]) {
+      roles.push((await db`insert into job_roles (tenant_id, name, department_id) values (${t.id}, ${n}, ${legal}) returning id`)[0]!.id as string);
+    }
+    // WF1: Sales 5, Ops 5, Legal 8 (R3 6, R1 1, R2 1). R1 and R2 have 3 people each (visible together in Legal's tree),
+    // so R3 is shown; Legal does not list WF1 (2 people outside R3), but R3 does. Finance 5 on WF3 keeps every
+    // department visible.
+    await populate(s, t, { departmentId: t.departments.sales, size: 5 });
+    await populate(s, t, { departmentId: ops, size: 5 });
+    await populate(s, t, { departmentId: t.departments.finance, size: 5, workflowId: WF3 });
+    await populate(s, t, { departmentId: legal, size: 6, jobRoleId: roles[2]! });
+    for (const r of [roles[0]!, roles[1]!]) {
+      await populate(s, t, { departmentId: legal, size: 1, jobRoleId: r });
+      await populate(s, t, { departmentId: legal, size: 2, jobRoleId: r, workflowId: WF3 });
+    }
+    owner = await asPrincipal(s.h, "owner");
+  }, 120_000);
+  afterAll(() => s.close());
+
+  const wf1 = async (scope: string) =>
+    ((await owner.get(`/v1/metrics/hours-saved?scope=${scope}&${Q}`)).json.topWorkflows as Array<{ workflowId: string; seconds: number }>)
+      .find((w) => w.workflowId === WF1);
+
+  test("FLOOR: Legal does not list WF1 while its role R3 does (the shape under test)", async () => {
+    expect(await wf1(`department:${legal}`)).toBeUndefined();
+    expect(await wf1(`job_role:${roles[2]}`)).toBeDefined();
+  });
+
+  test("FLOOR: company WF1 minus every listed department and every listed role of an unlisted department is 0, or the company does not list it", async () => {
+    const c = await wf1("company");
+    if (!c) return;
+    let listed = 0;
+    for (const d of [s.h.a.departments.sales, ops, s.h.a.departments.finance]) listed += (await wf1(`department:${d}`))?.seconds ?? 0;
+    for (const r of roles) listed += (await wf1(`job_role:${r}`))?.seconds ?? 0;
+    expect(c.seconds - listed).toBe(0);
   });
 });
