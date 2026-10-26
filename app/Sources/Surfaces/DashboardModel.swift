@@ -36,9 +36,16 @@ final class DashboardModel: ObservableObject {
   @Published var claudeVisionNote: String?
   var onClaudeVision: ((Bool) -> Void)?
 
-  /// Offload's own needs-you lines plus the captioner's (GET /status captioner.needsYou).
+  /// s29: the Claude key in Settings (shared with the first-run window), and the one notice shown while there is none.
+  var claudeKey: ClaudeKeyModel?
+  @Published var claudeKeyNotice: String?
+
+  /// Offload's own needs-you lines plus the captioner's (GET /status captioner.needsYou). s29: with no key, the key
+  /// notice is the one Claude message (the router's own "add a Claude key" line would say the same thing twice).
   var allNotices: [String] {
-    notices + [data?.observing.captioner?.needsYouLine, data?.observing.models?.needsYouLine].compactMap { $0 }
+    let models = data?.observing.models
+    let modelsLine = claudeKeyNotice != nil && models?.backend == "claude-code" ? nil : models?.needsYouLine
+    return [claudeKeyNotice].compactMap { $0 } + notices + [data?.observing.captioner?.needsYouLine, modelsLine].compactMap { $0 }
   }
 
   func toggleClaudeVision() {

@@ -177,7 +177,9 @@ fi
 
 echo "== scope"
 . "$ROOT/scripts/lib/slice-changes.sh"
-slice_files --allow-skip "$BASE"; scope_rc=$?
+# Only s28's own commits (later slices that merge on top may touch other paths under their own contracts; same rule
+# as s25, approved in PR #36).
+SLICE_GREP='^[a-z]+\(s28-dmg\)' slice_files --allow-skip "$BASE"; scope_rc=$?
 case $scope_rc in
   0) while IFS= read -r p; do
        [ -n "$p" ] || continue

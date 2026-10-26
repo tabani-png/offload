@@ -21,9 +21,14 @@ function cli(args: string[], env: Record<string, string> = {}) {
 }
 
 describe("s24 CLI", () => {
-  test("CLI: build --solution held:1 --option 1 writes the brief and frozen checks; approve; run (dry run); record", () => {
+  test("CLI: build --solution <held-back coding task> --option 1 writes the brief and frozen checks; approve; run (dry run); record", () => {
     const home = founderLive();
-    const prep = cli(["build", "--solution", "held:1", "--option", "1", "--home", home, "--json"]);
+    // s30: pick the coding task by id, as s22 does. founderLive() is the week ending yesterday at the real clock and the
+    // fixture's day content follows the weekday, so which held-back task is #1 changes with the day the suite runs
+    // (on a Monday it was the coding task, any other day it is a calls task whose first option is leave_alone).
+    const listed = JSON.parse(cli(["analyze", "--home", home, "--json"]).out) as { heldBack: Array<{ id: string; kind: string }> };
+    const coding = listed.heldBack.find((h) => h.kind === "code.claude-code")!.id;
+    const prep = cli(["build", "--solution", coding, "--option", "1", "--home", home, "--json"]);
     expect(prep.err).toBe("");
     expect(prep.code).toBe(0);
     const p = JSON.parse(prep.out);

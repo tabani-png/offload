@@ -1,3 +1,4 @@
+import { afterEach, beforeEach, setSystemTime } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +28,21 @@ function appNameFor(app: string): string {
   if (app === "us.zoom.xos") return "zoom.us";
   if (app === "com.apple.Terminal") return "Terminal";
   return app;
+}
+
+/** Two days after the s05/s10b fixture week (NOW and MON_0800 are 2026-10-19): sealed batches of that week are inside
+ * the 7-local-day keep window at this instant in every time zone. */
+export const FIXTURE_CLOCK = Date.UTC(2026, 9, 21, 12, 0, 0);
+
+/**
+ * s30: pins Date.now() / new Date() for every test of the calling file (restored after each test). Code under test that
+ * defaults to the real clock (executeBatch, readBatch, listBatches: the 7-local-day keep window) otherwise reads
+ * fixture data sealed on a fixed day against today's date, and the test starts failing once the real local day is more
+ * than 7 days after the fixture day: first in time zones east of UTC (Asia/Karachi), then everywhere.
+ */
+export function pinClock(at: number = FIXTURE_CLOCK): void {
+  beforeEach(() => void setSystemTime(new Date(at)));
+  afterEach(() => void setSystemTime());
 }
 
 export function tempHome(): { home: string; cleanup: () => void } {

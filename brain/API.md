@@ -703,7 +703,8 @@ check script exits 0, never "the model says done".
   is FAIL "artifact rejected"; hashing and scanning then read asynchronously in chunks, bounded by the wall budget
   plus 30 s.
   Every exit path (PASS, FAIL, CAP, TAMPER, an error, an unreadable artifact, SIGTERM/SIGINT/SIGHUP to the brain)
-  releases the supervisor (it sweeps its sandbox instance first), the command socket and its /tmp/ofl-* folder, and
+  releases the supervisor (it sweeps its sandbox instance first), the command socket and its /tmp/ofl-<pid>-* folder
+  (named after the brain process that made it, s30), and
   `cred/`; any error after setup is a recorded FAIL (an unreadable workspace file: "artifact unreadable"). A check's
   report (JUnit / DONE marker) is read while the check runs, capped at 8 MB ("report too large" = not a pass).
   OFF BY DEFAULT: a build runs only when the brain has OFFLOAD_BUILDER_ENABLED=1 (else 403 / exit 2 with the reason),

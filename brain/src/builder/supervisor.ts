@@ -35,9 +35,13 @@ export interface Supervisor {
   releaseNow(): void;
 }
 
-/** A short socket path (macOS limits unix socket paths to 104 bytes), in a private 0700 folder. */
+/** A short socket path (macOS limits unix socket paths to 104 bytes), in a private 0700 folder. The folder name
+ * carries the creating process's pid (/tmp/ofl-<pid>-XXXXXX), so a leftover can be traced to the process that made it
+ * and a check for leftovers (tests) can tell its own folders from those of another Offload process running at the same
+ * time. Pass `pid` only to read the prefix (oflPrefix). */
+export const oflPrefix = (pid: number = process.pid) => `ofl-${pid}-`;
 export function supervisorSocket(): { dir: string; socket: string } {
-  const dir = mkdtempSync("/tmp/ofl-");
+  const dir = mkdtempSync(`/tmp/${oflPrefix()}`);
   return { dir, socket: join(dir, "s") };
 }
 
