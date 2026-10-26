@@ -373,7 +373,7 @@ describe("s20 SAVING review 3: unknown or action verbs are never read-only", () 
     ["read", "invoice", "read"], ["view", "page", "read"], ["browse", "list", "read"], ["skim", "doc", "read"], ["check", "inbox", "read"],
     ["watch", "video", "read"], ["scroll", "feed", "read"], ["reviewing", "content", "read"], ["viewing", "page", "read"], ["watching", "video", "read"],
     ["attending", "meeting", "read"], ["listening", "call", "read"], ["search", "records", "read"],
-    ["approve", "invoice", "judge"], ["review", "application", "judge"], ["assess", "risk", "judge"], ["decide", "case", "judge"],
+    ["approve", "application", "judge"], ["review", "application", "judge"], ["assess", "risk", "judge"], ["decide", "case", "judge"],
     ["submit", "invoice", "record"], ["submitting", "form", "record"], ["pay", "bill", "record"], ["paying", "bill", "record"], ["publish", "page", "record"],
     ["delete", "record", "record"], ["export", "report", "record"], ["exporting", "report", "record"], ["download", "statement", "record"], ["run", "script", "record"],
     ["running", "tests", "record"], ["code", "feature", "record"], ["coding", "feature", "record"], ["fix", "bug", "record"], ["upload", "file", "record"],
@@ -458,7 +458,7 @@ describe("s20 ROUTE review 4: a commit capability matches the step's verb, else 
     expect([at("gmail", "reply"), at("gmail", "send"), at("xero", "enter"), at("google-sheets", "append"), at("greenhouse", "move"), at("slack", "post"), at("hubspot", "note"), at("zendesk", "reply")]).toEqual(["mail.send", "mail.send", "accounting.bill", "sheet.append", "ats.move_stage", "chat.post", "crm.note", "ticket.reply"]);
   });
 
-  test("ROUTE: a UI commit on a catalog app runs without that app's connector (the legacy send step names no connector)", async () => {
+  test("ROUTE: a UI commit on a catalog app is marked computer and requires no connector (review 5: it stays declared)", async () => {
     const { legacySteps, planConnectors } = await import("../../src/plan/build.ts");
     const v = { id: "a", label: "", summary: "", steps: [
       { id: "read_1", type: "read", title: "Read the email in Gmail", detail: "", capability: { need: "read", target: "gmail", targetName: "Gmail", capability: "mail.read", role: "read", via: "catalog" }, gated: false, when: null, writesText: false, sourceSteps: [] },
@@ -466,7 +466,7 @@ describe("s20 ROUTE review 4: a commit capability matches the step's verb, else 
     ] } as unknown as Parameters<typeof legacySteps>[0];
     const send = legacySteps(v).find((s) => s.type === "send")!;
     expect(send.title).toBe("Delete the email in Gmail");
-    expect(send.connector).toBeNull();
+    expect([send.connector, (send as { method?: string }).method]).toEqual(["gmail", "computer"]);
     expect(planConnectors(v).filter((c) => c.required)).toEqual([]);
   });
 
