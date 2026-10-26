@@ -189,21 +189,24 @@ export const COMPOSIO_READ_TOOL = "mcp__composio_cli__POSTHOG_GET_INSIGHT";
 /** What a connector answers for the dashboard: JSON, as an MCP tool or `composio execute` would. */
 export const dashJson = (d: Dash) => JSON.stringify({ insight: "Weekly metrics", week: d.week, signups: d.signups, active_users: d.active, churn: d.churn });
 
-/** A reader that does one call through the read gate; `tool` / `input` can be anything (a write, to prove refusal). */
+/** A reader that does one call through the read gate; `tool` / `input` can be anything (a write, to prove refusal).
+ * Without an explicit `input` it sends the arguments Offload learned (job.args), like a real reader. */
 export class FakeReader implements SourceReader {
   calls = 0;
   ran = 0;
   fail: string | null = null;
+  lastInput: Record<string, unknown> | null = null;
   constructor(
     private readonly answer: () => string,
     public tool: string,
-    public input: Record<string, unknown> = {},
+    public input: Record<string, unknown> | null = null,
   ) {}
 
-  async read(o: { call: ReadCall }): Promise<string> {
+  async read(o: { call: ReadCall; args: Record<string, unknown> }): Promise<string> {
     this.calls += 1;
     if (this.fail !== null) throw new Error(this.fail);
-    return o.call(this.tool, this.input, async () => {
+    this.lastInput = this.input ?? o.args;
+    return o.call(this.tool, this.lastInput, async () => {
       this.ran += 1;
       return this.answer();
     });

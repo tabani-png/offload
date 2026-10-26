@@ -48,6 +48,8 @@ describe("s27 path: the metrics task reads its own numbers", () => {
     expect(read.readHoursPerWeek).toBeGreaterThan(0);
     expect(read.arithmetic).toMatch(/h\/wk/);
     expect(read.evidence.spanIds.length).toBe(read.seenBefore);
+    // The read's arguments are learned from the recordings: the report the person looked at, the fields, the period.
+    expect(read.query).toEqual({ report: "Weekly metrics", fields: ["Week", "Signups", "Active users", "Churn"], filters: [["period", "last 7 days"]] });
     // Evidence resolves to real stored events.
     const day = readFileSync(join(w.home, "days", "2026-10-12.jsonl"), "utf8");
     for (const id of read.evidence.eventIds.slice(0, 3)) expect(day.includes(id) || readFileSync(join(w.home, "days", "2026-10-13.jsonl"), "utf8").includes(id) || readFileSync(join(w.home, "days", "2026-10-14.jsonl"), "utf8").includes(id)).toBe(true);
@@ -55,6 +57,8 @@ describe("s27 path: the metrics task reads its own numbers", () => {
     const stored = readFileSync(join(wfDir(), "workflow.json"), "utf8");
     expect(read.fields.map((f: any) => f.label + f.sourceLabel).join(" ")).not.toMatch(/\d/);
     expect(stored).not.toMatch(/Signups \d/);
+    // Offload builds its own view of the data: the page address the person had open is never stored.
+    expect(stored).not.toMatch(/dashboard\/7|project\/1|https:\/\/us\.posthog\.com/);
     // The detail route carries it too.
     expect((await w.call(`/workflows/${workflowId}`)).body.read.target).toBe(SOURCE_TARGET);
   });
@@ -89,6 +93,11 @@ describe("s27 path: the metrics task reads its own numbers", () => {
     expect(r.body.read.rows).toEqual([FIELDS]);
     expect(w.mcpReader.ran).toBe(1);
     expect(w.composioReader.calls).toBe(0);
+    // The learned query is what the connector is asked, it is shown, and the dry run's approval covers it.
+    expect(r.body.read.query).toEqual({ report: "Weekly metrics", fields: ["Week", "Signups", "Active users", "Churn"], filters: [["period", "last 7 days"]] });
+    expect(w.mcpReader.lastInput).toEqual({ report: "Weekly metrics", fields: ["Week", "Signups", "Active users", "Churn"], period: "last 7 days" });
+    const dryBatch = readBatch(w.home, workflowId, r.body.batchHash, w.clock.now)!;
+    for (const i of dryBatch.items) expect(i.body).toContain("Weekly metrics (Week, Signups, Active users, Churn; period last 7 days)");
     // Read through the read-only gate: allowed, logged, mode read.
     const reads = gateLog().filter((l) => l.mode === "read");
     expect(reads.map((l) => [l.tool, l.decision])).toEqual([[MCP_READ_TOOL, "allow"]]);
@@ -118,6 +127,8 @@ describe("s27 path: the metrics task reads its own numbers", () => {
     expect(live.items).toHaveLength(1);
     expect(live.items[0].body).toContain("Signups: 352");
     expect(live.items[0].body).toContain("PostHog");
+    // The live approval covers the learned query too (it is part of the hashed item text).
+    expect(live.items[0].body).toContain("Weekly metrics (Week, Signups, Active users, Churn; period last 7 days)");
     const batch = readBatch(w.home, workflowId, live.batch.hash, w.clock.now)!;
     expect(batch.items.map((i) => i.commit)).toEqual([{ verb: "save", fields: FIELDS }]);
     // The approval hash covers the exact fetched values: one changed value is another batch.
