@@ -52,3 +52,17 @@ An ingest that stores hs-1 inputs appends one `metric_dirty` row per transaction
 The nightly job takes a per-tenant advisory lock, takes in the pending rows and marks snapshots stale before it reads
 any input. A row that commits later stays pending for the next night. A month is `final` only while no row is
 pending. `metric_dirty` has no person column and no DELETE grant. Pruning taken rows is a retention concern (S2-08).
+
+## 5. Every value comes from inputs the floor lets through (PR #9 round 5)
+A value in a metrics response (number, anomaly detail, digest, flag) is computed only from inputs whose contributors
+pass the floor in the tree of the cell it is shown in.
+- Adoption floors each field on its own contributors: people with data, active people, people with workflow activity,
+  people with runs (rates, runs per week), people with a reviewed success (residual median). Each set is empty or at
+  least the floor and visible in its own company tree, else the value is suppressed.
+- Group views never list residual_zero_share (its detail is one person's counts). A workflow-keyed anomaly needs floor
+  people behind it in scope and, below the company, a visible cell in the tree of those runs.
+- `inputsDigest`: no inputs for a hidden cell; every run for the company; below it, the scope's own runs, their reviews
+  and the baselines of their workflow versions.
+- `final`: below the company, and for a suppressed company, it follows only the inputs behind the cell shown
+  (`metric_snapshots.scope_digest`), never tenant-wide pending data. A visible company keeps §4.
+- Baseline samples are workflow reference data (ADR 0109 §7) and stay outside this rule.
