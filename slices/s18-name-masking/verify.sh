@@ -68,6 +68,7 @@ for f in $touched; do
     brain/src/plan/text-step.ts|brain/src/plan/dryrun.ts|brain/src/tone/draft.ts) ;;
     brain/src/workflows/runner.ts|brain/src/workflows/dryrun.ts|brain/API.md|plan/adr/0010-name-masking.md) ;;
     brain/src/workflows/autorun.ts|brain/src/workflows/batch.ts|brain/src/api/workflow-routes.ts) ;;  # unfilled names never auto-sent (SPEC "Scope changes")
+    brain/src/api/server.ts) ;;  # the default model is the masking router (SPEC "Scope changes", review round 2)
     brain/tests/s18-name-masking/*|slices/s18-name-masking/*) ;;
     brain/tests/s05b-runner/idempotency.test.ts) ;;  # the H3 fix ported from S2-02 (SPEC "Scope changes")
     *) fail "s18 commit touched out-of-scope $f";;

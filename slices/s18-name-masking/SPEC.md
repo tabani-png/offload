@@ -5,7 +5,7 @@ depends_on: [s11-perception (frame notes), s12-understanding (span descriptions,
 parallel_safe: true
 human_gated: false
 verify: bash slices/s18-name-masking/verify.sh
-paths_in_scope: [brain/src/privacy/**, brain/src/grouping/normalize.ts (maskText keeps person placeholders), brain/src/models/router.ts, brain/src/models/model.ts (ModelRequest.names, stub sign-off pattern), brain/src/vision/notes.ts (maskFields), brain/src/vision/prompt.ts (context hint), brain/src/understanding/describe.ts, brain/src/plan/text-step.ts, brain/src/plan/dryrun.ts, brain/src/tone/draft.ts, brain/src/workflows/runner.ts (run-scoped map only), brain/src/workflows/dryrun.ts (run-scoped map only), brain/src/workflows/autorun.ts + brain/src/workflows/batch.ts + brain/src/api/workflow-routes.ts (auto-run holds unfilled names; see Scope changes), brain/API.md, plan/adr/0010-name-masking.md, brain/tests/s18-name-masking/**, brain/tests/s05b-runner/idempotency.test.ts (ported H3 fix, see Scope changes), slices/s18-name-masking/**]
+paths_in_scope: [brain/src/privacy/**, brain/src/grouping/normalize.ts (maskText keeps person placeholders), brain/src/models/router.ts, brain/src/models/model.ts (ModelRequest.names, stub sign-off pattern), brain/src/vision/notes.ts (maskFields), brain/src/vision/prompt.ts (context hint), brain/src/understanding/describe.ts, brain/src/plan/text-step.ts, brain/src/plan/dryrun.ts, brain/src/tone/draft.ts, brain/src/workflows/runner.ts (run-scoped map only), brain/src/workflows/dryrun.ts (run-scoped map only), brain/src/workflows/autorun.ts + brain/src/workflows/batch.ts + brain/src/api/workflow-routes.ts (auto-run holds unfilled names; see Scope changes), brain/src/api/server.ts (default model is the router; see Scope changes), brain/API.md, plan/adr/0010-name-masking.md, brain/tests/s18-name-masking/**, brain/tests/s05b-runner/idempotency.test.ts (ported H3 fix, see Scope changes), slices/s18-name-masking/**]
 paths_out_of_scope: [app/**, engine/**, packet/**, schemas/**, brain/fixtures/**, brain/package.json, brain/bun.lock, every other test folder]
 ---
 
@@ -122,3 +122,6 @@ network code; no s18 commit touches an out-of-scope path.
 - 2026-10-26 (review wave B, PR #7 item 2): `brain/src/workflows/autorun.ts` (`unfilledItems` in the auto partition,
   the needs-you sentence), `brain/src/workflows/batch.ts` (optional `review.unfilledNames`) and
   `brain/src/api/workflow-routes.ts` (`dispatchAuto` splits those drafts off) so an unfilled name is never auto-sent.
+- 2026-10-26 (review round 2, PR #7 item 4): `brain/src/api/server.ts` builds its default model with
+  `createRoutedModel` (as `serve` does) instead of a raw `AgentSdkModel`, so a brain created without a model still masks
+  every model call.
