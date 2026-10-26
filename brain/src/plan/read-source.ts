@@ -421,14 +421,77 @@ export interface SkippedRow {
   missing: string[];
 }
 
+export type ValueRow = Array<[string, string]>;
+
+/**
+ * s27 round 6: what reading an answer gave, explicitly.
+ *   ok             recognised rows: complete ones in `rows`, incomplete ones in `skipped` (with what they lack); a read
+ *                  with 0 complete rows and N skipped is still ok (the person sees the skipped rows);
+ *   empty          a recognised collection with no rows ({results: []}): a successful read of nothing;
+ *   wrong_context  the answer declares another report or filter than the learned query, anywhere in it;
+ *   unreadable     no recognisable rows at all (or a screen without the labels): `reason`, `missing`.
+ * The fetcher stops the chain on ok and empty, marks the method failed and tries the next on wrong_context, and falls
+ * back only on unreadable (or an error).
+ */
+export type ReadOutcome =
+  | { kind: "ok"; rows: ValueRow[]; skipped: SkippedRow[]; more?: true }
+  | { kind: "empty"; more?: true }
+  | { kind: "wrong_context"; reason: string }
+  | { kind: "unreadable"; reason: string; missing: string[] };
+
+/** The complete rows of an outcome ([] unless ok). */
+export const rowsOf = (o: ReadOutcome): ValueRow[] => (o.kind === "ok" ? o.rows : []);
+
+/** Keys that hold rows when they hold a list: an empty list under one of them is a recognised empty collection. */
+const ROW_KEYS = new Set(["results", "result", "data", "items", "rows", "records", "entries", "values", "series", "list"]);
+
+/**
+ * EVERY context declaration in the whole answer (all depths, every object and row, every key alias), collected before
+ * anything is chosen or flattened, so a nested declaration can never be overwritten or skipped.
+ */
+function declarations(v: unknown, out: Array<[string, unknown]> = [], depth = 0): Array<[string, unknown]> {
+  if (depth > 64) return out;
+  if (Array.isArray(v)) {
+    for (const x of v) declarations(x, out, depth + 1);
+    return out;
+  }
+  if (!isObj(v)) return out;
+  // A table's columns declare per row: { columns: [..., "period"], rows: [[..., "last 30 days"]] }.
+  const t = tableRows(v);
+  if (t !== null) for (const r of t) declarations(r, out, depth + 1);
+  for (const [k, x] of Object.entries(v)) {
+    if (typeof x === "string" || typeof x === "number") out.push([normKey(k), x]);
+    else declarations(x, out, depth + 1);
+  }
+  return out;
+}
+
+/** A recognised empty collection: the answer is [] or a row key holds [] / a table with no rows. */
+function emptyCollection(v: unknown, depth = 0): boolean {
+  if (depth > MAX_DEPTH) return false;
+  if (Array.isArray(v)) return depth === 0 && v.length === 0;
+  if (!isObj(v)) return false;
+  if (Array.isArray(v.columns) && (Array.isArray(v.rows) || Array.isArray(v.data)) && ((v.rows ?? v.data) as unknown[]).length === 0) return true;
+  for (const [k, x] of Object.entries(v)) {
+    if (Array.isArray(x) && x.length === 0 && ROW_KEYS.has(normKey(k))) return true;
+    if (isObj(x) && emptyCollection(x, depth + 1)) return true;
+  }
+  return false;
+}
+
+/**
+ * Rows of [commit label, value] from what a source returned: JSON from a connector, or screen text ("Signups 352"
+ * lines; accessibility outlines too). Values are copied by code (ADR 0005); nothing is guessed.
+ * JSON, one normaliser: (1) every context declaration anywhere is checked against the learned query; (2) candidate
+ * collections with their depth; (3) the collection scored over ALL its rows; (4) each row validated.
+ */
 export function readValues(
   text: string,
   fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[],
-  /** The learned query: a JSON answer naming another report or filter (envelope or row) is refused (`conflict`). */
+  /** The learned query: an answer declaring another report or filter anywhere is wrong_context. */
   query?: ReadQueryDTO,
-): { rows: Array<Array<[string, string]>>; missing: string[]; more?: true; skipped?: SkippedRow[]; conflict?: string } {
-  const missing = new Set<string>();
-  const rows: Array<Array<[string, string]>> = [];
+): ReadOutcome {
+  const allMissing = () => fields.map((f) => f.label);
   let json: unknown;
   let isJson = false;
   try {
@@ -438,13 +501,15 @@ export function readValues(
     isJson = false;
   }
   if (isJson) {
-    // 1. normalise: every candidate collection with its envelope context (one walk).
+    // 1. context first, over the whole answer (I1, I4).
+    if (query !== undefined) {
+      const conflict = conflictOf(declarations(json), query);
+      if (conflict !== null) return { kind: "wrong_context", reason: conflict };
+    }
+    // 2. candidate collections; 3. pick over all rows (best field match, how many rows reach it, shallower, order).
     const { all, more } = collections(json);
     const wanted = fields.map((f) => [normKey(f.sourceLabel), normKey(f.label)] as const);
-    const valueOf = (f: Map<string, unknown>, i: number) => cleanValue(f.get(wanted[i]![0]) ?? f.get(wanted[i]![1]));
     const hits = (f: Map<string, unknown>) => wanted.filter(([a, b]) => f.get(a) != null || f.get(b) != null).length;
-    // 2. pick the collection: scored over ALL its rows (best row's field matches, then how many rows reach it),
-    //    then shallower, then first in walk order. Deterministic.
     let best: { c: Collection; flats: Array<Map<string, unknown>>; top: number; count: number } | undefined;
     for (const c of all) {
       const flats = c.rows.map((r) => flat(r));
@@ -453,35 +518,31 @@ export function readValues(
       const count = flats.filter((f) => hits(f) === top).length;
       if (best === undefined || top > best.top || (top === best.top && (count > best.count || (count === best.count && (c.depth < best.c.depth || (c.depth === best.c.depth && c.order < best.c.order)))))) best = { c, flats, top, count };
     }
+    const extra = more ? { more: true as const } : {};
+    if (best === undefined) return emptyCollection(json) ? { kind: "empty", ...extra } : { kind: "unreadable", reason: `no rows with ${allMissing().join(", ")}`, missing: allMissing() };
+    // 4. each row: complete = row (I2); else skipped with what it lacks (I3). Missing, null, empty or oversized all
+    //    mean "not known": skipped, never guessed.
+    const rows: ValueRow[] = [];
     const skipped: SkippedRow[] = [];
-    if (best !== undefined) {
-      // 3. validate the context: the envelopes, then every row. Any conflict refuses the whole answer (I1).
-      if (query !== undefined) {
-        const conflict = conflictOf(best.c.context, query) ?? best.flats.map((f) => conflictOf(f.entries(), query)).find((x) => x !== null) ?? null;
-        if (conflict !== null) return { rows: [], missing: [], conflict };
-      }
-      // 4. validate each row: complete rows are rows (I2); the others are skipped with what they lack (I3).
-      for (const f of best.flats) {
-        const row: Array<[string, string]> = [];
-        const lacks: string[] = [];
-        fields.forEach((fd, i) => {
-          // Missing, null, empty or oversized: the value is not known, so the row is skipped, never guessed.
-          const v = valueOf(f, i);
-          if (v === null) lacks.push(fd.label);
-          else row.push([fd.label, v]);
-        });
-        for (const l of lacks) missing.add(l);
-        if (lacks.length === 0) rows.push(row);
-        else skipped.push({ missing: lacks });
-      }
-    } else for (const fd of fields) missing.add(fd.label);
-    return { rows, missing: rows.length > 0 ? [] : [...missing], ...(more ? { more: true as const } : {}), ...(rows.length > 0 && skipped.length > 0 ? { skipped } : {}) };
+    for (const f of best.flats) {
+      const row: ValueRow = [];
+      const lacks: string[] = [];
+      fields.forEach((fd, i) => {
+        const v = cleanValue(f.get(wanted[i]![0]) ?? f.get(wanted[i]![1]));
+        if (v === null) lacks.push(fd.label);
+        else row.push([fd.label, v]);
+      });
+      if (lacks.length === 0) rows.push(row);
+      else skipped.push({ missing: lacks });
+    }
+    return { kind: "ok", rows, skipped, ...extra };
   }
   const lines = text
     .split("\n")
     .map((l) => l.replace(/^AX[A-Za-z]+\s+/, "").replace(/"/g, " ").replace(/\s+/g, " ").trim())
     .filter((l) => l !== "");
-  const row: Array<[string, string]> = [];
+  const row: ValueRow = [];
+  const missing: string[] = [];
   for (const fd of fields) {
     const re = new RegExp(`^${escapeRe(fd.sourceLabel)}(?![\\p{L}\\p{N}])\\s*[:=|\\-]?\\s*(.*)$`, "iu");
     let v: string | null = null;
@@ -491,11 +552,10 @@ export function readValues(
       v = cleanValue((m[1] ?? "").replace(/^=\s*/, ""));
       if (v !== null) break;
     }
-    if (v === null) missing.add(fd.label);
+    if (v === null) missing.push(fd.label);
     else row.push([fd.label, v]);
   }
-  if (row.length === fields.length) rows.push(row);
-  return { rows, missing: rows.length > 0 ? [] : [...missing] };
+  return missing.length === 0 ? { kind: "ok", rows: [row], skipped: [] } : { kind: "unreadable", reason: `did not show ${missing.join(", ")}`, missing };
 }
 
 // ---------- dry run: a past instance filled from its source ----------
@@ -510,7 +570,7 @@ export interface SourceFilled {
 
 /** One past instance: the values its source showed right before it (code) next to what the person typed. */
 export function fillFromSource(src: ReadSourceDTO, sourceText: string, commitOcr: readonly string[], o: { outputType: OutputType; verb: string; object: string }): SourceFilled {
-  const { rows } = readValues(sourceText, src.fields);
+  const rows = rowsOf(readValues(sourceText, src.fields));
   const got = new Map(rows[0] ?? []);
   const ours: OutputFieldDTO[] = src.fields.map((f) => ({ label: f.label, value: got.get(f.label) ?? null }));
   const typed = new Map(parseCommitValues(commitOcr));

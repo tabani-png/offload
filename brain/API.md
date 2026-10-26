@@ -540,6 +540,9 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   - Round 5: one parser for connector answers (normalise, pick the collection over all its rows, check the context of
     the envelopes and of every row, then each row). A row or envelope naming another report or period refuses the
     answer for that method.
+  - Round 6: reading an answer has four outcomes: ok (rows and skipped rows, even 0 complete), empty (a recognised
+    empty collection: "nothing new", no fall back), wrong_context (a conflicting report or filter anywhere: that
+    method is marked failed, the next is tried), unreadable (the next is tried; the list only after all).
 
 ## s19: messaging playbook (additive, ADR 0011)
 A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,

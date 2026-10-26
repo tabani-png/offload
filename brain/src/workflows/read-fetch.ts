@@ -17,7 +17,7 @@ import { loadConnectorsConfig, toMcpServers, type Env } from "../connectors/conf
 import type { LinkRunner, Method } from "../connectors/link.ts";
 import type { SecretReader } from "../connectors/secrets.ts";
 import type { ChainTarget } from "../connectors/targets.ts";
-import { confirmOnScreen, contextWords, mentionsContext, queryArgs, queryOf, readValues, sourceTarget, type SkippedRow } from "../plan/read-source.ts";
+import { confirmOnScreen, contextWords, mentionsContext, queryArgs, queryOf, readValues, sourceTarget, type ReadOutcome, type SkippedRow } from "../plan/read-source.ts";
 import type { ToolPolicy } from "./allowlist.ts";
 import { makeBatch } from "./batch.ts";
 import { createGate, READ_ONLY_WORDS, splitMcpName } from "./gate.ts";
@@ -64,6 +64,14 @@ export interface FetchOptions {
 export interface SourceFetcher {
   fetch(o: FetchOptions): Promise<FetchResult>;
 }
+
+/** s27 round 6: what an answer's outcome does to the chain. ok and empty are successful reads: stop (never fall back to
+ * the list, whose rows may be stale). wrong_context and unreadable: try the next method (wrong_context also marks this
+ * method failed); only when every method is exhausted does the run fall back to the list. */
+export function chainStep(kind: ReadOutcome["kind"]): "stop" | "next" {
+  return kind === "ok" || kind === "empty" ? "stop" : "next";
+}
+export const marksFailed = (kind: ReadOutcome["kind"]): boolean => kind === "wrong_context";
 
 /** An answer larger than this is refused, never cut (a cut answer could drop rows silently). */
 export const MAX_ANSWER_CHARS = 5_000_000;
@@ -199,19 +207,27 @@ export class ChainSourceFetcher implements SourceFetcher {
         why.push(`${VIA_WORDS[state.method]}: ${onScreen}`);
         continue;
       }
-      // One parse: the answer's envelopes and every row are checked against the learned query in the same pass.
-      const { rows, missing, more, skipped, conflict } = readValues(text, src.fields, query);
-      if (conflict !== undefined) {
-        this.o.resolver.markFailed(target.id, state.method, new Error(conflict));
-        why.push(`${VIA_WORDS[state.method]}: ${conflict}`);
+      // One parse with an explicit outcome; what each outcome does to the chain is chainStep (tested).
+      const out = readValues(text, src.fields, query);
+      const step = chainStep(out.kind);
+      if (step === "next") {
+        const reason = out.kind === "wrong_context" ? out.reason : out.kind === "unreadable" ? `${src.targetName} ${out.reason}` : "";
+        if (marksFailed(out.kind)) this.o.resolver.markFailed(target.id, state.method, new Error(reason));
+        why.push(`${VIA_WORDS[state.method]}: ${reason}`);
         continue;
       }
-      if (rows.length === 0) {
-        why.push(`${VIA_WORDS[state.method]}: ${src.targetName} did not show ${missing.join(", ")}`);
-        continue;
-      }
+      const rows = out.kind === "ok" ? out.rows : [];
+      const skipped = out.kind === "ok" ? out.skipped : [];
+      const more = out.kind === "ok" || out.kind === "empty" ? out.more : undefined;
       // Done rows are dropped first; the batch size is applied later, to what is left (never the other way round).
-      return { ok: true, via: state.method, rows: f.keep === undefined ? rows : rows.filter(f.keep), message: `Read from ${src.targetName} ${VIA_WORDS[state.method]}.${state.method === "computer" || mentionsContext(text, query) ? "" : ` It did not say which report or period it answered for; Offload asked for ${contextWords(query)}.`}`, ...(more === true ? { more } : {}), ...(skipped === undefined ? {} : { skipped }) };
+      return {
+        ok: true,
+        via: state.method,
+        rows: f.keep === undefined ? rows : rows.filter(f.keep),
+        message: `Read from ${src.targetName} ${VIA_WORDS[state.method]}.${out.kind === "empty" ? ` It has no rows for ${contextWords(query)} right now.` : ""}${state.method === "computer" || mentionsContext(text, query) ? "" : ` It did not say which report or period it answered for; Offload asked for ${contextWords(query)}.`}`,
+        ...(more === true ? { more } : {}),
+        ...(skipped.length === 0 ? {} : { skipped }),
+      };
     }
     return { ok: false, status: "not_read", via: null, message: why.length === 0 ? `no way to read ${src.targetName} is set up on this Mac yet.` : `${why.join("; ")}.` };
   }

@@ -95,7 +95,15 @@ only saving was the typing.
     = row, else skipped with the fields it lacks). Invariants, tested over 50+ generated shapes
     (`brain/tests/s27-workflow-reads/parser-table.test.ts`): I1 a wrong context never becomes a row; I2 a valid row is
     never lost silently; I3 an incomplete row is never a row and is always named.
-12. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+12. **Round 6 (PR #35 review): explicit outcomes.** `readValues` returns `ok(rows, skipped)` | `empty` |
+    `wrong_context(reason)` | `unreadable(reason, missing)`. Every context declaration in the whole answer (any depth,
+    any row, table columns, every key alias) is collected and checked BEFORE a collection is chosen or a row flattened
+    (I4: a conflict anywhere refuses). A read with 0 complete rows and N skipped is ok (the person sees them); a
+    recognised empty collection (`[]`, `{results: []}`, an empty table) is `empty` = nothing new (I5). Chain mapping
+    (`chainStep`, `marksFailed`, tested): ok and empty stop the chain and never fall back to the list; wrong_context
+    marks the method failed and tries the next; unreadable tries the next; the list is used only when every method
+    is exhausted.
+13. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)
