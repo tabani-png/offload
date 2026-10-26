@@ -57,7 +57,7 @@ describe("SUCCESSOR", () => {
 
   test("SUCCESSOR: only the named successor can accept; anyone else gets 404", async () => {
     expect((await (await w.as("member2")).post(`/v1/handovers/${h1}/accept`, {})).status).toBe(404);
-    expect((await (await w.as("admin")).post(`/v1/handovers/${h1}/accept`, {})).status).toBe(403);
+    expect((await (await w.as("admin")).post(`/v1/handovers/${h1}/accept`, {})).status).toBe(404);
   });
 
   test("SUCCESSOR: after the named successor accepts, the workflow runs again", async () => {

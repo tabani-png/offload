@@ -22,12 +22,14 @@ export class PauseSpy implements WorkersPort {
   /** Fail the calls made once the freeze is committed (the workers service is down at follow-up time). The S2-07
    * broker also calls pauseFor inside the freeze transaction (stopRunsFor); that call is left alone. */
   failAfterCommit = false;
+  /** Fail every call, the one inside the freeze transaction too (the workers service is down at freeze time). */
+  failAlways = false;
   constructor(private readonly seen: () => Harness | null) {}
   async pauseFor(_tx: Tx, personId: string): Promise<number> {
     const h = this.seen();
     const [p] = h ? await h.db.migrator`select state from people where id = ${personId}` : [];
     this.calls.push({ personId, committedState: (p?.state as string | undefined) ?? null });
-    if (this.failAfterCommit && p?.state === "frozen") throw new Error("workers unavailable");
+    if (this.failAlways || (this.failAfterCommit && p?.state === "frozen")) throw new Error("workers unavailable");
     return 1;
   }
   /** Calls made once the freeze was committed. */
