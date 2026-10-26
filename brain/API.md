@@ -467,16 +467,25 @@ Routes (bearer token as everywhere):
 ## s18: person names (ADR 0010; no API change)
 - No new route and no DTO change. Person names are masked in code before text leaves the Mac or is stored in a note:
   frame-note fields (activity, verb, object, surface, step, inputs, outputs) and span descriptions store `<name>`;
-  every model request (every router route and backend) carries per-run placeholders (`<person:1>`,
-  `<person:1.first>`, `<person:me>` for the user). Drafts the user reviews (email drafts, text-step drafts in dry runs
-  and runs, style cards) come back with the real names, so batch items, `batchHash` and approvals are on the real text.
-  Task names, refined descriptions and workflow wording keep `<name>`. A draft whose reply holds a placeholder the brain
-  never wrote gets the warning "a name Offload could not fill in: check the names before you approve".
+  every model request (every router route and backend) carries per-run placeholders with a random run tag
+  (`<person:qzkt.1>`, `<person:qzkt.1.first>`, `<person:qzkt.me>` for the user). Placeholder-shaped text already in
+  the input (a notes cell, an inbound message) becomes `<name>` before masking, so it can never be restored to anyone's
+  name. Drafts the user reviews (email drafts, text-step drafts in dry runs and runs, style cards) come back with the
+  real names, so batch items, `batchHash` and approvals are on the real text. Task names, refined descriptions and
+  workflow wording keep `<name>`. A draft that still holds a placeholder or `<name>` gets the warning "a name Offload
+  could not fill in: check the names before you approve", and auto-run never sends it: it is split into a pending
+  batch for review and the needs-you line reads "N draft(s) ha(s/ve) a name Offload could not fill in: ...".
 - `$OFFLOAD_HOME/privacy.json` (optional, file only): `{ "ownName": "Muhammad Ali", "ownNameToClaude": "mask" |
   "keep" }`. Default `mask`: the user's own name goes out as `<person:me>` and is restored on the Mac; `keep` sends it
   as written. A workflow's facts.md `sign:` line also counts as the user's own name for its runs. People in any
   workflow's `recipients.csv` are masked wherever they appear, in any case.
 - Identifiers (record ids) in notes and descriptions stay as they are: sealed on disk, used for grouping, never sent.
+- Limits. The masker is rules over embedded word lists: a name that is in no list and has no cue ("CV - Njeri
+  Wambugu.pdf", "Aroha Ngata left a comment") is NOT masked; `tests/s18-name-masking/heldout.ts` measures this
+  (printed by the s18 verify.sh, not a gate). Contacts in a `recipients.csv` are masked anywhere. Three model paths do
+  not go through the router and are not name-masked: screenshot captioning (the engine-masked frame image itself; its
+  text turn is masked), the computer-use planner (screenshots and the AX outline), and the approved batch handed to the
+  executor (real text by design: it is what the user approved and what is sent).
 
 ## Connections (s17)
 Any app Composio supports (brain/CONNECTORS.md "Connect anything (s17)"). Nothing here sends: setup and test only

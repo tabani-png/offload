@@ -5,7 +5,7 @@ depends_on: [s11-perception (frame notes), s12-understanding (span descriptions,
 parallel_safe: true
 human_gated: false
 verify: bash slices/s18-name-masking/verify.sh
-paths_in_scope: [brain/src/privacy/**, brain/src/grouping/normalize.ts (maskText keeps person placeholders), brain/src/models/router.ts, brain/src/models/model.ts (ModelRequest.names, stub sign-off pattern), brain/src/vision/notes.ts (maskFields), brain/src/vision/prompt.ts (context hint), brain/src/understanding/describe.ts, brain/src/plan/text-step.ts, brain/src/plan/dryrun.ts, brain/src/tone/draft.ts, brain/src/workflows/runner.ts (run-scoped map only), brain/src/workflows/dryrun.ts (run-scoped map only), brain/API.md, plan/adr/0010-name-masking.md, brain/tests/s18-name-masking/**, brain/tests/s05b-runner/idempotency.test.ts (ported H3 fix, see Scope changes), slices/s18-name-masking/**]
+paths_in_scope: [brain/src/privacy/**, brain/src/grouping/normalize.ts (maskText keeps person placeholders), brain/src/models/router.ts, brain/src/models/model.ts (ModelRequest.names, stub sign-off pattern), brain/src/vision/notes.ts (maskFields), brain/src/vision/prompt.ts (context hint), brain/src/understanding/describe.ts, brain/src/plan/text-step.ts, brain/src/plan/dryrun.ts, brain/src/tone/draft.ts, brain/src/workflows/runner.ts (run-scoped map only), brain/src/workflows/dryrun.ts (run-scoped map only), brain/src/workflows/autorun.ts + brain/src/workflows/batch.ts + brain/src/api/workflow-routes.ts (auto-run holds unfilled names; see Scope changes), brain/API.md, plan/adr/0010-name-masking.md, brain/tests/s18-name-masking/**, brain/tests/s05b-runner/idempotency.test.ts (ported H3 fix, see Scope changes), slices/s18-name-masking/**]
 paths_out_of_scope: [app/**, engine/**, packet/**, schemas/**, brain/fixtures/**, brain/package.json, brain/bun.lock, every other test folder]
 ---
 
@@ -40,9 +40,11 @@ bin/al and middle initials allowed inside a run; possessive 's ignored):
 Runs containing an organisation word (Ltd, Inc, Logistics, Capital, Health, ...) or a product/app name (Google, Slack,
 Xero, Greenhouse, Zendesk, ...) are never names.
 
-Replacement: `NameMap` (one per run) gives stable placeholders `<person:N>` for the first surface it learns of person
-N and `<person:N.first>`, `<person:N.last>`, `<person:N.email>`, `<person:N.full>` for the other surfaces of that
-person (a casing variant gets `~k`). The user's own name is `<person:me>` (`.first`, ...). Every surface has exactly
+Replacement: `NameMap` (one per run) gives stable placeholders `<person:TAG.N>` for the first surface it learns of
+person N and `<person:TAG.N.first>`, `.last`, `.email`, `.full` for the other surfaces of that person (a casing variant
+gets `~k`). TAG is a random 4-letter tag per map. The user's own name is `<person:TAG.me>` (`.first`, ...). Before
+masking, any placeholder-shaped text in the input that the map did not write (any case, with or without a tag, also
+after `maskText`) becomes `<name>`, so input cannot name a placeholder that restores to another person. Every surface has exactly
 one placeholder, so `unmask(mask(x)) === x` exactly. The map lives in memory only: it is never written to disk,
 logged or sent (`toJSON()` returns only a count). `maskNamesForStorage(text)` is the same detection with every
 person collapsed to the grouping token `<name>` (notes keep no placeholder numbering and no map).
@@ -90,6 +92,13 @@ Drafts reach the batch with real names (restored by the router), so the approved
 - EGRESS: with a capturing backend behind the real router, analysing, drafting, choosing tools and dry-running every
   persona and the founder week (and a run of the founder outreach) sends no request body containing a fixture person
   name; the real `ApiBackend` HTTP body (stubbed fetch) has none either; the Claude captioner's text turn has none.
+- INJECT: placeholder-shaped text in the input (a recipient's notes, `<person:1>`, `<person:me>`) is neutralised; a
+  model echoing it in recipient B's draft (router, `draftInTone`, a live run) never restores recipient A's or the
+  user's name.
+- LEFTOVER: a draft that still holds a placeholder or `<name>` keeps its warning, is not auto-sendable, and the
+  scheduler's auto-run sends the other drafts and holds it in a pending batch whose needs-you line says why.
+- HELDOUT: a held-out set (>= 30 names in no lexicon, no cue, disjoint from the tuned corpus) has its false-negative
+  rate measured and printed apart from the tuned rate (reported, not a gate).
 - REVIEW: the drafted item and the approved batch contain the real names; the batch hash equals `batchHash` of the
   real text; the map never appears in any file under the home or in any request.
 - SELF: own name masked as `<person:me>` by default and restored; `keep` sends it unmasked; facts `sign:` counts.
@@ -100,7 +109,16 @@ typecheck; the s18 suite (>= 40 tests) passes with every tag present and passing
 false-negative rates printed and within bounds; the full brain suite passes; the masker imports no model and no
 network code; no s18 commit touches an out-of-scope path.
 
+## Limits (stated, not gated)
+- Names in no lexicon with no cue are not masked (held-out FN printed by verify.sh). Contacts in recipient lists are.
+- Three model paths bypass the router and are not name-masked: screenshot captioning (the engine-masked image; its
+  text turn is masked), the computer-use planner (screenshots, AX outline), and the approved batch handed to the
+  executor (real text by design).
+
 ## Scope changes
 - 2026-10-25: `brain/tests/s05b-runner/idempotency.test.ts` gets the H3 fix ported unchanged from S2-02 (PR #3,
   ba887f9): the test no longer probes the real `npx gmail-mcp` chain, which waited out the 5 s probe timeout wherever
   npx is installed and made the full brain suite red on main. Needed for this slice's "full brain suite passes" check.
+- 2026-10-26 (review wave B, PR #7 item 2): `brain/src/workflows/autorun.ts` (`unfilledItems` in the auto partition,
+  the needs-you sentence), `brain/src/workflows/batch.ts` (optional `review.unfilledNames`) and
+  `brain/src/api/workflow-routes.ts` (`dispatchAuto` splits those drafts off) so an unfilled name is never auto-sent.
