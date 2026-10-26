@@ -342,6 +342,16 @@ describe("v2: regrouping spans by captioned task", () => {
     expect(sessionize(withNull, DAY, DEFAULT_SESSION_OPTIONS)).toHaveLength(5);
   });
 
+  test("a failed first frame after a frameless run opening keeps its own boundary", () => {
+    // one run 0..600 s that opens without a frame; frames at 30 (failed caption, null key) and 90 (A)
+    const rows = parseLog(Array.from({ length: 121 }, (_, i) => row(i * 5)).join("\n")).rows;
+    const kept: Candidate[] = [30, 90].map((s, i) => ({ ts: (BASE + s) * 1000, t: stamp(s), hashes: hashesFromThumb(thumb(i)) }));
+    const events = buildEvents(DAY, activityRuns(rows), kept);
+    const keys = new Map<number, string | null>([[(BASE + 30) * 1000, null], [(BASE + 90) * 1000, "A"]]);
+    const spans = sessionize(regroupEvents(events, keys), DAY, DEFAULT_SESSION_OPTIONS);
+    expect(spans.map((s) => [s.start / 1000 - BASE, s.end / 1000 - BASE])).toEqual([[0, 30], [30, 90], [90, 600]]);
+  });
+
   test("regroupDay rewrites the day from the original events, so running it twice gives the same file", () => {
     const root = tmp();
     const home = join(root, "home");

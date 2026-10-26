@@ -542,7 +542,8 @@ export function frameKey(note: Pick<CaptionFields, "surface" | "verb" | "object"
 /**
  * Merges spans: a focus event that opens a kept frame is dropped when the frame's key equals the key of the span
  * before it in the same activity run, and the first frame of a run joins the run's opening span (which had no frame).
- * A run opens with the day's first focus or a focus at an idle_end. Frames with a null key never merge.
+ * A run opens with the day's first focus or a focus at an idle_end. Frames with a null key never merge, not even into
+ * the opening span.
  */
 export function regroupEvents(events: readonly OffloadEvent[], keys: ReadonlyMap<number, string | null>): OffloadEvent[] {
   const sorted = [...events].sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1));
@@ -568,7 +569,7 @@ export function regroupEvents(events: readonly OffloadEvent[], keys: ReadonlyMap
       continue;
     }
     const k = keys.get(e.ts)!;
-    if (last === START || (k !== null && k === last)) {
+    if (k !== null && (last === START || k === last)) {
       if (last === START) last = k;
       continue;
     }
