@@ -194,28 +194,32 @@ describe("s24 OS sandbox", () => {
 });
 
 describe("s24 frozen check outside the workspace", () => {
-  test("TAMPER: the check runs from a frozen read-only copy outside the workspace, verified before and after the run", async () => {
+  test("TAMPER: the frozen master outside the workspace is verified before and after the run; the check executes from read-only accept/", async () => {
     const p = await prepared();
     const { token } = approveBuild(p.home, p.briefId, p.briefHash, p.checkHash, NOW);
     const f = fakeQuery([{ act: writeSlug("good") }]);
     let seenPath = "";
+    let frozenDir = "";
     const rec = await runBuild({
       home: p.home,
       briefId: p.briefId,
       token,
       query: f.query,
       profile: ALLOW,
-      runCheck: (a: { ws: string; checkPath: string }) => {
+      runCheck: (a: { ws: string; checkPath: string; frozenDir: string }) => {
         seenPath = a.checkPath;
-        // An escape that rewrites the frozen check while it runs must still be caught.
+        frozenDir = a.frozenDir;
+        // An escape that rewrites the frozen master while the check runs must still be caught.
         const { chmodSync } = require("node:fs");
-        chmodSync(a.checkPath, 0o644);
-        writeFileSync(a.checkPath, "import sys\nsys.exit(0)\n");
+        const master = join(a.frozenDir, "accept.py");
+        chmodSync(master, 0o644);
+        writeFileSync(master, "import sys\nsys.exit(0)\n");
         return { exit: 0, output: "PASS" };
       },
     } as never);
-    expect(seenPath.startsWith(rec.artifactPath)).toBe(false);
-    expect(seenPath.startsWith(join(p.home, "builds"))).toBe(true);
+    expect(seenPath).toBe(join(rec.artifactPath, "accept", "accept.py"));
+    expect(frozenDir.startsWith(rec.artifactPath)).toBe(false);
+    expect(frozenDir.startsWith(join(p.home, "builds"))).toBe(true);
     expect(rec.outcome).toBe("TAMPER");
     expect(rec.tries[0]!.checkHashOk).toBe(false);
   }, 30_000);

@@ -473,9 +473,11 @@ check script exits 0, never "the model says done".
 - Env: `OFFLOAD_BUILDER_SANDBOX=container` allows bypass mode (inside a throwaway container only). Claude Code
   subprocesses get `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`.
 - Isolation: builder Bash commands and the acceptance check run under an OS sandbox (macOS `sandbox-exec`,
-  deny-default: workspace read-write, `accept/` and the frozen check copy at `builds/<run>/frozen/` read-only,
+  deny-default: workspace read-write, `accept/` and the frozen master at `builds/<run>/frozen/` read-only,
   toolchain read-only, no network) via `env -i` with only PATH, HOME=workspace, LANG, TMPDIR=workspace/.tmp. The
-  frozen check is hashed before and after every run. No usable sandbox and no container profile = 403 / exit 2
+  check executes as `workspace/accept/<file>` (so artifact imports resolve from the workspace) and is hashed against
+  the frozen master before and after every run; it gets only the remaining wall budget and a result after the
+  deadline is CAP, never PASS. No usable sandbox and no container profile = 403 / exit 2
   before the approval is used (fail closed). Check output is secret-redacted before it is stored or re-prompted.
   Limits must be finite and positive (whole numbers for tries); bad values are refused (400 / exit 2) before the
   token is consumed.

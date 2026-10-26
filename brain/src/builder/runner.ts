@@ -3,12 +3,15 @@
 // then the RUNNER, not the model, verifies the frozen check's sha256 and runs it. Exit 0 = PASS. A failure feeds the
 // exact (truncated) check output into the next try. Caps: tries, USD, turns per try, wall time. DRY RUN: the files
 // stay in the workspace; installing them on the user's system is a separate approval (not here).
-// Isolation: the check runs from a frozen read-only copy OUTSIDE the workspace (builds/<run>/frozen/), hashed before and
-// after every run, under the OS sandbox (sandbox.ts) with an allow-list env; builder Bash commands are rewritten into
-// the same sandbox. No usable sandbox = UnsafeProfileError before the approval is consumed. Check output is
+// Isolation: the frozen master lives OUTSIDE the workspace (builds/<run>/frozen/). The check executes as
+// workspace/accept/<file>, which the OS sandbox makes read-only and which is hash-checked against the master right
+// before and after every run, so the built artifact's imports resolve from the workspace (python: -I, workspace last
+// on sys.path; bun: relative imports, no builder bunfig/.env). It runs async in its own process group, bounded by the
+// remaining wall budget and killed by the wall abort; a result after the deadline never counts. Builder Bash
+// commands are rewritten into the same sandbox. No usable sandbox = UnsafeProfileError before the approval is consumed. Check output is
 // secret-redacted before it is stored or fed into the next prompt. Limits are validated before the approval is used.
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -77,24 +80,86 @@ export interface CheckRun {
 export interface CheckRunArgs {
   ws: string;
   file: CheckFile;
-  /** The frozen copy outside the workspace (read-only in the sandbox). */
+  /** The check to execute: workspace/accept/<file>. Read-only at the OS level (sandbox deny + 0444) and byte-identical
+   * to the frozen master (hash-checked right before and after), so relative imports resolve against the workspace. */
   checkPath: string;
+  /** The frozen dir outside the workspace (holds the master copy and an empty bunfig.toml for --config). */
+  frozenDir: string;
   /** The allow-list env (checkEnv), never process.env. */
   env: Record<string, string>;
   /** argv prefix that puts the process in the OS sandbox with exactly `env` (sandboxArgv). */
   sandbox: string[];
+  /** Never above the remaining wall budget. */
   timeoutMs: number;
+  /** The run's wall-time abort: kills the check when it fires. */
+  signal?: AbortSignal;
 }
-export type CheckRunner = (a: CheckRunArgs) => CheckRun;
+export type CheckRunner = (a: CheckRunArgs) => CheckRun | Promise<CheckRun>;
 
-/** Runs the frozen check with cwd = workspace, inside the OS sandbox (python3, or this bun for accept.test.ts). */
-export const runCheckProcess: CheckRunner = (a) => {
-  const prog = a.file === "accept.py" ? ["python3", a.checkPath] : [process.execPath, "test", a.checkPath];
-  const argv = [...a.sandbox, ...prog];
-  const r = spawnSync(argv[0]!, argv.slice(1), { cwd: a.ws, env: a.env, encoding: "utf8", timeout: a.timeoutMs, maxBuffer: 4 * 1024 * 1024 });
-  const out = `${r.stdout ?? ""}${r.stderr ?? ""}${r.error === undefined ? "" : `\n${r.error.message}`}`;
-  return { exit: r.status, output: out };
-};
+/** Python start-up for the check: `-I` (no PYTHON* env, no user site, no script dir or cwd on sys.path) so builder
+ * files such as sitecustomize.py never run first; then the check's own folder first and the workspace LAST on
+ * sys.path, so the built module imports from the workspace but cannot shadow the standard library. */
+export const PY_BOOT = "import os, runpy, sys; p, w = sys.argv[1], sys.argv[2]; sys.argv = [p]; sys.path = [os.path.dirname(p)] + sys.path + [w]; runpy.run_path(p, run_name='__main__')";
+
+export function checkArgv(a: Pick<CheckRunArgs, "ws" | "file" | "checkPath" | "frozenDir">): string[] {
+  // bun: --config points at an empty bunfig outside the workspace (no builder preload) and --no-env-file skips a
+  // builder .env; the test file sits in accept/, so `../x.ts` is the workspace.
+  return a.file === "accept.py" ? ["python3", "-I", "-c", PY_BOOT, a.checkPath, a.ws] : [process.execPath, "test", `--config=${join(a.frozenDir, "bunfig.toml")}`, "--no-env-file", a.checkPath];
+}
+
+const MAX_OUT = 4 * 1024 * 1024;
+
+/** Runs the check (cwd = workspace) inside the OS sandbox, asynchronously, in its own process group: the timeout or
+ * the run's abort kills the whole group, so a check (or a child it started) cannot outlive the wall cap. */
+export const runCheckProcess: CheckRunner = (a) =>
+  new Promise<CheckRun>((done) => {
+    const argv = [...a.sandbox, ...checkArgv(a)];
+    let out = "";
+    let finished = false;
+    let killed: string | null = null;
+    const child = spawn(argv[0]!, argv.slice(1), { cwd: a.ws, env: a.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const add = (b: Buffer) => {
+      if (out.length < MAX_OUT) out += b.toString("utf8");
+    };
+    child.stdout!.on("data", add);
+    child.stderr!.on("data", add);
+    const killGroup = (why: string) => {
+      if (killed === null) killed = why;
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+    };
+    const finish = (exit: number | null, extra = "") => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      a.signal?.removeEventListener("abort", onAbort);
+      child.stdout!.destroy();
+      child.stderr!.destroy();
+      done({ exit: killed === null ? exit : null, output: out + extra + (killed === null ? "" : `\n[check stopped: ${killed}]`) });
+    };
+    const onAbort = () => killGroup("wall time");
+    const timer = setTimeout(() => killGroup(`timeout ${a.timeoutMs} ms`), Math.max(0, a.timeoutMs));
+    if (a.signal?.aborted) killGroup("wall time");
+    else a.signal?.addEventListener("abort", onAbort, { once: true });
+    child.on("error", (err) => finish(null, `\n${err.message}`));
+    child.on("exit", (code) => {
+      // Children left in the group die with it; give the pipes a moment to drain, never longer.
+      reapGroup(child.pid);
+      setTimeout(() => finish(code), 100);
+    });
+    child.on("close", (code) => finish(code));
+  });
+
+function reapGroup(pid: number | undefined) {
+  try {
+    if (pid !== undefined) process.kill(-pid, "SIGKILL");
+  } catch {
+    // the group is already gone
+  }
+}
 
 function sdkVersion(): string {
   try {
@@ -122,6 +187,8 @@ export interface RunBuildOptions {
 }
 
 const round = (n: number) => Math.round(n * 1e6) / 1e6;
+/** Rounds DOWN to a micro-dollar: a budget handed to the SDK never exceeds what is left. */
+const floorUsd = (n: number) => Math.max(0, Math.floor(n * 1e6 + 1e-6) / 1e6);
 
 /** Limits with every cap a finite positive number (whole numbers for tries, turns and ms), or a bad_request. */
 export function validateLimits(partial: Partial<BuildLimits> | undefined): BuildLimits {
@@ -158,6 +225,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   const frozenPath = join(frozenDir, checks.file);
   writeFileSync(frozenPath, content, { mode: 0o444 });
   chmodSync(frozenPath, 0o444);
+  writeFileSync(join(frozenDir, "bunfig.toml"), "", { mode: 0o444 });
   const parentEnv = o.env ?? process.env;
   const profilePath = join(runDir, "sandbox.sb");
   writeFileSync(profilePath, sandboxProfile({ ws, frozenDir, readOnly: toolchain(parentEnv).readOnly }), { mode: 0o444 });
@@ -176,6 +244,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   const tries: TryRecord[] = [];
   const reported = new Set<string>();
   let claudeCode: string | null = null;
+  /** Unrounded spend: the cap compares against what the SDK reported, not a rounded copy. */
   let spent = 0;
   let outcome: BuildOutcome = "CAP";
   let reason: string | null = null;
@@ -187,7 +256,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         reason = `${limits.maxTries} tries without a passing check`;
         break;
       }
-      if (spent >= limits.maxUsd) {
+      if (spent >= limits.maxUsd || floorUsd(limits.maxUsd - spent) <= 0) {
         reason = `cost cap $${limits.maxUsd} reached ($${round(spent)})`;
         break;
       }
@@ -210,10 +279,11 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         ...(bypass ? { allowDangerouslySkipPermissions: true } : { canUseTool: perms.canUseTool }),
         hooks: { PreToolUse: [{ hooks: [perms.preToolUse] }] },
         maxTurns: limits.maxTurns,
-        maxBudgetUsd: round(limits.maxUsd - spent),
+        maxBudgetUsd: floorUsd(limits.maxUsd - spent),
         env,
         abortController: abort,
       };
+      let rawCost = 0;
       const rec: TryRecord = { n, result: "no result", turns: 0, costUsd: 0, tokens: { input: 0, output: 0, cacheRead: 0 }, checkExit: null, checkOutput: "", checkHashOk: true, ms: 0 };
       try {
         for await (const raw of o.query({ prompt: tryPrompt(brief, checks.file, prior, o.mask), options })) {
@@ -224,7 +294,8 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
           } else if (m.type === "result") {
             rec.result = String(m.subtype);
             rec.turns = Number(m.num_turns) || 0;
-            rec.costUsd = round(Number(m.total_cost_usd) || 0);
+            rawCost = Math.max(0, Number(m.total_cost_usd) || 0);
+            rec.costUsd = round(rawCost);
             const u = m.usage ?? {};
             rec.tokens = { input: Number(u.input_tokens) || 0, output: Number(u.output_tokens) || 0, cacheRead: Number(u.cache_read_input_tokens) || 0 };
             for (const k of Object.keys(m.modelUsage ?? {})) reported.add(k);
@@ -233,7 +304,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
       } catch (err) {
         rec.result = abort.signal.aborted ? "aborted: wall time" : `error: ${scrub(String((err as Error)?.message ?? err)).slice(0, 200)}`;
       }
-      spent = round(spent + rec.costUsd);
+      spent += rawCost;
       // Tamper check before the check runs: the file must be the approved bytes.
       rec.checkHashOk = intact();
       if (!rec.checkHashOk) {
@@ -256,7 +327,15 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         reason = `the builder failed: ${rec.result.slice(7)}`;
         break;
       }
-      const c = runCheck({ ws, file: checks.file, checkPath: frozenPath, env: childEnv, sandbox, timeoutMs: Math.max(1000, Math.min(120_000, limits.wallMs - (now() - startedAt))) });
+      // The check gets only what is left of the wall budget (no floor), runs async so the abort timer can kill it.
+      const left = limits.wallMs - (now() - startedAt);
+      if (left <= 0) {
+        rec.ms = now() - t0;
+        tries.push(rec);
+        reason = `wall time ${limits.wallMs} ms reached`;
+        break;
+      }
+      const c = await runCheck({ ws, file: checks.file, checkPath, frozenDir, env: childEnv, sandbox, timeoutMs: Math.min(120_000, left), signal: abort.signal });
       rec.checkOutput = truncateOutput(scrub(c.output));
       rec.ms = now() - t0;
       // And after: a check that changed while it ran proves nothing.
@@ -265,6 +344,12 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         tries.push(rec);
         outcome = "TAMPER";
         reason = "the acceptance check changed while it ran";
+        break;
+      }
+      // A result that lands after the deadline does not count, pass or fail.
+      if (abort.signal.aborted || now() - startedAt > limits.wallMs) {
+        tries.push(rec);
+        reason = `wall time ${limits.wallMs} ms reached during the check`;
         break;
       }
       rec.checkExit = c.exit;
