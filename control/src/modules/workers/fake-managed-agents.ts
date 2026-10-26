@@ -97,6 +97,10 @@ export class FakeManagedAgents {
   replayOnReconnect = 0;
   /** Fail the next N requests of this op with a 500. */
   failNext = new Map<string, number>();
+  /** Answer requests of this op only after this many milliseconds (to make calls overlap). */
+  delayMs = new Map<string, number>();
+  /** Perform the next N requests of this op, then answer 500 anyway (the response is lost). */
+  loseResponseNext = new Map<string, number>();
   private seq = 0;
   private clock: () => number;
   private dropped = new Set<string>();
@@ -169,8 +173,22 @@ export class FakeManagedAgents {
       this.failNext.set(ep.op, left - 1);
       return Response.json({ type: "error", error: { type: "api_error", message: "fake outage" } }, { status: 500 });
     }
-    return this.handle(ep.op, id, body ?? {}, query, req.signal);
+    const delay = this.delayMs.get(ep.op) ?? 0;
+    if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+    const res = this.handle(ep.op, id, body ?? {}, query, req.signal);
+    const lose = this.loseResponseNext.get(ep.op) ?? 0;
+    if (lose > 0) {
+      // Done on the platform, but the caller never learns it (a timeout or a 500 after the commit).
+      this.loseResponseNext.set(ep.op, lose - 1);
+      return Response.json({ type: "error", error: { type: "api_error", message: "fake outage after commit" } }, { status: 500 });
+    }
+    return res;
   };
+
+  /** Deployments the platform holds for a worker (by the metadata Offload sets), any status. */
+  deploymentsOf(workerId: string): Array<{ id: string; body: Record<string, any>; status: string }> {
+    return [...this.deployments.values()].filter((d) => d.body.metadata?.offload_worker_id === workerId);
+  }
 
   private bad(msg: string): Response {
     this.violations.push(msg);
