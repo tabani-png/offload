@@ -1,5 +1,5 @@
 // LOOP / CAPS / TAMPER / RECORD: the runner (code) runs the frozen check after each SDK try; done = exit 0.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approveBuild } from "../../src/builder/approval.ts";
@@ -7,7 +7,10 @@ import { readRunRecord, withBuildCosts } from "../../src/builder/record.ts";
 import { runBuild } from "../../src/builder/runner.ts";
 import { rulesSolutions } from "../../src/solutions/rules.ts";
 import { buildFixture, LINKEDIN_IMAGE } from "../s22-solution-designer/fixtures.ts";
-import { fakeQuery, NOW, prepared, writeSlug, type FakeTry } from "./setup.ts";
+import { fakeQuery, NOW, prepared, writeSlug, type FakeTry, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 

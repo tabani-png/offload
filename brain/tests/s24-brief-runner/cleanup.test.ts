@@ -3,7 +3,7 @@
 // server, the /tmp/ofl-* folder, builds/<run>/cred/ (apiKeyHelper + key file), the wall timer, check processes.
 // Paths: PASS, FAIL, CAP, TAMPER, a thrown error, an unreadable artifact, SIGTERM to the runner.
 // Also: a large JUnit report must not block bun (the harness reads it while bun runs, capped).
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,7 +12,10 @@ import { checksDir, checkSha, writeChecks } from "../../src/builder/checks.ts";
 import { readRunRecord } from "../../src/builder/record.ts";
 import { runBuild, type CheckRunner } from "../../src/builder/runner.ts";
 import { DEFAULT_MODELS } from "../../src/models/model.ts";
-import { briefHome, cleanSpawnEnv, fakeQuery, fakeRouted, NOW, prepared, tmp, writeSlug, type FakeTry } from "./setup.ts";
+import { briefHome, cleanSpawnEnv, fakeQuery, fakeRouted, NOW, prepared, tmp, writeSlug, type FakeTry, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 const KEY = "sk-ant-api03-S24CLEANUPKEYs24cleanup0123456789abcdef";

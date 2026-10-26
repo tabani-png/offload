@@ -2,14 +2,17 @@
 // readable by sandboxed builder code (sysctl KERN_PROCARGS2), so a build refuses it, naming the variables (never the
 // values). Harmless names that look like secrets are allow-listed. And the artifact scan reads every byte of every
 // file (overlapping chunks), failing closed above a hard size cap.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approveBuild } from "../../src/builder/approval.ts";
 import { runBuild } from "../../src/builder/runner.ts";
 import * as sandbox from "../../src/builder/sandbox.ts";
-import { cleanSpawnEnv, fakeQuery, NOW, prepared, writeSlug, withLaunchEnv } from "./setup.ts";
+import { cleanSpawnEnv, fakeQuery, NOW, prepared, writeSlug, withLaunchEnv, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 const secretEnvNames = (env: Record<string, string>) => (sandbox as unknown as { secretEnvNames: (e: Record<string, string>) => string[] }).secretEnvNames(env);

@@ -1,11 +1,14 @@
 // GATE: a build starts only after the exact single-use approval of this brief hash + this check-script hash.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approveBuild } from "../../src/builder/approval.ts";
 import { runBuild } from "../../src/builder/runner.ts";
 import { BriefError } from "../../src/solutions/brief.ts";
-import { fakeQuery, NOW, prepared, writeSlug } from "./setup.ts";
+import { fakeQuery, NOW, prepared, writeSlug, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 const codeOf = async (p: Promise<unknown>) => p.then(() => "ok", (e) => (e instanceof BriefError ? e.code : String(e)));

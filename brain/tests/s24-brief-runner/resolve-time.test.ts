@@ -2,14 +2,17 @@
 // workspace (Python module import, relative TS import) without letting builder files hook the check's start-up
 // (sitecustomize, stdlib shadowing, bunfig preload, .env); the wall cap holds during the check run; the SDK budget is
 // never rounded past the USD cap.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approveBuild } from "../../src/builder/approval.ts";
 import { writeChecks, type CheckFile } from "../../src/builder/checks.ts";
 import { runBuild } from "../../src/builder/runner.ts";
 import { DEFAULT_MODELS } from "../../src/models/model.ts";
-import { briefHome, fakeQuery, fakeRouted, NOW, type FakeTry } from "./setup.ts";
+import { briefHome, fakeQuery, fakeRouted, NOW, type FakeTry, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 

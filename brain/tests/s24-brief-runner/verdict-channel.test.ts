@@ -4,14 +4,17 @@
 // builder code cannot reach or impersonate (private pipes + per-request nonce), the command socket is owned by the
 // unsandboxed runner (children may only connect), the artifact must not change across the check, and no /tmp/ofl-*
 // folder may outlive a run.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approveBuild } from "../../src/builder/approval.ts";
 import { verifyArtifact } from "../../src/builder/record.ts";
 import { runBuild } from "../../src/builder/runner.ts";
-import { fakeQuery, NOW, prepared, writeSlug } from "./setup.ts";
+import { fakeQuery, NOW, prepared, writeSlug, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 const oflDirs = () => new Set(readdirSync("/tmp").filter((n) => n.startsWith("ofl-")));

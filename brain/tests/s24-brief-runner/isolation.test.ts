@@ -14,7 +14,10 @@ import { decideTool, UnsafeProfileError } from "../../src/builder/sandbox.ts";
 const checkEnv = (...a: unknown[]) => (sandbox as any).checkEnv(...a) as Record<string, string>;
 const redactSecrets = (...a: unknown[]) => (sandbox as any).redactSecrets(...a) as string;
 import { DEFAULT_MODELS } from "../../src/models/model.ts";
-import { briefHome, fakeQuery, fakeRouted, NOW, prepared, tmp, writeSlug, shell, cleanSpawnEnv } from "./setup.ts";
+import { briefHome, fakeQuery, fakeRouted, NOW, prepared, tmp, writeSlug, shell, cleanSpawnEnv, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 const SENTINEL_KEY = "sk-ant-api03-SENTINELsentinelSENTINEL0123456789abcdef";

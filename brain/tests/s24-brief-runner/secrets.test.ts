@@ -3,7 +3,7 @@
 // environment: the Claude Code child gets the key through apiKeyHelper (a script outside the sandbox's reach), a brain
 // started with the key in its own environment refuses to build (that memory stays readable even after
 // `delete process.env.X`), and an artifact that contains a secret is never a PASS.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -11,7 +11,10 @@ import { approveBuild } from "../../src/builder/approval.ts";
 import { verifyArtifact } from "../../src/builder/record.ts";
 import { runBuild, type BuilderQuery } from "../../src/builder/runner.ts";
 import { UnsafeProfileError } from "../../src/builder/sandbox.ts";
-import { cleanSpawnEnv, fakeQuery, NOW, prepared, shell, withLaunchEnv, writeSlug } from "./setup.ts";
+import { cleanSpawnEnv, fakeQuery, NOW, prepared, shell, withLaunchEnv, writeSlug, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 const KEY = "sk-ant-api03-S24KEYSENTINELs24keysentinel0123456789abcdef";

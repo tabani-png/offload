@@ -5,7 +5,7 @@
 //       bare imports at authoring time.
 // P2-2: run_in_background and Bash timeouts above the run's wall cap are denied; a builder command whose wrapper is
 //       SIGKILLed must not leave a process that writes the workspace during the check or after the artifact hash.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -15,7 +15,10 @@ import { verifyArtifact } from "../../src/builder/record.ts";
 import { runBuild } from "../../src/builder/runner.ts";
 import { builderPermissions, decideTool } from "../../src/builder/sandbox.ts";
 import { DEFAULT_MODELS } from "../../src/models/model.ts";
-import { briefHome, fakeQuery, fakeRouted, NOW, prepared, writeSlug, type FakeTry } from "./setup.ts";
+import { briefHome, fakeQuery, fakeRouted, NOW, prepared, writeSlug, type FakeTry, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 

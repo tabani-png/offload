@@ -5,7 +5,7 @@
 // - nothing builder-controlled outlives a check or a builder command (fork + setsid daemons included);
 // - the artifact is hashed at the verdict and can be verified later;
 // - the approval is consumed last (after setup) and claimed atomically; /opt/homebrew config is unreadable; no FIFOs.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as approval from "../../src/builder/approval.ts";
@@ -14,7 +14,10 @@ import { writeChecks, type CheckFile } from "../../src/builder/checks.ts";
 import * as record from "../../src/builder/record.ts";
 import { runBuild } from "../../src/builder/runner.ts";
 import { DEFAULT_MODELS } from "../../src/models/model.ts";
-import { briefHome, fakeQuery, fakeRouted, NOW, prepared, writeSlug, type FakeTry, shell } from "./setup.ts";
+import { briefHome, fakeQuery, fakeRouted, NOW, prepared, writeSlug, type FakeTry, shell, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 

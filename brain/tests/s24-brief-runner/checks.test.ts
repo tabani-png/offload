@@ -1,13 +1,16 @@
 // CHECKS: the acceptance lines become one frozen check script through the router (role build_checks, Sonnet) before
 // any build; bad replies are refused; the text sent to the model goes through the mask hook.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { checkSha, checkWriterPrompt, parseCheckReply, readChecks, writeChecks } from "../../src/builder/checks.ts";
 import { DEFAULT_MODELS, StubModel } from "../../src/models/model.ts";
 import { ROLE_ROUTES, ROUTES } from "../../src/models/router.ts";
 import { BriefError, readBrief } from "../../src/solutions/brief.ts";
-import { briefHome, CHECK_REPLY, fakeRouted, NOW, prepared } from "./setup.ts";
+import { briefHome, CHECK_REPLY, fakeRouted, NOW, prepared, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 describe("s24 checks first, frozen", () => {
   test("CHECKS: the recorded Sonnet reply becomes accept.py on disk (0600) with its sha256, before any build", async () => {

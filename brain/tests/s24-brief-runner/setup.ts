@@ -1,7 +1,8 @@
 // s24 test setup: a draft brief on disk (the s22 LinkedIn remove_step fixture, through the real s22 code), a fake
 // router backend replaying the recorded check-writer reply, and a fake Agent SDK query() that acts in the workspace
 // like a builder would (writes files, asks canUseTool) and replies with recorded result messages.
-import { copyFileSync, mkdtempSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeChecks } from "../../src/builder/checks.ts";
@@ -43,7 +44,40 @@ export const NOW = new Date(2026, 9, 26, 12).getTime();
 export const REC = join(import.meta.dir, "recorded");
 export const CHECK_REPLY = readFileSync(join(REC, "check-writer.json"), "utf8");
 
-export const tmp = (prefix = "offload-s24-") => mkdtempSync(join(tmpdir(), prefix));
+/** Every temp folder this process's s24 tests created; releaseTemps() removes them (each test file calls it in
+ * afterAll) and fails if any is still there, so repeated runs do not fill the disk. */
+const createdTemps: string[] = [];
+const RUN_START = Date.now() - 1000;
+export const tmp = (prefix = "offload-s24-") => {
+  const d = mkdtempSync(join(tmpdir(), prefix));
+  createdTemps.push(d);
+  return d;
+};
+
+export function releaseTemps(): void {
+  for (const d of createdTemps.splice(0)) {
+    try {
+      rmSync(d, { recursive: true, force: true });
+    } catch {
+      // a file a test made unreadable/read-only: make it writable and retry once
+      spawnSync("/bin/chmod", ["-R", "u+rwX", d]);
+      rmSync(d, { recursive: true, force: true });
+    }
+    if (existsSync(d)) throw new Error(`temp folder left behind: ${d}`);
+  }
+  // And nothing this run created outside tmp(): an offload-s24-* folder born after this process started is a leak.
+  const strays = readdirSync(tmpdir())
+    .filter((n) => n.startsWith("offload-s24-"))
+    .map((n) => join(tmpdir(), n))
+    .filter((d) => {
+      try {
+        return statSync(d).birthtimeMs >= RUN_START;
+      } catch {
+        return false;
+      }
+    });
+  if (strays.length > 0) throw new Error(`temp folders created by this run were left behind: ${strays.slice(0, 5).join(", ")}`);
+}
 
 export function briefHome(): { home: string; briefId: string; briefHash: string } {
   const home = tmp();

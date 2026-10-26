@@ -1,10 +1,13 @@
 // SAFETY: the builder's tool allowlist, the Bash allowlist, the workspace lock, Cindy's container-only bypass rule and
 // the telemetry-off env.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { approveBuild } from "../../src/builder/approval.ts";
 import { runBuild } from "../../src/builder/runner.ts";
 import { assertSafeExecutionProfile, BUILDER_TOOLS, builderEnv, builderPermissions, decideBashCommand, decideTool, DISALLOWED_TOOLS, NETWORK_TOOLS, profileFromEnv, UnsafeProfileError } from "../../src/builder/sandbox.ts";
-import { fakeQuery, NOW, prepared, writeSlug } from "./setup.ts";
+import { fakeQuery, NOW, prepared, writeSlug, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const WS = "/tmp/ws-s24";
 

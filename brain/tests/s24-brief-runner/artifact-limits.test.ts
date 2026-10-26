@@ -1,12 +1,15 @@
 // SAFETY (Codex review of e0f40de): the artifact is sized BEFORE it is read. A sparse file (huge logical length, few
 // real blocks) and a workspace over the total cap fail closed without reading the data; hashing then runs
 // asynchronously in chunks so it never blocks the brain.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { rmSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approveBuild } from "../../src/builder/approval.ts";
 import { runBuild } from "../../src/builder/runner.ts";
-import { fakeQuery, NOW, prepared, writeSlug } from "./setup.ts";
+import { fakeQuery, NOW, prepared, writeSlug, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
 

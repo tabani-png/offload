@@ -1,5 +1,5 @@
 // CLI / API: the real CLI and the real routes, prepare -> approve -> dry-run build -> record, with the recorded fake SDK.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { Analysis } from "../../src/analyze.ts";
 import { DEFAULT_MODELS, StubModel } from "../../src/models/model.ts";
@@ -7,7 +7,10 @@ import { solutionsRoute } from "../../src/solutions/routes.ts";
 import { chooseSolution, designSolutions } from "../../src/solutions/service.ts";
 import { founderLive, freshFounder, NOW } from "../s22-solution-designer/setup.ts";
 import { query as fakeSdk } from "./fake-sdk.ts";
-import { cleanSpawnEnv } from "./setup.ts";
+import { cleanSpawnEnv, releaseTemps } from "./setup.ts";
+
+// Remove every temp folder this file created (and fail if one is left).
+afterAll(releaseTemps);
 
 const CLI = join(import.meta.dir, "..", "..", "src", "cli.ts");
 const FAKE = join(import.meta.dir, "fake-sdk.ts");
