@@ -6,6 +6,7 @@
 // keeps hashes only, never addresses.
 import { createHash } from "node:crypto";
 import type { AutoRunPinDTO } from "../api/types.ts";
+import { unrestoredPlaceholders } from "../privacy/names.ts";
 import { readStyleCard } from "../tone/pack.ts";
 import type { Batch, BatchItem } from "./batch.ts";
 import { readRecipients, type RecipientRow } from "./scripts/recipients.ts";
@@ -77,6 +78,8 @@ export interface AutoPartition {
   eligible: BatchItem[];
   newItems: BatchItem[];
   changedItems: BatchItem[];
+  /** s18: drafts that still hold a name Offload could not fill in (a placeholder or <name>): never sent on their own. */
+  unfilledItems: BatchItem[];
   /** Pinned files that changed since the pin (now, or when the batch was drafted), and files the batch was drafted
    * with that the pin never saw. Non-empty = hold everything. */
   changedFiles: string[];
@@ -91,10 +94,11 @@ export function partitionForAuto(home: string, wf: WorkflowJson, batch: Batch): 
   const files = new Set(changedFiles(pin, now));
   if (batch.draftedWith !== undefined) for (const f of changedFiles(pin, batch.draftedWith)) files.add(f);
   else for (const f of fileNames(pin, now)) files.add(f); // drafted before s10b: nothing to compare with.
-  const out: AutoPartition = { eligible: [], newItems: [], changedItems: [], changedFiles: [...files], stale: pin === null || batch.createdAt < pin.at };
+  const out: AutoPartition = { eligible: [], newItems: [], changedItems: [], unfilledItems: [], changedFiles: [...files], stale: pin === null || batch.createdAt < pin.at };
   for (const i of batch.items) {
     const pinned = pin?.rows[addressHash(wf.id, i.key)];
-    if (pinned === undefined) out.newItems.push(i);
+    if (unrestoredPlaceholders(`${i.subject}\n${i.body}`).length > 0) out.unfilledItems.push(i);
+    else if (pinned === undefined) out.newItems.push(i);
     else if (i.sourceRowHash === undefined || pinned !== i.sourceRowHash) out.changedItems.push(i);
     else out.eligible.push(i);
   }
@@ -105,7 +109,7 @@ export function partitionForAuto(home: string, wf: WorkflowJson, batch: Batch): 
 export function autoSendable(home: string, wf: WorkflowJson, batch: Batch): boolean {
   if (!wf.autoRun) return false;
   const p = partitionForAuto(home, wf, batch);
-  return !p.stale && p.changedFiles.length === 0 && p.newItems.length === 0 && p.changedItems.length === 0;
+  return !p.stale && p.changedFiles.length === 0 && p.newItems.length === 0 && p.changedItems.length === 0 && p.unfilledItems.length === 0;
 }
 
 /** What is pinned, for the app: shown when auto-run is turned on, and on every summary while it is on. */
@@ -150,7 +154,9 @@ export function reviewSentence(b: Batch): string | null {
     return text.startsWith("the ") ? `T${text.slice(1)}` : text;
   }
   const n = r.newRecipients + r.changedRecipients;
-  if (n === 0) return null;
+  const u = r.unfilledNames ?? 0;
+  const unfilled = u === 0 ? null : `${u} ${plural(u, "draft has a name", "drafts have names")} Offload could not fill in: check ${plural(u, "it", "them")} before you approve.`;
+  if (n === 0) return unfilled;
   const what = r.changedRecipients === 0 ? "new" : r.newRecipients === 0 ? "changed" : "new or changed";
-  return `${n} ${what} ${plural(n, "recipient needs", "recipients need")} your review.`;
+  return [`${n} ${what} ${plural(n, "recipient needs", "recipients need")} your review.`, ...(unfilled === null ? [] : [unfilled])].join(" ");
 }

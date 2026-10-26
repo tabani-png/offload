@@ -18,6 +18,8 @@ import { join } from "node:path";
 import type { Model } from "../models/model.ts";
 import { draftInTone } from "../tone/draft.ts";
 import { readPlaybook } from "../playbook/store.ts";
+import { NameMap } from "../privacy/names.ts";
+import { readNamePolicy, signNames } from "../privacy/policy.ts";
 import { loadTonePack } from "../tone/pack.ts";
 import { DEFAULT_SERVERS, type ToolPolicy } from "./allowlist.ts";
 import { makeBatch, type Batch, type BatchItem, type ItemState } from "./batch.ts";
@@ -232,12 +234,15 @@ export async function prepareLiveBatch(o: PrepareOptions): Promise<Batch> {
     // s19: the workflow's messaging playbook, when it has one (auto-run pins playbook.json).
     const playbook = readPlaybook(o.home, wf.id);
     const items: BatchItem[] = [];
+    // s18: one name map per run (stable placeholders across recipients); drafts come back with the real names, so the
+    // batch the user approves (and its hash) is the real text.
+    const names = new NameMap(readNamePolicy(o.home, signNames(factsText)));
     for (const r of next) {
       const why = cancelReason(o.home, wf.id, ac);
       if (why !== null) throw new RunError(`stopped while drafting: ${why}`, "conflict");
       const recipient = { email: r.email, firstName: r.firstName, lastName: r.lastName, org: r.org, notes: r.notes };
       const subject = renderSubject(facts.subject ?? wf.inputs.subjectTemplate, facts, recipient);
-      const d = await draftInTone({ pack, bucket: wf.bucket, recipient, subject, facts: factsText, model: o.model, models: wf.models, playbook });
+      const d = await draftInTone({ pack, bucket: wf.bucket, recipient, subject, facts: factsText, model: o.model, models: wf.models, playbook, names });
       items.push({ key: r.email, to: r.email, subject, body: d.body, warnings: d.warnings, sourceRowHash: rowHash(r) });
     }
     const why = cancelReason(o.home, wf.id, ac);

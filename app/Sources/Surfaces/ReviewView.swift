@@ -232,7 +232,7 @@ private struct ToneSection: View {
           Text(r.value).paragraphStyle(Tokens.TypeScale.body).monospacedDigit().foregroundStyle(p.ink1)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-          Text(r.source).textStyle(Tokens.TypeScale.footnote).monospacedDigit().foregroundStyle(p.ink3).fixedSize()
+          // s10f (P1): "from 40 sent emails" is said once, in the section header, not on every row.
         }
         .padding(.horizontal, Tokens.Space.s16).padding(.vertical, Tokens.Space.s8 + Tokens.Space.nudge)
       }
@@ -283,8 +283,9 @@ private struct ToneSection: View {
       .padding(Tokens.Space.s12)
     } else {
       HStack(spacing: Tokens.Space.s12) {
+        // s10f (P1): two lines, so a note is not cut mid-word.
         Text(Self.firstLine(model.toneDraft)).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
-          .lineLimit(1).truncationMode(.tail)
+          .lineLimit(2).truncationMode(.tail).fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
         Button { model.editingVoice = true } label: {
           Text("Edit notes").textStyle(Tokens.TypeScale.calloutEmphasis).foregroundStyle(p.ink1)
@@ -340,7 +341,7 @@ private struct DryRunSection: View {
           }
           ForEach(Array(copy.items.enumerated()), id: \.element.id) { i, item in
             if let d = model.dryRun, d.items.indices.contains(i) {
-              DryRunCard(item: d.items[i], copy: item, oursTitle: copy.oursTitle)
+              DryRunCard(item: d.items[i], copy: item, oursTitle: copy.oursTitle, sampleHeader: copy.sampleCardHeader)
             }
           }
           Text(copy.diffNote).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
@@ -359,12 +360,25 @@ private struct DryRunCard: View {
   var item: DryRunItem
   var copy: ReviewCopy.Item
   var oursTitle: String
+  /// s10f (M3): "Sample, not your voice" on every card of a sample run, in amber.
+  var sampleHeader: String? = nil
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
     let p = Palette(scheme: scheme)
     let diff = DiffLite.diff(ours: item.ourDraft, theirs: item.whatYouSent)
     RingBox {
+      if let sampleHeader {
+        HStack(spacing: Tokens.Space.s8) {
+          Circle().fill(p.status(.needsYou)).frame(width: Tokens.Size.dotSmall, height: Tokens.Size.dotSmall)
+          Text(sampleHeader).textStyle(Tokens.TypeScale.calloutEmphasis).foregroundStyle(p.statusInk(.needsYou))
+          Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Tokens.Space.s16)
+        .padding(.vertical, Tokens.Space.s8)
+        .background(p.status(.needsYou).opacity(p.isDark ? 0.10 : 0.08))
+        RowDivider(inset: 0)
+      }
       // s10d: two lines, like a mail header. Who and what it saves; then the subject (it may truncate) and the
       // time, which never does.
       VStack(alignment: .leading, spacing: Tokens.Space.s4) {
@@ -373,7 +387,8 @@ private struct DryRunCard: View {
             .textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
             .lineLimit(1).truncationMode(.tail)
           Spacer(minLength: Tokens.Space.s12)
-          Chip(text: copy.saved, style: .positive)
+          // s10f (P3): green means done; a per-draft saving is a neutral chip.
+          Chip(text: copy.saved, style: .neutral)
         }
         HStack(spacing: Tokens.Space.s8) {
           Text(copy.subject)
@@ -392,7 +407,8 @@ private struct DryRunCard: View {
       .padding(.vertical, Tokens.Space.s12)
       RowDivider(inset: 0)
       HStack(alignment: .top, spacing: 0) {
-        column(oursTitle, segments: diff.ours, marked: true, check: copy.check, other: DiffEmphasis.words(item.whatYouSent), p: p)
+        column(oursTitle, segments: SentenceDiff.spans(ours: item.ourDraft, theirs: item.whatYouSent), marked: true,
+               check: copy.check, other: nil, p: p)
         Rectangle().fill(p.ring).frame(width: Tokens.Layout.hairline)
         column(copy.theirsTitle, segments: diff.theirs, marked: false, check: nil, other: nil, p: p)
       }
@@ -402,25 +418,33 @@ private struct DryRunCard: View {
     .accessibilityLabel("\(copy.who), \(copy.subject)")
   }
 
+  /// The column's title and, on our side, how far the draft is from what you sent (by sentence, plus the sign-off).
+  @ViewBuilder
+  private func columnHeader(_ title: String, marked: Bool, p: Palette) -> some View {
+    Text(title).textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink3)
+    if marked {
+      Text(SentenceDiff.summary(ours: item.ourDraft, theirs: item.whatYouSent).label)
+        .textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink2)
+        .fixedSize()
+        .padding(.horizontal, Tokens.Space.s8).frame(height: Tokens.Size.tag)
+        .background(Capsule().fill(p.fill))
+        .overlay(Capsule().strokeBorder(p.ring, lineWidth: Tokens.Layout.hairline))
+    }
+  }
+
   private func column(_ title: String, segments: [DiffLite.Segment], marked: Bool, check: String?, other: Set<String>?,
                       p: Palette) -> some View {
     VStack(alignment: .leading, spacing: Tokens.Space.s8) {
-      HStack(spacing: Tokens.Space.s8) {
-        Text(title).textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink3)
-        if marked {
-          // s10e (M2): how far the draft is from what you sent, said once per draft.
-          let n = DiffSummary.changedPhrases(ours: item.ourDraft, theirs: item.whatYouSent)
-          Text(DiffSummary.label(n)).textStyle(Tokens.TypeScale.caption).foregroundStyle(p.ink2)
-            .padding(.horizontal, Tokens.Space.s8).frame(height: Tokens.Size.tag)
-            .background(Capsule().fill(p.fill))
-            .overlay(Capsule().strokeBorder(p.ring, lineWidth: Tokens.Layout.hairline))
-        }
+      // s10f: the tag wraps under the title when the column is narrow, never truncates.
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: Tokens.Space.s8) { columnHeader(title, marked: marked, p: p) }
+        VStack(alignment: .leading, spacing: Tokens.Space.s4) { columnHeader(title, marked: marked, p: p) }
       }
       if segments.isEmpty {
         Text("No draft. This kind of task has no drafting dry run yet.")
           .textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
       } else {
-        DiffText(segments: segments, marked: marked, other: other)
+        DiffText(segments: segments, marked: marked, other: other, spans: marked)
       }
       // s10d: a number or date the draft added that you never wrote and your facts do not hold.
       if let check {
@@ -444,8 +468,15 @@ struct ReviewActionBar: View {
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
+    // s10f (M8): the bar knows its width, so below 720 pt the primary takes its short title and never truncates.
+    GeometryReader { geo in bar(compact: Double(geo.size.width) < ReviewPrimary.compactBelow) }
+      .frame(height: Tokens.Size.actionBar + Tokens.Layout.hairline)
+  }
+
+  private func bar(compact: Bool) -> some View {
     let p = Palette(scheme: scheme)
-    VStack(spacing: 0) {
+    let primary = ReviewPrimary.forWorkflow(model.workflow, sample: model.dryRun?.isSample == true)
+    return VStack(spacing: 0) {
       Rectangle().fill(p.barHairline).frame(height: Tokens.Layout.hairline)
       HStack(spacing: Tokens.Space.s8) {
         if case .discarding(let c) = model.flow.phase {
@@ -460,22 +491,34 @@ struct ReviewActionBar: View {
               .padding(.leading, Tokens.Space.s8)
           }
           Spacer(minLength: Tokens.Space.s12)
-          SecondaryButton(title: model.runningDryRun ? "Running…" : "Run again", key: model.textEditing ? nil : "R") { model.send(.rerun) }
-            .disabled(model.runningDryRun)
+          // s10f (M3): on a sample run the white primary reruns the dry run, so Run again is not shown twice.
+          if primary != .runWithVoice {
+            SecondaryButton(title: model.runningDryRun ? "Running…" : "Run again", key: model.textEditing ? nil : "R") { model.send(.rerun) }
+              .disabled(model.runningDryRun)
+          }
           SecondaryButton(title: "Edit", key: model.textEditing ? nil : "E") { model.send(.edit) }
           // Always in place, so the bar never reflows: disabled while a dry run is drafting or there is nothing to
           // approve. One white action per view: while the confirmation is up it holds the primary.
           // Disabled keeps its label (s10d), never a blank pill.
           // s10e (M8): while a step's tool is not connected, Connect is the white primary on ⌘↩ and Approve is
           // secondary, so the block is met here and not only in the next sheet.
-          if case .connect(let c) = ReviewPrimary.forWorkflow(model.workflow), model.flow.canApprove {
+          switch primary {
+          case .runWithVoice:
+            SecondaryButton(title: "Approve") { model.approveNow() }
+              .disabled(!model.flow.canApprove || model.runningDryRun || model.sheet != nil)
+            PrimaryButton(title: model.runningDryRun ? "Running…" : primary.title(compact: compact), key: "⌘↩") { model.runWithVoice() }
+              .disabled(model.runningDryRun || model.sheet != nil)
+              .fixedSize().layoutPriority(2)
+          case .connect(let c) where model.flow.canApprove:
             SecondaryButton(title: "Approve") { model.approveNow() }
               .disabled(model.runningDryRun || model.sheet != nil)
-            PrimaryButton(title: ReviewPrimary.connect(c).title, key: "⌘↩") { model.openConnect(c) }
+            PrimaryButton(title: primary.title(compact: compact), key: "⌘↩") { model.openConnect(c) }
               .disabled(model.sheet != nil)
-          } else {
+              .fixedSize().layoutPriority(2)
+          default:
             PrimaryButton(title: "Approve", key: "⌘↩") { model.send(.approve) }
               .disabled(!model.flow.canApprove || model.runningDryRun || model.sheet != nil)
+              .fixedSize().layoutPriority(2)
           }
         }
       }
@@ -516,8 +559,8 @@ struct CountdownStrip: View {
 // MARK: sheets
 
 /// The confirmation: exactly what the first run does, who gets an email, and what is not ready yet. While a
-/// connector a later step needs is missing, the reason is said once (the amber lines), Turn on is a disabled
-/// secondary, and the primary is "Connect …" with ⌘↩ (s10d).
+/// connector a later step needs is missing, the reason is said once (the amber lines), Turn on is not shown (s10f),
+/// and the primary is "Connect …" with ⌘↩ (s10d).
 struct ConfirmSheet: View {
   @ObservedObject var model: ReviewModel
   var frozenNow: Date? = nil
@@ -611,12 +654,11 @@ struct ConfirmSheet: View {
           HStack(spacing: Tokens.Space.s8) {
             Spacer()
             SecondaryButton(title: "Cancel", key: "esc") { model.send(.escape) }
-            SecondaryButton(title: copy.turnOnTitle) {}
-              .disabled(true)
+            // s10f (M5): no disabled Turn on beside the primary; it shows only when it can be pressed. Blocked: the way
+            // forward is the primary, on the same chord Turn on would have had.
+            PrimaryButton(title: copy.connectTitle ?? "Connect", key: "⌘↩") { model.connectFirstMissing() }
               .help(copy.blockedReason ?? "")
               .accessibilityHint(copy.blockedReason ?? "")
-            // Blocked: the way forward is the primary, on the same chord Turn on would have had.
-            PrimaryButton(title: copy.connectTitle ?? "Connect", key: "⌘↩") { model.connectFirstMissing() }
           }
         }
       }

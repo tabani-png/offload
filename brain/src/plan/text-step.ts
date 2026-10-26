@@ -2,8 +2,11 @@
 // (claude-sonnet-5-5, role "step") writes the text from the item's MASKED source text, the user's measured style card,
 // 3-5 of their own past texts (BM25) and the user context. Everything copied from the screen is an untrusted block
 // (REVIEW-1 M5). The draft is checked in code: a number that is not in the source is flagged (ADR 0005).
+// s18 (ADR 0010): person names in the source become the run's placeholders (<person:1>); the router restores them in
+// the reply on the Mac, so the draft the user reviews carries the real names.
 import { maskText } from "../grouping/normalize.ts";
 import { modelFor, type Model, type ModelConfig } from "../models/model.ts";
+import { NameMap, unrestoredPlaceholders } from "../privacy/names.ts";
 import { numbersNotIn } from "../tone/draft.ts";
 import { retrieveTextExamples, type TextTonePack } from "../tone/text-source.ts";
 import type { UserContext } from "../types.ts";
@@ -20,13 +23,13 @@ export const STEP_SYSTEM = [
   UNTRUSTED_RULE,
 ].join("\n");
 
-export function stepPrompt(o: { what: string; source: string; pack: TextTonePack | null; user?: UserContext }): string {
+export function stepPrompt(o: { what: string; source: string; pack: TextTonePack | null; user?: UserContext; names?: NameMap }): string {
   const examples = o.pack === null ? [] : retrieveTextExamples(o.pack, o.source);
   return [
     userContextBlock(o.user),
     untrustedBlock("style_card", o.pack?.card ?? "(no examples of their own texts yet: keep it short and plain)", BLOCKS),
     untrustedBlock("examples", examples.map((e, i) => `--- example ${i + 1}\n${e.text}`).join("\n"), BLOCKS),
-    untrustedBlock("source", maskText(o.source).slice(0, 4000), BLOCKS),
+    untrustedBlock("source", (o.names ?? new NameMap()).mask(maskText(o.source)).slice(0, 4000), BLOCKS),
     "",
     `Write the ${o.what} now.`,
   ]
@@ -48,13 +51,16 @@ export function stepCheck(source: string): (text: string) => string | null {
   };
 }
 
-export async function draftTextStep(o: { what: string; source: string; pack: TextTonePack | null; user?: UserContext; model: Model; models: ModelConfig; stepKey?: string }): Promise<TextStepResult> {
+/** `names`: the run's name map (one per dry run or run), shared with the router so it can restore the reply. */
+export async function draftTextStep(o: { what: string; source: string; pack: TextTonePack | null; user?: UserContext; model: Model; models: ModelConfig; stepKey?: string; names?: NameMap }): Promise<TextStepResult> {
   const examples = o.pack === null ? [] : retrieveTextExamples(o.pack, o.source);
-  const raw = await o.model.complete({ role: "step", model: modelFor("step", o.models), system: STEP_SYSTEM, prompt: stepPrompt(o), maxTokens: 800, validate: stepCheck(o.source), ...(o.stepKey === undefined ? {} : { stepKey: o.stepKey }) });
+  const names = o.names ?? new NameMap();
+  const raw = await o.model.complete({ role: "step", model: modelFor("step", o.models), system: STEP_SYSTEM, prompt: stepPrompt({ ...o, names }), maxTokens: 800, validate: stepCheck(o.source), names, ...(o.stepKey === undefined ? {} : { stepKey: o.stepKey }) });
   const text = raw.replace(/^```\w*\n?|\n?```$/g, "").trim();
   const warnings: string[] = [];
   for (const n of numbersNotIn(text, [o.source])) warnings.push(`number not in the source: ${n}`);
   for (const m of text.match(/\[missing:[^\]]*\]/g) ?? []) warnings.push(`gap: ${m}`);
+  if (unrestoredPlaceholders(text).length > 0) warnings.push("a name Offload could not fill in: check the names before you approve");
   if (text === "") warnings.push("empty draft");
   return { text, examplesUsed: examples.map((e) => e.id), warnings };
 }

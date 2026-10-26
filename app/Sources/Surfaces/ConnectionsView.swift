@@ -125,6 +125,8 @@ final class ConnectionSheetModel: ObservableObject {
   }
 
   func choose(_ n: Int) { flow.chooseNumber(n) }
+  /// s10f: the run confirm's "Download and run" / "Run it".
+  func confirmRun() { run(flow.confirmRun()) }
   func primary() {
     if let c = connect { c.primary(); return }
     run(flow.primary())
@@ -250,7 +252,7 @@ struct ConnectionsView: View {
         Text(ConnectionsCopy.empty).paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink3).padding(.top, Tokens.Space.s24)
       }
       ForEach(Array(rows.enumerated()), id: \.element.id) { i, r in
-        ConnectionRowView(row: r, selected: i == model.list.selected)
+        ConnectionRowView(row: r, selected: i == model.list.selected, query: model.list.query)
           .onTapGesture {
             model.select(r.id)
             model.handle(.open)
@@ -295,20 +297,38 @@ struct ConnectionsView: View {
 struct ConnectionRowView: View {
   var row: ConnectionRow
   var selected: Bool
+  /// s10f (M4): the search words, so a row found by a tool or its description says why it is here.
+  var query: String = ""
   @Environment(\.colorScheme) private var scheme
 
   var body: some View {
     let p = Palette(scheme: scheme)
     let shape = RoundedRectangle(cornerRadius: Tokens.Radius.row, style: .continuous)
     HStack(alignment: .center, spacing: Tokens.Space.s12) {
-      StatusDot(role: row.status.role).frame(width: Tokens.Space.s16)
+      AppTile(name: row.name)
       VStack(alignment: .leading, spacing: Tokens.Space.nudge) {
-        Text(row.name).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
-        Text(row.statusLine).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3).lineLimit(1)
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+          // s10f (M4): the status dot sits on the name's line, before it.
+          StatusDot(role: row.status.role, size: Tokens.Size.dotSmall)
+            .frame(width: Tokens.Space.s8, height: Tokens.Space.s8)
+          Text(row.name).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
+        }
+        if let why = ConnectionsMatch.line(row, query: query) {
+          Text(why).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2).lineLimit(1).truncationMode(.tail)
+        }
+        // s10f (M4): two lines, so an instruction ("Check the API key in Stripe's settings…") is readable.
+        Text(row.statusLine).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+          .lineLimit(2).fixedSize(horizontal: false, vertical: true)
       }
       Spacer(minLength: Tokens.Space.s8)
       if row.verified {
-        Chip(text: ConnectionsCopy.verifiedChip, style: .neutral)
+        // s10f (M4): a caption with a seal, not a pill: it is a fact about the app, not something to press.
+        HStack(spacing: Tokens.Space.s4) {
+          Image(systemName: "checkmark.seal").symbolStyle(Tokens.TypeScale.Symbol.small)
+          Text(ConnectionsCopy.verifiedChip).textStyle(Tokens.TypeScale.footnote)
+        }
+        .foregroundStyle(p.ink3)
+        .fixedSize()
       } else if row.reads + row.commits > 0 {
         Text(ConnectionsCopy.rowCounts(row)).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
       }
@@ -316,13 +336,30 @@ struct ConnectionRowView: View {
         .frame(width: Tokens.Layout.savedColumn, alignment: .trailing)
     }
     .padding(.horizontal, Tokens.Space.s12)
-    .frame(height: Tokens.Size.row + Tokens.Space.s12)
+    .padding(.vertical, Tokens.Space.s8)
+    .frame(minHeight: Tokens.Size.row + Tokens.Space.s12)
     .background(shape.fill(selected ? p.fillStrong : .clear))
     .overlay(shape.strokeBorder(selected ? p.ringStrong : .clear, lineWidth: 1))
     .contentShape(shape)
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(row.name), \(row.status.label)")
     .accessibilityAddTraits(.isButton)
+  }
+}
+
+/// s10f (M4): an app's mark: its monogram on a neutral 32-pt tile, radius 12, ring not shadow. No third-party logos.
+struct AppTile: View {
+  var name: String
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    let shape = RoundedRectangle(cornerRadius: CGFloat(AppMark.radius), style: .continuous)
+    Text(AppMark.monogram(name)).textStyle(Tokens.TypeScale.calloutEmphasis).foregroundStyle(p.ink1)
+      .frame(width: CGFloat(AppMark.tile), height: CGFloat(AppMark.tile))
+      .background(shape.fill(p.fillStrong))
+      .overlay(shape.strokeBorder(p.ring, lineWidth: Tokens.Layout.hairline))
+      .accessibilityHidden(true)
   }
 }
 
@@ -364,9 +401,14 @@ struct ConnectionSheetView: View {
   @ViewBuilder
   private func header(_ f: ConnectionSheetFlow, _ p: Palette) -> some View {
     HStack(alignment: .center, spacing: Tokens.Space.s12) {
-      StatusDot(role: f.detail.row.status.role).frame(width: Tokens.Space.s16)
+      AppTile(name: f.name)
       VStack(alignment: .leading, spacing: Tokens.Space.nudge) {
-        Text("Set up \(f.name)").textStyle(Tokens.TypeScale.sheetTitle).foregroundStyle(p.ink1)
+        // s10f (M4): the dot inline before the title, on its baseline, not in a column of its own.
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+          StatusDot(role: f.detail.row.status.role, size: Tokens.Size.dotSmall)
+            .frame(width: Tokens.Space.s8, height: Tokens.Space.s8)
+          Text("Set up \(f.name)").textStyle(Tokens.TypeScale.sheetTitle).foregroundStyle(p.ink1)
+        }
         Text(f.detail.row.verified ? ConnectionsCopy.verifiedChip : "Every action is shown to you field by field before it runs.")
           .textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink3)
       }
@@ -386,6 +428,8 @@ struct ConnectionSheetView: View {
       keyEntry(f, p)
     case .enterServer:
       serverEntry(f, p)
+    case .confirmRun(let c):
+      runConfirm(c, p)
     case .choose, .ready:
       methodList(f, p)
     default:
@@ -437,6 +481,27 @@ struct ConnectionSheetView: View {
       .padding(.top, Tokens.Space.s8)
   }
 
+  /// s10f: before a command server runs. The exact command, in full; Cancel is the white default.
+  private func runConfirm(_ c: ServerRunConfirm, _ p: Palette) -> some View {
+    VStack(alignment: .leading, spacing: Tokens.Space.s8) {
+      HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
+        Circle().fill(p.status(.needsYou)).frame(width: Tokens.Size.dotSmall, height: Tokens.Size.dotSmall)
+        Text(c.title).textStyle(Tokens.TypeScale.label).foregroundStyle(p.ink1)
+      }
+      Text(c.body).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2).fixedSize(horizontal: false, vertical: true)
+      Text(c.commandLine)
+        .font(.system(.callout, design: .monospaced)).foregroundStyle(p.ink1)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Tokens.Space.s12)
+        .background(RoundedRectangle(cornerRadius: Tokens.Radius.row, style: .continuous).fill(p.fill))
+        .overlay(RoundedRectangle(cornerRadius: Tokens.Radius.row, style: .continuous).strokeBorder(p.ring, lineWidth: Tokens.Layout.hairline))
+        .accessibilityLabel("Command: \(c.commandLine)")
+    }
+    .padding(.top, Tokens.Space.s16)
+  }
+
   @ViewBuilder
   private func footer(_ f: ConnectionSheetFlow, _ p: Palette) -> some View {
     if case .built(let b) = f.phase, let missing = ConnectionsCopy.missingLine(b) {
@@ -444,9 +509,15 @@ struct ConnectionSheetView: View {
     }
     HStack(spacing: Tokens.Space.s8) {
       Spacer()
-      SecondaryButton(title: Self.entering(f.phase) ? "Back" : "Close", key: "esc") { model.back() }
-      if let t = f.primaryTitle {
-        PrimaryButton(title: t, key: "⌘↩") { model.primary() }.disabled(!f.primaryEnabled)
+      if case .confirmRun(let c) = f.phase {
+        // s10f: running is the deliberate, secondary choice; Cancel is the default (↩, ⌘↩ and esc).
+        SecondaryButton(title: c.runTitle) { model.confirmRun() }
+        PrimaryButton(title: "Cancel", key: "↩") { model.primary() }
+      } else {
+        SecondaryButton(title: Self.entering(f.phase) ? "Back" : "Close", key: "esc") { model.back() }
+        if let t = f.primaryTitle {
+          PrimaryButton(title: t, key: "⌘↩") { model.primary() }.disabled(!f.primaryEnabled)
+        }
       }
     }
     .padding(.top, Tokens.Space.s20)

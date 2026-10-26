@@ -11,9 +11,14 @@
 // other paid route stops with a needs-you line. Nothing here writes a number into an output or opens a commit gate.
 // The ledger on disk ($OFFLOAD_HOME/model-usage.json) holds routes, models, token counts, costs and short reasons only:
 // never a prompt, a reply or a key.
+// s18 (ADR 0010): the router is the one egress for model calls, so it masks person names in the system and user turns
+// before any backend sees them (privacy/names.ts, the request's run map or a fresh one) and handles the reply on the
+// Mac: real names restored for text the user reviews (RESTORE_ROLES), <name> for text stored as a name or a note.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Model, ModelRequest, ModelRole } from "./model.ts";
+import { collapsePlaceholders, NameMap, type NameMapOptions } from "../privacy/names.ts";
+import { readNamePolicy } from "../privacy/policy.ts";
 
 export type Route = "understand" | "design" | "choose" | "explain" | "execute" | "draft" | "item_step" | "caption" | "refine" | "classify";
 export type Tier = "opus" | "sonnet" | "haiku";
@@ -53,6 +58,7 @@ export const ROLE_ROUTES: Readonly<Record<ModelRole, Route>> = {
   bucket: "classify",
   style_card: "classify",
   workflow_design: "design",
+  solution_design: "design",
   step: "item_step",
   label: "understand",
   refine: "refine",
@@ -60,6 +66,10 @@ export const ROLE_ROUTES: Readonly<Record<ModelRole, Route>> = {
   playbook_label: "classify",
   playbook: "understand",
 };
+
+/** s18: roles whose reply the user reads and reviews as text; names are restored on the Mac. Every other reply (a task
+ * name, a refined description, workflow wording, a bucket) is stored, so its placeholders become <name>. */
+export const RESTORE_ROLES: ReadonlySet<ModelRole> = new Set<ModelRole>(["draft", "step", "style_card", "explain"]);
 
 /** Clean runs before a per-item step moves from Sonnet to Haiku. */
 export const PROVEN_RUNS = 5;
@@ -154,6 +164,8 @@ export interface RouterOptions {
   env?: Readonly<Record<string, string | undefined>>;
   /** Model per tier (models.json / env can override). */
   models?: Partial<Record<Tier, string>>;
+  /** s18: the name policy for a request without a run map. Default: privacy.json + contacts of this home. */
+  namePolicy?: () => NameMapOptions;
 }
 
 const monthOf = (ts: number) => {
@@ -346,6 +358,11 @@ export class ModelRouter {
     const route = req.route ?? ROLE_ROUTES[req.role];
     if (this.blocked() && this.o.backend.metered) throw new BudgetError("the monthly Claude budget is spent; raise it in Settings or wait for next month");
     const spec = ROUTES[route];
+    // s18: nothing below sees an unmasked turn; the map stays in this process.
+    const names = req.names ?? new NameMap(this.o.namePolicy?.() ?? readNamePolicy(this.o.home));
+    const system = names.mask(req.system);
+    const prompt = names.mask(req.prompt);
+    const local = (text: string) => (RESTORE_ROLES.has(req.role) ? names.unmask(text) : collapsePlaceholders(text));
     const start = this.startTier(route, req.stepKey);
     const ladder = TIERS.slice(TIERS.indexOf(start));
     const escalations: string[] = [];
@@ -358,7 +375,7 @@ export class ModelRouter {
       tried.push(tier);
       const model = this.tierModels[tier];
       lastModel = model;
-      const reply = await this.o.backend.complete({ model, route, role: req.role, system: req.system, prompt: req.prompt, maxTokens: req.maxTokens ?? 2000, effort: tier === "opus" ? "high" : spec.effort, adaptiveThinking: tier === "opus" || spec.adaptiveThinking });
+      const reply = await this.o.backend.complete({ model, route, role: req.role, system, prompt, maxTokens: req.maxTokens ?? 2000, effort: tier === "opus" ? "high" : spec.effort, adaptiveThinking: tier === "opus" || spec.adaptiveThinking });
       usage = { inputTokens: usage.inputTokens + reply.usage.inputTokens, outputTokens: usage.outputTokens + reply.usage.outputTokens, cacheReadTokens: usage.cacheReadTokens + reply.usage.cacheReadTokens };
       cost += costOf(reply.model, reply.usage);
       last = reply;
@@ -367,7 +384,7 @@ export class ModelRouter {
       if (reply.stopReason === "refusal") why = `${tier} declined`;
       else if (reply.stopReason === "max_tokens") why = `${tier} reply was cut off`;
       else if (req.validate !== undefined) {
-        const v = req.validate(reply.text);
+        const v = req.validate(local(reply.text));
         if (v !== null) why = `${tier}: ${v.slice(0, 80)}`;
       }
       if (why === null) break;
@@ -377,7 +394,7 @@ export class ModelRouter {
     this.record(d, usage.cacheReadTokens);
     if (req.stepKey !== undefined && route === "item_step") this.recordStepOutcome(req.stepKey, escalations.length === 0 ? { ok: true } : { ok: false, reason: escalations[0]! });
     if (last === null || last.stopReason === "refusal") throw new RefusalError(`every model declined this ${route} request`);
-    return last.text;
+    return local(last.text);
   }
 
   summary(): RouterSummary {
