@@ -20,7 +20,7 @@ import { ChainCapabilityResolver } from "../../src/plan/chain-resolver.ts";
 import { DriverComputerProbe } from "../../src/connectors/computer/probe.ts";
 import type { ComputerDriver } from "../../src/connectors/computer/driver.ts";
 import { rememberTargets } from "../../src/connectors/chain.ts";
-import { stepClass } from "../../src/plan/steps.ts";
+import { isReadOnlyStep, stepClass } from "../../src/plan/steps.ts";
 import { brainKeyMode, brainKeyPath, clearBrainKeyCache, openText, sealText } from "../../src/store/vault.ts";
 import { clearSyncKeyCache, DEVICE_SIGNING, syncKey } from "../../src/sync/keys.ts";
 import { TOOL_POLICIES } from "../../src/workflows/allowlist.ts";
@@ -384,8 +384,9 @@ describe("s20 SAVING review 3: unknown or action verbs are never read-only", () 
 
   test("SAVING: the verb x class table (40+ verbs, made-up ones included): action verbs write, unknown verbs are not reads", () => {
     expect(VERBS.length).toBeGreaterThanOrEqual(40);
-    const got = VERBS.map(([v, o]) => `${v}=${stepClass({ verb: v, object: o })}`);
-    expect(got).toEqual(VERBS.map(([v, , c]) => `${v}=${c}`));
+    // Unknown verbs are planned as reads (s14 contract: no unasked commit) but are never a known read (isReadOnlyStep).
+    const got = VERBS.map(([v, o]) => `${v}=${stepClass({ verb: v, object: o })}/${isReadOnlyStep({ verb: v, object: o })}`);
+    expect(got).toEqual(VERBS.map(([v, , c]) => `${v}=${c === "unknown" ? "read" : c}/${c === "read" || c === "judge"}`));
   });
 
   test("SAVING: a task with any action or unknown verb is not read-only and keeps a non-zero saving claim", async () => {
@@ -401,10 +402,10 @@ describe("s20 SAVING review 3: unknown or action verbs are never read-only", () 
   });
 
   test("SAVING: a step of an unknown verb is still never planned as a commit (no write without the gate's commit step)", async () => {
-    const { stepClass: sc } = await import("../../src/plan/steps.ts");
-    // Unknown is its own class: neither a write that would get an unasked commit nor a read for the saving.
-    expect(sc({ verb: "frobnicate", object: "widget" })).toBe("unknown");
+    const { stepClass: sc, isReadOnlyStep: ro } = await import("../../src/plan/steps.ts");
+    // An unknown verb is neither a write that would get an unasked commit nor a known read for the saving.
     expect(["text", "record"]).not.toContain(sc({ verb: "frobnicate", object: "widget" }));
+    expect(ro({ verb: "frobnicate", object: "widget" })).toBe(false);
   });
 });
 
