@@ -25,6 +25,7 @@ import { NameMap } from "../privacy/names.ts";
 import { readNamePolicy, signNames } from "../privacy/policy.ts";
 import type { ReadPreviewDTO } from "../api/s14-types.ts";
 import { recordRead, type SourceFetcher } from "./read-fetch.ts";
+import { queryOf } from "../plan/read-source.ts";
 
 export class DryRunError extends Error {}
 
@@ -67,12 +68,14 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
   let read: ReadPreviewDTO | undefined;
   if (wf.plan !== undefined) {
     const src = wf.read;
-    if (src === undefined) read = { status: "none", name: null, via: null, rows: [], message: NO_SOURCE_DRY };
-    else if (o.read === undefined) read = { status: "not_read", name: src.targetName, via: null, rows: [], message: `Reading ${src.targetName} is not set up on this Mac yet; live runs use your list ${wf.inputs.list}.` };
+    if (src === undefined) read = { status: "none", name: null, via: null, query: null, rows: [], rowsTotal: 0, message: NO_SOURCE_DRY };
+    else if (o.read === undefined) read = { status: "not_read", name: src.targetName, via: null, query: queryOf(src), rows: [], rowsTotal: 0, message: `Reading ${src.targetName} is not set up on this Mac yet; live runs use your list ${wf.inputs.list}.` };
     else {
       const r = await o.read.fetch({ wf, now, logPath: gateLogPath(o.home, wf.id) });
       recordRead(o.home, wf.id, r, now);
-      read = r.ok ? { status: "fetched", name: src.targetName, via: r.via, rows: r.rows, message: r.message } : { status: r.status, name: src.targetName, via: null, rows: [], message: `Could not read ${src.targetName}: ${r.message} Live runs use your list ${wf.inputs.list} until it can be read.` };
+      read = r.ok
+        ? { status: "fetched", name: src.targetName, via: r.via, query: queryOf(src), rows: r.rows.slice(0, 20), rowsTotal: r.rows.length, message: r.message }
+        : { status: r.status === "cancelled" ? "not_read" : r.status, name: src.targetName, via: null, query: queryOf(src), rows: [], rowsTotal: 0, message: `Could not read ${src.targetName}: ${r.message} Live runs use your list ${wf.inputs.list} until it can be read.` };
     }
   }
   const readAutomated = read?.status === "fetched";

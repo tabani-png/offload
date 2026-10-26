@@ -5,7 +5,7 @@ depends_on: [s13 (chain, gate, computer use), s14 (general plan, dry run), s17 (
 parallel_safe: true (seams in runner.ts, gate.ts, drafter.ts, plan/dryrun.ts, workflows/dryrun.ts, service.ts, workflow-routes.ts, server.ts)
 human_gated: false
 verify: bash slices/s27-workflow-reads/verify.sh
-paths_in_scope: [brain/tests/s27-workflow-reads/**, slices/s27-workflow-reads/**, brain/src/plan/read-source.ts (new), brain/src/workflows/read-fetch.ts (new), brain/src/workflows/gate.ts (read mode only), brain/src/workflows/types.ts (additive), brain/src/workflows/drafter.ts (read step on build), brain/src/workflows/plan-live.ts, brain/src/workflows/runner.ts (prepareLiveBatch seam), brain/src/workflows/dryrun.ts (read preview, totals), brain/src/plan/dryrun.ts (source fields, read minutes), brain/src/workflows/service.ts (estimate and measured with reading), brain/src/api/workflow-routes.ts (pass the fetcher), brain/src/api/server.ts (readers option), brain/src/api/types.ts (additive), brain/src/api/s14-types.ts (additive), brain/src/workflows/batch.ts (additive `source`), brain/src/api/scheduler.ts (pass the fetcher), brain/src/understanding/surfaces.ts (one known product: PostHog), brain/API.md, plan/plan.md (s27 row)]
+paths_in_scope: [brain/tests/s27-workflow-reads/**, slices/s27-workflow-reads/**, brain/src/plan/read-source.ts (new), brain/src/workflows/read-fetch.ts (new), brain/src/workflows/gate.ts (read mode only), brain/src/workflows/types.ts (additive), brain/src/workflows/drafter.ts (read step on build), brain/src/workflows/plan-live.ts, brain/src/workflows/runner.ts (prepareLiveBatch seam), brain/src/workflows/dryrun.ts (read preview, totals), brain/src/plan/dryrun.ts (source fields, read minutes), brain/src/workflows/service.ts (estimate and measured with reading), brain/src/api/workflow-routes.ts (pass the fetcher), brain/src/api/server.ts (readers option), brain/src/api/types.ts (additive), brain/src/api/s14-types.ts (additive), brain/src/workflows/batch.ts (additive `source`), brain/src/api/scheduler.ts (pass the fetcher), brain/src/understanding/surfaces.ts (one known product: PostHog), brain/API.md, plan/plan.md (s27 row, ADR line), plan/adr/0015-read-steps.md]
 paths_out_of_scope: [engine/**, app/**, control/**, web/**, packet/**, schemas/**, brain/src/builder/** (the builder stays off), brain/fixtures/**, brain/src/connectors/** (read-only use), every other slice's tests]
 ---
 
@@ -57,7 +57,18 @@ only saving was the typing.
    hours per week (with the arithmetic), and the measured saving adds the reading time on the source before the task's
    instances (before) against all time on the source (after, conservative). When it is not automated, none of it is
    counted.
-7. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+7. **Round 1 (PR #35 review, operator decisions 2026-10-26, ADR 0015).**
+   - Read arguments are LEARNED: `read.query` = the report (page title without the product name), the fields (source
+     labels) and the filters seen on screen (period "last 7 days"), code only. Shown in the dry run (`read.query`),
+     part of the hashed item text of dry-run and live batches (every approval covers it), sent as the read's
+     arguments. No setup step.
+   - Offload builds its OWN view of the data: the page address is never stored; reads go through a connector or API
+     query built from `read.query`. The screen read stays the last resort and opens only the site.
+   - Done rows are dropped before any limit (the fetcher keeps only rows not done; the batch size applies after);
+     an answer too large is refused, never cut.
+   - A pause or delete during a read stops the chain: checked before every method and call, in the read gate's cancel
+     callback, and by the built-in readers (signal); the method is not marked failed.
+8. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)

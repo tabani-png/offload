@@ -20,7 +20,7 @@ import { commitFor, missingWords } from "./commit-fields.ts";
 import { readSchema, readUniverse } from "../connectors/universe.ts";
 import { NameMap } from "../privacy/names.ts";
 import { readNamePolicy, signNames } from "../privacy/policy.ts";
-import { fillFromSource, sourceSpansBefore } from "./read-source.ts";
+import { fillFromSource, queryText, sourceSpansBefore } from "./read-source.ts";
 
 export interface GeneralDryRunOptions {
   home: string;
@@ -153,7 +153,9 @@ export async function generalDryRun(o: GeneralDryRunOptions): Promise<GeneralDry
       warnings: built.warnings,
     };
     out.push(dto);
-    const body = built.ours.text ?? built.ours.fields.map((f) => `${f.label}: ${f.value ?? "[left for you]"}`).join("\n");
+    // s27: what the read step asks its source for is part of the approved text (the dry run's approval covers it).
+    const reads = fromSource && src !== undefined ? `\n\nReads from ${src.targetName}: ${queryText(src)}` : "";
+    const body = (built.ours.text ?? built.ours.fields.map((f) => `${f.label}: ${f.value ?? "[left for you]"}`).join("\n")) + reads;
     // makeBatch keys items by `to` (batch.ts); a general item has no recipient, so `to` carries the item key (the
     // instance id). s13's BatchItem.commit carries the real commit once it lands; nothing in a dry run is sent.
     items.push({ key: inst.instance.id.toLowerCase(), to: inst.instance.id.toLowerCase(), subject: built.ours.summary, body, sourceInstanceId: inst.instance.id, warnings: built.warnings });

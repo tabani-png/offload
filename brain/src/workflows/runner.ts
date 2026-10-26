@@ -25,7 +25,8 @@ import { DEFAULT_SERVERS, type ToolPolicy } from "./allowlist.ts";
 import { makeBatch, type Batch, type BatchItem, type ItemState } from "./batch.ts";
 import { crmLines, contactedFrom, type CrmEntry } from "./scripts/crm-log.ts";
 import { pickNext, readRecipients } from "./scripts/recipients.ts";
-import { isPlanWorkflow, planLiveItems, PlanLiveError, type ItemRow } from "./plan-live.ts";
+import { isPlanWorkflow, planLiveItems, PlanLiveError, rowKey, type ItemRow } from "./plan-live.ts";
+import { queryText } from "../plan/read-source.ts";
 import { recordRead, type SourceFetcher } from "./read-fetch.ts";
 import type { RunSourceDTO } from "../api/s14-types.ts";
 import type { Executor, ToolCallRecord } from "./executor.ts";
@@ -232,11 +233,26 @@ export async function prepareLiveBatch(o: PrepareOptions): Promise<Batch> {
         if (o.read === undefined) {
           source = { kind: "list", name: list, via: null, message: `Reading ${name} is not set up on this Mac yet, so these values are from your list ${list}.` };
         } else {
-          const r = await o.read.fetch({ wf, now, logPath: gateLogPath(o.home, wf.id), signal: ac.signal });
+          const done = contactedKeys(o.home, wf.id, wf.inputs.crmLog, now);
+          const ledger = ledgerContacted(o.home, wf.id);
+          const r = await o.read.fetch({
+            wf,
+            now,
+            logPath: gateLogPath(o.home, wf.id),
+            signal: ac.signal,
+            cancelled: () => cancelReason(o.home, wf.id, ac),
+            // Done rows are dropped before any limit (PR #35 review): a source with more rows than one batch is
+            // worked through to the end.
+            keep: (fields) => {
+              const k = rowKey(wf.id, fields);
+              return !done.has(k) && !ledger.has(addressHash(wf.id, k));
+            },
+          });
+          if (!r.ok && r.status === "cancelled") throw new RunError(r.message, "conflict");
           recordRead(o.home, wf.id, r, now);
           if (r.ok) {
             source = { kind: "read", name, via: r.via, message: r.message };
-            read = { rows: r.rows.map((fields, i) => ({ line: i + 1, fields })), name, line: r.message };
+            read = { rows: r.rows.map((fields, i) => ({ line: i + 1, fields })), name, line: `${r.message.replace(/\.$/, "")}: ${queryText(wf.read)}.` };
           } else {
             source = { kind: "list", name: list, via: null, message: `Could not read ${name}: ${r.message} These values are from your list ${list}.` };
           }

@@ -5,7 +5,7 @@
 // are kept, never a value. Also: the read step in the plan, and the code that turns what a source shows (connector
 // JSON, screen text) into rows of [commit label, value].
 import type { Analysis } from "../analyze.ts";
-import type { CapabilityNeedDTO, OutputDTO, OutputFieldDTO, OutputType, PlanStepDTO, ReadFieldDTO, ReadSourceDTO, WorkflowPlanDTO } from "../api/s14-types.ts";
+import type { CapabilityNeedDTO, OutputDTO, OutputFieldDTO, OutputType, PlanStepDTO, ReadFieldDTO, ReadQueryDTO, ReadSourceDTO, WorkflowPlanDTO } from "../api/s14-types.ts";
 import { SCREEN_READ, targetForProfile, type ChainTarget } from "../connectors/targets.ts";
 import type { Span, TaskInstance } from "../types.ts";
 import type { FrameNote } from "../understanding/frames.ts";
@@ -112,6 +112,39 @@ interface Candidate {
   eventIds: string[];
   frameIds: string[];
   votes: Map<string, Map<string, number>>;
+  /** Report names (page titles without the product name) and period filters seen on its screen, with counts. */
+  reports: Map<string, number>;
+  periods: Map<string, number>;
+}
+
+/** Period filters a report shows ("Last 7 days", "This month"): the filter the person looked at. */
+const PERIOD_RE = /\b(last \d{1,3} (?:days?|weeks?|months?)|this (?:week|month|quarter|year)|today|yesterday|month to date|year to date)\b/i;
+
+const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
+const top = (m: Map<string, number>, min: number): string | null => {
+  const best = [...m.entries()].sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1))[0];
+  return best === undefined || best[1] < min ? null : best[0];
+};
+
+/** The report a page title names, without the product or site name ("Weekly metrics - PostHog" -> "Weekly metrics"). */
+export function reportOf(title: string, name: string): string | null {
+  const parts = title.split(/\s+[-–|·]\s+/).map((x) => x.trim()).filter((x) => x !== "" && x.toLowerCase() !== name.toLowerCase());
+  return parts.length === 0 ? null : plainLabel(parts[0]!);
+}
+
+/** The arguments a read sends: the report, the fields, and each filter as its own key. */
+export function queryArgs(q: ReadQueryDTO): Record<string, unknown> {
+  return { ...(q.report === null ? {} : { report: q.report }), fields: [...q.fields], ...Object.fromEntries(q.filters) };
+}
+
+/** The learned query of a source (sources from before round 1: the fields alone). */
+export const queryOf = (src: Pick<ReadSourceDTO, "query" | "fields">): ReadQueryDTO => src.query ?? { report: null, fields: src.fields.map((f) => f.sourceLabel), filters: [] };
+
+/** One line naming what is read: "Weekly metrics (Week, Signups; period last 7 days)". Part of hashed item text. */
+export function queryText(src: Pick<ReadSourceDTO, "query" | "fields" | "targetName">): string {
+  const q = queryOf(src);
+  const filters = q.filters.map(([k, v]) => `${k} ${v}`).join(", ");
+  return `${q.report ?? src.targetName} (${q.fields.join(", ")}${filters === "" ? "" : `; ${filters}`})`;
 }
 
 /** The display name of a source: a known product (PostHog), else the host or the app name. */
@@ -145,7 +178,7 @@ export function findReadSource(a: Analysis, taskId: string, now: number = Date.n
     const groups = new Map<string, Span[]>();
     for (const s of before(a, taskId, inst, own)) groups.set(surfaceOf(s), [...(groups.get(surfaceOf(s)) ?? []), s]);
     for (const [surface, spans] of groups) {
-      const c: Candidate = cands.get(surface) ?? { surface, sample: spans[0]!, seen: 0, withValues: 0, ms: 0, spanIds: [], eventIds: [], frameIds: [], votes: new Map() };
+      const c: Candidate = cands.get(surface) ?? { surface, sample: spans[0]!, seen: 0, withValues: 0, ms: 0, spanIds: [], eventIds: [], frameIds: [], votes: new Map(), reports: new Map(), periods: new Map() };
       c.seen += 1;
       c.ms += spans.reduce((n, s) => n + s.activeMs, 0);
       c.spanIds.push(...spans.map((s) => s.id));
@@ -157,6 +190,11 @@ export function findReadSource(a: Analysis, taskId: string, now: number = Date.n
         .map((l) => l.trim())
         .filter((l) => l !== "");
       c.frameIds.push(...spans.flatMap((s) => notes.get(s.id)?.ids ?? []));
+      // What the person looked at, to build Offload's own view of it (never the page address).
+      const report = reportOf(spans[0]!.title, sourceName(spans[0]!));
+      if (report !== null) bump(c.reports, report);
+      const period = lines.map((l) => PERIOD_RE.exec(l)?.[1]).find((x) => x !== undefined);
+      if (period !== undefined) bump(c.periods, period.toLowerCase());
       let found = 0;
       for (const [label, value] of typed) {
         const line = lines.find((l) => labelOnLine(l, value) !== null) ?? lines.find((l) => tokenIn(l, value));
@@ -217,6 +255,11 @@ export function findReadSource(a: Analysis, taskId: string, now: number = Date.n
     readHoursPerWeek: hours,
     arithmetic: `${secs} s reading ${name} before ${best.seen} of ${n} times × ${r1(perDay)}/day × 7 days = ${hours.toFixed(2)} h/wk`,
     evidence: { spanIds: [...new Set(best.spanIds)].slice(0, 200), eventIds: [...new Set(best.eventIds)].slice(0, 200), frameIds: [...new Set(best.frameIds)].slice(0, 200) },
+    query: (() => {
+      const min = Math.max(2, Math.ceil(best.seen / 2));
+      const period = top(best.periods, min);
+      return { report: top(best.reports, min), fields: fields.map((f) => f.sourceLabel), filters: period === null ? [] : [["period", period] as [string, string]] };
+    })(),
     foundAt: now,
   };
 }
@@ -310,7 +353,7 @@ export function readValues(text: string, fields: readonly Pick<ReadFieldDTO, "la
     isJson = false;
   }
   if (isJson) {
-    for (const o of objectsOf(json).slice(0, 50)) {
+    for (const o of objectsOf(json)) {
       const f = flat(o);
       const row: Array<[string, string]> = [];
       for (const fd of fields) {

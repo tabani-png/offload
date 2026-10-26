@@ -7,7 +7,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BRAIN="$ROOT/brain"
 BASE=0abc4e0   # origin/main when this slice started
-MIN_TESTS=20
+MIN_TESTS=26
 TAGS="SOURCE STEP GATE FETCH DRYRUN LIVE EXECUTE METRIC"
 fails=0
 fail() { echo "FAIL $*"; fails=$((fails + 1)); }
@@ -61,7 +61,7 @@ esac
 while IFS= read -r p; do
   [ -n "$p" ] || continue
   case "$p" in
-    brain/tests/s27-workflow-reads/*|slices/s27-workflow-reads/*|brain/src/plan/read-source.ts|brain/src/workflows/read-fetch.ts|brain/src/workflows/gate.ts|brain/src/workflows/types.ts|brain/src/workflows/drafter.ts|brain/src/workflows/plan-live.ts|brain/src/workflows/runner.ts|brain/src/workflows/dryrun.ts|brain/src/plan/dryrun.ts|brain/src/workflows/service.ts|brain/src/api/workflow-routes.ts|brain/src/api/server.ts|brain/src/api/types.ts|brain/src/api/s14-types.ts|brain/src/understanding/surfaces.ts|brain/src/workflows/batch.ts|brain/src/api/scheduler.ts|brain/API.md|plan/plan.md) ;;
+    brain/tests/s27-workflow-reads/*|slices/s27-workflow-reads/*|brain/src/plan/read-source.ts|brain/src/workflows/read-fetch.ts|brain/src/workflows/gate.ts|brain/src/workflows/types.ts|brain/src/workflows/drafter.ts|brain/src/workflows/plan-live.ts|brain/src/workflows/runner.ts|brain/src/workflows/dryrun.ts|brain/src/plan/dryrun.ts|brain/src/workflows/service.ts|brain/src/api/workflow-routes.ts|brain/src/api/server.ts|brain/src/api/types.ts|brain/src/api/s14-types.ts|brain/src/understanding/surfaces.ts|brain/src/workflows/batch.ts|brain/src/api/scheduler.ts|brain/API.md|plan/plan.md|plan/adr/0015-read-steps.md) ;;
     *) fail "out-of-scope path changed: $p" ;;
   esac
 done <<< "$SLICE_FILES"

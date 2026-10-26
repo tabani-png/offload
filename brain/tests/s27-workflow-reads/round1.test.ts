@@ -20,7 +20,7 @@ describe("s27 round 1", () => {
     const { id } = await activeMetricsWorkflow(w);
     updateWorkflow(w.home, id, (x) => {
       x.batchSize = 50;
-    });
+    }, w.clock.now);
     const weeks: string[] = [];
     for (const want of [50, 50, 20]) {
       const r = await w.call(`/workflows/${id}/run`, "POST", {});

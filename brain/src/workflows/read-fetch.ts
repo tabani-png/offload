@@ -18,7 +18,7 @@ import { loadConnectorsConfig, toMcpServers, type Env } from "../connectors/conf
 import type { LinkRunner, Method } from "../connectors/link.ts";
 import type { SecretReader } from "../connectors/secrets.ts";
 import type { ChainTarget } from "../connectors/targets.ts";
-import { readValues, sourceTarget } from "../plan/read-source.ts";
+import { queryArgs, queryOf, readValues, sourceTarget } from "../plan/read-source.ts";
 import type { ToolPolicy } from "./allowlist.ts";
 import { makeBatch } from "./batch.ts";
 import { createGate, READ_ONLY_WORDS, splitMcpName } from "./gate.ts";
@@ -32,7 +32,10 @@ export interface ReaderJob {
   target: ChainTarget;
   state: MethodState;
   source: ReadSourceDTO;
+  /** The learned read arguments (report, fields, filters): what a connector or API read is asked for. */
+  args: Record<string, unknown>;
   call: ReadCall;
+  /** Aborted when the workflow is paused or deleted: readers stop and send nothing more. */
   signal?: AbortSignal;
 }
 
@@ -42,14 +45,29 @@ export interface SourceReader {
 }
 
 export class ReadRefused extends Error {}
+export class ReadCancelled extends Error {}
 
 export type FetchResult =
   | { ok: true; via: Method; rows: Array<Array<[string, string]>>; message: string }
-  | { ok: false; status: "refused" | "not_read"; via: null; message: string };
+  | { ok: false; status: "refused" | "not_read" | "cancelled"; via: null; message: string };
+
+export interface FetchOptions {
+  wf: WorkflowJson;
+  now: number;
+  logPath?: string;
+  signal?: AbortSignal;
+  /** Non-null when the run must stop (paused, deleted): checked before every method and every call. */
+  cancelled?: () => string | null;
+  /** Rows to keep (live runs: not done yet). Applied before anything else is limited, so done rows never hide new ones. */
+  keep?: (fields: Array<[string, string]>) => boolean;
+}
 
 export interface SourceFetcher {
-  fetch(o: { wf: WorkflowJson; now: number; logPath?: string; signal?: AbortSignal }): Promise<FetchResult>;
+  fetch(o: FetchOptions): Promise<FetchResult>;
 }
+
+/** An answer larger than this is refused, never cut (a cut answer could drop rows silently). */
+export const MAX_ANSWER_CHARS = 5_000_000;
 
 /** How each method reads, in plain words (no internal words: the app's lint refuses mcp, token, gate, ...). */
 export const VIA_WORDS: Record<Method, string> = {
@@ -103,10 +121,15 @@ export class ChainSourceFetcher implements SourceFetcher {
     },
   ) {}
 
-  async fetch(f: { wf: WorkflowJson; now: number; logPath?: string; signal?: AbortSignal }): Promise<FetchResult> {
+  async fetch(f: FetchOptions): Promise<FetchResult> {
     const src = f.wf.read;
     if (src === undefined) return { ok: false, status: "not_read", via: null, message: "Offload has not seen where these values come from." };
+    const stop = (): string | null => (f.signal?.aborted === true ? "the workflow was paused or deleted" : (f.cancelled?.() ?? null));
+    const cancelled = (why: string): FetchResult => ({ ok: false, status: "cancelled", via: null, message: `stopped before reading ${src.targetName}: ${why}` });
     const target = sourceTarget(src);
+    const args = queryArgs(queryOf(src));
+    let why0 = stop();
+    if (why0 !== null) return cancelled(why0);
     let states: MethodState[];
     try {
       states = (await this.o.resolver.resolve(target)).methods.filter((m) => m.health === "ok" && m.reads.length > 0);
@@ -116,6 +139,9 @@ export class ChainSourceFetcher implements SourceFetcher {
     }
     const why: string[] = [];
     for (const state of states) {
+      // A pause or delete stops the whole chain: no next method, no screen opened.
+      why0 = stop();
+      if (why0 !== null) return cancelled(why0);
       const reader = this.o.readers[state.method];
       if (reader === undefined || readTool(target, state) === null) continue;
       const { servers, policies } = readPolicies(target, state);
@@ -129,13 +155,18 @@ export class ChainSourceFetcher implements SourceFetcher {
         servers,
         policies,
         actions: [],
+        cancelled: stop,
         ...(f.logPath === undefined ? {} : { logPath: f.logPath }),
         now: () => f.now,
       });
       let refused: string | null = null;
       const call: ReadCall = async (tool, input, run) => {
+        const s = stop();
+        if (s !== null) throw new ReadCancelled(s);
         const { decision } = gate.check(tool, input);
         if (!decision.allow) {
+          const s2 = stop();
+          if (s2 !== null) throw new ReadCancelled(s2);
           refused ??= decision.reason;
           throw new ReadRefused(decision.reason);
         }
@@ -143,27 +174,36 @@ export class ChainSourceFetcher implements SourceFetcher {
       };
       let text: string;
       try {
-        text = await reader.read({ target, state, source: src, call, ...(f.signal === undefined ? {} : { signal: f.signal }) });
+        text = await reader.read({ target, state, source: src, args, call, ...(f.signal === undefined ? {} : { signal: f.signal }) });
       } catch (err) {
+        // Cancelled: the method is not to blame and nothing else is tried.
+        const s = stop();
+        if (s !== null || err instanceof ReadCancelled) return cancelled(s ?? (err as Error).message);
         if (refused !== null || err instanceof ReadRefused) return { ok: false, status: "refused", via: null, message: `Offload stopped the read of ${src.targetName}: ${refused ?? READ_ONLY_WORDS}.` };
         this.o.resolver.markFailed(target.id, state.method, err);
         why.push(`${VIA_WORDS[state.method]}: ${plainError(err)}`);
         continue;
       }
+      why0 = stop();
+      if (why0 !== null) return cancelled(why0);
       // A reader that swallowed a refusal still read nothing usable: what it returns is not used.
       if (refused !== null) return { ok: false, status: "refused", via: null, message: `Offload stopped the read of ${src.targetName}: ${refused}.` };
+      if (text.length > MAX_ANSWER_CHARS) {
+        why.push(`${VIA_WORDS[state.method]}: ${src.targetName} answered with more than Offload reads at once`);
+        continue;
+      }
       const { rows, missing } = readValues(text, src.fields);
       if (rows.length === 0) {
         why.push(`${VIA_WORDS[state.method]}: ${src.targetName} did not show ${missing.join(", ")}`);
         continue;
       }
-      return { ok: true, via: state.method, rows: rows.slice(0, 50), message: `Read from ${src.targetName} ${VIA_WORDS[state.method]}.` };
+      // Done rows are dropped first; the batch size is applied later, to what is left (never the other way round).
+      return { ok: true, via: state.method, rows: f.keep === undefined ? rows : rows.filter(f.keep), message: `Read from ${src.targetName} ${VIA_WORDS[state.method]}.` };
     }
     return { ok: false, status: "not_read", via: null, message: why.length === 0 ? `no way to read ${src.targetName} is set up on this Mac yet.` : `${why.join("; ")}.` };
   }
 }
 
-/** A reader's error in one scrubbed line (no addresses, no quoted snippets): it is shown and kept on the workflow. */
 const plainError = (err: unknown) =>
   scrubLogText(err instanceof Error ? err.message : String(err))
     .replace(/\s+/g, " ")
@@ -193,10 +233,14 @@ export class ScreenReader implements SourceReader {
     const p = await this.driver.permissions();
     if (!p.accessibility || !p.screenRecording) throw new Error("Offload is not allowed to read the screen");
     const tool = `mcp__${computerServer(job.target.id)}__read`;
+    // Opens only the site or app (never a stored page address); Offload's own view comes from a connector or API query.
+    const aborted = (): boolean => job.signal?.aborted === true;
+    if (aborted()) throw new ReadCancelled("stopped");
     await job.call(tool, { member: "open" }, async () => {
       await this.driver.open(job.target);
       return "";
     });
+    if (aborted()) throw new ReadCancelled("stopped");
     return job.call(tool, { member: "read_ui" }, () => this.driver.readUi());
   }
 }
@@ -212,7 +256,7 @@ export class McpSourceReader implements SourceReader {
     const cfg = loadConnectorsConfig(this.o.home).config;
     if (cfg === null || cfg.servers[parts.server] === undefined) throw new Error("the connector is not set up");
     const server = toMcpServers({ ...cfg, servers: { [parts.server]: cfg.servers[parts.server]! } }, this.o.env)[parts.server]!;
-    return job.call(tool, {}, async () => {
+    return job.call(tool, job.args, async () => {
       const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
       const client = new Client({ name: "offload-brain-read", version: "1" });
       try {
@@ -225,7 +269,7 @@ export class McpSourceReader implements SourceReader {
         } else {
           throw new Error("this kind of connector is not supported here");
         }
-        const r = await client.callTool({ name: parts.tool, arguments: {} });
+        const r = await client.callTool({ name: parts.tool, arguments: job.args }, undefined, job.signal === undefined ? {} : { signal: job.signal });
         if (r.isError === true) throw new Error("the connector answered with an error");
         const content = Array.isArray(r.content) ? (r.content as Array<{ type?: string; text?: string }>) : [];
         return content.filter((c) => c.type === "text" && typeof c.text === "string").map((c) => c.text!).join("\n");
@@ -245,9 +289,10 @@ export class ComposioSourceReader implements SourceReader {
     const parts = tool === null ? null : splitMcpName(tool);
     const account = job.state.info?.account;
     if (tool === null || parts === null || account === undefined) throw new Error("no Composio read for this app");
-    return job.call(tool, {}, async () => {
+    return job.call(tool, job.args, async () => {
+      if (job.signal?.aborted === true) throw new ReadCancelled("stopped");
       const env = Object.fromEntries(Object.entries(this.o.env).filter((e): e is [string, string] => typeof e[1] === "string"));
-      const r = await this.o.runner.run(["composio", "execute", parts.tool, "-d", "{}", "--account", account], { timeoutMs: this.o.timeoutMs ?? 30_000, env });
+      const r = await this.o.runner.run(["composio", "execute", parts.tool, "-d", JSON.stringify(job.args), "--account", account], { timeoutMs: this.o.timeoutMs ?? 30_000, env });
       if (r.spawnError !== undefined || r.timedOut || r.code !== 0) throw new Error(r.timedOut ? "Composio did not answer in time" : "Composio did not read it");
       let out: { successful?: unknown; data?: unknown } | null = null;
       try {
@@ -271,17 +316,24 @@ export class ApiSourceReader implements SourceReader {
     const entry = loadConnectorsConfig(this.o.home).config?.apis?.[job.target.id];
     const op = entry?.operations.find((x: ApiOperation) => x.operationId === parts?.tool && x.role === "read");
     if (tool === null || entry === undefined || op === undefined) throw new Error("no direct read for this app");
-    return job.call(tool, {}, async () => {
+    return job.call(tool, job.args, async () => {
       const secret = entry.auth === null ? null : await this.o.secrets.read(entry.auth.secret);
-      const { url, init } = buildRequest(entry, { method: "GET", path: op.path, body: "none" }, {}, secret);
+      const built = buildRequest(entry, { method: "GET", path: op.path, body: "none" }, {}, secret);
+      // The learned query goes in the query string: Offload's own view of the data (report, fields, filters).
+      const u = new URL(built.url);
+      for (const [k, v] of Object.entries(job.args)) u.searchParams.set(k, Array.isArray(v) ? v.join(",") : String(v));
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), this.o.timeoutMs ?? 15_000);
+      const onAbort = () => ac.abort();
+      job.signal?.addEventListener("abort", onAbort, { once: true });
       try {
-        const res = await this.o.fetch(url, { ...init, signal: ac.signal, redirect: "error" });
+        const res = await this.o.fetch(u.toString(), { ...built.init, signal: ac.signal, redirect: "error" });
         if (res.status < 200 || res.status >= 300) throw new Error(`the service answered ${res.status}`);
-        return (await res.text()).slice(0, 200_000);
+        // Never cut: the fetcher refuses an answer over MAX_ANSWER_CHARS instead.
+        return await res.text();
       } finally {
         clearTimeout(timer);
+        job.signal?.removeEventListener("abort", onAbort);
       }
     });
   }

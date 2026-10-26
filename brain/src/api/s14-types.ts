@@ -174,6 +174,15 @@ export interface ReadStatusDTO {
   message: string;
 }
 
+/** s27 (operator, 2026-10-26): the read's arguments, learned from the recordings: the report the person looked at (its
+ * name), the fields, and the filters seen on screen (e.g. period "last 7 days"). Offload builds its own view of the
+ * data from these; the page address the person had open is never stored. Shown in the dry run, covered by approvals. */
+export interface ReadQueryDTO {
+  report: string | null;
+  fields: string[];
+  filters: Array<[string, string]>;
+}
+
 /** s27: where a repeated task's values come from, learned from the recordings (plan/read-source.ts, code only).
  * Only labels, the app or site and code arithmetic are kept: never a value. */
 export interface ReadSourceDTO {
@@ -198,6 +207,8 @@ export interface ReadSourceDTO {
   readHoursPerWeek: number;
   arithmetic: string;
   evidence: { spanIds: string[]; eventIds: string[]; frameIds: string[] };
+  /** The learned read arguments (absent on sources found before round 1: the fields alone). */
+  query?: ReadQueryDTO;
   foundAt: number;
   lastRead?: ReadStatusDTO | null;
 }
@@ -207,8 +218,12 @@ export interface ReadPreviewDTO {
   status: "fetched" | "refused" | "not_read" | "none";
   name: string | null;
   via: string | null;
-  /** Fetched rows, [commit label, value] pairs, as the live batch would use them. */
+  /** What the read asks the source for (learned); null without a source. */
+  query: ReadQueryDTO | null;
+  /** Fetched rows, [commit label, value] pairs, as the live batch would use them (the first 20 shown). */
   rows: Array<Array<[string, string]>>;
+  /** Every row the source returned (rows shows at most 20). */
+  rowsTotal: number;
   message: string;
 }
 

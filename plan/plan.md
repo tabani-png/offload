@@ -42,6 +42,7 @@ flowchart LR
 - 0007 Perception for any domain; connectors resolve by a chain per app (MCP -> Composio -> API -> computer use).
 - 0008 `@anthropic-ai/sdk` (pinned, already the Agent SDK's peer) for computer use with `computer_toolset_20260801`.
 - 0013 (proposed) Safe builder: run builder code in a micro-VM; ship config-patch setup fixes without the builder first.
+- 0015 Read steps: read arguments learned from the recordings; Offload builds its own view (no stored page address); read only; done rows before limits.
 
 ## Slices
 | id | name | owner type | depends |

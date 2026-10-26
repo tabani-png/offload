@@ -524,6 +524,11 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   - Dashboard: when the last read worked, `estimatedHoursSavedPerWeek` adds `read.readHoursPerWeek` (the arithmetic
     says so) and `measured` adds `readingHoursPerWeekBefore` / `After` (before: reading right before the instances;
     after: all time on the source) inside `hoursPerWeekBefore` / `After`.
+  - Round 1 (ADR 0015): `read.query` (`ReadQueryDTO {report, fields, filters}`) is learned from the recordings and
+    sent as the read's arguments; the dry run shows it (`read.query`, plus `rowsTotal`; `rows` shows at most 20) and
+    dry-run and live item text names it, so approvals cover it. The page address is never stored; a screen read opens
+    only the site. Live runs drop done rows before the batch size applies. A pause or delete during a read stops the
+    run with 409 "stopped before reading <source>: ..." and no other method is tried.
 
 ## s19: messaging playbook (additive, ADR 0011)
 A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,
