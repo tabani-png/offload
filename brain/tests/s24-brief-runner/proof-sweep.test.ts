@@ -61,7 +61,8 @@ describe("s24 completion proof", () => {
   }, 30_000);
 });
 
-const DAEMON = ["import os, sys, time", "if os.fork() == 0:", "    os.setsid()", "    if os.fork() == 0:", "        time.sleep(1.5)", "        open('mutated_after_pass.txt', 'w').write('x')", "        os._exit(0)", "    os._exit(0)", "print('tool done')", ""].join("\n");
+// A real daemon: detaches (fork + setsid + fork) and closes its stdio, so nobody waits on it.
+const DAEMON = ["import os, sys, time", "if os.fork() == 0:", "    os.setsid()", "    if os.fork() == 0:", "        devnull = os.open(os.devnull, os.O_RDWR)", "        for fd in (0, 1, 2):", "            os.dup2(devnull, fd)", "        time.sleep(1.5)", "        open('mutated_after_pass.txt', 'w').write('x')", "        os._exit(0)", "    os._exit(0)", "print('tool done')", ""].join("\n");
 
 describe("s24 no survivors", () => {
   test("SAFETY: a fork+setsid daemon started during the check is killed before the verdict; the artifact does not change after PASS", async () => {
