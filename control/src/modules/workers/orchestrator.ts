@@ -11,9 +11,19 @@
  *
  * LOCK ORDER. Worker rows are step 9 of the broker's lock order (broker.ts header): every broker lock comes before
  * them, the tenant's audit-chain lock after them. Within step 9 every transaction here takes, in this order and
- * never back up it: the runner's `offload_cloud_device:<person>` advisory lock, then worker_runs rows, then workers
- * rows, then deployments rows; two rows of one table in id order. Audit events are written after the last row lock.
+ * never back up it: the tenant's `offload_workers_budget:<tenant>` advisory lock (run admission: the monthly cap's
+ * check and its reservation, the run insert, are one critical section; the run route takes it before its worker row),
+ * the runner's `offload_cloud_device:<person>` advisory lock, then worker_runs rows, then workers rows, then
+ * deployments rows; two rows of one table in id order. Audit events are written after the last row lock.
  * Broker calls made inside these transactions (loadBatch, dto, killSwitchActive) only read and queue no audit.
+ *
+ * DURABILITY. Nothing is marked done before the remote call succeeded: an interrupt is requested in the deciding
+ * transaction (`interrupt_sent_at`) and confirmed after Managed Agents accepted it (`interrupt_delivered_at`);
+ * undelivered interrupts are retried by every sweep with backoff, and while one is requested no event of the run is
+ * acted on. Nothing lives only in memory: `recover` (the per-minute `workers.recover` job, so also the first minute
+ * after a start, and every reconcile tick) re-attaches a consumer to every unfinished session, fails a run whose
+ * session id was never recorded after SESSION_RECORD_TIMEOUT_MS (releasing its budget), delivers pending interrupts
+ * and reports ended runs to their overnight policy (`policy_reported_at`). One orchestrator process per tenant.
  */
 import type { Deps, Principal } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
@@ -37,6 +47,11 @@ import {
 export const SESSION_RETENTION_DAYS = 30;
 export const MAX_RECONNECTS = 5;
 export const FAILURES_TO_PAUSE = 2;
+/** A run whose session id is still unrecorded this long after it started is failed (the session, if any, is idle). */
+export const SESSION_RECORD_TIMEOUT_MS = 10 * 60_000;
+/** Retry delay of an undelivered interrupt: 30 s doubling per failed attempt, at most 15 minutes. */
+export const interruptBackoffMs = (attempts: number) => Math.min(30_000 * 2 ** Math.max(0, attempts - 1), 15 * 60_000);
+const ERRORS_SESSION_MAY_RUN = new Set(["stream_lost", "stream_unavailable", "orchestrator_error"]);
 
 /** Read credentials for a connection (deployment wiring: OAuth / KMS). Returning null creates no credential. */
 export type CredentialSource = (c: { id: string; kind: string; externalRef: string }) => Promise<{ token: string; mcpServerUrl: string } | null>;
@@ -65,6 +80,10 @@ export interface Workers extends WorkersPort {
   sweep(tenantId: string): Promise<void>;
   interruptAll(tenantId: string, scope: { tenant: true } | { personId: string } | { workflowId: string }): Promise<number>;
   retention(tenantId: string): Promise<number>;
+  /** Restart recovery (see DURABILITY above); safe to repeat. */
+  recover(tenantId: string): Promise<void>;
+  /** Run admission's tenant-wide lock (lock order step 9, first). Callers take it before any worker row. */
+  lockBudget(tx: Tx): Promise<void>;
   monthSpent(tx: Tx, excludeRunId?: string): Promise<{ spent: number; cap: number }>;
   idle(): Promise<void>;
   /** Stops every consumer (process exit, tests). Sessions keep running on the platform; resume re-attaches. */
@@ -84,6 +103,14 @@ const DAY_MS = 86_400_000;
 
 /** Pauses a person's workers and their deployments, in the caller's transaction (ADR 0106 §4, ADR 0107). */
 export async function pauseWorkersOf(tx: Tx, personId: string, now: number, reason: string): Promise<string[]> {
+  // The person's unfinished runs: the interrupt is requested here, in the caller's transaction, so it survives a
+  // restart; the orchestrator delivers it (at once if bound, else on the next sweep). Runs before workers.
+  const mine = tx`select id from workers where owner_person_id = ${personId} or (identity_type = 'person' and identity_id = ${personId})`;
+  const runs = await tx`select id from worker_runs where ended_at is null and interrupt_sent_at is null
+    and (runner_person_id = ${personId} or worker_id in (${mine})) order by id for update`;
+  if (runs.length > 0) {
+    await tx`update worker_runs set interrupt_sent_at = ${new Date(now)} where id in ${tx(runs.map((r: { id: string }) => r.id))}`;
+  }
   // Lock order: the rows in id order before the update (two of these can run at once for overlapping workers).
   await tx`select id from workers where state in ('ready', 'provisioning')
     and (owner_person_id = ${personId} or (identity_type = 'person' and identity_id = ${personId})) order by id for update`;
@@ -145,6 +172,8 @@ export function createWorkers(deps: Deps): Workers {
   const inflight = new Set<Promise<unknown>>();
   // Consumers live as long as their session: they are not "work in flight" while they wait for the next event.
   const consuming = new Map<string, AbortController>();
+  // Runs whose session this process is creating: recovery leaves them to openSession (which sends the first message).
+  const opening = new Set<string>();
   let busy = 0;
   // One provisioning at a time per tenant: the environment is shared and must not be created twice.
   const tenantLocks = new Map<string, Promise<unknown>>();
@@ -340,6 +369,7 @@ export function createWorkers(deps: Deps): Workers {
   }
 
   async function reconcile(tenantId: string, workerId?: string): Promise<void> {
+    if (!workerId) await recover(tenantId);
     const ids = workerId
       ? [workerId]
       : await service(tenantId, async (tx) => (await tx`select id from workers where state <> 'retired' or id in (select worker_id from deployments where remote_status <> desired_status) order by created_at`).map((r: { id: string }) => r.id));
@@ -350,6 +380,10 @@ export function createWorkers(deps: Deps): Workers {
   }
 
   // ---------- runs ----------
+
+  async function lockBudget(tx: Tx): Promise<void> {
+    await tx`select pg_advisory_xact_lock(hashtext('offload_workers_budget:' || current_setting('app.tenant_id')))`;
+  }
 
   async function monthSpent(tx: Tx, excludeRunId?: string): Promise<{ spent: number; cap: number }> {
     const [t] = await tx`select monthly_worker_budget_cents, reporting_timezone from tenants where id = current_setting('app.tenant_id')::uuid`;
@@ -396,6 +430,8 @@ export function createWorkers(deps: Deps): Workers {
     if (w.state !== "ready") throw conflict(`this worker is ${w.state}`);
     const runnable = await registry().isRunnableBy(tx, w.workflowId, w.version, w.identityType === "person" ? { personId: w.identityId } : { identityId: w.identityId });
     if (!runnable) throw conflict("this workflow version can no longer run as this identity");
+    // Check and reservation (the insert below) under the tenant's admission lock; the route took it first already.
+    await lockBudget(tx);
     const { spent, cap } = await monthSpent(tx);
     if (spent + w.sessionBudgetCents > cap) {
       throw new HttpError(409, "budget_exceeded", "this month's cloud budget would be exceeded by one more session");
@@ -417,6 +453,15 @@ export function createWorkers(deps: Deps): Workers {
   }
 
   async function openSession(tenantId: string, runId: string, first: ReturnType<typeof runMessage>): Promise<void> {
+    opening.add(runId);
+    try {
+      await openSessionOnce(tenantId, runId, first);
+    } finally {
+      opening.delete(runId);
+    }
+  }
+
+  async function openSessionOnce(tenantId: string, runId: string, first: ReturnType<typeof runMessage>): Promise<void> {
     const s = await service(tenantId, async (tx) => {
       const run = await loadRun(tx, runId);
       return run ? { run, w: (await loadWorker(tx, run.workerId))! } : null;
@@ -438,11 +483,23 @@ export function createWorkers(deps: Deps): Workers {
       console.error(`workers: session for run ${runId} not created: ${(e as Error).message}`);
       return;
     }
-    await service(tenantId, async (tx) => {
-      await tx`update worker_runs set session_ref = ${sessionId} where id = ${runId}`;
+    // A session nobody sends a first message to stays idle: if the run ended meanwhile (recovery timed it out), the
+    // session is left unrecorded and inert.
+    const rec = await service(tenantId, async (tx) => {
+      const [u] = await tx`update worker_runs set session_ref = ${sessionId} where id = ${runId} and ended_at is null
+        returning interrupt_sent_at`;
+      if (!u) return null;
       await tx`insert into session_cursors (tenant_id, session_id, run_id) values (current_setting('app.tenant_id')::uuid, ${sessionId}, ${runId})
         on conflict do nothing`;
+      return { interrupt: u.interrupt_sent_at !== null };
     });
+    if (!rec) return;
+    if (rec.interrupt) {
+      // Stopped before the session existed: deliver the interrupt, never the first message.
+      await deliverInterrupt(tenantId, runId, sessionId);
+      void consume(tenantId, runId);
+      return;
+    }
     void consume(tenantId, runId, first);
   }
 
@@ -491,6 +548,7 @@ export function createWorkers(deps: Deps): Workers {
         if (first) await api.sendEvents(sid, [first]);
         else if (await catchUp(ctx)) return;
       } catch (e) {
+        if (ac.signal.aborted) return;
         await finish(tenantId, runId, "failed", "error", "stream_unavailable");
         console.error(`workers: run ${runId}: ${(e as Error).message}`);
         return;
@@ -504,6 +562,8 @@ export function createWorkers(deps: Deps): Workers {
             wait();
           }
           work();
+          // Shut down (process exit, restart): the session keeps running and recovery re-attaches; never end it here.
+          if (ac.signal.aborted) return;
         } catch (e) {
           work();
           if (ac.signal.aborted) return;
@@ -525,6 +585,7 @@ export function createWorkers(deps: Deps): Workers {
       }
     } catch (e) {
       console.error(`workers: run ${runId}: ${(e as Error).message}`);
+      if (ac.signal.aborted) return;
       await finish(tenantId, runId, "failed", "error", "orchestrator_error").catch(() => undefined);
     } finally {
       work();
@@ -573,21 +634,64 @@ export function createWorkers(deps: Deps): Workers {
     return ended;
   }
 
+  /** Requests the run's interrupt (durable) and delivers it unless it is delivered already or its retry is not due. */
   async function interrupt(ctx: Ctx): Promise<void> {
-    const [r] = await service(ctx.tenantId, (tx) => tx`update worker_runs set interrupt_sent_at = ${new Date(now())}
-      where id = ${ctx.run.id} and interrupt_sent_at is null and ended_at is null returning id`);
-    if (r) await send(ctx, { type: "user.interrupt" });
+    const [r] = await service(ctx.tenantId, (tx) => tx`update worker_runs set interrupt_sent_at = coalesce(interrupt_sent_at, ${new Date(now())})
+      where id = ${ctx.run.id} returning interrupt_delivered_at, interrupt_next_at`);
+    if (!r || r.interrupt_delivered_at !== null) return;
+    if (r.interrupt_next_at !== null && (r.interrupt_next_at as Date).getTime() > now()) return;
+    await deliverInterrupt(ctx.tenantId, ctx.run.id, ctx.sessionId);
+  }
+
+  /**
+   * Sends one user.interrupt and records the outcome: delivered (also when the session no longer exists), or one more
+   * failed attempt and the time of the next one. Never throws; the request stays until it is delivered.
+   */
+  async function deliverInterrupt(tenantId: string, runId: string, sessionId: string): Promise<boolean> {
+    try {
+      await api.sendEvents(sessionId, [{ type: "user.interrupt" }]);
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (!/404|not[ _]found/i.test(msg)) {
+        console.error(`workers: interrupt of run ${runId} not delivered: ${msg}`);
+        await service(tenantId, async (tx) => {
+          const [u] = await tx`update worker_runs set interrupt_attempts = interrupt_attempts + 1 where id = ${runId} returning interrupt_attempts`;
+          await tx`update worker_runs set interrupt_next_at = ${new Date(now() + interruptBackoffMs(Number(u?.interrupt_attempts ?? 1)))} where id = ${runId}`;
+        });
+        return false;
+      }
+    }
+    await service(tenantId, (tx) => tx`update worker_runs set interrupt_delivered_at = ${new Date(now())}, interrupt_next_at = null
+      where id = ${runId} and interrupt_delivered_at is null`);
+    return true;
+  }
+
+  /** Delivers every requested, undelivered interrupt whose retry is due; re-attaches a consumer to unfinished runs. */
+  async function deliverPending(tenantId: string): Promise<number> {
+    const due = (await service(tenantId, (tx) => tx`select id, session_ref, ended_at from worker_runs
+      where interrupt_sent_at is not null and interrupt_delivered_at is null and session_ref <> '' and session_deleted_at is null
+        and (interrupt_next_at is null or interrupt_next_at <= ${new Date(now())}) order by id`)) as Array<{ id: string; session_ref: string; ended_at: Date | null }>;
+    let n = 0;
+    for (const r of due) {
+      if (await deliverInterrupt(tenantId, r.id, r.session_ref)) n += 1;
+      // If no consumer is attached (another process, a restart), attach one so the run ends as interrupted.
+      if (r.ended_at === null && !consuming.has(r.id) && !opening.has(r.id)) void consume(tenantId, r.id);
+    }
+    return n;
   }
 
   async function act(ctx: Ctx, ev: SessionEvent): Promise<boolean> {
     if (ACTIONABLE.has(ev.type)) {
+      // While an interrupt is requested (delivered or not), no event of the run is acted on.
       const stop = await service(ctx.tenantId, async (tx) => {
         const [r] = await tx`select interrupt_sent_at from worker_runs where id = ${ctx.run.id}`;
         if (r?.interrupt_sent_at) return "interrupted";
         return (await killedFor(tx, ctx.w, ctx.run.runnerPersonId)) ? "kill" : null;
       });
-      if (stop === "kill") await interrupt(ctx);
-      if (stop !== null) return false;
+      if (stop !== null) {
+        await interrupt(ctx);
+        return false;
+      }
     }
     switch (ev.type) {
       case "agent.mcp_tool_use":
@@ -839,8 +943,12 @@ export function createWorkers(deps: Deps): Workers {
         }
       }
       if (final === "failed" && r.interruptSentAt !== null) final = "interrupted";
+      // Ended here because we lost the session, not because it stopped: it may still be running, so its interrupt is
+      // requested with the end and delivered (and retried) by the sweep.
+      const stopIt = r.sessionRef !== "" && errorCode !== null && ERRORS_SESSION_MAY_RUN.has(errorCode);
       const [u] = await tx`update worker_runs set state = ${final}, stop_reason = ${stopReason}, ended_at = ${new Date(now())},
-          error_code = coalesce(${errorCode}, error_code), cost_cents = greatest(cost_cents, ${cost ?? 0})
+          error_code = coalesce(${errorCode}, error_code), cost_cents = greatest(cost_cents, ${cost ?? 0}),
+          interrupt_sent_at = case when ${stopIt} then coalesce(interrupt_sent_at, ${new Date(now())}) else interrupt_sent_at end
         where id = ${runId} returning *`;
       const ended = runRow(u!);
       let paused = false;
@@ -857,21 +965,28 @@ export function createWorkers(deps: Deps): Workers {
     });
     if (!after) return true;
     const { ended, w, paused } = after;
-    if (ended.overnightPolicyId) {
-      try {
-        const b = broker();
-        const trip = await b.reportRunResult(tenantId, ended.overnightPolicyId, ended.state !== "failed");
-        if (trip) await recordTrip(tenantId, runId, ended.overnightPolicyId, trip);
-        if (ended.costCents > 0) {
-          const t2 = await b.reportNightSignals(tenantId, ended.overnightPolicyId, { costCents: ended.costCents });
-          if (t2) await recordTrip(tenantId, runId, ended.overnightPolicyId, t2);
-        }
-      } catch (e) {
-        console.error(`workers: reporting run ${runId} to its overnight policy: ${(e as Error).message}`);
-      }
-    }
+    if (ended.overnightPolicyId) await reportPolicy(tenantId, ended.id, ended.overnightPolicyId, ended.state !== "failed", ended.costCents);
     if (paused) await syncDeployment(tenantId, w.id);
     return true;
+  }
+
+  /**
+   * An ended run's result to its overnight policy, then `policy_reported_at` (act, then mark: a crash in between
+   * reports it twice, which can only trip the breaker early, never hide a failure). Recovery reports what is left.
+   */
+  async function reportPolicy(tenantId: string, runId: string, policyId: string, ok: boolean, costCents: number): Promise<void> {
+    try {
+      const b = broker();
+      const trip = await b.reportRunResult(tenantId, policyId, ok);
+      if (trip) await recordTrip(tenantId, runId, policyId, trip);
+      if (costCents > 0) {
+        const t2 = await b.reportNightSignals(tenantId, policyId, { costCents });
+        if (t2) await recordTrip(tenantId, runId, policyId, t2);
+      }
+      await service(tenantId, (tx) => tx`update worker_runs set policy_reported_at = ${new Date(now())} where id = ${runId}`);
+    } catch (e) {
+      console.error(`workers: reporting run ${runId} to its overnight policy: ${(e as Error).message}`);
+    }
   }
 
   /** Consecutive failures of scheduled runs (ADR 0105 §5): two in a row pause the worker and its deployment. */
@@ -902,8 +1017,10 @@ export function createWorkers(deps: Deps): Workers {
           const [dup] = await tx`select id from worker_runs where deployment_run_ref = ${dr.id}`;
           const failed = Boolean(dr.error) || !dr.session_id;
           const w0 = await loadWorker(tx, d.worker_id);
-          // Lock order (step 9): the runner's cloud-device lock (emitOutcome takes it), the worker row, then its
-          // deployment; audit last.
+          // Lock order (step 9): the tenant's admission lock (a started session is checked against the monthly cap
+          // and reserved), the runner's cloud-device lock (emitOutcome takes it), the worker row, then its deployment;
+          // audit last.
+          if (w0 && !dup && !failed) await lockBudget(tx);
           if (w0 && !dup && failed) {
             await tx`select pg_advisory_xact_lock(hashtext(${"offload_cloud_device:" + (w0.identityType === "person" ? w0.identityId : w0.ownerPersonId)}))`;
           }
@@ -922,22 +1039,18 @@ export function createWorkers(deps: Deps): Workers {
           await audit(tx, { actor: SERVICE, action: "worker.run_start", subjectPersonId: run.runnerPersonId, resource: { type: "worker_run", id: run.id }, detail: { workerId: w.id, trigger: "schedule", deploymentRun: dr.id } });
           // The platform already created this session: if the month's cap is gone, stop it at once.
           const { spent, cap } = await monthSpent(tx, run.id);
-          return { run, paused: false, attach: true, overCap: spent + w.sessionBudgetCents > cap, policy: run.overnightPolicyId };
+          const overCap = spent + w.sessionBudgetCents > cap;
+          // Over the cap: the stop is requested with the run (durable) and delivered below, retried by the sweep.
+          if (overCap) await tx`update worker_runs set error_code = 'budget_exceeded', interrupt_sent_at = ${new Date(now())} where id = ${run.id}`;
+          return { run, paused: false, attach: true, overCap, policy: run.overnightPolicyId };
         });
         if (!started) continue;
         if (started.paused) await syncDeployment(tenantId, d.worker_id);
         if (!started.attach) {
-          if (started.policy) {
-            const trip = await broker().reportRunResult(tenantId, started.policy, false).catch(() => null);
-            if (trip) await recordTrip(tenantId, started.run.id, started.policy, trip);
-          }
+          if (started.policy) await reportPolicy(tenantId, started.run.id, started.policy, false, 0);
           continue;
         }
-        if ("overCap" in started && started.overCap) {
-          await service(tenantId, (tx) => tx`update worker_runs set error_code = 'budget_exceeded' where id = ${started.run.id}`);
-          await api.sendEvents(started.run.sessionRef, [{ type: "user.interrupt" }]).catch(() => undefined);
-          await service(tenantId, (tx) => tx`update worker_runs set interrupt_sent_at = ${new Date(now())} where id = ${started.run.id}`);
-        }
+        if ("overCap" in started && started.overCap) await deliverInterrupt(tenantId, started.run.id, started.run.sessionRef);
         void consume(tenantId, started.run.id);
       }
     }
@@ -948,25 +1061,19 @@ export function createWorkers(deps: Deps): Workers {
   async function interruptRuns(tenantId: string, pick: (tx: Tx, r: RunRow, w: WorkerRow) => Promise<boolean>): Promise<number> {
     const targets = await service(tenantId, async (tx) => {
       const out: RunRow[] = [];
-      // Lock order: the runs in id order, before any other row (finish locks its run before its worker).
-      for (const row of await tx`select * from worker_runs where state = 'running' and ended_at is null and interrupt_sent_at is null and session_ref <> ''
+      // Lock order: the runs in id order, before any other row (finish locks its run before its worker). A run whose
+      // session is not recorded yet is requested too: openSession then delivers the interrupt, not the first message.
+      for (const row of await tx`select * from worker_runs where state = 'running' and ended_at is null and interrupt_sent_at is null
           order by id for update`) {
         const r = runRow(row);
         const w = (await loadWorker(tx, r.workerId))!;
         if (await pick(tx, r, w)) out.push(r);
       }
+      // Requested, not sent: delivery is confirmed separately (deliverPending), so a failed send is retried.
       for (const r of out) await tx`update worker_runs set interrupt_sent_at = ${new Date(now())} where id = ${r.id}`;
       return out;
     });
-    for (const r of targets) {
-      try {
-        await api.sendEvents(r.sessionRef, [{ type: "user.interrupt" }]);
-      } catch (e) {
-        console.error(`workers: interrupt of run ${r.id}: ${(e as Error).message}`);
-      }
-      // If no consumer is attached (another process, a restart), attach one so the run ends as interrupted.
-      if (!consuming.has(r.id)) void consume(tenantId, r.id);
-    }
+    await deliverPending(tenantId);
     return targets.length;
   }
 
@@ -995,6 +1102,7 @@ export function createWorkers(deps: Deps): Workers {
   }
 
   async function sweep(tenantId: string): Promise<void> {
+    // interruptRuns requests the new ones and delivers every due request (kill switch, person stopped, budget, lost).
     await interruptRuns(tenantId, (tx, r, w) => killedFor(tx, w, r.runnerPersonId));
     await pauseDeploymentsWhere(tenantId, (tx, w) => killedFor(tx, w, w.identityType === "person" ? w.identityId : w.ownerPersonId), "kill_switch");
   }
@@ -1003,6 +1111,27 @@ export function createWorkers(deps: Deps): Workers {
     const match = (r: RunRow, w: WorkerRow) =>
       "tenant" in scope ? true : "personId" in scope ? r.runnerPersonId === scope.personId || (w.identityType === "person" && w.identityId === scope.personId) : w.workflowId === scope.workflowId;
     return interruptRuns(tenantId, async (_tx, r, w) => match(r, w));
+  }
+
+  // ---------- restart recovery ----------
+
+  async function recover(tenantId: string): Promise<void> {
+    const cutoff = new Date(now() - SESSION_RECORD_TIMEOUT_MS);
+    const open = (await service(tenantId, (tx) => tx`select id, session_ref, started_at from worker_runs where ended_at is null order by id`)) as Array<{ id: string; session_ref: string; started_at: Date }>;
+    for (const r of open) {
+      if (opening.has(r.id)) continue;
+      if (r.session_ref === "") {
+        // The session id was never recorded (a crash between create and record, or create never ran): any such
+        // session never got its first message, so it is idle; the run ends and its reserved budget is released.
+        if (r.started_at < cutoff) await finish(tenantId, r.id, "failed", "error", "session_not_recorded");
+        continue;
+      }
+      if (!consuming.has(r.id) && !opening.has(r.id)) void consume(tenantId, r.id);
+    }
+    await deliverPending(tenantId);
+    const unreported = (await service(tenantId, (tx) => tx`select id, overnight_policy_id, state, cost_cents from worker_runs
+      where ended_at is not null and overnight_policy_id is not null and policy_reported_at is null order by id limit 200`)) as Array<{ id: string; overnight_policy_id: string; state: string; cost_cents: string | number }>;
+    for (const r of unreported) await reportPolicy(tenantId, r.id, r.overnight_policy_id, r.state !== "failed", Number(r.cost_cents));
   }
 
   // ---------- retention ----------
@@ -1064,7 +1193,10 @@ export function createWorkers(deps: Deps): Workers {
     startRun,
     dispatchRun,
     async startRunUnchecked(tenantId, workerId, o) {
-      const run = await service(tenantId, async (tx) => insertRun(tx, (await loadWorker(tx, workerId))!, o));
+      const run = await service(tenantId, async (tx) => {
+        await lockBudget(tx);
+        return insertRun(tx, (await loadWorker(tx, workerId))!, o);
+      });
       const w = await service(tenantId, async (tx) => (await loadWorker(tx, workerId))!);
       void track(openSession(tenantId, run.id, runMessage({ runId: run.id, workflow: w.workflowId, inputs: o.inputs, scheduled: false })));
       return run.id;
@@ -1077,6 +1209,8 @@ export function createWorkers(deps: Deps): Workers {
     sweep,
     interruptAll,
     retention,
+    recover,
+    lockBudget,
     monthSpent,
     async idle() {
       // Quiescent: nothing scheduled or running, and every consumer is waiting for its next event (a few ticks in a

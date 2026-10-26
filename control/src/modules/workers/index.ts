@@ -43,6 +43,8 @@ const workers: ModuleDef = {
     job("workers.reconcile", "*/5 * * * *", (w, t) => w.reconcile(t)),
     job("workers.poll_deployments", "* * * * *", (w, t) => w.pollDeployments(t)),
     job("workers.kill_sweep", "* * * * *", (w, t) => w.sweep(t)),
+    // Restart recovery: its first tick after a start re-attaches every unfinished session (also run by reconcile).
+    job("workers.recover", "* * * * *", (w, t) => w.recover(t)),
     job("workers.session_retention", "40 4 * * *", (w, t) => w.retention(t)),
   ],
 };

@@ -69,6 +69,27 @@ personal-allowed sending connections (not `linkedin_personal`). Omitted, the per
 none or several is `409`. A role identity sends through its own connection, so naming one there is `400`.
 
 ## 11. Lock order
-Worker rows are step 9 of the broker's lock order (broker.ts header). Within it: the runner's cloud-device advisory
-lock, then `worker_runs`, then `workers`, then `deployments`, rows of one table in id order; audit events after the
-last row lock. Broker calls made inside worker transactions only read and queue no audit event.
+Worker rows are step 9 of the broker's lock order (broker.ts header). Within it: the tenant's run-admission advisory
+lock `offload_workers_budget:<tenant>`, the runner's cloud-device advisory lock, then `worker_runs`, then `workers`,
+then `deployments`, rows of one table in id order; audit events after the last row lock. Broker calls made inside
+worker transactions only read and queue no audit event. The monthly cap's check and its reservation (the run insert)
+run under the admission lock, for manual starts (the run route takes it before its worker row) and for scheduled runs
+the platform started (deployment polling).
+
+## 12. Durable intent, confirmed delivery, restart recovery
+- Nothing is marked done before the remote call succeeded. An interrupt is requested in the deciding transaction
+  (`worker_runs.interrupt_sent_at`: kill sweep, `WorkersPort.pauseFor` in the caller's transaction, monthly cap on a
+  scheduled run, a run ended because its stream was lost) and confirmed by `interrupt_delivered_at` once Managed
+  Agents accepted the `user.interrupt` (or the session no longer exists). Every sweep retries due undelivered
+  interrupts (30 s doubling, at most 15 min). While an interrupt is requested no event of the run is acted on.
+- A run whose session is not recorded yet is interrupted by delivering the interrupt instead of the first message.
+- `workers.recover` (every minute, so also the first minute after a start, and at the start of every reconcile tick)
+  re-attaches a consumer to every unfinished run with a recorded session, fails a run whose session id is still
+  unrecorded 10 minutes after it started (`session_not_recorded`; such a session never got its first message, so it
+  is idle) which releases its reserved budget, delivers pending interrupts and reports ended runs whose result has
+  not reached their overnight policy (`policy_reported_at`; act then mark, so a crash can only report twice).
+- Stopping the process never ends a run: consumers stop, the sessions keep running, recovery re-attaches.
+- One orchestrator process per tenant (event handling is exactly-once per process via `session_events`).
+- Residual: a deployment created on Managed Agents whose id was not recorded (crash between create and record) is not
+  found again; the recorded contract has no list-deployments call. Environments, vaults and agents left the same way
+  are inert.

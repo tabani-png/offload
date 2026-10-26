@@ -208,6 +208,8 @@ export function workerRoutes(app: App, deps: Deps, workers: () => Workers): void
     const req = await readLocal<{ inputs?: { recipients?: string[]; context?: string } }>(c, RUN_CREATE);
     const { out, run, w, tenantId } = await tenantTx(c, deps, async (tx, p) => {
       if (p.kind !== "person") throw forbidden();
+      // Lock order (workers step 9): the tenant's run-admission lock before the worker row (startRun re-takes it).
+      await workers().lockBudget(tx);
       const w = await visibleWorker(tx, p, id, true);
       const run = await workers().startRun(tx, p.tenantId, w, { trigger: "manual", runnerPersonId: p.personId, inputs: req.inputs ?? null });
       return { out: await runDto(tx, run), run, w, tenantId: p.tenantId };

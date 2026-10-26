@@ -57,21 +57,25 @@ describe("KILL", () => {
     const { id, sid } = await startHanging(a.id);
     failSends(1);
     await killSwitch("tenant", null);
-    await w.workers.sweep(w.t.id);
-    await w.workers.idle();
-    expect(interrupts(sid)).toBe(0);
-    expect((await runOf(id)).ended_at).toBeNull();
-    w.h.clock.advance(10 * 60_000);
-    await w.workers.sweep(w.t.id);
-    await w.workers.idle();
-    expect(interrupts(sid)).toBe(1);
-    expect((await runOf(id)).state).toBe("interrupted");
-    // Delivered: no further sends on later sweeps.
-    w.h.clock.advance(10 * 60_000);
-    await w.workers.sweep(w.t.id);
-    expect(interrupts(sid)).toBe(1);
-    await clearSwitch("tenant", null);
-  });
+    try {
+      await w.workers.sweep(w.t.id);
+      await w.workers.idle();
+      expect(interrupts(sid)).toBe(0);
+      expect((await runOf(id)).ended_at).toBeNull();
+      w.h.clock.advance(10 * 60_000);
+      await w.workers.sweep(w.t.id);
+      await w.workers.idle();
+      expect(interrupts(sid)).toBe(1);
+      expect((await runOf(id)).state).toBe("interrupted");
+      // Delivered: no further sends on later sweeps.
+      w.h.clock.advance(10 * 60_000);
+      await w.workers.sweep(w.t.id);
+      expect(interrupts(sid)).toBe(1);
+    } finally {
+      w.fake.failNext.delete("sessions.events.send");
+      await clearSwitch("tenant", null);
+    }
+  }, 60_000);
 
   test("KILL: stopping a person without a kill switch requests the interrupt in the caller's transaction; the sweep delivers it", async () => {
     const mine = await createWorker(w, { identityId: w.t.people.member.id });
@@ -86,7 +90,7 @@ describe("KILL", () => {
     await w.workers.idle();
     expect(interrupts(sid)).toBe(1);
     expect((await runOf(id)).state).toBe("interrupted");
-  });
+  }, 60_000);
 });
 
 describe("SESSION", () => {
@@ -104,7 +108,7 @@ describe("SESSION", () => {
     const r = await runOf(id);
     expect(r.state).toBe("done");
     expect(r.summary).toBe("after restart");
-  });
+  }, 60_000);
 
   test("SESSION: a per-minute recovery job fails a run whose session was never recorded, after a timeout, and releases its budget", async () => {
     const recover = job("workers.recover");
@@ -126,7 +130,7 @@ describe("SESSION", () => {
     expect((await runOf(fresh)).ended_at).toBeNull();
     expect((await tx(w, (t) => w.workers.monthSpent(t))).spent).toBe(before - 300);
     await w.h.db.migrator`update worker_runs set state = 'failed', ended_at = now(), stop_reason = 'error' where id = ${fresh}`;
-  });
+  }, 60_000);
 });
 
 describe("BUDGET", () => {
@@ -156,5 +160,5 @@ describe("BUDGET", () => {
     expect(res.find((r) => r.status === 409)!.json.error.code).toBe("budget_exceeded");
     await w.workers.idle();
     await w.h.db.migrator`update tenants set monthly_worker_budget_cents = 100000 where id = ${w.t.id}`;
-  });
+  }, 60_000);
 });

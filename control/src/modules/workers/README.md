@@ -18,7 +18,8 @@ frozen `WorkersPort` names only `pauseFor(tx, personId)`; `interruptAll(tenantId
 rest are members of the same object.
 
 ## Jobs (once per tenant: `job.run(deps, tenantId)`)
-`workers.reconcile` (*/5), `workers.poll_deployments` (every minute), `workers.kill_sweep` (every minute),
+`workers.reconcile` (*/5), `workers.poll_deployments` (every minute), `workers.kill_sweep` (every minute; also retries undelivered interrupts),
+`workers.recover` (every minute: re-attaches unfinished sessions after a restart, ADR 0112 §12),
 `workers.session_retention` (04:40 UTC, sessions deleted 30 days after the run ended; `configure({retentionDays})`
 down to 1).
 
