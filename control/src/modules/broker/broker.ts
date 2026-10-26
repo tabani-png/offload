@@ -1321,7 +1321,8 @@ export function createBroker(deps: Deps): Broker {
     revokeTokensFor,
     async stopRunsFor(tx, personId) {
       const tokens = await revokeTokensFor(tx, personId);
-      const pol = await tx`update overnight_policies set state = 'paused', updated_at = ${new Date(now())}
+      // A system pause (N3): no person paused it, so only an owner, admin or dept lead resumes it.
+      const pol = await tx`update overnight_policies set state = 'paused', paused_by = null, updated_at = ${new Date(now())}
         where owner_person_id = ${personId} and state = 'active'`;
       const workers = await deps.ports.workers.pauseFor(tx, personId);
       return { tokens, policies: pol.count, workers };
