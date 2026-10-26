@@ -134,7 +134,10 @@ export async function startControl(): Promise<Control> {
 }
 
 /** Render the whole app at `path`, signed in as `who`, on the real API. */
-export async function renderReal(c: Control, path: string, who: string, opts: { onRequest?: (method: string, path: string) => void } = {}) {
+export async function renderReal(
+  c: Control, path: string, who: string,
+  opts: { onRequest?: (method: string, path: string) => void; evidencePaging?: { pageSize: number; maxPages: number } } = {},
+) {
   const { api: inner } = await c.as(who);
   const seen = (m: string, p: string) => opts.onRequest?.(m, p);
   const api: ApiClient = {
@@ -146,7 +149,7 @@ export async function renderReal(c: Control, path: string, who: string, opts: { 
   };
   const router = createAppRouter(createMemoryHistory({ initialEntries: [path] }));
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  const utils = render(<App deps={{ api, now: c.now }} router={router} queryClient={queryClient} />);
+  const utils = render(<App deps={{ api, now: c.now, evidencePaging: opts.evidencePaging }} router={router} queryClient={queryClient} />);
   await settle();
   return { ...utils, api, router, queryClient };
 }

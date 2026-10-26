@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { act, cleanup, fireEvent } from "@testing-library/react";
 import { main, until } from "../helpers/render.tsx";
 import { renderReal, startControl, type Control } from "./real.tsx";
+import { CLEAR_REFUSED_WORDS } from "../../src/screens/Digest.tsx";
 
 // Kill-switch clearing rights on the real API (API.md "Clearing a kill switch", S2-07): the digest offers "Clear the
 // stop" only to someone the server lets clear it, and "Stop all sending" only to an owner or admin.
@@ -29,17 +30,25 @@ describe("CLEAR rights for the tenant stop", () => {
     await until(() => has("Stop all sending"), "stop button");
   });
 
-  test("KILL: a stop an owner set is not offered to an admin to clear (the server refuses it too), and the owner clears it", async () => {
+  test("KILL: an admin trying to clear a stop an owner set gets the server's refusal in plain words; the stop stays; the owner clears it", async () => {
+    // The kill-switch DTO (frozen schema) has no setter role and the server decides on the role recorded when the
+    // stop was set, so the web cannot know in advance: it offers the action and explains the refusal.
     const owner = await c.as("owner");
     await owner.api.post("/v1/kill-switches", { scope: "tenant", targetId: null, reason: "Audit week" });
-    const admin = await c.as("admin");
-    const refused = await admin.api.delete("/v1/kill-switches/tenant/null").catch((e: unknown) => e);
-    expect((refused as { code: string }).code).toBe("forbidden");
 
     await renderReal(c, "/digest", "admin");
     await until(() => main().textContent!.includes("All sending is stopped"), "stop banner");
-    expect(has("Clear the stop")).toBe(false);
     expect(has("Stop all sending")).toBe(false);
+    await until(() => has("Clear the stop"), "clear button for admin");
+    await act(async () => {
+      fireEvent.click(Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.startsWith("Clear the stop"))!);
+    });
+    await act(async () => {
+      fireEvent.submit(document.getElementById("clear-form") as HTMLFormElement);
+    });
+    await until(() => (document.querySelector("#clear-form [role=alert]")?.textContent ?? "").includes("only an owner"), "refusal words");
+    expect(document.querySelector("#clear-form [role=alert]")!.textContent).toBe(CLEAR_REFUSED_WORDS);
+    expect(await tenantActive()).toBe(true);
     cleanup();
 
     await renderReal(c, "/digest", "owner");

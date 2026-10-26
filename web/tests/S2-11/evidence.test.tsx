@@ -76,6 +76,25 @@ describe("EVIDENCE drill-down on the real API", () => {
     expect(small.page.nextCursor).toBeNull();
   });
 
+  test("EVIDENCE: when the loader stops before the last page the screen says the list is partial, labels its sum, and loads the rest on request", async () => {
+    const ev = await evidenceAll("owner", c.state.workflows.sales);
+    expect(ev.runs.length).toBe(18);
+    await renderReal(c, `/workflows/${c.state.workflows.sales}/evidence`, "owner", { evidencePaging: { pageSize: 5, maxPages: 2 } });
+    await until(() => bodyRows(table("Runs behind the hours")).length === 10, "first 10 runs");
+    const partial = () => main().querySelector("[data-partial=runs]");
+    expect(partial()?.textContent).toContain("Showing the first 10 runs");
+    const sum10 = ev.runs.slice(0, 10).reduce((a: number, r: Run) => a + r.savedSeconds, 0);
+    expect(main().textContent).toContain(`${hoursText(sum10)} saved in the first 10 runs listed`);
+    const more = () => Array.from(main().querySelectorAll("button")).find((b) => b.textContent?.startsWith("Load more runs"));
+    expect(more()).toBeTruthy();
+    await act(async () => { fireEvent.click(more()!); });
+    await until(() => bodyRows(table("Runs behind the hours")).length === 18, "all 18 runs");
+    expect(partial()).toBeNull();
+    expect(more()).toBeUndefined();
+    const all = ev.runs.reduce((a: number, r: Run) => a + r.savedSeconds, 0);
+    expect(main().textContent).toContain(`${hoursText(all)} saved in this list`);
+  });
+
   test("EVIDENCE: each run row matches the API exactly (ended, items, baseline, review time, saved), in API order", async () => {
     const ev = await evidenceAll("owner", c.state.workflows.sales);
     await renderReal(c, `/workflows/${c.state.workflows.sales}/evidence`, "owner");
