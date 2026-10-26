@@ -90,3 +90,21 @@ pass the floor in the tree of the cell it is shown in.
   makes hidden groups cross the floor together (two hidden cells summing to floor no longer need a complementary cell,
   so a visible neighbour reappears). Any floor with complementary suppression has this; it reveals only that a hidden
   sum crossed the floor, never a value.
+
+## 6. Figures combined across dimensions (S2-05 follow-ups)
+Each figure in an hours report is a sum over (department, job role, workflow) cells: company, department and job-role
+totals, the children cells, top workflows at each level. A reader can add and subtract any of them, across one response
+and across responses. Found on seeded data: company total − Sales − the listed "Invoice matching" workflow gave Legal's
+4-person hours, though each figure passed the floor alone. Rule: top workflows are added to a scope in rank order only
+while no linear combination of the figures it can be combined with isolates 1 to floor-1 people (`span.ts`: cells with
+the same membership form blocks; a combination supported on a set of small blocks exists iff the null-space columns
+on those blocks are dependent). A job role decides over its own figures, a department over its subtree (total, role
+cells, roles' lists), the company over everything shown, so a department's list still depends on its own data only.
+This also covers a scope's total minus one listed workflow (the rest being one person's other workflows).
+- A small_baseline anomaly is floored on that version's runners, not the workflow's (follow-up #17).
+- Single-sender baseline: when the only sender of a version's baseline is also the only runner in scope, member scope
+  still shows that person their own evidence; every other reader gets 422 group_floor, and group totals show the
+  baseline only inside sums over floor people (§5).
+- The nightly job stores the org hierarchy a snapshot was computed under (`hier_digest`, migration 0507). A person
+  changing department, a moved job role or a rename replaces the snapshot without an alert; a data edit under an
+  unchanged hierarchy is still a recompute_mismatch.

@@ -19,15 +19,16 @@ beforeAll(async () => {
   const t = s.h.a;
   const db = s.h.db.migrator;
   const ops = (await db`insert into departments (tenant_id, name) values (${t.id}, 'Ops') returning id`)[0]!.id as string;
-  const sales = await populate(s, t, { departmentId: t.departments.sales, size: 5 });
+  // Sales runs only the eleven (SMALL through populate), so no other figure of the company makes SMALL unsafe.
+  const sales = await populate(s, t, { departmentId: t.departments.sales, size: 5, workflowId: SMALL });
   const opsPeople = await populate(s, t, { departmentId: ops, size: 5 });
   await populate(s, t, { departmentId: t.departments.finance, size: 5 });
-  receipt(await sendObjects(s.h, sales[0]!.dev, [...BIG, SMALL].map((w) => baselineSample([600, 620, 640, 660, 680], { workflowId: w }))));
+  receipt(await sendObjects(s.h, sales[0]!.dev, BIG.map((w) => baselineSample([600, 620, 640, 660, 680], { workflowId: w }))));
   const runs = (w: string, sent: number, k: number) => {
     const run = runOutcome({ workflowId: w, endedAt: at("2026-10-22", 8 + (k % 12)), sent });
     return [run, reviewEvent(run.runId, { review: 10, at: at("2026-10-22", 21) })];
   };
-  for (const p of sales) receipt(await sendObjects(s.h, p.dev, [...BIG.flatMap((w, k) => runs(w, 20, k)), ...runs(SMALL, 1, 11)]));
+  for (const p of sales) receipt(await sendObjects(s.h, p.dev, BIG.flatMap((w, k) => runs(w, 20, k))));
   receipt(await sendObjects(s.h, opsPeople[0]!.dev, BIG.flatMap((w, k) => runs(w, 20, k))));
   owner = await asPrincipal(s.h, "owner");
 }, 60_000);

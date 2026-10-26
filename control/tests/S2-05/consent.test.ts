@@ -84,7 +84,7 @@ describe("CONSENT server-side re-check (ADR 0103 §2)", () => {
     expect(receipt(await sendObjects(s.h, dev, [wt])).rejected).toEqual({ [wt.id]: "feature_disabled" });
   });
 
-  test("CONSENT: with the default ports (no compliance module) nothing but notice_ack passes the gate", async () => {
+  test("CONSENT: with the default ports nothing but notice_ack passes the gate; an ack of an unpublished notice is invalid", async () => {
     const p = await addPerson(plain, plain.a, { departmentId: plain.a.departments.sales });
     const d = await addDevice(plain, plain.a, p);
     const run = runOutcome();
@@ -92,9 +92,10 @@ describe("CONSENT server-side re-check (ADR 0103 §2)", () => {
     const r = await sendObjects(plain, d, [ack, run]);
     expect(r.status).toBe(200);
     expect(r.json.accepted).toEqual([]);
-    // No module handles notice_ack yet (S2-08): retryable, so the Mac keeps it until one does.
+    // S2-08 now handles notice_ack. This ack names a notice that was never published: the object is invalid, not a
+    // server fault, so it is rejected for good (it used to come back as a retryable server_error, retried forever).
     expect(r.json.rejected).toEqual([
-      { id: ack.id, code: "server_error", retryable: true },
+      { id: ack.id, code: "validation_failed", retryable: false },
       { id: run.id, code: "consent_missing", retryable: false },
     ]);
   });
