@@ -1,0 +1,110 @@
+// De-personalisation check, fail closed: a playbook (or a notes edit, or a model's wording) that still holds a
+// person's name, an address, a phone, a link, a figure that is not one of the playbook's own counts, or the author's
+// name or company is refused. Findings carry the kind and the field path, never the value.
+import { EMAIL_RE, handleLeaks, HOST_RE, identityBase, identityHit, isCap, isPlaceholder, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
+import type { Playbook } from "./types.ts";
+
+export type LeakKind = "author" | "company" | "name" | "email" | "phone" | "link" | "number";
+
+export interface Leak {
+  kind: LeakKind;
+  /** Field path, e.g. "rules[2].text". */
+  path: string;
+}
+
+export class PlaybookLeakError extends Error {
+  /** `words`: the offending words of text the user just typed (notes); the message names them and says to reword.
+   * Never passed for text that came from mail or a model. */
+  constructor(readonly leaks: Leak[], words: readonly string[] = []) {
+    super(
+      words.length > 0
+        ? `the playbook kept a personal detail in notes: ${[...new Set(words)].slice(0, 5).map((w) => `"${w}"`).join(", ")}. Reword the note without it (write [name], {company} or {their_org} for a person or company); nothing was written`
+        : `the playbook kept a personal detail (${leaks.slice(0, 5).map((l) => `${l.kind} in ${l.path}`).join(", ")}${leaks.length > 5 ? ", ..." : ""}); nothing was written`,
+    );
+  }
+}
+
+const NUM_RE = /\d+(?:\.\d+)?/g;
+const LOCAL = new Set(["playbook.json", "playbook.md", "facts.md", "skill.md"]);
+
+/** Every word written in lower case in these texts: the vocabulary a capitalised word may come from. */
+export function lowerWords(texts: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const t of texts) for (const w of t.match(TOKEN_RE) ?? []) if (!isPlaceholder(w) && !isCap(w)) out.add(identityBase(w));
+  return out;
+}
+
+/** Leaks in one text field: contact patterns, figures that are not counts, and every word mask.ts identityHit names
+ * (the author, the company, a known contact in any case, or a capitalised word mid-sentence or never written in lower
+ * case in `vocab`): a name the identity set never saw (one a model added, or one from mail no longer here) is caught. */
+export function findTextLeaks(text: string, id: Identity, allowedNumbers: ReadonlySet<string>, path: string, vocab: ReadonlySet<string> = lowerWords([text]), words?: string[]): Leak[] {
+  const out: Leak[] = [];
+  /** One leak per kind; every offending word goes to `words` when the caller asks (the user's own notes only). */
+  const add = (kind: LeakKind, word: string) => {
+    words?.push(word);
+    if (!out.some((l) => l.kind === kind)) out.push({ kind, path });
+  };
+  for (const e of text.match(EMAIL_RE) ?? []) add("email", e);
+  for (const u of [...(text.match(URL_RE) ?? []), ...(text.match(WWW_RE) ?? []), ...(text.match(HOST_RE) ?? []).filter((h) => !LOCAL.has(h.toLowerCase()) && !/^\d+(?:\.\d+)+$/.test(h))]) add("link", u);
+  for (const p of (text.match(PHONE_RE) ?? []).filter((x) => x.replace(/\D/g, "").length >= 9)) add("phone", p);
+  for (const m of text.matchAll(NUM_RE)) {
+    const n = m[0];
+    if (allowedNumbers.has(n)) continue;
+    // Notes may say a small plain number ("under 100 words"); an id-shaped one ("#4821", "A-123", "12a") is refused.
+    const before = text.slice(Math.max(0, (m.index ?? 0) - 1), m.index ?? 0);
+    const after = text.slice((m.index ?? 0) + n.length, (m.index ?? 0) + n.length + 1);
+    if (path === "notes" && /^\d{1,3}$/.test(n) && !/[#\p{L}\d_+-]/u.test(before) && !/[\p{L}\d_-]/u.test(after)) continue;
+    add("number", n);
+  }
+  // Handles, snake_case names and paths: the same patterns maskContacts masks.
+  for (const h of handleLeaks(text)) add("name", h);
+  // One decision with maskText (identityHit): a word maskText would mask is a leak, and no other word is.
+  for (const mm of text.matchAll(TOKEN_RE)) {
+    const hit = identityHit(text, mm[0], mm.index ?? 0, id, vocab);
+    if (hit === "author" || hit === "company") add(hit, mm[0]);
+    else if (hit !== null) add("name", mm[0]);
+  }
+  return out;
+}
+
+/** Every number the playbook's own counts hold (the only figures its text may state, ADR 0005). */
+export function allowedNumbers(pb: Pick<Playbook, "stats" | "outcomes" | "cadence">): Set<string> {
+  const out = new Set<string>();
+  const walk = (v: unknown) => {
+    if (typeof v === "number" && Number.isFinite(v)) out.add(String(v));
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (typeof v === "object" && v !== null) Object.values(v).forEach(walk);
+  };
+  walk(pb.stats);
+  walk(pb.outcomes);
+  walk(pb.cadence);
+  return out;
+}
+
+/** Text fields of a playbook, with their paths. Warnings are fixed code text (kinds and paths, never content). */
+export function textFields(pb: Pick<Playbook, "message" | "rules" | "templates" | "skeletons" | "avoid" | "notes">): Array<[string, string]> {
+  const out: Array<[string, string]> = [["message", pb.message]];
+  pb.rules.forEach((r, i) => out.push([`rules[${i}].text`, r.text]));
+  pb.templates.forEach((t, i) => {
+    out.push([`templates[${i}].text`, t.text]);
+    t.slots.forEach((s, j) => out.push([`templates[${i}].slots[${j}].says`, s.says]));
+  });
+  pb.skeletons.forEach((s, i) => out.push([`skeletons[${i}]`, s]));
+  pb.avoid.forEach((a, i) => out.push([`avoid[${i}]`, a]));
+  out.push(["notes", pb.notes]);
+  return out;
+}
+
+/** All leaks of a playbook against an identity set. Empty = clean. */
+export function checkDepersonalised(pb: Playbook, id: Identity): Leak[] {
+  const nums = allowedNumbers(pb);
+  const fields = textFields(pb);
+  const vocab = lowerWords(fields.map(([, t]) => t));
+  return fields.flatMap(([path, text]) => findTextLeaks(text, id, nums, path, vocab));
+}
+
+/** Throws PlaybookLeakError on any leak (fail closed). */
+export function assertDepersonalised(pb: Playbook, id: Identity): void {
+  const leaks = checkDepersonalised(pb, id);
+  if (leaks.length > 0) throw new PlaybookLeakError(leaks);
+}

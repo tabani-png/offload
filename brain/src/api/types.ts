@@ -442,6 +442,15 @@ export interface DryRunInstanceDTO {
   estimate: { observedMinutes: number; reviewSeconds: number; savedMinutes: number };
   examplesUsed: string[];
   warnings: string[];
+  /** s19: present when the workflow has a messaging playbook: does this draft follow it (rules checked in code). */
+  playbook?: PlaybookVerdictDTO;
+}
+
+/** s19: "follows the playbook: yes / partly / no" with each checked rule. */
+export interface PlaybookVerdictDTO {
+  version: number;
+  verdict: "yes" | "partly" | "no";
+  rules: Array<{ id: string; text: string; pass: boolean }>;
 }
 
 export interface DryRunResponse {
