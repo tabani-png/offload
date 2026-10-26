@@ -1,12 +1,18 @@
 // s18 person-name masker (ADR 0010). Deterministic rules, no model: names from the run so far, the user's own name and
 // their contacts; honorific + name; greeting/role cue + name; given + family pairs; signatures; lone given names; email
 // local parts that equal a name. Common words, UI labels, months, products and organisations are left alone
-// (privacy/lexicon.ts). `NameMap.mask` gives stable per-run placeholders (<person:1>, <person:1.first>, <person:me>) so
-// a model can refer to people consistently; `unmask` restores them exactly, on the Mac. The map lives in memory only.
+// (privacy/lexicon.ts). `NameMap.mask` gives stable per-run placeholders (<person:qzkt.1>, <person:qzkt.1.first>,
+// <person:qzkt.me>; "qzkt" is the run's random tag) so a model can refer to people consistently; `unmask` restores them
+// exactly, on the Mac. The map lives in memory only. Placeholder-shaped text that arrives in the input (a notes cell, an
+// inbound message) carries no run tag: it becomes <name> before masking, so it can never restore to a real name.
+import { randomBytes } from "node:crypto";
 import { AMBIGUOUS_GIVEN, CLOSINGS, COMMON, FAMILY, GIVEN, GREETING_CUES, HONORIFICS, ORG, PARTICLES, PRODUCT, PROTECTED_PHRASES, ROLE_CUES, ROLE_MAILBOXES, STRONG_CUE_PAIRS, WEAK_CUES } from "./lexicon.ts";
 
-/** Every placeholder a NameMap writes. */
-export const PERSON_PLACEHOLDER_RE = /<person:(?:\d+|me)(?:\.[a-z]+)?(?:~\d+)?>/g;
+/** Every placeholder a NameMap writes: <person:TAG.N>, <person:TAG.N.first>, <person:TAG.me~2> (TAG = 4 letters). */
+export const PERSON_PLACEHOLDER_RE = /<person:[a-z]{4}\.(?:\d+|me)(?:\.[a-z]+)?(?:~\d+)?>/g;
+/** Anything shaped like a person placeholder, in any case, with or without a run tag (also after maskText turned its
+ * digits into <n>): what input text may carry to impersonate one. */
+const PERSON_LIKE_RE = /<\s*person\s*:[^\n>]{0,40}>+/gi;
 /** The grouping code's token for a name in stored text (grouping/normalize.ts NAME). */
 export const NAME_TOKEN = "<name>";
 
@@ -160,6 +166,8 @@ export class NameMap {
   private readonly regexes = new Map<string, RegExp>();
   private keptRes: RegExp[] = [];
   private next = 1;
+  /** This map's random run tag: input text cannot know it, so it cannot name a placeholder this map wrote. */
+  private readonly tag = [...randomBytes(4)].map((b) => String.fromCharCode(97 + (b % 26))).join("");
 
   constructor(o: NameMapOptions = {}) {
     for (const k of o.known ?? []) {
@@ -242,11 +250,11 @@ export class NameMap {
     if (person.id === "") person.id = String(this.next++);
     let ph: string;
     if (!person.bareUsed) {
-      ph = `<person:${person.id}>`;
+      ph = `<person:${this.tag}.${person.id}>`;
       person.bareUsed = true;
     } else {
-      ph = `<person:${person.id}.${part}>`;
-      for (let k = 2; this.toSurface.has(ph); k++) ph = `<person:${person.id}.${part}~${k}>`;
+      ph = `<person:${this.tag}.${person.id}.${part}>`;
+      for (let k = 2; this.toSurface.has(ph); k++) ph = `<person:${this.tag}.${person.id}.${part}~${k}>`;
     }
     this.toPlaceholder.set(surface, ph);
     this.toSurface.set(ph, surface);
@@ -332,9 +340,16 @@ export class NameMap {
     this.surfaces.set(local, { person, part: "email" });
   }
 
-  /** `text` with every person name replaced by its placeholder. Idempotent; placeholders already in the text stay. */
-  mask(text: string): string {
-    if (text === "") return text;
+  /** Placeholder-shaped text this map did not write becomes <name>: only the map's own placeholders survive. */
+  neutralise(text: string): string {
+    return text.includes("<") ? text.replace(PERSON_LIKE_RE, (m) => (this.toSurface.has(m) ? m : NAME_TOKEN)) : text;
+  }
+
+  /** `text` with every person name replaced by its placeholder. Idempotent: this map's placeholders already in the text
+   * stay; any other placeholder-shaped text (injected in the input) becomes <name>. */
+  mask(input: string): string {
+    if (input === "") return input;
+    const text = this.neutralise(input);
     this.learn(text);
     const prot = protectedRanges(text, this.keptRes);
     const spans: Array<{ start: number; end: number; found: string; person: Person; part: Part }> = [];
@@ -389,14 +404,15 @@ function protectedRanges(text: string, kept: readonly RegExp[]): Array<[number, 
   return out;
 }
 
-/** Placeholders -> the grouping token <name>; a run of them ("<name> <name>") becomes one. */
+/** Placeholders (any placeholder-shaped text) -> the grouping token <name>; a run of them ("<name> <name>") becomes one. */
 export function collapsePlaceholders(text: string): string {
-  return text.replace(PERSON_PLACEHOLDER_RE, NAME_TOKEN).replace(/<name>(?:[ \t]+<name>)+/g, NAME_TOKEN);
+  return text.replace(PERSON_LIKE_RE, NAME_TOKEN).replace(/<name>(?:[ \t]+<name>)+/g, NAME_TOKEN);
 }
 
-/** Placeholders a reply still carries after unmasking (the model invented them). */
+/** Names a reply still leaves unfilled after unmasking: any placeholder-shaped text (the model invented it, or echoed
+ * one from the input) and the <name> token. */
 export function unrestoredPlaceholders(text: string): string[] {
-  return [...new Set(text.match(PERSON_PLACEHOLDER_RE) ?? [])];
+  return [...new Set([...(text.match(PERSON_LIKE_RE) ?? []), ...(text.match(/<name>/g) ?? [])])];
 }
 
 /** Text for a note or a description: every person name becomes <name> (no numbering, no map kept). */
