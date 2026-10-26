@@ -358,6 +358,34 @@ final class ClaudeKeyController {
   }
 }
 
+extension ClaudeKeyFlow {
+  /// s29 review round 4: what the key screen draws below the field (lines and buttons that come and go).
+  struct Layout: Hashable, Sendable {
+    var message: String?
+    var saveAnyway: Bool
+    var checking: Bool
+  }
+
+  var layout: Layout { Layout(message: message, saveAnyway: canSaveWithoutChecking, checking: isChecking) }
+}
+
+/// s29 review round 4: the fixed-size first-run window fits its content. This signature changes whenever a row is
+/// added, removed or rewrapped, and the window refits after layout each time it does.
+struct OnboardingLayout: Hashable, Sendable {
+  var keyStep: Bool
+  var step: OnboardingStep
+  var key: ClaudeKeyFlow.Layout?
+  var note: String?
+  var permissionsNote: String
+  var chips: [Int]
+
+  static func of(flow: OnboardingFlow, showingKeyStep: Bool, keyFlow: ClaudeKeyFlow?, note: String?) -> OnboardingLayout {
+    OnboardingLayout(keyStep: showingKeyStep, step: flow.step, key: showingKeyStep ? keyFlow?.layout : nil, note: note,
+                     permissionsNote: flow.permissionsNote,
+                     chips: ContextStepState.Field.allCases.map { flow.context.suggestions($0).count })
+  }
+}
+
 /// s29 review round 2: where the dashboard shows the key settings. They need no brain, so they never wait for the
 /// dashboard's data: with data they sit on the Observing page; without it (the brain is down, the first load failed,
 /// nothing yet) every page shows them, with the other controls that need no brain.

@@ -481,19 +481,21 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     window.delegate = self
     window.center()
     // Each step is sized to its content; keep the top edge where it is when it changes.
-    stepWatch = model.$flow.map(\.step).removeDuplicates().dropFirst().sink { [weak self] _ in
-      DispatchQueue.main.async { self?.fitToContent() }
-    }
-    keyStepWatch = model.$showingKeyStep.removeDuplicates().dropFirst().sink { [weak self] _ in
-      DispatchQueue.main.async { self?.fitToContent() }
-    }
+    // s29 review round 4: refit on every change that adds, removes or rewraps a row (OnboardingLayout), not only on
+    // a step change: key errors, "Save without checking", the demo-week note, the permissions note, chips arriving.
+    let keyFlow: AnyPublisher<ClaudeKeyFlow?, Never> = model.claudeKey.map { $0.$flow.map(Optional.some).eraseToAnyPublisher() }
+      ?? Just(nil).eraseToAnyPublisher()
+    layoutWatch = Publishers.CombineLatest4(model.$flow, model.$showingKeyStep, model.$note, keyFlow)
+      .map { OnboardingLayout.of(flow: $0, showingKeyStep: $1, keyFlow: $3, note: $2) }
+      .removeDuplicates().dropFirst()
+      .sink { [weak self] _ in DispatchQueue.main.async { self?.fitToContent() } }
   }
 
-  private var stepWatch: AnyCancellable?
-  private var keyStepWatch: AnyCancellable?
+  private var layoutWatch: AnyCancellable?
 
   private func fitToContent() {
     guard let host = window.contentView else { return }
+    host.layoutSubtreeIfNeeded()
     let size = host.fittingSize
     var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
     frame.origin.x = window.frame.minX
