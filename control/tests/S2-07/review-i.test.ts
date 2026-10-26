@@ -3,7 +3,7 @@
 // gate transaction (pg_blocking_pids), as in review-e.test.ts. Both failed on 09ee4f3 with 40P01.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import type { Tx } from "../../src/db/pool.ts";
-import { approveToken, email, items, proposeOk, tx, WF2, world, type World } from "./setup.ts";
+import { approveToken, auditActions, email, items, proposeOk, tx, WF2, WF3, world, type World } from "./setup.ts";
 
 let w: World;
 const SLOW = 30_000;
@@ -128,4 +128,17 @@ describe("S2-07 follow-up review: lock order with the audit chain and person kil
     },
     SLOW,
   );
+
+  test("AUDIT: a kill whose queued audit events are never written rolls back whole (fail closed)", async () => {
+    const hash = await proposeOk(w, [email("i3@fund.com")], { workflowId: WF3 });
+    await approveToken(w, "lead", hash);
+    const before = (await auditActions(w)).length;
+    // revokeForKill queues its events for its caller; a caller that never calls flushAudits cannot commit.
+    const r = await settle(tx(w, (t) => w.broker.revokeForKill(t, "workflow", WF3, "kill switch")));
+    expect(r.ok).toBe(false);
+    expect((await items(w, hash))[0]!.token_id).not.toBeNull();
+    const [t] = await db()`select revoked_at from approval_tokens where tenant_id = ${w.t.id} and batch_hash = ${hash}`;
+    expect(t!.revoked_at).toBeNull();
+    expect((await auditActions(w)).length).toBe(before);
+  });
 });
