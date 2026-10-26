@@ -387,12 +387,13 @@ struct S14PlanTests {
     #expect(a.ours.title == "What Offload would do" && a.theirs.title.hasPrefix("What you did · "))
     #expect(a.theirs.rows[2].value == "filled, value not visible" && a.theirs.rows[2].hidden)
     #expect(a.theirs.rows[1].differs && !a.theirs.rows[0].differs && !a.theirs.rows[2].differs)
-    #expect(a.matchChip == "1 of 3 match" && a.matchLine == "1 of 3 fields the same = 33%" && a.matchRole == .needsYou)
+    // s10f (DESIGN-REVIEW-4 M6): the unreadable due date is left out of the count, not counted as a miss.
+    #expect(a.matchChip == "1 of 2 readable fields match" && a.matchLine == "1 of 2 readable fields the same = 50% · not readable: due date" && a.matchRole == .needsYou)
     #expect(a.ours.actions == ["Save bill"] && a.ours.text == nil)
     let b = c.items[1]
     #expect(b.matchRole == .done && b.ours.text == "Hi Sam, your refund is on its way." && b.ours.rows.isEmpty)
     #expect(b.ours.actions == ["Send reply", "Mark solved"] && b.warnings.count == 1)
-    #expect(c.totals == "3 of 5 the same = 60%" && c.trailing.hasPrefix("2 real examples from last week"))
+    #expect(c.totals == "3 of 4 readable fields the same across 2 examples = 75%" && c.trailing.hasPrefix("2 real examples from last week"))
   }
 
   @Test("HTTP: POST /workflows/:id/plan {variant} returns the detail with the plan you kept")
