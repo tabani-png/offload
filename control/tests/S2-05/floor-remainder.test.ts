@@ -140,14 +140,15 @@ describe("FLOOR small and empty children, job roles held elsewhere, top workflow
     expect((await owner.get(`/v1/metrics/adoption?scope=job_role:${ae}&${Q}`)).json.value).toEqual(SUPPRESSED);
   });
 
-  test("FLOOR: a department's top workflows never list a workflow whose company figure minus it covers 1 to floor-1 people", async () => {
+  test("FLOOR: a workflow is never listed both by the company and by a department when the difference is 1 to floor-1 people", async () => {
     const company = (await owner.get(`/v1/metrics/hours-saved?scope=company&${Q}`)).json;
     const sales = (await owner.get(`/v1/metrics/hours-saved?scope=department:${s.h.a.departments.sales}&${Q}`)).json;
     expect(sales.total.people).toBe(12);
     const inCompany = (company.topWorkflows as Array<{ workflowId: string }>).some((w) => w.workflowId === WF2);
     const inSales = (sales.topWorkflows as Array<{ workflowId: string }>).some((w) => w.workflowId === WF2);
-    // The company lists WF2 (6 people); Sales must not, or company minus Sales is the Finance person's WF2 seconds.
-    expect(inCompany).toBe(true);
-    expect(inSales).toBe(false);
+    // Company minus Sales would be the Finance person's WF2 seconds, so both may not list it. Since round 6 a department's
+    // list depends only on its own inputs: Sales (5 people) keeps WF2 and the company, with 1 person unaccounted, drops it.
+    expect(inSales).toBe(true);
+    expect(inCompany).toBe(false);
   });
 });
