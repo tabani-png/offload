@@ -5,8 +5,8 @@ depends_on: [s24-brief-runner (Keychain key rule), s25-standalone-install (Brain
 parallel_safe: true
 human_gated: false
 verify: bash slices/s29-byok-key/verify.sh
-paths_in_scope: [app/Sources/Core/ClaudeKey.swift, app/Sources/Core/BrainCheck.swift, app/Sources/Surfaces/ClaudeKeychain.swift, app/Sources/Surfaces/ClaudeKeyViews.swift, app/Sources/Surfaces/OnboardingWindow.swift, app/Sources/Surfaces/DashboardModel.swift, app/Sources/Surfaces/DashboardView.swift, app/Sources/App/OffloadApp.swift, app/build.sh (test list), slices/s25-standalone-install/verify.sh (key line), slices/s29-byok-key/**]
-paths_out_of_scope: [brain/**, engine/**, control/**, web/**, schemas/**, packages/**]
+paths_in_scope: [app/Sources/Core/ClaudeKey.swift, app/Sources/Core/BrainCheck.swift, app/Sources/Surfaces/ClaudeKeychain.swift, app/Sources/Surfaces/ClaudeKeyViews.swift, app/Sources/Surfaces/OnboardingWindow.swift, app/Sources/Surfaces/DashboardModel.swift, app/Sources/Surfaces/DashboardView.swift, app/Sources/App/OffloadApp.swift, app/build.sh (test list), brain/src/connectors/computer/claude.ts + brain/src/api/server.ts (review round 3: computer-use key loading only), slices/s25-standalone-install/verify.sh (key line), slices/s29-byok-key/**]
+paths_out_of_scope: [brain/** except the two key-loading lines below, engine/**, control/**, web/**, schemas/**, packages/**]
 ---
 
 # s29-byok-key
@@ -57,7 +57,10 @@ secret.
    sit on the Observing page; without it (brain down, first load failed, nothing yet) every page shows them under
    the empty state, with the no-key notice when there is no key, plus the other brain-free controls (the Claude
    screen-reading opt-in and Show logs). Quit, pause and permissions already live in the rail menu, outside the gate.
-10. **Check (CHECK)** - `Offload --brain-check` prints `key: set` or `key: missing`, never the key.
+10. **Computer use (BRAIN, review round 3)** - `anthropicMessages` resolves the key with the shared
+   `resolveAnthropicKey` (serve env + Keychain seam) and the captioner's host guard; with no key it refuses with a
+   sentence pointing to Settings instead of building an unauthenticated client. server.ts passes the serve env.
+11. **Check (CHECK)** - `Offload --brain-check` prints `key: set` or `key: missing`, never the key.
 
 ## Acceptance (tags = Swift test name prefixes in tests/S29Tests.swift, brain test name prefixes in tests/brain)
 - FORMAT, VALIDATE, FLOW, SETTINGS, LAUNCH, ONBOARD, CHECK, CANCEL, REPLACE, OFFLINE: Swift tests with a fake Keychain and a fake validator.

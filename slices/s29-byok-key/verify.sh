@@ -34,7 +34,7 @@ echo "== brain"
 [ -d "$BRAIN/node_modules/@anthropic-ai/sdk" ] || (cd "$BRAIN" && "$BUN" install --frozen-lockfile >/dev/null 2>&1) || fail "bun install failed"
 out="$(cd "$BRAIN" && TMPDIR="$T" "$BUN" test "$HERE/tests/brain" 2>&1)"; code=$?
 n="$(echo "$out" | sed -n 's/^ *\([0-9][0-9]*\) pass$/\1/p' | tail -1)"
-if [ $code -eq 0 ] && [ "${n:-0}" -ge 4 ]; then echo "BRAIN: $n passing"; else echo "$out" | grep -E "\(fail\)|error:" | head -10; fail "s29 brain key tests (exit $code, ${n:-0} passing)"; fi
+if [ $code -eq 0 ] && [ "${n:-0}" -ge 7 ]; then echo "BRAIN: $n passing"; else echo "$out" | grep -E "\(fail\)|error:" | head -10; fail "s29 brain key tests (exit $code, ${n:-0} passing)"; fi
 if [ "${S29_SKIP_BRAIN_SUITE:-0}" = 1 ]; then echo "brain suite: skipped (S29_SKIP_BRAIN_SUITE=1)"; else
   full="$(cd "$BRAIN" && TMPDIR="$T" "$BUN" test 2>&1)"; fcode=$?
   echo "$full" | grep -E "^ *[0-9]+ (pass|fail)$|^Ran [0-9]+ tests" | tail -3
@@ -50,6 +50,9 @@ done
 grep -q "claudeKeyEnvironment" "$S/App/OffloadApp.swift" || fail "OffloadApp does not launch the brain through BrainLaunch.claudeKeyEnvironment"
 grep -q "claudeKeyEnvironment" "$S/Core/BrainCheck.swift" || fail "--brain-check does not launch the brain through BrainLaunch.claudeKeyEnvironment"
 grep -q "checkLine" "$S/Core/BrainCheck.swift" || fail "--brain-check does not print the key line"
+# Review round 3: computer use resolves the key through the shared resolver, with the serve env.
+grep -q "anthropicMessages({ env" "$BRAIN/src/api/server.ts" || fail "server.ts builds the computer-use client without the serve env (no Keychain reference)"
+grep -q "resolveAnthropicKey" "$BRAIN/src/connectors/computer/claude.ts" || fail "computer use does not use the shared resolveAnthropicKey"
 grep -q "kSecAttrAccess\b\|kSecAttrAccess as" "$S/Surfaces/ClaudeKeychain.swift" 2>/dev/null || fail "the Keychain item has no access list (the brain's security read would prompt)"
 # A real-looking key in anything this slice added (older slices keep their own sentinel strings; ours are built by
 # concatenation and do not match).
@@ -79,7 +82,10 @@ slice_files --allow-skip "$BASE"; scope_rc=$?
 case $scope_rc in
   0) while IFS= read -r p; do
        [ -n "$p" ] || continue
-       case "$p" in brain/*|engine/*|control/*|web/*|schemas/*|packages/*) fail "out-of-scope path changed: $p" ;; esac
+       case "$p" in
+         brain/src/connectors/computer/claude.ts|brain/src/api/server.ts) ;;   # review round 3: key loading only
+         brain/*|engine/*|control/*|web/*|schemas/*|packages/*) fail "out-of-scope path changed: $p" ;;
+       esac
      done <<< "$SLICE_FILES"
      echo "scope checked ($(printf '%s\n' "$SLICE_FILES" | grep -c .) files)" ;;
   3) echo "scope: SKIPPED ($SLICE_ERROR)" ;;

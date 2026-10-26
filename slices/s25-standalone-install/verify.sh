@@ -131,7 +131,8 @@ du -sh "$C/Contents/Helpers/bun" "$C/Contents/Helpers/claude" "$C/Contents/Resou
 
 echo "== scope"
 . "$ROOT/scripts/lib/slice-changes.sh"
-slice_files --allow-skip "$BASE"; scope_rc=$?
+# Only s25's own commits (later slices that merge on top may touch other paths under their own contracts).
+SLICE_GREP='^[a-z]+\(s25-standalone-install\)' slice_files --allow-skip "$BASE"; scope_rc=$?
 case $scope_rc in
   0) while IFS= read -r p; do
        [ -n "$p" ] || continue
