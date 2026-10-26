@@ -310,13 +310,107 @@ const normKey = (s: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+/** I6: a value is exactly what the source shows (only surrounding spaces are dropped): sign, symbols, separators and
+ * zeros kept. A value that is empty, multi-line or too long is not known (null): its row is skipped, never altered. */
 const cleanValue = (v: unknown): string | null => {
   if (typeof v === "number" && Number.isFinite(v)) return String(v);
   if (typeof v === "boolean") return String(v);
   if (typeof v !== "string") return null;
-  const t = v.normalize("NFC").replace(/\s+/g, " ").trim();
-  return t === "" || t.length > MAX_VALUE ? null : t;
+  const t = v.trim();
+  return t === "" || t.length > MAX_VALUE || /[\r\n]/.test(t) ? null : t;
 };
+
+/** JSON with every number turned into a string of its own text (25.50 stays "25.50", 1e3 stays "1e3", -0.0 stays). */
+function quoteNumbers(t: string): string {
+  let out = "";
+  let inStr = false;
+  for (let i = 0; i < t.length; ) {
+    const c = t[i]!;
+    if (inStr) {
+      out += c;
+      if (c === "\\") {
+        out += t[i + 1] ?? "";
+        i += 2;
+        continue;
+      }
+      if (c === '"') inStr = false;
+      i += 1;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      out += c;
+      i += 1;
+      continue;
+    }
+    if (c === "-" || (c >= "0" && c <= "9")) {
+      const m = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(t.slice(i, i + 400));
+      if (m !== null) {
+        out += JSON.stringify(m[0]);
+        i += m[0].length;
+        continue;
+      }
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
+/** Context words that, at the start of a text line without a ":" or "=", still declare a report or filter. */
+const TEXT_DECLARATIONS = ["report", "insight", "dashboard", "period", "date range", "time range", "timeframe"];
+
+/**
+ * s27 round 7: a TEXT answer (screen text, a plain-text connector answer) as the same structure a JSON answer gives,
+ * so it goes through the same pipeline and invariants: "Label: value" / "Label = value" lines and "Label value" lines
+ * for the wanted fields and the context words become one object; a table (header of labels, cells split by | or
+ * tabs) becomes its rows. Values are kept exactly as shown.
+ */
+function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): Obj {
+  const lines = text
+    .split("\n")
+    .map((l) => {
+      const ax = /^AX[A-Za-z]+\s+"(.*)"(?:\s*=\s*"(.*)")?\s*$/.exec(l.trim());
+      return (ax === null ? l : ax[2] === undefined ? ax[1]! : `${ax[1]} = ${ax[2]}`).replace(/\s+$/, "").replace(/^\s+/, "");
+    })
+    .filter((l) => l !== "");
+  const obj: Obj = {};
+  const rows: Obj[] = [];
+  const put = (k: string, v: string) => {
+    if (!Object.hasOwn(obj, k)) obj[k] = v;
+  };
+  const words = [...new Set([...fields.flatMap((f) => [f.sourceLabel, f.label]), ...TEXT_DECLARATIONS])].sort((a, b) => b.length - a.length);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const head = cellsOf(line);
+    if (head !== null && head.length >= 2 && head.every((c) => plainLabel(c) !== null)) {
+      // A table: every following line with the same number of cells is a row; cells kept exactly.
+      let j = i + 1;
+      for (; j < lines.length; j++) {
+        const raw = lines[j]!.includes("|") ? lines[j]!.split("|") : lines[j]!.includes("\t") ? lines[j]!.split("\t") : null;
+        if (raw === null || raw.length !== head.length) break;
+        rows.push(Object.fromEntries(head.map((h, k) => [h, raw[k]!.trim()])));
+      }
+      i = j - 1;
+      continue;
+    }
+    const kv = /^([A-Za-z][A-Za-z _-]{0,39}?)\s*[:=]\s*(.*)$/.exec(line);
+    if (kv !== null) {
+      put(kv[1]!.trim(), kv[2]!);
+      continue;
+    }
+    // "Label value": a wanted field or a context word, then a space, then the value exactly (a leading sign is kept).
+    for (const w of words) {
+      const m = new RegExp(`^${escapeRe(w)}(?![\\p{L}\\p{N}])\\s+(\\S.*)$`, "iu").exec(line);
+      if (m !== null) {
+        put(w, m[1]!);
+        break;
+      }
+    }
+  }
+  return rows.length > 0 ? { ...obj, rows } : obj;
+}
+
 
 function flat(o: Record<string, unknown>, depth = 0): Map<string, unknown> {
   const out = new Map<string, unknown>();
@@ -492,70 +586,53 @@ export function readValues(
   query?: ReadQueryDTO,
 ): ReadOutcome {
   const allMissing = () => fields.map((f) => f.label);
-  let json: unknown;
-  let isJson = false;
+  let answer: unknown;
+  let textual = false;
   try {
-    json = JSON.parse(text.trim());
-    isJson = json !== null && typeof json === "object";
+    answer = JSON.parse(quoteNumbers(text.trim()));
+    if (answer === null || typeof answer !== "object") throw new Error("not an object");
   } catch {
-    isJson = false;
+    // Text answers go through the SAME pipeline and invariants as JSON (round 7).
+    answer = textAnswer(text, fields);
+    textual = true;
   }
-  if (isJson) {
-    // 1. context first, over the whole answer (I1, I4).
-    if (query !== undefined) {
-      const conflict = conflictOf(declarations(json), query);
-      if (conflict !== null) return { kind: "wrong_context", reason: conflict };
-    }
-    // 2. candidate collections; 3. pick over all rows (best field match, how many rows reach it, shallower, order).
-    const { all, more } = collections(json);
-    const wanted = fields.map((f) => [normKey(f.sourceLabel), normKey(f.label)] as const);
-    const hits = (f: Map<string, unknown>) => wanted.filter(([a, b]) => f.get(a) != null || f.get(b) != null).length;
-    let best: { c: Collection; flats: Array<Map<string, unknown>>; top: number; count: number } | undefined;
-    for (const c of all) {
-      const flats = c.rows.map((r) => flat(r));
-      const top = Math.max(0, ...flats.map(hits));
-      if (top === 0) continue;
-      const count = flats.filter((f) => hits(f) === top).length;
-      if (best === undefined || top > best.top || (top === best.top && (count > best.count || (count === best.count && (c.depth < best.c.depth || (c.depth === best.c.depth && c.order < best.c.order)))))) best = { c, flats, top, count };
-    }
-    const extra = more ? { more: true as const } : {};
-    if (best === undefined) return emptyCollection(json) ? { kind: "empty", ...extra } : { kind: "unreadable", reason: `no rows with ${allMissing().join(", ")}`, missing: allMissing() };
-    // 4. each row: complete = row (I2); else skipped with what it lacks (I3). Missing, null, empty or oversized all
-    //    mean "not known": skipped, never guessed.
-    const rows: ValueRow[] = [];
-    const skipped: SkippedRow[] = [];
-    for (const f of best.flats) {
-      const row: ValueRow = [];
-      const lacks: string[] = [];
-      fields.forEach((fd, i) => {
-        const v = cleanValue(f.get(wanted[i]![0]) ?? f.get(wanted[i]![1]));
-        if (v === null) lacks.push(fd.label);
-        else row.push([fd.label, v]);
-      });
-      if (lacks.length === 0) rows.push(row);
-      else skipped.push({ missing: lacks });
-    }
-    return { kind: "ok", rows, skipped, ...extra };
+  // 1. context first, over the whole answer (I1, I4).
+  if (query !== undefined) {
+    const conflict = conflictOf(declarations(answer), query);
+    if (conflict !== null) return { kind: "wrong_context", reason: conflict };
   }
-  const lines = text
-    .split("\n")
-    .map((l) => l.replace(/^AX[A-Za-z]+\s+/, "").replace(/"/g, " ").replace(/\s+/g, " ").trim())
-    .filter((l) => l !== "");
-  const row: ValueRow = [];
-  const missing: string[] = [];
-  for (const fd of fields) {
-    const re = new RegExp(`^${escapeRe(fd.sourceLabel)}(?![\\p{L}\\p{N}])\\s*[:=|\\-]?\\s*(.*)$`, "iu");
-    let v: string | null = null;
-    for (const l of lines) {
-      const m = re.exec(l);
-      if (m === null) continue;
-      v = cleanValue((m[1] ?? "").replace(/^=\s*/, ""));
-      if (v !== null) break;
-    }
-    if (v === null) missing.push(fd.label);
-    else row.push([fd.label, v]);
+  // 2. candidate collections; 3. pick over all rows (best field match, how many rows reach it, shallower, order).
+  const { all, more } = collections(answer);
+  const wanted = fields.map((f) => [normKey(f.sourceLabel), normKey(f.label)] as const);
+  const hits = (f: Map<string, unknown>) => wanted.filter(([a, b]) => f.get(a) != null || f.get(b) != null).length;
+  let best: { c: Collection; flats: Array<Map<string, unknown>>; top: number; count: number } | undefined;
+  for (const c of all) {
+    const flats = c.rows.map((r) => flat(r));
+    const top = Math.max(0, ...flats.map(hits));
+    if (top === 0) continue;
+    const count = flats.filter((f) => hits(f) === top).length;
+    if (best === undefined || top > best.top || (top === best.top && (count > best.count || (count === best.count && (c.depth < best.c.depth || (c.depth === best.c.depth && c.order < best.c.order)))))) best = { c, flats, top, count };
   }
-  return missing.length === 0 ? { kind: "ok", rows: [row], skipped: [] } : { kind: "unreadable", reason: `did not show ${missing.join(", ")}`, missing };
+  const extra = more ? { more: true as const } : {};
+  if (best === undefined) {
+    if (!textual && emptyCollection(answer)) return { kind: "empty", ...extra };
+    return { kind: "unreadable", reason: textual ? `did not show ${allMissing().join(", ")}` : `no rows with ${allMissing().join(", ")}`, missing: allMissing() };
+  }
+  // 4. each row: complete = row (I2), values exactly as shown (I6); else skipped with what it lacks (I3).
+  const rows: ValueRow[] = [];
+  const skipped: SkippedRow[] = [];
+  for (const f of best.flats) {
+    const row: ValueRow = [];
+    const lacks: string[] = [];
+    fields.forEach((fd, i) => {
+      const v = cleanValue(f.get(wanted[i]![0]) ?? f.get(wanted[i]![1]));
+      if (v === null) lacks.push(fd.label);
+      else row.push([fd.label, v]);
+    });
+    if (lacks.length === 0) rows.push(row);
+    else skipped.push({ missing: lacks });
+  }
+  return { kind: "ok", rows, skipped, ...extra };
 }
 
 // ---------- dry run: a past instance filled from its source ----------
