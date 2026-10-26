@@ -235,7 +235,8 @@ struct ClaudeKeyFlow: Equatable, Sendable, CustomStringConvertible, CustomDebugS
   mutating func remove(store: ClaudeKeyStore) {
     do {
       try store.remove()
-      status = .missing
+      // Read back: Settings says what the Keychain holds, never what we assume.
+      status = store.status()
       phase = .idle
       text = ""
       pending = nil
@@ -259,10 +260,12 @@ struct ClaudeKeyFlow: Equatable, Sendable, CustomStringConvertible, CustomDebugS
   private mutating func save(_ key: String, store: ClaudeKeyStore) {
     do {
       try store.save(key, last4: ClaudeKeyFormat.last4(key))
-      status = .set(last4: ClaudeKeyFormat.last4(key))
+      status = store.status()
       phase = .saved
     } catch {
-      phase = .failed(Self.sentence(error, fallback: "The Keychain did not save the key. Nothing was changed."))
+      // The store updates in place, so a refused write leaves the old key (and its status) as they were.
+      status = store.status()
+      phase = .failed(Self.sentence(error, fallback: "The Keychain did not save the key. Your old key is unchanged."))
     }
     pending = nil
     text = ""
@@ -273,6 +276,85 @@ struct ClaudeKeyFlow: Equatable, Sendable, CustomStringConvertible, CustomDebugS
     case .failed(let m)?, .invalid(let m)?: return m
     case nil: return fallback
     }
+  }
+}
+
+/// s29 review round 1: owns the Anthropic check as a task plus a submission generation, so Cancel, Skip for now,
+/// Remove or a newer submit makes a late answer stale: it is dropped, nothing is saved and `onChange` (the brain
+/// restart) does not fire. `onChange` fires only when the stored status really changed. Shared by the first-run
+/// window and Settings through ClaudeKeyModel.
+@MainActor
+final class ClaudeKeyController {
+  private(set) var flow: ClaudeKeyFlow { didSet { onFlow?(flow) } }
+  /// Every flow change (the SwiftUI wrapper republishes it).
+  var onFlow: ((ClaudeKeyFlow) -> Void)?
+  /// The stored key changed (saved or removed): restart the brain, update the notice.
+  var onChange: ((ClaudeKeyStatus) -> Void)?
+  private let store: ClaudeKeyStore
+  private let validator: ClaudeKeyValidator
+  private var generation = 0
+  private var task: Task<Void, Never>?
+
+  init(store: ClaudeKeyStore, validator: ClaudeKeyValidator) {
+    self.store = store
+    self.validator = validator
+    flow = ClaudeKeyFlow(status: store.status())
+  }
+
+  func beginReplace() { stopCheck(); flow.beginReplace() }
+  func edit(_ s: String) { flow.edit(s) }
+
+  /// Cancel, and "Skip for now": the pending check (if any) is cancelled and its answer will be ignored.
+  func cancel() {
+    stopCheck()
+    flow.cancel()
+  }
+
+  /// Starts the check. The returned task is for tests; the UI does not wait on it.
+  @discardableResult
+  func submit() -> Task<Void, Never>? {
+    guard !flow.isChecking else { return nil }
+    stopCheck()
+    guard let key = flow.begin() else { return nil }
+    let mine = generation
+    let validator = validator
+    let t = Task { [weak self] in
+      let answer = await validator.check(key)
+      guard let self, !Task.isCancelled, mine == self.generation else { return }
+      self.task = nil
+      self.write { $0.apply(answer, key: key, store: self.store) }
+    }
+    task = t
+    return t
+  }
+
+  func saveWithoutChecking() { write { $0.saveWithoutChecking(store: store) } }
+
+  func remove() {
+    stopCheck()
+    if flow.isChecking { flow.cancel() }
+    write { $0.remove(store: store) }
+  }
+
+  func refresh() { flow.refresh(store.status()) }
+
+  /// Snapshots.
+  func preview(_ f: ClaudeKeyFlow) { flow = f }
+
+  private func stopCheck() {
+    generation += 1
+    task?.cancel()
+    task = nil
+  }
+
+  private func write(_ change: (inout ClaudeKeyFlow) -> Void) {
+    let before = flow
+    var f = flow
+    change(&f)
+    flow = f
+    // A key was written (even one with the same last four) or the stored status changed.
+    let wrote = f.phase == .saved && before.phase != .saved
+    if wrote || f.status != before.status { onChange?(f.status) }
   }
 }
 

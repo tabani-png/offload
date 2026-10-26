@@ -18,19 +18,22 @@ struct ClaudeKeychain: ClaudeKeyStore {
   func save(_ key: String, last4: String) throws {
     let v = ClaudeKeyFormat.trimmed(key)
     if let p = ClaudeKeyFormat.problem(v) { throw SecretStoreError.invalid(p) }
-    // Replace = delete, then add: the new item gets a fresh access list.
-    let gone = SecItemDelete(query as CFDictionary)
-    guard gone == errSecSuccess || gone == errSecItemNotFound else {
-      throw SecretStoreError.failed("The Keychain did not let Offload replace the old key (code \(gone)). Nothing was changed.")
+    // Replace = update in place (review round 1): a refused update leaves the working key exactly as it was. The
+    // item keeps the access list it was created with. Only a missing item is added, with the access list below.
+    let change: [String: Any] = [
+      kSecValueData as String: Data(v.utf8),
+      kSecAttrComment as String: last4,
+      kSecAttrLabel as String: "Offload: Claude API key",
+    ]
+    var status = SecItemUpdate(query as CFDictionary, change as CFDictionary)
+    if status == errSecItemNotFound {
+      var add = query
+      for (k, value) in change { add[k] = value }
+      if let access = Self.access() { add[kSecAttrAccess as String] = access }
+      status = SecItemAdd(add as CFDictionary, nil)
     }
-    var add = query
-    add[kSecValueData as String] = Data(v.utf8)
-    add[kSecAttrLabel as String] = "Offload: Claude API key"
-    add[kSecAttrComment as String] = last4
-    if let access = Self.access() { add[kSecAttrAccess as String] = access }
-    let status = SecItemAdd(add as CFDictionary, nil)
     guard status == errSecSuccess else {
-      throw SecretStoreError.failed("The Keychain did not save the key (code \(status)). Nothing was sent.")
+      throw SecretStoreError.failed("The Keychain did not save the key (code \(status)). Your old key is unchanged.")
     }
   }
 
@@ -78,49 +81,35 @@ final class MemoryClaudeKeyStore: ClaudeKeyStore, @unchecked Sendable {
   func status() -> ClaudeKeyStatus { lock.withLock { tail.map { .set(last4: $0) } ?? .missing } }
 }
 
-/// Main-actor wrapper around ClaudeKeyFlow, shared by the first-run window and the dashboard's Settings.
-/// `onChange` fires after a key is saved or removed (the app delegate restarts the brain and updates the notice).
+/// Main-actor SwiftUI wrapper around ClaudeKeyController (Core), shared by the first-run window and Settings.
+/// `onChange` fires after a key is really saved or removed (the app delegate restarts the brain and updates the
+/// notice); a cancelled or stale check never fires it.
 @MainActor
 final class ClaudeKeyModel: ObservableObject {
   @Published private(set) var flow: ClaudeKeyFlow
-  private let store: ClaudeKeyStore
-  private let validator: ClaudeKeyValidator
-  var onChange: ((ClaudeKeyStatus) -> Void)?
+  private let controller: ClaudeKeyController
+
+  var onChange: ((ClaudeKeyStatus) -> Void)? {
+    get { controller.onChange }
+    set { controller.onChange = newValue }
+  }
 
   init(store: ClaudeKeyStore, validator: ClaudeKeyValidator = AnthropicKeyValidator()) {
-    self.store = store
-    self.validator = validator
-    flow = ClaudeKeyFlow(status: store.status())
+    controller = ClaudeKeyController(store: store, validator: validator)
+    flow = controller.flow
+    controller.onFlow = { [weak self] f in self?.flow = f }
   }
 
   var status: ClaudeKeyStatus { flow.status }
 
-  func beginReplace() { flow.beginReplace() }
-  func cancel() { flow.cancel() }
-  func edit(_ s: String) { flow.edit(s) }
-
-  /// Checks the typed key with Anthropic and saves it when it works.
-  func submit() async {
-    guard let key = flow.begin() else { return }
-    let before = flow.status
-    let answer = await validator.check(key)
-    flow.apply(answer, key: key, store: store)
-    if flow.status != before || flow.phase == .saved { onChange?(flow.status) }
-  }
-
-  func saveWithoutChecking() {
-    flow.saveWithoutChecking(store: store)
-    if flow.phase == .saved { onChange?(flow.status) }
-  }
-
-  func remove() {
-    let before = flow.status
-    flow.remove(store: store)
-    if flow.status != before { onChange?(flow.status) }
-  }
-
-  func refresh() { flow.refresh(store.status()) }
-
+  func beginReplace() { controller.beginReplace() }
+  func cancel() { controller.cancel() }
+  func edit(_ s: String) { controller.edit(s) }
+  /// Checks the typed key with Anthropic and saves it when it works (cancel-safe).
+  func submit() { controller.submit() }
+  func saveWithoutChecking() { controller.saveWithoutChecking() }
+  func remove() { controller.remove() }
+  func refresh() { controller.refresh() }
   /// Snapshots: show a given state without a store round trip.
-  func preview(_ f: ClaudeKeyFlow) { flow = f }
+  func preview(_ f: ClaudeKeyFlow) { controller.preview(f) }
 }

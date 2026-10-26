@@ -48,8 +48,7 @@ final class OnboardingModel: ObservableObject {
 
   /// ↩ or Save key on the key screen: check with Anthropic, save when it works.
   func submitKey() {
-    guard let k = claudeKey, !k.flow.isChecking else { return }
-    Task { await k.submit() }
+    claudeKey?.submit()
   }
 
   /// Skip for now: no key, Claude stays off (the dashboard says where to add one).

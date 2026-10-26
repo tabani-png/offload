@@ -94,13 +94,11 @@ struct ClaudeKeySettingsSection: View {
             }
           }
           if model.flow.isEntering {
-            ClaudeKeyField(model: model) { Task { await model.submit() } }
+            ClaudeKeyField(model: model) { model.submit() }
             HStack(spacing: Tokens.Space.s8) {
               Spacer()
               SecondaryButton(title: "Cancel") { model.cancel() }
-              PrimaryButton(title: model.flow.isChecking ? "Checking…" : ClaudeKeyStep.saveTitle) {
-                Task { await model.submit() }
-              }
+              PrimaryButton(title: model.flow.isChecking ? "Checking…" : ClaudeKeyStep.saveTitle) { model.submit() }
               .disabled(model.flow.isChecking)
             }
           } else if case .failed(let m) = model.flow.phase {
