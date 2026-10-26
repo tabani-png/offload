@@ -165,3 +165,14 @@ The default digest day is `digestDayOf`: the local calendar day, or the next one
   so its digest window, its month and its outcome follow the platform's start.
 - `offload_report` says the summary is recorded with the run (the run DTO shows it); the digest schema has no field
   for it.
+
+## 18. Worker questions reach a person (operator-approved schema change, 2026-10-26)
+The operator approved adding `questions` to two frozen Stage 2 schemas on 2026-10-26 (PR #19, Codex on 86d4dd0):
+- `worker-run.schema.json`: `questions`, a list of `{question, askedAt}` (at most 20, oldest first).
+- `digest.schema.json`: `questions`, a list of `{runId, workflowId, question, askedAt}`: every question the person's
+  workers asked in the digest window, by the time asked (a run still running included), at most 200.
+Both are optional properties (`additionalProperties` stays false), so earlier fixtures stay valid; the control plane
+always sends them. Each item carries its run, workflow, text and time so a chat surface can show it as a message.
+The time is `worker_runs.question_asked_at` (migration 0907), written by the same statement as `questions`, in the
+same order. `offload_need_human` tells the agent a person will see the question only after that statement stored it;
+the 21st question of a run is not stored and the agent is told so (`limit_reached`).

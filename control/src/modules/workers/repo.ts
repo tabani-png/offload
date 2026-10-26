@@ -65,7 +65,8 @@ export interface RunRow {
   costCents: number;
   budgetCents: number;
   summary: string | null;
-  questions: string[];
+  /** offload_need_human questions, oldest first (at most 20). */
+  questions: Array<{ question: string; askedAt: number }>;
   sessionRef: string;
   deploymentRunRef: string | null;
   interruptSentAt: number | null;
@@ -132,7 +133,7 @@ export function runRow(r: Row): RunRow {
     costCents: Number(r.cost_cents),
     budgetCents: Number(r.budget_cents),
     summary: (r.summary as string | null) ?? null,
-    questions: (r.questions as string[]) ?? [],
+    questions: ((r.questions as string[]) ?? []).map((question, i) => ({ question, askedAt: Number((r.question_asked_at as Array<number | string> | undefined)?.[i] ?? 0) })),
     sessionRef: r.session_ref as string,
     deploymentRunRef: (r.deployment_run_ref as string | null) ?? null,
     interruptSentAt: ms(r.interrupt_sent_at as Date | null),
@@ -194,5 +195,6 @@ export async function runDto(tx: Tx, r: RunRow) {
     batchHashes: hashes.map((h: { batch_hash: string }) => h.batch_hash).slice(0, 50),
     summary: r.summary,
     sessionRef: r.sessionRef,
+    questions: r.questions,
   };
 }

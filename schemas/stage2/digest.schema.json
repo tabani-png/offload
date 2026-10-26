@@ -156,6 +156,37 @@
     },
     "totalCostCents": {
       "$ref": "common.schema.json#/$defs/cents"
+    },
+    "questions": {
+      "description": "Questions the person's cloud workers asked in the digest window, oldest first. Operator-approved addition 2026-10-26 (ADR 0112 \u00a718).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "runId",
+          "workflowId",
+          "question",
+          "askedAt"
+        ],
+        "properties": {
+          "runId": {
+            "$ref": "common.schema.json#/$defs/ulid"
+          },
+          "workflowId": {
+            "$ref": "common.schema.json#/$defs/uuid"
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "askedAt": {
+            "$ref": "common.schema.json#/$defs/tsMs"
+          }
+        }
+      },
+      "maxItems": 200
     }
   }
 }

@@ -23,6 +23,8 @@ export interface Digest {
   trips: Array<{ policyId: string; reason: string }>;
   suggestions: Array<{ title: string; class: string; estimatedMinutes: number; label: "estimated" }>;
   totalCostCents: number;
+  /** Questions the person's cloud workers asked in the window (offload_need_human), oldest first. */
+  questions: Array<{ runId: string; workflowId: string; question: string; askedAt: number }>;
 }
 
 function realDay(day: string): boolean {
@@ -81,6 +83,14 @@ export async function buildDigest(tx: Tx, _deps: Deps, personId: string, day: st
       and r.started_at >= ${new Date(from)} and r.started_at < ${new Date(to)} order by b.at limit 200`;
   const trips = await tx`select distinct t.policy_id, t.reason from worker_run_trips t join worker_runs r on r.tenant_id = t.tenant_id and r.id = t.run_id
     where r.runner_person_id = ${personId} and r.started_at >= ${new Date(from)} and r.started_at < ${new Date(to)} order by t.policy_id, t.reason limit 50`;
+  // Every question asked in the window, by the time it was asked (a run still running included).
+  const asked = await tx`select r.id, w.workflow_id, q.question, t.asked_at
+      from worker_runs r join workers w on w.tenant_id = r.tenant_id and w.id = r.worker_id,
+        jsonb_array_elements_text(r.questions) with ordinality as q(question, n)
+        join jsonb_array_elements_text(r.question_asked_at) with ordinality as t0(asked_at, n) on t0.n = q.n,
+        lateral (select t0.asked_at::bigint as asked_at) t
+    where r.runner_person_id = ${personId} and t.asked_at >= ${from} and t.asked_at < ${to}
+    order by t.asked_at, r.id, q.n limit 200`;
   return {
     personId,
     day,
@@ -91,6 +101,12 @@ export async function buildDigest(tx: Tx, _deps: Deps, personId: string, day: st
     // Tonight's suggestions come from the person's Mac in a later sync kind (ADR 0112 §9).
     suggestions: [],
     totalCostCents: Number(total!.c),
+    questions: asked.map((a: Record<string, unknown>) => ({
+      runId: a.id as string,
+      workflowId: a.workflow_id as string,
+      question: a.question as string,
+      askedAt: Number(a.asked_at),
+    })),
   };
 }
 
@@ -108,6 +124,7 @@ export function digestText(d: Digest): string {
     ...[...outcomes.entries()].sort().map(([o, n]) => `  ${o}: ${n}`),
     `${plural(d.waiting.length, "batch", "batches")} waiting for your approval (${plural(d.waiting.reduce((s, w) => s + w.items, 0), "item")}).`,
     `${plural(d.autoCommitted.reduce((s, a) => s + a.items, 0), "item")} approved by an overnight policy.`,
+    ...(d.questions.length === 0 ? [] : [`${plural(d.questions.length, "question")} from your workers:`, ...d.questions.map((q) => `  - ${q.question}`)]),
     d.trips.length === 0 ? "No circuit breaker tripped." : `${plural(d.trips.length, "circuit breaker trip")}: ${d.trips.map((t) => t.reason).join(", ")}. The policy is paused until you re-arm it.`,
     "",
     "Open Offload to review, approve or reject. Nothing waiting is sent until you approve it.",

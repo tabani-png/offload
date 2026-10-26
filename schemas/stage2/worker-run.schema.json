@@ -93,6 +93,29 @@
     "sessionRef": {
       "type": "string",
       "maxLength": 100
+    },
+    "questions": {
+      "description": "Questions the worker asked a person (offload_need_human), oldest first. Operator-approved addition 2026-10-26 (ADR 0112 \u00a718).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "question",
+          "askedAt"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "askedAt": {
+            "$ref": "common.schema.json#/$defs/tsMs"
+          }
+        }
+      },
+      "maxItems": 20
     }
   }
 }

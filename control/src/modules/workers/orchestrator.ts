@@ -969,11 +969,16 @@ export function createWorkers(deps: Deps): Workers {
         return reply("Recorded with this run.");
       }
       case "offload_need_human": {
-        const q = typeof input.question === "string" ? input.question.slice(0, 500) : null;
-        if (q === null) return reply({ error: "validation_failed", message: "question must be a string" }, true);
-        await service(ctx.tenantId, (tx) => tx`update worker_runs set questions = case when jsonb_array_length(questions) < 20
-            then questions || ${[q]}::jsonb else questions end where id = ${ctx.run.id}`);
-        return reply("A person will see this question in the morning digest. Continue with what you can do without the answer.");
+        const q = typeof input.question === "string" ? input.question.trim().slice(0, 500) : "";
+        if (q === "") return reply({ error: "validation_failed", message: "question must be a non-empty string" }, true);
+        // Stored with its time where the run DTO and the digest read it; only a stored question is promised to a person.
+        const [stored] = await service(ctx.tenantId, (tx) => tx`update worker_runs set questions = questions || ${[q]}::jsonb,
+              question_asked_at = question_asked_at || ${[now()]}::jsonb
+            where id = ${ctx.run.id} and jsonb_array_length(questions) < 20 returning id`);
+        if (!stored) {
+          return reply({ error: "limit_reached", message: "This run already asked 20 questions; this one was not recorded. Continue with what you can do without the answer." }, true);
+        }
+        return reply("A person will see this question with this run and in their morning digest. Continue with what you can do without the answer.");
       }
       default:
         return reply(`There is no such tool: ${String(ev.name).slice(0, 64)}. Your tools are offload_propose_batch, offload_report and offload_need_human.`, true);
