@@ -19,7 +19,7 @@ import type { Tx } from "../../db/pool.ts";
 import { ms, msNN } from "../../db/pool.ts";
 import { isUuid, withTenant } from "../../db/tenant.ts";
 import { HttpError, conflict, forbidden, invalid, notFound, type ErrorCode } from "../../schema/http.ts";
-import { randomToken, sha256Hex } from "../../schema/encoding.ts";
+import { jcs, randomToken, sha256Hex } from "../../schema/encoding.ts";
 import type { BrokerPort } from "../../ports.ts";
 import {
   evaluateOvernight,
@@ -328,6 +328,25 @@ async function connectionOf(tx: Tx, id: string): Promise<ConnRow | null> {
   };
 }
 
+/**
+ * What an approval binds besides the items (N2): the batch's sending identity, runner, job role and CRM sheet, and the
+ * connection's account as it was at approval. Stored with the token and re-derived before every call, so a re-linked
+ * mailbox or a re-pointed batch no longer matches.
+ */
+function bindingHash(b: BatchRow, c: ConnRow): string {
+  return sha256Hex(
+    jcs({
+      v: 1,
+      batch: b.hash,
+      identity: [b.identityType, b.identityId],
+      runner: b.runnerPersonId,
+      jobRole: b.jobRoleId,
+      crmSheet: b.crmSheet,
+      connection: [c.id, c.kind, c.ownership, c.provider, c.externalRef, c.ownerPersonId, c.jobRoleId],
+    }),
+  );
+}
+
 /** The binding rules that hold at propose and again before every call. */
 function bindingRefusal(conn: ConnRow): string | null {
   if (conn.kind === "linkedin_personal") return "a personal LinkedIn account is never automated";
@@ -538,10 +557,13 @@ export function createBroker(deps: Deps): Broker {
   ): Promise<{ token: string; expiresAt: number }> {
     const token = randomToken(32);
     const t = now();
+    const b = await loadBatch(tx, hash);
+    const conn = b ? await connectionOf(tx, b.connectionId) : null;
+    if (!b || !conn) throw notFound();
     const [row] = await tx`insert into approval_tokens (tenant_id, token_hash, batch_hash, item_keys, approver_kind, approved_by,
-        policy_id, created_at, expires_at)
+        policy_id, created_at, expires_at, binding_hash)
       values (current_setting('app.tenant_id')::uuid, ${sha256Hex(token)}, ${hash}, ${keys}::jsonb, ${kind},
-        ${approvedBy}, ${policyId}, ${new Date(t)}, ${new Date(t + TOKEN_TTL_MS)}) returning id`;
+        ${approvedBy}, ${policyId}, ${new Date(t)}, ${new Date(t + TOKEN_TTL_MS)}, ${bindingHash(b, conn)}) returning id`;
     await tx`update batch_items set token_id = ${row!.id}, updated_at = ${new Date(t)}
       where batch_hash = ${hash} and key in (select jsonb_array_elements_text(${keys}::jsonb))`;
     return { token, expiresAt: t + TOKEN_TTL_MS };
@@ -1042,7 +1064,7 @@ export function createBroker(deps: Deps): Broker {
       const row = itemRow(raw);
       named = [key, row.recipient];
       if (row.state !== "pending" || row.tokenId === null) return { done: "waiting" as const };
-      const [tk] = await tx`select used_at, revoked_at, approver_kind, policy_id from approval_tokens where id = ${row.tokenId}`;
+      const [tk] = await tx`select used_at, revoked_at, approver_kind, approved_by, policy_id, binding_hash from approval_tokens where id = ${row.tokenId}`;
       if (!tk || tk.used_at === null || tk.revoked_at !== null) return { done: "waiting" as const };
       // A policy approval holds only while its policy is active (ADR 0112 §1): paused, tripped or gone fails closed and
       // the policy's unsent items go back to a person.
@@ -1097,6 +1119,12 @@ export function createBroker(deps: Deps): Broker {
       const item = stage1Items([row])![0]!;
       const conn = await connectionOf(tx, b.connectionId);
       if (!conn) return { done: await failBefore(tx, b, "connection_gone", "the connection is gone") };
+      // The approval was for this account, identity and runner (N2): anything re-linked or re-pointed since needs a new one.
+      if (tk.binding_hash !== bindingHash(b, conn)) {
+        await revokeBatch(tx, hash, "binding changed");
+        await audit(tx, { actor: SERVICE, action: "batch.binding_changed", subjectPersonId: b.runnerPersonId, resource: { type: "batch", id: hash }, detail: { item: itemRef(b.workflowId, key) } });
+        return { done: "waiting" as const };
+      }
       const refusal = bindingRefusal(conn);
       if (refusal) return { done: await failBefore(tx, b, "binding_refused", refusal) };
       const method = methodOf(conn.provider)! as Method;
