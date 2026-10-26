@@ -1,7 +1,8 @@
 import type { Deps, ModuleDef } from "../../app.ts";
+import type { Tx } from "../../db/pool.ts";
 import type { ConsentPort, FeaturePort } from "../../ports.ts";
 import { pageParams } from "../../schema/http.ts";
-import { allowsAt } from "./consent.ts";
+import { allowsAt, requiredNoticeAt, workingTimeStartsAt } from "./consent.ts";
 import { enabledFor, featureRoutes } from "./features.ts";
 import { noticeRoutes, syncNoticeAck } from "./notices.ts";
 import { retentionJob } from "./retention.ts";
@@ -18,8 +19,20 @@ import { listTemplates } from "./templates.ts";
 const unmounted = (): never => {
   throw new Error("compliance ports answer only once the module is mounted in an app (createApp)");
 };
+/**
+ * ConsentPort plus the extras the sync slice's device config reads when present (ports.ts names only `allows`): the
+ * notice the person must acknowledge and when working time may start for them, both "now" by the app's clock.
+ */
+interface CompliancePort extends ConsentPort {
+  requiredNotice(tx: Tx, personId: string): ReturnType<typeof requiredNoticeAt>;
+  workingTimeStartsAt(tx: Tx, personId: string): Promise<number | null>;
+}
 const claimed = {
-  consent: { allows: async () => unmounted() } satisfies ConsentPort,
+  consent: {
+    allows: async () => unmounted(),
+    requiredNotice: async () => unmounted(),
+    workingTimeStartsAt: async () => unmounted(),
+  } satisfies CompliancePort,
   features: { enabledFor: async () => unmounted() } satisfies FeaturePort,
 };
 
@@ -27,7 +40,12 @@ const claimed = {
 function bindPorts(deps: Deps): void {
   const clock = deps.clock;
   if (deps.ports.consent === claimed.consent) {
-    deps.ports.consent = { allows: (tx, personId, kind) => allowsAt(tx, personId, kind, clock.now()) };
+    const consent: CompliancePort = {
+      allows: (tx, personId, kind) => allowsAt(tx, personId, kind, clock.now()),
+      requiredNotice: (tx, personId) => requiredNoticeAt(tx, personId, clock.now()),
+      workingTimeStartsAt: (tx, personId) => workingTimeStartsAt(tx, personId, clock.now()),
+    };
+    deps.ports.consent = consent;
   }
   if (deps.ports.features === claimed.features) {
     deps.ports.features = { enabledFor: (tx, jurisdiction) => enabledFor(tx, jurisdiction, clock.now()) };
