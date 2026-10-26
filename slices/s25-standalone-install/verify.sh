@@ -86,7 +86,10 @@ proof() {  # $1 label
   env -i PATH="$STRIPPED_PATH" sh -c 'command -v bun' >/dev/null 2>&1 && fail "$1: bun is on the stripped PATH"
   out="$(cd "$T" && env -i HOME="$T/home" PATH="$STRIPPED_PATH" TMPDIR="$T/tmp" \
     "$C/Contents/MacOS/Offload" --brain-check --home "$T/home/offload" 2>&1)"; code=$?
-  echo "$out" | grep -E "^brain (source|status)" | sed "s|$T|\$T|g"
+  echo "$out" | grep -E "^(brain (source|status)|key):" | sed "s|$T|\$T|g"
+  # s29: the Claude key line says set or missing, never the key.
+  echo "$out" | grep -qE "^key: (set|missing)$" || fail "$1: no 'key: set|missing' line"
+  echo "$out" | grep -q "sk-ant-" && fail "$1: --brain-check printed key material"
   echo "$out" | grep -qF "brain source: bundled $C/Contents/Helpers/bun $C/Contents/Resources/offload" \
     || fail "$1: the brain did not come from the bundle copy"
   echo "$out" | grep -qE "^brain status: 200" || { echo "$out" | tail -15; fail "$1: GET /status did not answer 200"; }

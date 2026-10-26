@@ -4,20 +4,25 @@ import Foundation
 // BrainSupervisor with its orphan guard), waits for the ready line, calls GET /status with the token, then stops it.
 // Model stub: no key is needed and nothing is sent. Prints the source and the HTTP status; exit 0 only on 200.
 // slices/s25-standalone-install/verify.sh runs it from a copy of the app outside the repo with no bun on PATH.
+// s29: it also prints `key: set` or `key: missing` (the Claude key in the login Keychain), never the key, and launches
+// the brain with the same Keychain reference the app uses.
 enum BrainCheck {
   static func sourceLine(_ l: BrainLocation?) -> String {
     guard let l else { return "brain source: none" }
     return "brain source: \(l.bundled ? "bundled" : "repo") \(l.bun.path) \(l.root.path)"
   }
 
-  static func run(bundleURL: URL, environment env: [String: String], home: URL, timeout: TimeInterval = 30) -> Int32 {
+  static func run(bundleURL: URL, environment env: [String: String], home: URL, keyStatus: ClaudeKeyStatus,
+                  timeout: TimeInterval = 30) -> Int32 {
     let loc = BrainLaunch.locate(bundleURL: bundleURL, environment: env)
     print(sourceLine(loc))
+    print(keyStatus.checkLine)
     guard let loc else { print("brain status: no brain (no bundled brain, no repo with bun)"); return 1 }
     try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true,
                                              attributes: [.posixPermissions: 0o700])
     let token = BrainLaunch.newToken()
-    let spec = BrainLaunch.spec(location: loc, home: home, token: token, baseEnvironment: env, model: "stub")
+    let spec = BrainLaunch.spec(location: loc, home: home, token: token,
+                               baseEnvironment: BrainLaunch.claudeKeyEnvironment(env, status: keyStatus), model: "stub")
     let box = BrainEndpointBox()
     let errLog = home.appendingPathComponent("brain-check.err.log")
     let sup = BrainSupervisor(spec: spec, token: token, endpoint: box, startupTimeout: timeout, stderrLog: errLog)

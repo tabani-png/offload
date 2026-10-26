@@ -149,6 +149,8 @@ struct DashboardDetail: View {
           TimelineSection(model: model, data: d, now: now, tracked: copy.tracked).id("section.timeline")
         case .observing:
           ObservingSection(model: model, observing: d.observing, now: now)
+          // s29: the Claude API key (Key set (…ABCD), Replace key, Remove key).
+          if let k = model.claudeKey { ClaudeKeySettingsSection(model: k) }
           KeptFilesSection(model: model)
         }
       } else if let problem = model.problem {

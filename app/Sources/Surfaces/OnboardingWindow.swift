@@ -30,12 +30,42 @@ final class OnboardingModel: ObservableObject {
 
   private let readPermissions: () async -> [PermissionState]
   private var poll: Timer?
+  /// s29: "Your Claude API key", shown first when no key is stored. The four steps after it are unchanged.
+  let claudeKey: ClaudeKeyModel?
+  @Published private(set) var showingKeyStep = false
+  private var keyWatch: AnyCancellable?
 
-  init(readPermissions: @escaping () async -> [PermissionState]) {
+  init(readPermissions: @escaping () async -> [PermissionState], claudeKey: ClaudeKeyModel? = nil) {
     self.readPermissions = readPermissions
+    self.claudeKey = claudeKey
+    showingKeyStep = claudeKey.map { ClaudeKeyStep.shows(status: $0.status) } ?? false
+    // Saved (checked, or "Save without checking"): move on to the first step.
+    keyWatch = claudeKey?.$flow.map(\.phase).removeDuplicates().sink { [weak self] phase in
+      guard phase == .saved else { return }
+      DispatchQueue.main.async { self?.leaveKeyStep() }
+    }
+  }
+
+  /// ↩ or Save key on the key screen: check with Anthropic, save when it works.
+  func submitKey() {
+    guard let k = claudeKey, !k.flow.isChecking else { return }
+    Task { await k.submit() }
+  }
+
+  /// Skip for now: no key, Claude stays off (the dashboard says where to add one).
+  func skipKey() {
+    claudeKey?.cancel()
+    leaveKeyStep()
+  }
+
+  private func leaveKeyStep() {
+    guard showingKeyStep else { return }
+    showingKeyStep = false
+    stepChanged()
   }
 
   func next() {
+    if showingKeyStep { submitKey(); return }
     if flow.isLast { finish(); return }
     if flow.step == .context {
       if let c = flow.continueContext() { onContext?(c) }
@@ -113,8 +143,9 @@ final class OnboardingModel: ObservableObject {
   // MARK: snapshot support
 
   func preview(step: OnboardingStep, permissions: [PermissionState]? = nil, granted: [PermissionState]? = nil,
-               context: ContextStepState? = nil, claudeVision: Bool = false) {
+               context: ContextStepState? = nil, claudeVision: Bool = false, keyStep: Bool = false) {
     self.claudeVision = claudeVision
+    showingKeyStep = keyStep && claudeKey != nil
     var f = OnboardingFlow()
     while f.step != step { f.next() }
     if let permissions { f.update(permissions) }
@@ -134,48 +165,11 @@ struct OnboardingView: View {
   var body: some View {
     let p = Palette(scheme: scheme)
     VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: Tokens.Space.s8) {
-        OffloadMark(size: Tokens.Space.s24)
-        Text(model.flow.step.counter).textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
-        Spacer()
+      if model.showingKeyStep, let key = model.claudeKey {
+        keyScreen(key, p)
+      } else {
+        steps(p)
       }
-      .padding(.bottom, Tokens.Space.s16)
-      Text(model.flow.step.title).paragraphStyle(Tokens.TypeScale.display).foregroundStyle(p.ink1)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityAddTraits(.isHeader)
-        .padding(.bottom, Tokens.Space.s16)
-      Group {
-        switch model.flow.step {
-        case .watches: WatchesStep()
-        case .permissions: PermissionsStep(flow: model.flow)
-        case .context: ContextStep(model: model)
-        case .comeBack: ComeBackStep(model: model)
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      if let note = model.note {
-        Text(note).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2).padding(.top, Tokens.Space.s16)
-      }
-      HStack(spacing: Tokens.Space.s8) {
-        if !model.flow.isFirst {
-          SecondaryButton(title: "Back") { model.back() }
-        }
-        Spacer()
-        if model.flow.isLast {
-          SecondaryButton(title: model.seeding ? "Preparing demo week…" : "Use demo week") { model.useDemoWeek() }
-            .disabled(model.seeding)
-        }
-        if model.flow.step == .context {
-          // s14: the question is optional; Skip sends nothing.
-          SecondaryButton(title: "Skip", key: "⌘↩") { model.skipContext() }
-        }
-        if case .openSettings = model.flow.primary {
-          SecondaryButton(title: model.flow.primaryTitle, key: "⌘↩") { model.next() }
-        } else {
-          PrimaryButton(title: model.flow.primaryTitle, key: "↩") { model.next() }
-        }
-      }
-      .padding(.top, Tokens.Space.s32)
     }
     // Sized to its content, like a System Settings pane: no dead band above the buttons (s10a). The window
     // controller resizes to fit when the step changes.
@@ -183,6 +177,84 @@ struct OnboardingView: View {
     .frame(width: Self.width, alignment: .topLeading)
     .fixedSize(horizontal: false, vertical: true)
     .background(p.canvas)
+  }
+
+  /// s29: the key screen, before the four steps.
+  @ViewBuilder private func keyScreen(_ key: ClaudeKeyModel, _ p: Palette) -> some View {
+    HStack(spacing: Tokens.Space.s8) {
+      OffloadMark(size: Tokens.Space.s24)
+      Text("Before you start").textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+      Spacer()
+    }
+    .padding(.bottom, Tokens.Space.s16)
+    Text(ClaudeKeyStep.title).paragraphStyle(Tokens.TypeScale.display).foregroundStyle(p.ink1)
+      .fixedSize(horizontal: false, vertical: true)
+      .accessibilityAddTraits(.isHeader)
+      .padding(.bottom, Tokens.Space.s16)
+    ClaudeKeyStepView(model: key) { model.submitKey() }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    KeyScreenButtons(model: model, key: key)
+      .padding(.top, Tokens.Space.s32)
+  }
+
+  @ViewBuilder private func steps(_ p: Palette) -> some View {
+    HStack(spacing: Tokens.Space.s8) {
+      OffloadMark(size: Tokens.Space.s24)
+      Text(model.flow.step.counter).textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
+      Spacer()
+    }
+    .padding(.bottom, Tokens.Space.s16)
+    Text(model.flow.step.title).paragraphStyle(Tokens.TypeScale.display).foregroundStyle(p.ink1)
+      .fixedSize(horizontal: false, vertical: true)
+      .accessibilityAddTraits(.isHeader)
+      .padding(.bottom, Tokens.Space.s16)
+    Group {
+      switch model.flow.step {
+      case .watches: WatchesStep()
+      case .permissions: PermissionsStep(flow: model.flow)
+      case .context: ContextStep(model: model)
+      case .comeBack: ComeBackStep(model: model)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    if let note = model.note {
+      Text(note).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2).padding(.top, Tokens.Space.s16)
+    }
+    HStack(spacing: Tokens.Space.s8) {
+      if !model.flow.isFirst {
+        SecondaryButton(title: "Back") { model.back() }
+      }
+      Spacer()
+      if model.flow.isLast {
+        SecondaryButton(title: model.seeding ? "Preparing demo week…" : "Use demo week") { model.useDemoWeek() }
+          .disabled(model.seeding)
+      }
+      if model.flow.step == .context {
+        // s14: the question is optional; Skip sends nothing.
+        SecondaryButton(title: "Skip", key: "⌘↩") { model.skipContext() }
+      }
+      if case .openSettings = model.flow.primary {
+        SecondaryButton(title: model.flow.primaryTitle, key: "⌘↩") { model.next() }
+      } else {
+        PrimaryButton(title: model.flow.primaryTitle, key: "↩") { model.next() }
+      }
+    }
+    .padding(.top, Tokens.Space.s32)
+  }
+}
+
+/// s29: Skip for now and Save key (↩). Its own view so it redraws as the key check runs.
+private struct KeyScreenButtons: View {
+  @ObservedObject var model: OnboardingModel
+  @ObservedObject var key: ClaudeKeyModel
+
+  var body: some View {
+    HStack(spacing: Tokens.Space.s8) {
+      Spacer()
+      SecondaryButton(title: ClaudeKeyStep.skipTitle) { model.skipKey() }
+      PrimaryButton(title: key.flow.isChecking ? "Checking…" : ClaudeKeyStep.saveTitle, key: "↩") { model.submitKey() }
+        .disabled(key.flow.isChecking)
+    }
   }
 }
 
@@ -413,9 +485,13 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     stepWatch = model.$flow.map(\.step).removeDuplicates().dropFirst().sink { [weak self] _ in
       DispatchQueue.main.async { self?.fitToContent() }
     }
+    keyStepWatch = model.$showingKeyStep.removeDuplicates().dropFirst().sink { [weak self] _ in
+      DispatchQueue.main.async { self?.fitToContent() }
+    }
   }
 
   private var stepWatch: AnyCancellable?
+  private var keyStepWatch: AnyCancellable?
 
   private func fitToContent() {
     guard let host = window.contentView else { return }
