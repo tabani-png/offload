@@ -13,15 +13,19 @@ export interface RetentionTable {
   kind: "per_person" | "working_time";
   /** The row's age: a `date` column, or epoch ms. */
   time: { column: string; type: "date" | "ms" };
-  /** A child table goes with its parent row: deleted where the parent (same device and object) is past retention. */
+  /** A child table goes with its parent row: deleted where the parent (same device and `key`) is past retention. */
   parent?: string;
+  /** The column joining child to parent besides tenant and device (default `object_id`). */
+  key?: string;
 }
 
 /**
- * S2-05's per-person tables (migration 0501), children before their parents (their foreign keys). Every one must
- * exist: a missing table fails the pass rather than leaving its rows unpruned.
+ * S2-05's per-person tables (migrations 0501, 0505), children before their parents (their foreign keys). Every one
+ * must exist: a missing table fails the pass rather than leaving its rows unpruned. A run's ownership claim
+ * (run_owners) references the owning copy of the run, so it goes with that copy.
  */
 export const RETENTION_TABLES: readonly RetentionTable[] = [
+  { table: "run_owners", kind: "per_person", time: { column: "ended_at_ms", type: "ms" }, parent: "run_outcomes", key: "run_id" },
   { table: "run_outcomes", kind: "per_person", time: { column: "ended_at_ms", type: "ms" } },
   { table: "review_events", kind: "per_person", time: { column: "created_at_ms", type: "ms" } },
   { table: "baseline_sample_instances", kind: "per_person", time: { column: "window_end", type: "date" }, parent: "baseline_samples" },
@@ -64,7 +68,8 @@ export async function runRetention(deps: Deps, tenantId: string, at = deps.clock
       const res = r.parent
         ? await tx.unsafe(
             `delete from ${JSON.stringify(r.table)} c using ${JSON.stringify(r.parent)} p
-              where p.tenant_id = c.tenant_id and p.device_id = c.device_id and p.object_id = c.object_id and p.${col} < $1`,
+              where p.tenant_id = c.tenant_id and p.device_id = c.device_id and p.${JSON.stringify(r.key ?? "object_id")} = c.${JSON.stringify(r.key ?? "object_id")}
+                and p.${col} < $1`,
             [cutoff],
           )
         : await tx.unsafe(`delete from ${JSON.stringify(r.table)} where ${col} < $1`, [cutoff]);

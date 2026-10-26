@@ -72,6 +72,10 @@ export const PERSON_COLUMNS: readonly PersonColumn[] = [
   },
   // S2-05 ingest (migration 0501): what my devices synced.
   { table: "run_outcomes", column: "person_id", shownIn: "runs", slice: "S2-05" },
+  {
+    table: "run_owners", column: "person_id", shownIn: null, slice: "S2-05",
+    reason: "which device's copy of a run counts (migration 0505); the run itself is listed under runs",
+  },
   { table: "daily_aggregates", column: "person_id", shownIn: "dailyAggregates", slice: "S2-05" },
   { table: "daily_aggregate_workflows", column: "person_id", shownIn: "dailyAggregates", slice: "S2-05" },
   { table: "working_time_aggregates", column: "person_id", shownIn: "workingTime", slice: "S2-05" },

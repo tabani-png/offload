@@ -27,6 +27,7 @@
 | `feature_enablements` | `enabled_by`, `disabled_by` | the owner's enablement act with DPIA attestation | shown to everyone in `GET /v1/compliance/features` | kept as a record |
 | `correction_requests` | `person_id` | the person's correction requests | in the access log as `correction.request` | kept as a record |
 | `run_outcomes` | `person_id` | outcome, item counts, cost and times of each workflow run the person's Mac synced (S2-05) | `runs` | 90 days (tenant setting) |
+| `run_owners` | `person_id` | which device's copy of a run counts toward hours saved (the device that stored it first; S2-05) | not shown (the run is under `runs`) | deleted with its run, 90 days (tenant setting) |
 | `review_events` | `person_id` | review, edit and fix seconds per run (S2-05) | not shown: an hs-1 input | 90 days (tenant setting) |
 | `baseline_samples` | `person_id` | manual-time baseline windows per workflow (S2-05) | not shown: an hs-1 input | 90 days (tenant setting) |
 | `baseline_sample_instances` | `person_id` | seconds per hashed instance inside a baseline sample (S2-05) | not shown: part of the sample | with its sample |
