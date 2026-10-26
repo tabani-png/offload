@@ -10,6 +10,7 @@ import { catalogTarget } from "../connectors/targets.ts";
 import type { UnderstandingStep } from "../types.ts";
 import { surfaceReach } from "../understanding/reach.ts";
 import { knownSurfaceAt } from "../understanding/surfaces.ts";
+import { baseVerb } from "../understanding/verbs.ts";
 
 /** Lowercase letters, digits and single dashes; at most 40 characters; "app" when nothing is left (s13 slugify). */
 export function slugify(s: string): string {
@@ -64,13 +65,30 @@ export function readCapability(t: StepTarget): string {
   return "screen.read";
 }
 
-/** Canonical commit capability: the catalog target's allowlisted commit (s13 targets.ts, from the s16 policies:
- * mail.send, accounting.bill, ticket.reply, ats.move_stage, ...), else ui.commit (computer use). Sheets only append. */
+/** s20 review 4: the verbs each catalog commit capability really does. A commit capability must MATCH the step's verb:
+ * "delete the email" is never mail.send and "pay the invoice" never accounting.bill. A capability missing here does no
+ * verb (a new allowlisted one must be added on purpose). */
+export const CAPABILITY_VERBS: Readonly<Record<string, ReadonlySet<string>>> = {
+  "mail.send": new Set(["send", "reply", "answer", "respond", "write", "message", "compose", "forward"]),
+  "chat.post": new Set(["post", "message", "send", "reply", "answer", "respond", "comment", "write"]),
+  "ticket.reply": new Set(["reply", "answer", "respond", "send", "write", "comment"]),
+  "crm.note": new Set(["note", "log", "record", "add", "write", "comment"]),
+  "crm.task": new Set(["create", "add", "assign", "schedule", "log"]),
+  "accounting.bill": new Set(["create", "enter", "add", "record", "key in", "fill in", "file", "bill"]),
+  "sheet.append": new Set(["add", "append", "log", "record"]),
+  "table.create_record": new Set(["create", "add", "enter", "record", "log", "key in", "fill in"]),
+  "ats.move_stage": new Set(["move", "update", "advance"]),
+  "outreach.add_lead": new Set(["add", "enter", "upload", "import"]),
+  "outreach.resume_lead": new Set(["resume"]),
+};
+
+/** Canonical commit capability: the catalog target's allowlisted commit (s13 targets.ts, from the s16 policies) whose
+ * verbs include the step's verb, else ui.commit (computer use, gated like every commit). Never another write. */
 export function commitCapability(t: StepTarget, verb: string): string {
   if (t.connectorId === null) return "ui.commit";
-  if (t.connectorId === "google-sheets") return /^(add|append|log|record)$/.test(verb) ? "sheet.append" : "ui.commit";
   const ct = catalogTarget(t.connectorId);
-  return ct?.sends[0] ?? ct?.logs[0] ?? "ui.commit";
+  const v = baseVerb(verb);
+  return [...(ct?.sends ?? []), ...(ct?.logs ?? [])].find((c) => CAPABILITY_VERBS[c]?.has(v) === true) ?? "ui.commit";
 }
 
 /** The chain's answer for every need. */

@@ -7,7 +7,7 @@ import { connectorById } from "../connectors/catalog.ts";
 import type { TaskLabel, TaskProfile, UnderstandingStep } from "../types.ts";
 import { surfaceReach } from "./reach.ts";
 import { knownSurfaceAt } from "./surfaces.ts";
-import { ACTION_VERBS, baseVerb } from "./verbs.ts";
+import { baseVerb, IRREVERSIBLE_VERBS, isReadOnlyBase, isWriteBase, TEXT_VERBS } from "./verbs.ts";
 
 const slug = (s: string) =>
   s
@@ -18,19 +18,17 @@ const slug = (s: string) =>
 
 const cap = (s: string) => (s === "" ? s : s.charAt(0).toUpperCase() + s.slice(1));
 
-const WRITE_VERBS = new Set(["enter", "key in", "copy", "paste", "fill in", "update", "edit", "log", "record", "tag", "file", "upload", "write", "type", "reply", "answer", "send", "respond", "match", "reconcile", "move", "create", "add"]);
 const TRANSFER_VERBS = new Set(["enter", "key in", "copy", "paste", "fill in", "update", "edit", "log", "record", "tag", "file", "upload", "match", "reconcile", "move", "create", "add", "look up", "find", "check", "type"]);
 const TEMPLATED_REPLY_VERBS = new Set(["reply", "answer", "respond", "send", "triage"]);
 const REVIEW_VERBS = new Set(["review", "screen", "assess", "evaluate", "approve", "decide", "compare"]);
 const LIVE_VERBS = new Set(["attend", "meet", "call", "present"]);
 const READ_VERBS = new Set(["read", "skim", "browse", "view", "watch", "chat", "scroll", "reviewing", "comparing", "look at"]);
 
-/** s20: gerunds count as their base verb ("writing" is a write). */
-export const isWriteVerb = (v: string) => WRITE_VERBS.has(baseVerb(v)) || ACTION_VERBS.has(baseVerb(v));
-/** s20 review 3: verbs that positively only read, judge or are live (being there). Anything else may change something:
- * a task is "reading only" only when every step is one of these, never because a verb is unknown. */
-const READ_ONLY_VERBS = new Set([...READ_VERBS, ...REVIEW_VERBS, ...LIVE_VERBS, "check", "look up", "find", "open", "search", "listen", "join", "monitor", "observe", "wait", "inspect", "examine", "study", "screen", "triage", "score", "grade", "vet"]);
-const isReadOnlyVerb = (v: string) => READ_ONLY_VERBS.has(baseVerb(v));
+/** s20: gerunds count as their base verb ("writing" is a write). s20 review 4: write / read-only come from the ONE verb
+ * table in verbs.ts (the plan and the saving use it too); the sets above only weight the judgement. */
+export const isWriteVerb = (v: string) => isWriteBase(baseVerb(v));
+/** A task is "reading only" only when every step positively reads or judges, never because a verb is unknown. */
+const isReadOnlyVerb = (v: string) => isReadOnlyBase(baseVerb(v));
 
 function mailOnly(p: TaskProfile): boolean {
   const u = p.understanding;
@@ -121,8 +119,11 @@ export const understandingJudge = {
       j = Math.max(j, 0.9);
       reasons.push("live conversation");
     }
-    const external = writes.some((s) => TEMPLATED_REPLY_VERBS.has(s.verb) || s.verb === "write") && u.counterparts.length > 0;
-    const risk = writes.length === 0 ? (unknown.length === 0 ? 0 : 0.2) : external ? 0.5 : 0.2;
+    // s20 review 4: any text to a person (post, message, comment, ...) is external; money, deletion and publishing
+    // cannot be taken back: both are risk 0.5.
+    const external = writes.some((s) => TEXT_VERBS.has(baseVerb(s.verb))) && u.counterparts.length > 0;
+    const irreversible = writes.some((s) => IRREVERSIBLE_VERBS.has(baseVerb(s.verb)));
+    const risk = writes.length === 0 ? (unknown.length === 0 ? 0 : 0.2) : external || irreversible ? 0.5 : 0.2;
     if (writes.length === 0 && unknown.length > 0) reasons.push(`what "${unknown[0]!.verb}" changes in ${unknown[0]!.surface} is not known`);
     // s22 bias audit: writing for someone (a post, a document) is not replying to them.
     const replies = writes.some((s) => TEMPLATED_REPLY_VERBS.has(s.verb));

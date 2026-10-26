@@ -20,8 +20,39 @@ const KNOWN = new Set(
  * write. Before, they fell through to reading. */
 export const ACTION_VERBS: ReadonlySet<string> = new Set(["submit", "pay", "publish", "delete", "remove", "export", "download", "import", "run", "code", "fix", "debug", "test", "merge", "deploy", "sign", "invoice", "share", "archive", "rename", "order", "buy", "purchase", "refund", "transfer", "install", "configure", "build", "commit", "push"]);
 
+/** s20 review 4: THE verb table (plan/steps.ts, the judge in labeler.ts and the saving all classify with it). */
+export const READ_VERBS: ReadonlySet<string> = new Set(["read", "view", "browse", "skim", "check", "look up", "find", "open", "search", "watch", "scroll", "look at", "reading", "reviewing", "comparing", "chat",
+  // being there (a call, a meeting) and looking closely are reads too: nothing is changed.
+  "attend", "meet", "call", "present", "listen", "join", "monitor", "observe", "wait", "inspect", "examine", "study",
+  // getting in and showing a screen change nothing in the app's data.
+  "sign in", "sign up", "sign out", "log in", "log out", "share screen"]);
+export const JUDGE_VERBS: ReadonlySet<string> = new Set(["review", "screen", "assess", "evaluate", "compare", "triage", "decide", "approve", "score", "grade", "vet"]);
+export const RECORD_VERBS: ReadonlySet<string> = new Set(["enter", "key in", "fill in", "update", "edit", "create", "add", "move", "log", "record", "tag", "file", "upload", "match", "reconcile", "copy", "paste", "type", "entering", "editing", "updating", "book", "schedule", "assign", "close"]);
+export const TEXT_VERBS: ReadonlySet<string> = new Set(["reply", "answer", "respond", "write", "send", "message", "comment", "post", "draft", "compose", "note"]);
+/** Irreversible or money-moving actions: risk 0.5 in the judge, like writing to a person. */
+export const IRREVERSIBLE_VERBS: ReadonlySet<string> = new Set(["pay", "refund", "transfer", "buy", "purchase", "order", "delete", "remove", "publish", "deploy", "merge", "push", "sign"]);
+
+/** A base verb that changes something (text, record or action). */
+export const isWriteBase = (b: string) => TEXT_VERBS.has(b) || RECORD_VERBS.has(b) || ACTION_VERBS.has(b);
+/** A base verb that positively only reads or judges. */
+export const isReadOnlyBase = (b: string) => READ_VERBS.has(b) || JUDGE_VERBS.has(b);
+
 /** Particle verbs kept as two words, gerund -> base. */
 const PHRASES: Readonly<Record<string, string>> = {
+  "signing in": "sign in",
+  "sign in": "sign in",
+  "signing up": "sign up",
+  "sign up": "sign up",
+  "signing out": "sign out",
+  "sign out": "sign out",
+  "logging in": "log in",
+  "log in": "log in",
+  "logging out": "log out",
+  "log out": "log out",
+  "sharing screen": "share screen",
+  "share screen": "share screen",
+  "sharing the screen": "share screen",
+  "share the screen": "share screen",
   "filling in": "fill in",
   "filling out": "fill in",
   "fill out": "fill in",
@@ -62,6 +93,17 @@ function baseOfWord(w: string): string {
 export function baseVerb(verb: string): string {
   const v = verb.toLowerCase().replace(/\s+/g, " ").trim();
   if (v === "") return v;
+  // s20 review 4: several verbs ("reading and replying", "checking, then submitting"): a write or action wins, else the
+  // first. Only clause heads count, so an object ("reviewing the post") is never taken for a verb.
+  const clauses = v.split(/\s*(?:,|&|\/|\bthen\b|\band\b)\s*/).filter((c) => c !== "");
+  if (clauses.length > 1) {
+    const bases = clauses.map(phraseBase);
+    return bases.find(isWriteBase) ?? bases[0]!;
+  }
+  return phraseBase(v);
+}
+
+function phraseBase(v: string): string {
   if (PHRASES[v] !== undefined) return PHRASES[v]!;
   const words = v.split(" ");
   if (words.length > 1) {

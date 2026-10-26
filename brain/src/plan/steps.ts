@@ -8,15 +8,11 @@
 import type { CapabilityNeedDTO, OutputType, PlanStepDTO, PlanVariantDTO } from "../api/s14-types.ts";
 import type { TaskUnderstanding, UnderstandingStep } from "../types.ts";
 import type { FrameNote } from "../understanding/frames.ts";
-import { ACTION_VERBS, baseVerb } from "../understanding/verbs.ts";
+import { ACTION_VERBS, baseVerb, JUDGE_VERBS, READ_VERBS, RECORD_VERBS, TEXT_VERBS } from "../understanding/verbs.ts";
 import { commitCapability, readCapability, targetOf, type StepTarget } from "./capabilities.ts";
 
-export const READ_VERBS = new Set(["read", "view", "browse", "skim", "check", "look up", "find", "open", "search", "watch", "scroll", "look at", "reading", "reviewing", "comparing",
-  // s20 review 3: being there (a call, a meeting) and looking closely are reads too: nothing is changed.
-  "attend", "meet", "call", "present", "listen", "join", "monitor", "observe", "wait", "inspect", "examine", "study"]);
-export const JUDGE_VERBS = new Set(["review", "screen", "assess", "evaluate", "compare", "triage", "decide", "approve", "score", "grade", "vet"]);
-export const RECORD_VERBS = new Set(["enter", "key in", "fill in", "update", "edit", "create", "add", "move", "log", "record", "tag", "file", "upload", "match", "reconcile", "copy", "paste", "type", "entering", "editing", "updating", "book", "schedule", "assign", "close"]);
-export const TEXT_VERBS = new Set(["reply", "answer", "respond", "write", "send", "message", "comment", "post", "draft", "compose", "note"]);
+// s20 review 4: ONE verb table for plan, judge and saving (understanding/verbs.ts); re-exported for s14 callers.
+export { JUDGE_VERBS, READ_VERBS, RECORD_VERBS, TEXT_VERBS } from "../understanding/verbs.ts";
 
 export type VerbClass = "read" | "judge" | "record" | "text";
 
@@ -168,12 +164,16 @@ export function skeleton(input: PlanInput, opts: { coreOnly: boolean }): PlanSte
     const role = commits === 0 ? "send" : "log";
     commits += 1;
     const verb = s.verb;
+    // s20 review 4: the capability matches what the commit says it does: a text write commits as "send" (email) or
+    // "write" (saved text) when its verb is not a text verb itself ("typing a message"); a record or action its verb.
+    const sendsMail = s.category === "email" || t.connectorId === "gmail" || t.connectorId === "outlook";
+    const commitVerb = cls === "text" && textWord(s) !== verb ? (sendsMail ? "send" : "write") : verb;
     out.push({
       id: id("commit"),
       type: "commit",
-      title: cls === "text" ? (textWord(s) === verb ? `Send the ${verb} to the ${s.object} in ${t.targetName}` : `${s.category === "email" ? "Send" : "Save"} the ${s.object} in ${t.targetName}`) : `${verb.charAt(0).toUpperCase()}${verb.slice(1)} the ${s.object} in ${t.targetName}`,
+      title: cls === "text" ? (textWord(s) === verb ? `Send the ${verb} to the ${s.object} in ${t.targetName}` : `${sendsMail ? "Send" : "Save"} the ${s.object} in ${t.targetName}`) : `${verb.charAt(0).toUpperCase()}${verb.slice(1)} the ${s.object} in ${t.targetName}`,
       detail: `${outs.length > 0 ? `Saves ${outs.join(" and ")}. ` : ""}Waits for your approval of this exact item; nothing is written before.`,
-      capability: need(t, cls === "text" ? (textWord(s) === verb ? `send ${verb} to ${s.object} in ${t.targetName}` : `${s.category === "email" ? "send" : "save"} ${s.object} in ${t.targetName}`) : `${verb} ${s.object} in ${t.targetName}`, commitCapability(t, verb), role),
+      capability: need(t, cls === "text" ? (textWord(s) === verb ? `send ${verb} to ${s.object} in ${t.targetName}` : `${sendsMail ? "send" : "save"} ${s.object} in ${t.targetName}`) : `${verb} ${s.object} in ${t.targetName}`, commitCapability(t, commitVerb), role),
       ...base,
       gated: true,
     });

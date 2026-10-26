@@ -156,15 +156,21 @@ From a 7-day blind test on screenshot-only data (one synthetic app, captions fro
   Read-only means every verb is positively a read or judgement (read, view, watch, attend, review, approve, ...).
   Action verbs (submit, pay, publish, delete, export, download, run, code, fix, merge, deploy, ...) are record writes
   with a gated commit; a verb no table knows is `unknown`: it is planned as a read (no unasked commit) but never makes
-  a task read-only, and the judge gives it risk 0.2 instead of "reading only".
+  a task read-only, and the judge gives it risk 0.2 instead of "reading only". One verb table
+  (`understanding/verbs.ts`) serves the plan, the judge and the saving. In a phrase of several verbs a write wins
+  ("reading and replying" = reply); sign in / up / out, log in / out and share screen are reads. The judge gives risk
+  0.5 to any text to a person and to irreversible actions (pay, refund, delete, publish, deploy, ...).
 - Plan needs (`serve`): resolved through the connector chain (`plan/chain-resolver.ts`) instead of `pending`. A
   product a caption named that the catalog lacks tries a connector on this Mac, then Composio through its toolkit
   (s17 universe target), then its direct API, and only then computer use; `GET /connectors/:id` for such an app target
   lists `methods: ["mcp","composio","api","computer"]`. Other app targets are unchanged. A need is matched to what
   each method advertises (`chain-resolver.ts serves`): the exact capability; computer use's `screen.read` for any read
-  and its gated commit for `ui.commit`; for an app's generic need (`screen.read`, `file.read`, `ui.commit`) any read /
-  write that a connector, Composio or the app's own API offers for that app. A specific catalog commit (`mail.send`,
-  ...) needs exactly that capability. A local document's `file.read` resolves with `method: "local"` ("reading the
+  and its gated commit for `ui.commit`; for an app's generic read (`screen.read`, `file.read`) any read that a
+  connector, Composio or the app's own API offers for that app. A `ui.commit` is served only by computer use or a
+  Composio toolkit's generic commit, never by a write of another name. A specific catalog commit (`mail.send`, ...)
+  needs exactly that capability, and a step's commit capability must match its verb (`plan/capabilities.ts
+  CAPABILITY_VERBS`): "delete the email" in Gmail or "pay the invoice" in Xero is `ui.commit` (gated, on screen), never
+  `mail.send` / `accounting.bill`; such a commit names no connector in the legacy steps and requires none. A local document's `file.read` resolves with `method: "local"` ("reading the
   file on this Mac") without probing the chain. An app's identity for the chain (bundle ids, hosts) comes from what
   was observed first (the current analysis' steps), then the app target stored from the insights, and only then the
   product table, which otherwise only gives name and toolkit; a catalog app's observed host goes before its catalog

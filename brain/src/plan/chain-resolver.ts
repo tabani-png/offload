@@ -102,9 +102,10 @@ const LOCAL_WORDS = "reading the file on this Mac";
  * - the exact capability always serves;
  * - computer use reads any app on screen (`screen.read` serves every read need: mail.read, file.read, ...) and does
  *   any UI commit (`ui.commit`): every computer target has the same gated commit tool (computer/executor.ts);
- * - a generic need of an app (`screen.read`, `file.read`, `ui.commit`: "read / change what is in this app") is served
- *   by any read / write a connector on this Mac, Composio or the app's own API advertises for that same app, and by a
- *   universe toolkit's generic read / commit; each commit still waits for exact approval at the gate (ADR 0006);
+ * - a generic read of an app (`screen.read`, `file.read`) is served by any read a connector on this Mac, Composio or
+ *   the app's own API advertises for that same app; a `ui.commit` only by computer use or a universe toolkit's generic
+ *   commit (asked as composio.commit), never by a write of another name (review 4); every commit waits for exact
+ *   approval at the gate (ADR 0006);
  * - a specific catalog commit (mail.send, accounting.bill, ...) is never served by a different write.
  */
 export function serves(method: Method, s: Pick<MethodState, "health" | "reads" | "writes">, n: Pick<CapabilityNeedDTO, "capability" | "role">, asked: string = n.capability): boolean {
@@ -112,9 +113,11 @@ export function serves(method: Method, s: Pick<MethodState, "health" | "reads" |
   if (s.reads.includes(asked) || s.writes.includes(asked)) return true;
   const read = n.role === "read";
   if (method === "computer") return read ? s.reads.includes(SCREEN_READ) : n.capability === UI_COMMIT;
-  const generic = read ? n.capability === SCREEN_READ || n.capability === LOCAL_FILE_READ : n.capability === UI_COMMIT;
-  if (!generic) return false;
-  return read ? s.reads.length > 0 : s.writes.length > 0;
+  // s20 review 4: a UI commit is only ever done by computer use or a universe toolkit's generic commit (exact approval
+  // of the call the agent picks, generic.ts); another write (mail.send, item.update) may not do the step's verb.
+  if (!read) return false;
+  const generic = n.capability === SCREEN_READ || n.capability === LOCAL_FILE_READ;
+  return generic && s.reads.length > 0;
 }
 
 export class ChainCapabilityResolver implements CapabilityResolver {
