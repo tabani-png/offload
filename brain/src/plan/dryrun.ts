@@ -20,6 +20,7 @@ import { commitFor, missingWords } from "./commit-fields.ts";
 import { readSchema, readUniverse } from "../connectors/universe.ts";
 import { NameMap } from "../privacy/names.ts";
 import { readNamePolicy, signNames } from "../privacy/policy.ts";
+import { fillFromSource, sourceSpansBefore } from "./read-source.ts";
 
 export interface GeneralDryRunOptions {
   home: string;
@@ -32,6 +33,8 @@ export interface GeneralDryRunOptions {
   user?: UserContext;
   /** facts.md text: the only facts drafted text may state. */
   facts?: string;
+  /** s27: the workflow's read source was read by Offload itself just now: its reading time counts as saved. */
+  readAutomated?: boolean;
 }
 
 export interface GeneralDryRun {
@@ -92,9 +95,18 @@ export async function generalDryRun(o: GeneralDryRunOptions): Promise<GeneralDry
   // s18: one name map per dry run, so the same person has the same placeholder in every instance's prompt. The facts
   // `sign:` line is the user's own name. The map never leaves this function's process.
   const names = new NameMap(readNamePolicy(o.home, signNames(facts)));
+  const src = o.wf.read;
+  const fromSource = src !== undefined && (sh.outputType === "form_fields" || sh.outputType === "rows");
   for (const inst of ev.instances.slice(0, o.limit)) {
     let built;
-    if (sh.outputType === "form_fields" || sh.outputType === "rows") built = buildFields(sh, inst);
+    let readMinutes = 0;
+    if (fromSource && src !== undefined) {
+      // s27: the values this instance needed were on the source's screen right before it: filled from there (code).
+      const spans = sourceSpansBefore(o.analysis, o.wf.taskId, src, inst.instance);
+      readMinutes = round1(spans.reduce((n, x) => n + x.activeMs, 0) / 60_000);
+      const commitOcr = [...sh.commitSteps].flatMap((s) => inst.bySteps.get(s)?.ocr ?? []);
+      built = fillFromSource(src, spans.flatMap((x) => x.ocr.map((t) => t.text)).join("\n"), commitOcr, { outputType: sh.outputType, verb: sh.commitVerb, object: sh.commitObject });
+    } else if (sh.outputType === "form_fields" || sh.outputType === "rows") built = buildFields(sh, inst);
     else {
       let text: string | null = null;
       const extra: string[] = [];
@@ -124,7 +136,9 @@ export async function generalDryRun(o: GeneralDryRunOptions): Promise<GeneralDry
     // s26: an instance the workflow cannot fill at all stays with the person: it saves nothing (honest dry run).
     const nothing = producesNothing(sh.outputType, built.ours);
     if (nothing) built.warnings.push(NOTHING_TO_FILL);
-    const savedMinutes = nothing ? 0 : Math.max(0, round1(observedMinutes - o.wf.reviewSecondsPerItem / 60));
+    // s27: the reading time counts only when Offload reads the source itself.
+    const counted = fromSource && o.readAutomated === true;
+    const savedMinutes = nothing ? 0 : Math.max(0, round1(observedMinutes + (counted ? readMinutes : 0) - o.wf.reviewSecondsPerItem / 60));
     const dto: GeneralDryRunInstanceDTO = {
       instanceId: inst.instance.id,
       day: inst.instance.day,
@@ -134,7 +148,7 @@ export async function generalDryRun(o: GeneralDryRunOptions): Promise<GeneralDry
       match: built.match,
       steps: { ours: [...predictedSteps(v, inst, ev)].sort(), theirs: [...inst.steps].sort() },
       evidence: { eventIds: inst.eventIds, spanIds: inst.spanIds, frameIds: [...new Set(inst.frameIds)] },
-      estimate: { observedMinutes, reviewSeconds: o.wf.reviewSecondsPerItem, savedMinutes },
+      estimate: { observedMinutes, reviewSeconds: o.wf.reviewSecondsPerItem, savedMinutes, ...(fromSource ? { readMinutes, readCounted: counted } : {}) },
       commit: built.commit,
       warnings: built.warnings,
     };

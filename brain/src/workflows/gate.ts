@@ -2,6 +2,7 @@
 // `preToolUse` to the Agent SDK; the same functions run in tests with a fake tool set. Rules, in order:
 //   built-in tool (no mcp__ prefix)                        -> deny (workflow runs get MCP tools only)
 //   the run was cancelled (pause, delete)                   -> deny
+//   (s27) anything that is not an allowlisted read in mode "read" -> deny (a read step only reads, whatever approval)
 //   anything that is not an allowlisted read in a dry run   -> deny (a dry run allows zero non-read tools)
 //   meta / shell / forward / reply / draft tool, nested tool call in the input -> deny
 //   not on the allowlist (allowlist.ts) for a connected server -> deny (unknown = deny)
@@ -59,11 +60,17 @@ export function appendGateLog(path: string, d: GateDecisionLog): void {
   appendLogLine(path, JSON.stringify(disk));
 }
 
+/** s27: why a read step's call that is not a read is refused (mode "read"). */
+export const READ_ONLY_WORDS = "a read step only reads: it never writes, saves or sends";
+
+/** dry_run and live: a batch's run. s27 read: a read step fetching its source; only allowlisted reads pass. */
+export type GateMode = "dry_run" | "live" | "read";
+
 export interface GateDecisionLog {
   at: number;
   workflowId: string;
   batchHash: string;
-  mode: "dry_run" | "live";
+  mode: GateMode;
   tool: string;
   toolClass: ToolClass;
   decision: "allow" | "deny";
@@ -84,7 +91,7 @@ const covers = (a: GateAction, role: string, p: ToolPolicy) => a.role === role &
 
 export interface GateContext {
   workflowId: string;
-  mode: "dry_run" | "live";
+  mode: GateMode;
   batch: Batch;
   /** Per-workflow flag, off by default: lets a live run act on its own batch without a token. */
   autoRun: boolean;
@@ -221,6 +228,8 @@ export function createGate(ctx: GateContext): Gate {
     const deny = (reason: string, itemKey?: string): Decision => ({ allow: false, reason, toolClass, ...(itemKey === undefined ? {} : { itemKey }) });
     const cancelled = ctx.cancelled?.() ?? null;
     if (cancelled !== null) return deny(`run cancelled: ${cancelled}`);
+    // s27: a read step can never write or send, whatever approval or auto-run the run holds.
+    if (!isRead && ctx.mode === "read") return deny(READ_ONLY_WORDS);
     // Dry runs allow zero non-read tools, before anything else is looked at.
     if (!isRead && ctx.mode === "dry_run") return deny("dry run: side effects are disabled");
     if ("reason" in p) return deny(p.reason);

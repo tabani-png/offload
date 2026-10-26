@@ -38,6 +38,7 @@ import { CAPABILITIES, capabilityById, capabilityDTO, CATALOG_CHECKED_AT } from 
 import { existsSync } from "node:fs";
 import { connectionsRoute, startUniverseRefresh, type ConnectionsContext } from "./connections-routes.ts";
 import { readUniverse, universeStatus } from "../connectors/universe.ts";
+import { ApiSourceReader, ChainSourceFetcher, ComposioSourceReader, McpSourceReader, ScreenReader, type SourceReader } from "../workflows/read-fetch.ts";
 
 export interface BrainOptions {
   home: string;
@@ -64,6 +65,9 @@ export interface BrainOptions {
     pickModel?: PickModel;
     /** Send through the chain with the stub model too (tests). */
     always?: boolean;
+    /** s27: per-method readers of a workflow's read source (tests inject fakes). Default: the connector on this Mac,
+     * Composio, the direct connection and a read-only screen read. */
+    readers?: Partial<Record<Method, SourceReader>>;
   };
   /** s11: the caption worker (vision/worker.ts). Its status is `captioner` in GET /status; startBrainServer starts
    * and stops it. Absent = `serve --captioner off`. */
@@ -218,6 +222,21 @@ export function createBrain(opts: BrainOptions): Brain {
     let api: MessagesApi | null = null;
     computer = { driver: new OsaDriver(resolver.deps.runner, env), planner: new ClaudePlanner({ create: async (p) => (api ??= await anthropicMessages()).create(p) }, opts.chain?.pickModel ?? (router === undefined ? undefined : (route, ctx) => router.pickModel(route, ctx))), sessions };
   }
+  // s27: read steps read through the chain, read only, whenever sends go through it (real model, or tests asking).
+  const read =
+    modelLabel === "real" || opts.chain?.always === true
+      ? new ChainSourceFetcher({
+          resolver,
+          readers: {
+            mcp: new McpSourceReader({ home: opts.home, env }),
+            composio: new ComposioSourceReader({ runner: resolver.deps.runner, env }),
+            api: new ApiSourceReader({ home: opts.home, fetch: resolver.deps.fetch, secrets: resolver.deps.secrets }),
+            ...(computer === undefined ? {} : { computer: new ScreenReader(computer.driver) }),
+            ...(opts.chain?.readers ?? {}),
+          },
+          ...(opts.log === undefined ? {} : { log: opts.log }),
+        })
+      : undefined;
   const targetOf = (id: string) => knownTarget(opts.home, id, now());
   const linker = new Linker({
     home: opts.home,
@@ -274,6 +293,7 @@ export function createBrain(opts: BrainOptions): Brain {
       ...(opts.chain?.always === true ? { always: true } : {}),
       ...(opts.log === undefined ? {} : { log: opts.log }),
     },
+    ...(read === undefined ? {} : { read }),
   };
 
   const connCtx: ConnectionsContext = {

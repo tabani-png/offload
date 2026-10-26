@@ -5,7 +5,8 @@
 //   - field outputs only (rows, form_fields, record, stage_change) whose commit is a UI commit (computer use, the
 //     legacy send step's `method: "computer"`); text outputs and commits through a tool's own schema refuse plainly;
 //   - the items are the rows of the workflow's own list (`inputs.list`, items.csv): header = field labels, one row per
-//     item. The person fills it (or exports it). Reading new source data through a connector is not wired yet;
+//     item. The person fills it (or exports it). s27: a workflow with a read source gets its rows from the source
+//     instead (workflows/read-fetch.ts); the list is the fallback;
 //   - next `batchSize` rows not done yet (done log, live batches that are not provably unsent, the contacted ledger);
 //   - each item carries its exact commit `{ verb, fields }` (part of the batch hash, s13), so the gate binds the click to
 //     the approved values; values are copied by code from the list (ADR 0005); no model call.
@@ -101,11 +102,20 @@ export function rowKey(workflowId: string, fields: ReadonlyArray<readonly [strin
  * The next live items of a plan workflow, or a PlanLiveError. `done` = keys that must not be done again (done log
  * and live batches); the contacted ledger is read here (it outlives purged batches).
  */
-export function planLiveItems(o: { home: string; wf: WorkflowJson; done: ReadonlySet<string>; ledger: ReadonlySet<string> }): BatchItem[] {
+export function planLiveItems(o: {
+  home: string;
+  wf: WorkflowJson;
+  done: ReadonlySet<string>;
+  ledger: ReadonlySet<string>;
+  /** s27: rows read from the workflow's source (read step); without them the person's list is read. */
+  read?: { rows: ItemRow[]; name: string; line: string };
+  /** s27: a plain warning on every item (the source could not be read; these values are from the list). */
+  warning?: string;
+}): BatchItem[] {
   const why = liveUnsupported(o.wf);
   if (why !== null) throw new PlanLiveError(why, "bad_request");
   const file = o.wf.inputs.list;
-  const { rows } = readItemRows(readText(o.home, o.wf.id, file) ?? "", file);
+  const rows = o.read !== undefined ? o.read.rows : readItemRows(readText(o.home, o.wf.id, file) ?? "", file).rows;
   const verb = liveCommitVerb(o.wf);
   const items: BatchItem[] = [];
   const keys = new Set<string>();
@@ -118,13 +128,13 @@ export function planLiveItems(o: { home: string; wf: WorkflowJson; done: Readonl
       key,
       to: key,
       subject: `${verb.charAt(0).toUpperCase()}${verb.slice(1)} ${shown.map(([l, v]) => `${l} ${v}`).join(", ")}`.slice(0, 300),
-      body: r.fields.map(([l, v]) => `${l}: ${v === "" ? "(empty)" : v}`).join("\n"),
-      warnings: r.fields.some(([, v]) => v === "") ? ["some fields are empty in your list; they stay empty"] : [],
+      body: r.fields.map(([l, v]) => `${l}: ${v === "" ? "(empty)" : v}`).join("\n") + (o.read === undefined ? "" : `\n\n${o.read.line}`),
+      warnings: [...(r.fields.some(([, v]) => v === "") ? ["some fields are empty in your list; they stay empty"] : []), ...(o.warning === undefined ? [] : [o.warning])],
       commit: { verb, fields: r.fields.map(([l, v]) => [l, v] as [string, string]) },
     });
     if (items.length >= o.wf.batchSize) break;
   }
-  if (items.length === 0) throw new PlanLiveError(`every row in ${file} is done; add new rows to do more`, "conflict");
+  if (items.length === 0) throw new PlanLiveError(o.read !== undefined ? `nothing new at ${o.read.name} since the last run: every row it shows now is done` : `every row in ${file} is done; add new rows to do more`, "conflict");
   // The done log starts with its header, so its first entry is read back as an entry.
   const log = join(workflowDir(o.home, o.wf.id), o.wf.inputs.crmLog);
   if (!existsSync(log)) writePrivate(log, CRM_HEADER + "\n");

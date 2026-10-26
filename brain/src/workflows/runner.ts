@@ -25,7 +25,9 @@ import { DEFAULT_SERVERS, type ToolPolicy } from "./allowlist.ts";
 import { makeBatch, type Batch, type BatchItem, type ItemState } from "./batch.ts";
 import { crmLines, contactedFrom, type CrmEntry } from "./scripts/crm-log.ts";
 import { pickNext, readRecipients } from "./scripts/recipients.ts";
-import { isPlanWorkflow, planLiveItems, PlanLiveError } from "./plan-live.ts";
+import { isPlanWorkflow, planLiveItems, PlanLiveError, type ItemRow } from "./plan-live.ts";
+import { recordRead, type SourceFetcher } from "./read-fetch.ts";
+import type { RunSourceDTO } from "../api/s14-types.ts";
 import type { Executor, ToolCallRecord } from "./executor.ts";
 import { parseFacts, renderSubject } from "./facts.ts";
 import { createGate, type GateAction, type ServerMap } from "./gate.ts";
@@ -195,7 +197,12 @@ export interface PrepareOptions {
   workflowId: string;
   model: Model;
   now?: () => number;
+  /** s27: reads a plan workflow's source (its read step) through the connector chain, read only. Absent = the list. */
+  read?: SourceFetcher;
 }
+
+/** s27: no source in the recordings: the person's list, said plainly. */
+export const NO_SOURCE_WORDS = (list: string) => `Offload has not seen where these values come from, so it uses your list ${list}: one line per row to enter.`;
 
 const preparingPath = (home: string, id: string) => join(workflowDir(home, id), "preparing.json");
 
@@ -215,15 +222,36 @@ export async function prepareLiveBatch(o: PrepareOptions): Promise<Batch> {
     const pending = pendingLiveBatch(o.home, wf.id, now);
     if (pending !== null) return pending;
     // s26: a general plan workflow takes its items from the person's own list; no drafting, no model call.
+    // s27: a workflow with a read source reads it first (read only, through the chain); the list is the fallback.
     if (isPlanWorkflow(wf)) {
+      const list = wf.inputs.list;
+      let source: RunSourceDTO = { kind: "list", name: list, via: null, message: NO_SOURCE_WORDS(list) };
+      let read: { rows: ItemRow[]; name: string; line: string } | undefined;
+      if (wf.read !== undefined) {
+        const name = wf.read.targetName;
+        if (o.read === undefined) {
+          source = { kind: "list", name: list, via: null, message: `Reading ${name} is not set up on this Mac yet, so these values are from your list ${list}.` };
+        } else {
+          const r = await o.read.fetch({ wf, now, logPath: gateLogPath(o.home, wf.id), signal: ac.signal });
+          recordRead(o.home, wf.id, r, now);
+          if (r.ok) {
+            source = { kind: "read", name, via: r.via, message: r.message };
+            read = { rows: r.rows.map((fields, i) => ({ line: i + 1, fields })), name, line: r.message };
+          } else {
+            source = { kind: "list", name: list, via: null, message: `Could not read ${name}: ${r.message} These values are from your list ${list}.` };
+          }
+        }
+      }
+      const why = cancelReason(o.home, wf.id, ac);
+      if (why !== null) throw new RunError(`stopped while reading: ${why}`, "conflict");
       let items: BatchItem[];
       try {
-        items = planLiveItems({ home: o.home, wf, done: contactedKeys(o.home, wf.id, wf.inputs.crmLog, now), ledger: ledgerContacted(o.home, wf.id) });
+        items = planLiveItems({ home: o.home, wf, done: contactedKeys(o.home, wf.id, wf.inputs.crmLog, now), ledger: ledgerContacted(o.home, wf.id), ...(read === undefined ? {} : { read }), ...(wf.read !== undefined && read === undefined ? { warning: source.message } : {}) });
       } catch (err) {
-        if (err instanceof PlanLiveError) throw new RunError(err.message, err.code);
+        if (err instanceof PlanLiveError) throw new RunError(wf.read !== undefined && read === undefined ? `${source.message.replace(/ These values are from your list .*$/, "").replace(/, so these values are from your list .*$/, ".")} ${err.message}` : err.message, err.code);
         throw err;
       }
-      const batch = makeBatch(wf.id, "live", items, now);
+      const batch: Batch = { ...makeBatch(wf.id, "live", items, now), source };
       saveBatch(o.home, batch);
       return batch;
     }

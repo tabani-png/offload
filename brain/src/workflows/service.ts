@@ -33,6 +33,8 @@ import { autoRunPinDTO, reviewSentence } from "./autorun.ts";
 import { displayName } from "./labels.ts";
 import { listBatches, listWorkflows, readText, workflowDir } from "./store.ts";
 import type { WorkflowJson } from "./types.ts";
+import type { ReadSourceDTO } from "../api/s14-types.ts";
+import { sourceSpansBefore, surfaceOf } from "../plan/read-source.ts";
 
 export function batchSummary(b: Batch): BatchSummaryDTO {
   const states = b.items.map((i) => b.itemStates?.[i.key]?.state);
@@ -98,8 +100,8 @@ export function summaryOf(home: string, wf: WorkflowJson, status: Record<string,
     createdAt: wf.createdAt,
     activatedAt: wf.activatedAt,
     connectors,
-    estimatedHoursSavedPerWeek: wf.estimate.weeklyHoursSaved,
-    arithmetic: wf.estimate.arithmetic,
+    estimatedHoursSavedPerWeek: estimateOf(wf).hours,
+    arithmetic: estimateOf(wf).arithmetic,
     pendingBatch: pending === null ? null : batchSummary(pending),
     lastDryRunAt: wf.lastDryRunAt,
     ...runTimes(home, wf, now),
@@ -125,7 +127,20 @@ export function detailOf(home: string, wf: WorkflowJson, status: Record<string, 
     pendingItems: (pending?.items ?? []).map((i) => ({ key: i.key, to: i.to, subject: i.subject, body: i.body, warnings: [...i.warnings] })),
     ...(wf.plan === undefined ? {} : { plan: wf.plan }),
     ...(wf.tools === undefined ? {} : { tools: wf.tools }),
+    ...(wf.read === undefined ? {} : { read: wf.read }),
   };
+}
+
+/** s27: true when the workflow reads its source itself (its last read through the chain worked). */
+export const readingAutomated = (wf: Pick<WorkflowJson, "read">): boolean => wf.read !== undefined && wf.read.lastRead?.ok === true;
+
+/** s27: the estimate, plus the reading time on the source when Offload reads it itself (code arithmetic). */
+export function estimateOf(wf: Pick<WorkflowJson, "estimate" | "read">): { hours: number; arithmetic: string } {
+  const base = { hours: wf.estimate.weeklyHoursSaved, arithmetic: wf.estimate.arithmetic };
+  if (!readingAutomated(wf) || wf.read!.readHoursPerWeek <= 0) return base;
+  const r = wf.read!;
+  const hours = r1(wf.estimate.weeklyHoursSaved + r.readHoursPerWeek);
+  return { hours, arithmetic: `${wf.estimate.arithmetic} + ${r.readHoursPerWeek.toFixed(2)} h/wk reading ${r.targetName} (Offload reads it: ${r.arithmetic}) = ${hours.toFixed(1)} h/wk` };
 }
 
 /** `simulated` (s10e): true only while the brain runs with the stub model; then demo sign-ins
@@ -152,7 +167,7 @@ const r1 = (x: number) => Math.round(x * 10 + 1e-9) / 10;
  * Observed hours/week on the task from the store: full stored days before the activation day vs full stored days
  * after it (the activation day itself is mixed and left out). null until both sides have at least one day.
  */
-export function measuredSaving(a: Analysis, taskId: string, activatedAt: number | null): MeasuredSavingDTO | null {
+export function measuredSaving(a: Analysis, taskId: string, activatedAt: number | null, read?: ReadSourceDTO | null): MeasuredSavingDTO | null {
   if (activatedAt === null) return null;
   const act = localDay(activatedAt);
   const before = a.windowDays.filter((d) => d < act);
@@ -164,11 +179,27 @@ export function measuredSaving(a: Analysis, taskId: string, activatedAt: number 
     for (const s of a.spans) if (set.has(s.day) && a.taskOfSpan.get(s.id) === taskId) ms += s.activeMs;
     return ms / 60_000;
   };
-  const hb = r1(minutes(before) / 60);
-  const ha = r1(minutes(after) / 60);
+  // s27: reading the source counts when Offload reads it itself: before = the reading right before the task's
+  // instances; after = every minute on the source (conservative: any reading left counts against the saving).
+  const reading = (days: readonly string[], linked: boolean) => {
+    if (read == null) return 0;
+    const set = new Set(days);
+    const ids = new Set<string>();
+    let ms = 0;
+    if (linked) {
+      const task = a.tasks.find((t) => t.id === taskId);
+      for (const inst of task?.instances ?? []) if (set.has(inst.day)) for (const s of sourceSpansBefore(a, taskId, read, inst)) if (!ids.has(s.id)) { ids.add(s.id); ms += s.activeMs; }
+    } else for (const s of a.spans) if (set.has(s.day) && surfaceOf(s) === read.surface) ms += s.activeMs;
+    return ms / 60_000;
+  };
+  const rb = r1(reading(before, true) / 60);
+  const ra = r1(reading(after, false) / 60);
+  const hb = r1(minutes(before) / 60 + rb);
+  const ha = r1(minutes(after) / 60 + ra);
   const wb = r1((hb / before.length) * 7);
   const wa = r1((ha / after.length) * 7);
   const saved = r1(wb - wa);
+  const incl = (h: number) => (read == null ? "" : ` (incl. ${h.toFixed(1)} h reading ${read.targetName})`);
   return {
     activatedAt,
     daysBefore: before.length,
@@ -176,7 +207,8 @@ export function measuredSaving(a: Analysis, taskId: string, activatedAt: number 
     hoursPerWeekBefore: wb,
     hoursPerWeekAfter: wa,
     hoursSavedPerWeek: saved,
-    arithmetic: `before: ${hb.toFixed(1)} h over ${before.length} days = ${wb.toFixed(1)} h/wk; after: ${ha.toFixed(1)} h over ${after.length} days = ${wa.toFixed(1)} h/wk → saves ${saved.toFixed(1)} h/wk`,
+    ...(read == null ? {} : { readingHoursPerWeekBefore: r1((rb / before.length) * 7), readingHoursPerWeekAfter: r1((ra / after.length) * 7) }),
+    arithmetic: `before: ${hb.toFixed(1)} h${incl(rb)} over ${before.length} days = ${wb.toFixed(1)} h/wk; after: ${ha.toFixed(1)} h${incl(ra)} over ${after.length} days = ${wa.toFixed(1)} h/wk → saves ${saved.toFixed(1)} h/wk`,
   };
 }
 
@@ -192,7 +224,8 @@ export function dashboard(a: Analysis, home: string, env: Env, now: number = Dat
   const status = connectorStatus(home, env, simulated, now);
   const automations: AutomationDTO[] = listWorkflows(home).map((wf) => {
     const s = summaryOf(home, wf, status, now);
-    const measured = measuredSaving(a, wf.taskId, wf.activatedAt);
+    const measured = measuredSaving(a, wf.taskId, wf.activatedAt, readingAutomated(wf) ? wf.read : null);
+    const est = estimateOf(wf);
     const insight = a.insights.find((i) => i.id === wf.insightId);
     return {
       id: wf.id,
@@ -200,12 +233,12 @@ export function dashboard(a: Analysis, home: string, env: Env, now: number = Dat
       name: s.name,
       status: legacyStatus(s.state, wf),
       connectors: insight === undefined ? wf.insight.connectors : insightConnectors(insight),
-      estimatedHoursSavedPerWeek: wf.estimate.weeklyHoursSaved,
+      estimatedHoursSavedPerWeek: est.hours,
       measuredHoursSavedPerWeek: measured?.hoursSavedPerWeek ?? null,
       workflowId: wf.id,
       state: s.state,
       needsYou: s.needsYou,
-      arithmetic: wf.estimate.arithmetic,
+      arithmetic: est.arithmetic,
       measured,
       pendingBatch: s.pendingBatch,
       lastRunAt: s.lastRunAt,

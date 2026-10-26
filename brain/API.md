@@ -501,6 +501,29 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   route and model, prices, the last 100 routing decisions (route, tiers tried, escalation reasons, tokens, cost).
 - CLI: `draft` and `dry-run` take `--understanding v1|v2` (and the embedder flags); `draft` of a general insight uses
   the stub design model unless `--model real` is given.
+- s27 read steps (workflows fetch their own data; `slices/s27-workflow-reads/SPEC.md`):
+  - Building a plan workflow looks, in code, for where its values come from: the site or app on screen right before at
+    least half of the instances whose screen (masked OCR or frame notes) showed the values then typed. Found: the
+    workflow gets `read` (`ReadSourceDTO`: `target`, `targetName`, `app`, `host`, `surface`, `fields: [{label,
+    sourceLabel, support}]`, `instances`, `seenBefore`, `withValues`, `readSecondsPerInstance`, `readHoursPerWeek`,
+    `arithmetic`, `evidence`, `lastRead`; labels only, never a value), and both plan variants start with the step
+    `read_source` (type read, role read, never gated). `GET /workflows/:id` carries `read`.
+  - A read goes through the connector chain in order (MCP, Composio, direct API, then a screen read: open the app or
+    site and read its accessibility text; no click, no typing). Every call passes the gate in mode `read`: only
+    allowlisted reads; anything else is denied with "a read step only reads: it never writes, saves or sends" and
+    stops the read (no other method is tried). Gate log lines of reads have `mode: "read"`.
+  - `POST /workflows/:id/dry-run` adds `read` (`ReadPreviewDTO`: `status` fetched | refused | not_read | none, `name`,
+    `via`, `rows`, `message`); a plan with a source fills each past instance from what the source showed right before
+    it; `estimate.readMinutes` / `readCounted` per instance; reading minutes count as saved only when `status` is
+    `fetched` (the totals say "+ X min reading <source> (Offload reads it)" or "reading <source> stays with you").
+  - `POST /workflows/:id/run` reads the source first: its values are the items (`commit.fields` = commit labels with
+    the fetched values; hashed), the body ends with "Read from <source> <how>.". `items.csv` is the fallback when no
+    source is known or it cannot be read (items then carry the reason as a warning). The response adds `source:
+    {kind: read | list, name, via, message}`. 409 "nothing new at <source> since the last run: ..." when the fetched
+    rows are done.
+  - Dashboard: when the last read worked, `estimatedHoursSavedPerWeek` adds `read.readHoursPerWeek` (the arithmetic
+    says so) and `measured` adds `readingHoursPerWeekBefore` / `After` (before: reading right before the instances;
+    after: all time on the source) inside `hoursPerWeekBefore` / `After`.
 
 ## s19: messaging playbook (additive, ADR 0011)
 A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,
