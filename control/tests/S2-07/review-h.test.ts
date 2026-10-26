@@ -106,7 +106,11 @@ describe("S2-07 follow-up 3: every state change in the send path is audited", ()
     const hash = await proposeOk(w, [email(to())]);
     await approveToken(w, "lead", hash);
     const from = (await auditActions(w)).length;
-    await tx(w, (t) => w.broker.revokeForKill(t, "workflow", WF, "kill switch"));
+    await tx(w, async (t) => {
+      await w.broker.revokeForKill(t, "workflow", WF, "kill switch");
+      // revokeForKill queues its events; its caller writes them after its last row lock (the kill route does).
+      await w.broker.flushAudits(t);
+    });
     expect(await since(from)).toContain("batch.tokens_revoked");
   });
 

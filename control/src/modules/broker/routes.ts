@@ -228,6 +228,8 @@ export function killRoutes(app: App, deps: Deps, broker: () => Broker): void {
       // ADR 0106 §4: revoke unspent tokens; queued batches stay queued. Cloud workers of the person pause too.
       const revoked = await broker().revokeForKill(tx, req.scope, req.targetId, "kill switch");
       const workers = req.scope === "person" ? await deps.ports.workers.pauseFor(tx, req.targetId!) : 0;
+      // Lock order: the broker's audit events (and the one below) after the last row lock.
+      await broker().flushAudits(tx);
       await deps.ports.audit.write(tx, {
         actor: actorOf(p),
         action: "kill.set",
