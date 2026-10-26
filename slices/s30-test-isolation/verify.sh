@@ -62,11 +62,13 @@ for tz in default America/Toronto Asia/Karachi; do
 done
 
 echo "== scope"
-if git -C "$ROOT" cat-file -e "$BASE^{commit}" 2>/dev/null; then
-  bad="$(git -C "$ROOT" diff --name-only "$BASE" -- . | grep -vE '^(brain/src/builder/supervisor\.ts|brain/API\.md|brain/tests/helpers\.ts|brain/tests/s24-brief-runner/(setup|cleanup\.test|verdict-channel\.test|surfaces\.test)\.ts|brain/tests/s05-workflows/runner\.test\.ts|brain/tests/s05b-runner/idempotency\.test\.ts|brain/tests/s10b-review2/autorun\.test\.ts|slices/s30-test-isolation/.*)$' || true)"
+# Against the fork point from origin/main (main merged in later brings other slices' files, which are not ours).
+FORK="$(git -C "$ROOT" merge-base HEAD origin/main 2>/dev/null || echo "$BASE")"
+if git -C "$ROOT" cat-file -e "$FORK^{commit}" 2>/dev/null; then
+  bad="$(git -C "$ROOT" diff --name-only "$FORK" -- . | grep -vE '^(brain/src/builder/supervisor\.ts|brain/API\.md|brain/tests/helpers\.ts|brain/tests/s24-brief-runner/(setup|cleanup\.test|verdict-channel\.test|surfaces\.test)\.ts|brain/tests/s05-workflows/runner\.test\.ts|brain/tests/s05b-runner/idempotency\.test\.ts|brain/tests/s10b-review2/autorun\.test\.ts|slices/s30-test-isolation/.*)$' || true)"
   [ -z "$bad" ] && echo "scope ok" || { echo "$bad"; fail "files changed outside the s30 scope"; }
 else
-  echo "scope: base $BASE not in this clone, skipped"
+  echo "scope: base $FORK not in this clone, skipped"
 fi
 
 if [ $fails -ne 0 ]; then echo "s30 verify: $fails check(s) failed (logs: $LOGS)"; exit 1; fi
