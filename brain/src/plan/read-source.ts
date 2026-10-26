@@ -783,16 +783,65 @@ function declarations(v: unknown, out: Array<[string, unknown]> = [], depth = 0)
 }
 
 /** A recognised empty collection: the answer is [] or a row key holds [] / a table with no rows. */
-/** True when an answer object reports an error (a non-empty error / errors / fault): never an empty read. */
-const reportsError = (o: Obj): boolean =>
-  Object.entries(o).some(([k, v]) => ["error", "errors", "fault", "error message"].includes(normKey(k)) && v !== null && v !== false && v !== "" && !(Array.isArray(v) && v.length === 0));
+
+const FALSY_TEXT = new Set(["", "false", "0", "none", "null", "ok"]);
+const present = (v: unknown): boolean =>
+  !(v === null || v === undefined || v === false || v === 0 || (typeof v === "string" && FALSY_TEXT.has(v.trim().toLowerCase())) || (Array.isArray(v) && v.length === 0) || (isObj(v) && Object.keys(v).length === 0));
+const isFalse = (v: unknown): boolean => v === false || (typeof v === "string" && v.trim().toLowerCase() === "false");
+
+/** The error signal one envelope object carries, or null: error / errors / fault, ok / success / successful false,
+ * status error or failed, or a message with an error code beside it. */
+function errorSignalOf(o: Obj, wanted: ReadonlySet<string> = new Set()): string | null {
+  const f = new Map<string, unknown>();
+  // A field the read asks for is data, never a signal (an "Errors" metric is a value).
+  for (const [k, v] of Object.entries(o)) for (const x of v instanceof Repeated ? v.values : [v]) if (!wanted.has(normKey(k)) && (!f.has(normKey(k)) || present(x))) f.set(normKey(k), x);
+  for (const k of ["error", "errors", "fault", "error message"]) if (present(f.get(k))) return k;
+  for (const k of ["ok", "success", "successful"]) if (f.has(k) && isFalse(f.get(k))) return `${k} false`;
+  const st = f.get("status");
+  if (typeof st === "string" && ["error", "failed", "failure", "fail"].includes(st.trim().toLowerCase())) return `status ${st.trim().toLowerCase()}`;
+  const code = f.get("code");
+  if (present(f.get("message")) && present(code) && !["200", "ok"].includes(String(code).trim().toLowerCase())) return "message with an error code";
+  return null;
+}
+
+/**
+ * s27 round 20 (I5b): an error signal anywhere in an answer (every envelope object at any depth, in any part),
+ * collected in the same first pass as the context. Elements of a list are rows (data: a row's own "status: failed" is a
+ * value); objects inside them that are not list elements are envelopes again.
+ */
+function errorSignal(v: unknown, wanted: ReadonlySet<string>, depth = 0, row = false): string | null {
+  if (depth > MAX_DECLARATION_DEPTH) return null;
+  if (Array.isArray(v)) {
+    for (const x of v) {
+      const e = errorSignal(x, wanted, depth + 1, true);
+      if (e !== null) return e;
+    }
+    return null;
+  }
+  if (v instanceof Repeated) {
+    for (const x of v.values) {
+      const e = errorSignal(x, wanted, depth + 1, row);
+      if (e !== null) return e;
+    }
+    return null;
+  }
+  if (!isObj(v)) return null;
+  if (!row) {
+    const e = errorSignalOf(v, wanted);
+    if (e !== null) return e;
+  }
+  for (const x of Object.values(v)) {
+    const e = errorSignal(x, wanted, depth + 1, false);
+    if (e !== null) return e;
+  }
+  return null;
+}
 
 function emptyCollection(v: unknown, depth = 0): boolean {
   if (depth > MAX_DEPTH) return false;
   if (Array.isArray(v)) return depth === 0 && v.length === 0;
   if (!isObj(v)) return false;
-  // An error next to an empty list is not "nothing new" (round 18): it is unreadable.
-  if (reportsError(v)) return false;
+  // (An error anywhere is found before this is asked: readValueParts step 1b, round 20.)
   if (Array.isArray(v.columns) && (Array.isArray(v.rows) || Array.isArray(v.data)) && ((v.rows ?? v.data) as unknown[]).length === 0) return true;
   for (const [k, x] of Object.entries(v)) {
     if (Array.isArray(x) && x.length === 0 && ROW_KEYS.has(normKey(k))) return true;
@@ -855,6 +904,12 @@ export function readValueParts(parts: readonly AnswerPart[], fields: readonly Pi
     const conflict = conflictOf(decl, query);
     if (conflict !== null) return { kind: "wrong_context", reason: conflict };
   }
+  // 1b. an error anywhere in any part (I5b): unreadable, decided before empty or ok; partial answers are not trusted.
+  const asked = new Set(fields.flatMap((f) => [normKey(f.sourceLabel), normKey(f.label)]));
+  for (const a of answers) {
+    const e = errorSignal(a.answer, asked);
+    if (e !== null) return { kind: "unreadable", reason: `the answer reports an error (${e})`, missing: allMissing() };
+  }
   // 2. candidate collections of every part.
   const all: Collection[] = [];
   let more = false;
@@ -876,9 +931,8 @@ export function readValueParts(parts: readonly AnswerPart[], fields: readonly Pi
   }
   const extra = more ? { more: true as const } : {};
   if (best === undefined) {
-    // Empty only when some part is a recognised empty collection and NO part reports an error (round 18).
-    const erroring = answers.some((a) => isObj(a.answer) && reportsError(a.answer));
-    if (!erroring && answers.some((a) => !a.textual && emptyCollection(a.answer))) return { kind: "empty", ...extra };
+    // Errors anywhere were refused in step 1b, so a recognised empty collection is a real empty read.
+    if (answers.some((a) => !a.textual && emptyCollection(a.answer))) return { kind: "empty", ...extra };
     const textual = answers.every((a) => a.textual);
     return { kind: "unreadable", reason: textual ? `did not show ${allMissing().join(", ")}` : `no rows with ${allMissing().join(", ")}`, missing: allMissing() };
   }

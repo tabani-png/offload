@@ -183,7 +183,13 @@ only saving was the typing.
     `prototype` are plain data whose context is checked like any other. Object-shaped table rows follow the same
     scalar-cell rule as array rows. A table header is decided by structure (the first table line); every later line of
     the right width is data, word values included, in the read step, the learning step and dry-run matching.
-27. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+27. **Round 20 (PR #35 review), I5b.** Error signals are collected across the whole answer and every part, right after
+    the context check and before empty or ok are decided: error / errors / fault, ok / success / successful false,
+    status error or failed, a message with an error code. Any of them in an envelope at any depth, or in any part,
+    makes the answer unreadable (the chain moves on); rows next to an error are not trusted. Elements of a list are
+    rows: their own fields (a "status: failed" column) are data, and so is any field the read asks for (an "Errors"
+    metric).
+28. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)

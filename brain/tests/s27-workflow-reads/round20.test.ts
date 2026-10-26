@@ -50,5 +50,7 @@ describe("s27 round 20: errors anywhere (I5b)", () => {
     expect(readValues('{"results":[{"signups":1,"active_users":2,"status":"failed"}]}', F).kind).toBe("ok");
     expect(readValues('{"errors":0,"ok":true,"status":"ok","results":[{"signups":1,"active_users":2}]}', F).kind).toBe("ok");
     expect(readValues('{"results":[]}', F).kind).toBe("empty");
+    // A field the read asks for is data: an "Errors" metric is a value, not an error signal.
+    expect(readValues("Errors: 12\nSignups: 3", [{ label: "Errors", sourceLabel: "Errors" }, { label: "Signups", sourceLabel: "Signups" }]).kind).toBe("ok");
   });
 });
