@@ -35,6 +35,7 @@ export const CHECK_WRITER_SYSTEM = [
   "You get the brief: what it is, its inputs, outputs, where it runs, and the acceptance lines.",
   "Write ONE self-contained check script that runs from the workspace root and exits 0 only when every acceptance line holds. Print one line per check: PASS or FAIL and the reason.",
   "Use python3 with the standard library only (file accept.py), or bun test (file accept.test.ts). No network, no package installs, no reading outside the workspace. Make fixtures inside a temporary folder.",
+  "Do not write into the workspace (it must be identical before and after the check): put fixtures and the tool's outputs in a temporary folder (tempfile.mkdtemp, or os.tmpdir()).",
   "Never import or require the built code into the check: run it as a subprocess from the workspace root (python3: subprocess.run([sys.executable, 'tool.py', ...]); bun: Bun.spawnSync([process.execPath, 'run', 'tool.ts', ...])) and check its output and files. Imports of workspace code are refused.",
   'Reply with JSON only: {"file":"accept.py","content":"..."}.',
 ].join("\n");

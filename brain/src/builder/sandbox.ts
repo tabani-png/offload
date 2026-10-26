@@ -303,14 +303,9 @@ export function sandboxProfile(o: { ws: string; frozenDir: string; readOnly: rea
     ...(ancestors.length > 0 ? [`(allow file-read-data ${ancestors.map((a) => `(literal ${sbStr(a)})`).join(" ")})`] : []),
     "(deny file-write-create (vnode-type FIFO))",
     '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))',
-    // The per-run supervisor's socket (and only it): the supervisor binds it, command clients connect to it.
-    ...(o.socket === undefined
-      ? []
-      : [
-          `(allow file-read* file-write* (literal ${sbStr(realish(o.socket))}))`,
-          `(allow network-bind network-inbound (local unix-socket (path-literal ${sbStr(realish(o.socket))})))`,
-          `(allow network-outbound (remote unix-socket (path-literal ${sbStr(realish(o.socket))})))`,
-        ]),
+    // The runner's command socket: sandboxed processes may CONNECT to it, nothing else (no bind, no unlink, no
+    // write); the unsandboxed runner owns and listens on it. It accepts `run` only.
+    ...(o.socket === undefined ? [] : [`(allow network-outbound (remote unix-socket (path-literal ${sbStr(realish(o.socket))})))`]),
     "(deny network*)",
     "",
   ].join("\n");
@@ -331,8 +326,9 @@ export function harnessArgv(rt: SandboxRuntime, profilePath: string, env: Record
 }
 export const sweepMode = (rt: SandboxRuntime) => (rt.kind === "sandbox-exec" ? "sweep" : "nosweep");
 
-/** A builder command becomes a sandboxed client that hands the argv to the per-run supervisor (harness.ts "serve"),
- * which runs it as its own child inside the one supervisor sandbox instance and sweeps that instance afterwards. */
+/** A builder command becomes a sandboxed client that hands the argv to the runner's command socket; the runner relays
+ * it over a private pipe to the per-run supervisor (harness.ts "serve"), which runs it as its own child inside the
+ * one supervisor sandbox instance and sweeps that instance afterwards. */
 export function commandWrapper(rt: SandboxRuntime, profilePath: string, env: Record<string, string>, harnessPath: string, socket: string): CommandWrapper {
   const prefix = [...harnessArgv(rt, profilePath, env, harnessPath), "client", sweepMode(rt), socket, "--"].map(shq).join(" ") + " ";
   return { wrap: (c) => prefix + c, unwrap: (c) => (c.startsWith(prefix) ? c.slice(prefix.length) : null) };

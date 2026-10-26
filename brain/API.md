@@ -542,9 +542,13 @@ check script exits 0, never "the model says done".
   `RunRecord.artifactSha256` is the workspace hash at the verdict; an install step must refuse when
   `verifyArtifact(home, runId)` is false. The approval is verified first and claimed atomically (O_EXCL
   `build-approval.claim`) after setup, so a failed setup keeps it.
-  Every builder Bash command runs through one per-run sandboxed supervisor (harness "serve", unix socket in a 0700
-  /tmp folder): the command is the supervisor's child, so one sweep reaches every builder process ever started. The
-  runner sweeps before every check and before hashing; the artifact is hashed twice with a gap and must not change.
+  Every builder Bash command runs through one per-run sandboxed supervisor (harness "serve"): the command is the
+  supervisor's child, so one sweep reaches every builder process ever started. Commands reach the runner over a unix
+  socket the unsandboxed runner owns (0700 /tmp folder; sandboxed processes may only connect; `run` only); the runner
+  talks to the supervisor ONLY over its private stdin/stdout pipes with a per-request nonce, so a sweep verdict cannot
+  be impersonated. No secret or socket path is in any argv. Per try: sweep, hash, check, sweep, hash; both hashes
+  must match (a check must not change the workspace) and the final double hash must match too. No /tmp/ofl-* folder
+  outlives a run.
   Background Bash and timeouts above the run's wall cap are denied. Bun checks run the frozen copy with their module
   resolution root outside the workspace; any module whose resolved path is in the workspace is refused, and checks
   that import non-builtin bare specifiers are refused when written. No usable sandbox and no container profile = 403 / exit 2

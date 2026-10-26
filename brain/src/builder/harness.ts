@@ -215,78 +215,71 @@ def _recv_line(f):
     return line.decode("utf8", "replace") if line else ""
 
 def serve():
-    sock_path, ws = sys.argv[3], os.path.realpath(sys.argv[4])
-    token = read_nonce()
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(sock_path)
-    srv.listen(16)
-    run_lock = threading.Lock()
-    print("OFFLOAD_SUPERVISOR_READY", flush=True)
+    # Requests arrive ONLY on stdin and replies leave ONLY on stdout: private pipes from the runner, never inherited by
+    # the commands (they get /dev/null and their own pipe). Every reply echoes the request's id and nonce.
+    import base64
+    ws = os.path.realpath(sys.argv[3])
+    out_lock = threading.Lock()
+    cur = {"p": None, "id": None}
 
-    def handle(conn):
-        f = conn.makefile("rb")
-        try:
-            hdr = json.loads(_recv_line(f) or "{}")
-        except ValueError:
-            conn.close(); return
-        op = hdr.get("op")
-        if op in ("sweep", "shutdown"):
-            if hdr.get("token") != token:
-                conn.close(); return
-            with run_lock:
-                res = sweep(MODE_SWEEP)
-            conn.sendall((json.dumps(res) + "\n").encode())
-            conn.close()
-            if op == "shutdown":
-                os._exit(0)
-            return
-        if op != "run":
-            conn.close(); return
-        argv = hdr.get("argv")
+    def emit(obj):
+        data = (json.dumps(obj) + "\n").encode()
+        with out_lock:
+            while data:
+                n = os.write(1, data)
+                data = data[n:]
+
+    def run(req):
+        rid, nonce = req.get("id"), req.get("nonce")
+        argv = req.get("argv")
         if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
-            conn.close(); return
-        cwd = os.path.realpath(str(hdr.get("cwd") or ws))
+            emit({"id": rid, "nonce": nonce, "type": "exit", "code": 2}); return
+        cwd = os.path.realpath(str(req.get("cwd") or ws))
         if not (cwd == ws or cwd.startswith(ws + os.sep)):
             cwd = ws
-        with run_lock:
-            try:
-                p = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            except (FileNotFoundError, PermissionError) as e:
-                _send(conn, b"D", ("command not found: %s\n" % argv[0]).encode()); _send(conn, b"X", b"127"); conn.close(); return
-            gone = threading.Event()
-            def watch():
-                # The client went away (Claude Code timeout or SIGKILL): stop the command.
-                try:
-                    while conn.recv(1):
-                        pass
-                except OSError:
-                    pass
-                gone.set()
+        try:
+            p = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        except (FileNotFoundError, PermissionError):
+            emit({"id": rid, "nonce": nonce, "type": "data", "b64": base64.b64encode(("command not found: %s\n" % argv[0]).encode()).decode()})
+            emit({"id": rid, "nonce": nonce, "type": "exit", "code": 127}); return
+        cur["p"], cur["id"] = p, rid
+        for chunk in iter(lambda: p.stdout.read1(65536), b""):
+            emit({"id": rid, "nonce": nonce, "type": "data", "b64": base64.b64encode(chunk).decode()})
+        rc = p.wait()
+        cur["p"], cur["id"] = None, None
+        sw = sweep(MODE_SWEEP)
+        if sw.get("killed"):
+            emit({"id": rid, "nonce": nonce, "type": "data", "b64": base64.b64encode(("[offload sandbox: stopped %d leftover process(es)]\n" % sw["killed"]).encode()).decode()})
+        emit({"id": rid, "nonce": nonce, "type": "exit", "code": rc})
+
+    emit({"type": "ready"})
+    for line in sys.stdin.buffer:
+        try:
+            req = json.loads(line)
+        except ValueError:
+            continue
+        op = req.get("op")
+        if op == "run":
+            threading.Thread(target=run, args=(req,), daemon=True).start()
+        elif op == "cancel":
+            p = cur["p"]
+            if p is not None and req.get("id") == cur["id"]:
                 try:
                     p.kill()
                 except Exception:
                     pass
-            threading.Thread(target=watch, daemon=True).start()
-            for chunk in iter(lambda: p.stdout.read1(65536), b""):
-                if gone.is_set():
-                    break
+        elif op == "sweep":
+            p = cur["p"]
+            if p is not None:
                 try:
-                    _send(conn, b"D", chunk)
-                except OSError:
-                    gone.set(); p.kill(); break
-            rc = p.wait()
-            sw = sweep(MODE_SWEEP)
-            try:
-                if sw.get("killed"):
-                    _send(conn, b"D", ("[offload sandbox: stopped %d leftover process(es)]\n" % sw["killed"]).encode())
-                _send(conn, b"X", str(rc).encode())
-            except OSError:
-                pass
-        conn.close()
-
-    while True:
-        conn, _ = srv.accept()
-        threading.Thread(target=handle, args=(conn,), daemon=True).start()
+                    p.kill()
+                except Exception:
+                    pass
+            res = sweep(MODE_SWEEP)
+            emit(dict(res, id=req.get("id"), nonce=req.get("nonce"), type="sweep"))
+    # The runner is gone: leave nothing behind.
+    sweep(MODE_SWEEP)
+    os._exit(0)
 
 def client():
     sock_path = sys.argv[3]

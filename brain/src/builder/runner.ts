@@ -265,7 +265,8 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
     writeFileSync(join(frozenDir, "bunfig.toml"), `preload = [${guard}]\n\n[test]\npreload = [${guard}]\n`, { mode: 0o444 });
     writeFileSync(profilePath, sandboxProfile({ ws, frozenDir, readOnly: tc.readOnly, socket: sock.socket }), { mode: 0o444 });
     // One supervisor per run: every builder command runs as its child, in one sandbox instance it can sweep.
-    sup = await startSupervisor({ argv: [...harnessArgv(rt, profilePath, childEnv, harnessPath), "serve", sweepMode(rt), sock.socket, ws], cwd: ws, env: childEnv, dir: sock.dir, socket: sock.socket });
+    // Nothing secret and no socket path in its argv (argv is readable by same-user processes).
+    sup = await startSupervisor({ argv: [...harnessArgv(rt, profilePath, childEnv, harnessPath), "serve", sweepMode(rt), ws], cwd: ws, env: childEnv, dir: sock.dir, socket: sock.socket, ws });
     // Last: use the single-use approval (atomic claim). The inputs are re-verified against what was written above.
     claimed = claimBuildApproval(home, o.briefId, o.token, now());
     if (claimed.checks.sha256 !== c0.sha256 || claimed.content !== content0) throw new BriefError("the check script changed during setup", "conflict");
@@ -315,6 +316,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   let outcome: BuildOutcome = "CAP";
   let reason: string | null = null;
   let prior: { n: number; output: string } | null = null;
+  let passedSha: string | null = null;
 
   try {
     for (let n = 1; ; n++) {
@@ -410,6 +412,8 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         reason = `builder processes could not be stopped before the check (${quiet.why ?? "sweep not clean"})`;
         break;
       }
+      // The artifact going in: sweep -> hash -> check -> sweep -> hash; both hashes must match for a PASS.
+      const before = artifactDigest(ws);
       const nonce = randomBytes(16).toString("hex");
       // bun runs the frozen copy (resolution root outside the workspace); python runs accept/<file> (cwd workspace).
       const c = await runCheck({ ws, file: checks.file, checkPath: checks.file === "accept.py" ? checkPath : frozenPath, frozenDir, env: childEnv, harness, sweep, nonce, timeoutMs: Math.min(120_000, left), signal: abort.signal });
@@ -431,12 +435,23 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         reason = `wall time ${limits.wallMs} ms reached during the check`;
         break;
       }
-      // An exit 0 without a valid proof is recorded as "did not complete" (null), never as 0.
-      rec.checkExit = c.exit === 0 && !proof.ok ? null : c.exit;
+      // Quiescent again, and the artifact the check saw is the one we keep.
+      const after = await supervisor.sweep();
+      if (!after.clean) {
+        tries.push(rec);
+        outcome = "FAIL";
+        reason = `builder processes could not be stopped after the check (${after.why ?? "sweep not clean"})`;
+        break;
+      }
+      const changed = artifactDigest(ws) !== before;
+      if (changed && c.exit === 0 && proof.ok) rec.checkOutput = truncateOutput(`${rec.checkOutput}\n[not a pass: the workspace changed while the check ran; write fixtures and outputs to a temporary folder]`);
+      // An exit 0 without a valid proof (or that changed the artifact) is recorded as "did not complete" (null).
+      rec.checkExit = c.exit === 0 && (!proof.ok || changed) ? null : c.exit;
       tries.push(rec);
-      if (c.exit === 0 && proof.ok) {
+      if (c.exit === 0 && proof.ok && !changed) {
         outcome = "PASS";
         reason = null;
+        passedSha = before;
         break;
       }
       prior = { n, output: rec.checkOutput };
@@ -455,7 +470,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
     if (outcome === "PASS" && !fin.clean) {
       outcome = "FAIL";
       reason = `builder processes could not be stopped after the check (${fin.why ?? "sweep not clean"})`;
-    } else if (outcome === "PASS" && d1 !== artifactSha256) {
+    } else if (outcome === "PASS" && (d1 !== artifactSha256 || artifactSha256 !== passedSha)) {
       outcome = "FAIL";
       reason = "the workspace was still changing after the check";
     }
