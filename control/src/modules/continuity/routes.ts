@@ -34,6 +34,9 @@ export function continuityRoutes(app: App, deps: Deps, get: () => Continuity): v
     const id = idParam(c);
     const input = await body<{ effectiveOn: string; reason: OffboardReason; note: string }>(c, deps, OFFBOARD);
     const out = await tenantTx(c, deps, async (tx, p) => {
+      // First in S2-10's lock order: one offboarding per tenant at a time, so two owners offboarding each other cannot
+      // both see the other as the remaining owner (the check below reads committed rows only).
+      await tx`select pg_advisory_xact_lock(hashtext('owners:' || current_setting('app.tenant_id')))`;
       const [t] = await tx`select access_role, state from people where id = ${id} for update`;
       if (!t) throw notFound();
       if (id === p.personId) throw conflict("you cannot offboard yourself");
