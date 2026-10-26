@@ -1,11 +1,15 @@
 // Fix round 3 for PR #11 (Codex re-review): a word in brackets is only exempt from masking and the leak check when it
 // is one of the defined placeholders, and playbook.json is validated field by field before drafting trusts it. Each
 // test failed before its fix.
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { readFileSync, writeFileSync } from "node:fs";
 import { checkDepersonalised, findTextLeaks, lowerWords } from "../../src/playbook/leak.ts";
 import { buildIdentity, maskedCore, maskText, PLACEHOLDERS, startsUnmasked } from "../../src/playbook/mask.ts";
-import type { PlaybookMessage } from "../../src/playbook/types.ts";
-import { build, founderPersona, NOW } from "./setup.ts";
+import { playbookForPromotion } from "../../src/playbook/promote.ts";
+import { CORRUPT_PLAYBOOK_WARNING, playbookPath, readPlaybook, writePlaybook } from "../../src/playbook/store.ts";
+import type { Playbook, PlaybookMessage } from "../../src/playbook/types.ts";
+import { dryRun } from "../../src/workflows/dryrun.ts";
+import { build, founderPersona, NOW, world, type World } from "./setup.ts";
 
 const msg = (i: number, to: string, first: string, line: string): PlaybookMessage => ({
   id: `m${i}`,
@@ -74,6 +78,82 @@ describe("s19 fix 3: only the defined placeholders are exempt", () => {
       const leaks = checkDepersonalised({ ...fr.playbook, notes }, fr.identity);
       expect(leaks.length).toBeGreaterThan(0);
       expect(leaks.every((l) => l.path === "notes")).toBe(true);
+    }
+  });
+});
+
+describe("s19 fix 3: playbook.json is validated before it is trusted", () => {
+  let w: World;
+  let good: Playbook;
+  let path: string;
+  beforeAll(async () => {
+    w = await world();
+    good = { ...(await build(await founderPersona())).playbook, workflowId: w.outreach.id };
+    writePlaybook(w.home, good);
+    path = playbookPath(w.home, w.outreach.id);
+  });
+  afterAll(() => w.cleanup());
+
+  const bad = (): Array<[string, unknown]> => {
+    const g = JSON.parse(JSON.stringify(good)) as Record<string, unknown>;
+    const t0 = (g.templates as Array<Record<string, unknown>>)[0]!;
+    return [
+      ["only the schema", { schema: "offload.playbook/1" }],
+      ["templates not an array", { ...g, templates: "x" }],
+      ["rules missing", { ...g, rules: undefined }],
+      ["a rule without text", { ...g, rules: [{ id: "r1", kind: "do" }] }],
+      ["a rule with an unknown check", { ...g, rules: [{ id: "r1", kind: "do", text: "x", check: { kind: "nope" } }] }],
+      ["a template without slots", { ...g, templates: [{ ...t0, slots: undefined }] }],
+      ["a slot that is not a slot", { ...g, templates: [{ ...t0, slots: [{ slot: "evil", says: "x" }] }] }],
+      ["notes not a string", { ...g, notes: 3 }],
+      ["skeletons with a number", { ...g, skeletons: [1] }],
+      ["stats missing", { ...g, stats: undefined }],
+      ["outcomes without byPattern", { ...g, outcomes: { ...(g.outcomes as object), byPattern: undefined } }],
+      ["cadence without followUpMoves", { ...g, cadence: { ...(g.cadence as object), followUpMoves: null } }],
+      ["version not a number", { ...g, version: "2" }],
+      ["unknown channel", { ...g, channel: "fax" }],
+      ["history not an array", { ...g, history: {} }],
+      ["models missing", { ...g, models: undefined }],
+    ];
+  };
+
+  test("PLAYBOOK: a playbook.json with the right schema but a missing or wrong field reads as no playbook, with the warning", () => {
+    const saved = readFileSync(path, "utf8");
+    try {
+      for (const [what, v] of bad()) {
+        writeFileSync(path, JSON.stringify(v));
+        const warnings: string[] = [];
+        expect([what, readPlaybook(w.home, w.outreach.id, warnings)]).toEqual([what, null]);
+        expect([what, warnings]).toEqual([what, [CORRUPT_PLAYBOOK_WARNING]]);
+      }
+    } finally {
+      writeFileSync(path, saved);
+    }
+    expect(readPlaybook(w.home, w.outreach.id)).toEqual(good);
+  });
+
+  test("DRYRUN: a schema-only playbook.json drafts without the playbook instead of throwing", async () => {
+    const saved = readFileSync(path, "utf8");
+    try {
+      writeFileSync(path, JSON.stringify({ schema: "offload.playbook/1" }));
+      const r = await dryRun({ home: w.home, analysis: w.analysis, workflowId: w.outreach.id, model: w.model, now: () => NOW });
+      expect(r.warnings).toContain(CORRUPT_PLAYBOOK_WARNING);
+      expect(r.instances.length).toBeGreaterThan(0);
+      for (const i of r.instances) expect(i.playbook).toBeUndefined();
+    } finally {
+      writeFileSync(path, saved);
+    }
+    const r = await dryRun({ home: w.home, analysis: w.analysis, workflowId: w.outreach.id, model: w.model, now: () => NOW });
+    expect(r.instances.some((i) => i.playbook !== undefined)).toBe(true);
+  });
+
+  test("PLAYBOOK: promotion of a malformed playbook.json is nothing to promote, not a crash", () => {
+    const saved = readFileSync(path, "utf8");
+    try {
+      writeFileSync(path, JSON.stringify({ schema: "offload.playbook/1", rules: [] }));
+      expect(playbookForPromotion(w.home, w.outreach.id, NOW)).toBeNull();
+    } finally {
+      writeFileSync(path, saved);
     }
   });
 });

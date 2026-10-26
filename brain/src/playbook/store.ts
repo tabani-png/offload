@@ -9,7 +9,7 @@ import { ensureDir, workflowDir, writePrivate } from "../workflows/store.ts";
 import { assertDepersonalised } from "./leak.ts";
 import { hashWord, type Identity, type IdentityDigest } from "./mask.ts";
 import { renderPlaybookMd } from "./render.ts";
-import { MAX_NOTES_CHARS, PLAYBOOK_SCHEMA, type Playbook } from "./types.ts";
+import { CHANNELS, CTAS, MAX_NOTES_CHARS, MOVES, OPENERS, PLAYBOOK_SCHEMA, PROOFS, SLOTS, type Playbook } from "./types.ts";
 
 export const PLAYBOOK_FILE = "playbook.json";
 export const PLAYBOOK_MD = "PLAYBOOK.md";
@@ -20,8 +20,9 @@ export const playbookPath = (home: string, id: string) => join(workflowDir(home,
 
 export class PlaybookNotesError extends Error {}
 
-/** The workflow's playbook, or null. A file that does not parse reads as no playbook with a warning (pushed to
- * `warnings`, else logged), so a dry run or a run drafts without it instead of failing. */
+/** The workflow's playbook, or null. A file that does not parse, or that lacks any field or nested shape of a
+ * playbook (isPlaybook), reads as no playbook with a warning (pushed to `warnings`, else logged), so a dry run or a
+ * run drafts without it instead of failing. */
 export function readPlaybook(home: string, id: string, warnings?: string[]): Playbook | null {
   const p = playbookPath(home, id);
   if (!existsSync(p)) return null;
@@ -31,12 +32,92 @@ export function readPlaybook(home: string, id: string, warnings?: string[]): Pla
   } catch {
     pb = null;
   }
-  if (typeof pb !== "object" || pb === null || Array.isArray(pb)) {
+  if (!isPlaybook(pb)) {
     if (warnings === undefined) console.error(`brain: workflow ${id}: ${CORRUPT_PLAYBOOK_WARNING}`);
     else warnings.push(CORRUPT_PLAYBOOK_WARNING);
     return null;
   }
-  return (pb as Playbook).schema === PLAYBOOK_SCHEMA ? (pb as Playbook) : null;
+  return pb;
+}
+
+type Obj = Record<string, unknown>;
+const obj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
+const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const str = (v: unknown): v is string => typeof v === "string";
+const oneOf = (xs: readonly string[]) => (v: unknown): v is string => typeof v === "string" && xs.includes(v);
+const arr = <T>(v: unknown, each: (x: unknown) => boolean): v is T[] => Array.isArray(v) && v.every(each);
+const nums = (o: Obj, ks: readonly string[]) => ks.every((k) => num(o[k]));
+const share = (v: unknown) => obj(v) && str(v.value) && num(v.count) && num(v.share);
+const shares = (o: Obj, ks: readonly string[]) => ks.every((k) => arr(o[k], share));
+
+function isRuleCheck(c: unknown): boolean {
+  if (!obj(c)) return false;
+  switch (c.kind) {
+    case "cta":
+      return oneOf(CTAS)(c.value);
+    case "opener":
+      return arr(c.values, oneOf(OPENERS));
+    case "proof":
+      return oneOf(PROOFS)(c.value);
+    case "move":
+      return oneOf(MOVES)(c.value);
+    case "max_words":
+    case "max_links":
+    case "max_questions":
+      return num(c.value);
+    default:
+      return false;
+  }
+}
+const isRule = (r: unknown) => obj(r) && str(r.id) && oneOf(["do", "dont"])(r.kind) && str(r.text) && (r.check === undefined || isRuleCheck(r.check));
+const isTemplate = (t: unknown) =>
+  obj(t) && oneOf(["first_touch", "follow_up", "reply"])(t.id) && str(t.text) && num(t.from) && arr(t.slots, (x) => obj(x) && oneOf(SLOTS)(x.slot) && str(x.says));
+const isStats = (s: unknown) =>
+  obj(s) &&
+  nums(s, ["messages", "ctaTimeBoxed", "medianWords", "p90Words", "maxQuestions", "messagesWithLinks", "messagesWithAttachments"]) &&
+  shares(s, ["byRole", "intent", "audience", "opener", "cta", "proof", "hooks", "objections", "moveSequences"]) &&
+  obj(s.limits) &&
+  nums(s.limits, ["maxWords", "maxLinks", "maxQuestions"]);
+const isOutcomes = (o: unknown) =>
+  obj(o) &&
+  o.scope === "first_touch" &&
+  nums(o, ["messages", "replied", "noReply", "unknown", "minSample"]) &&
+  arr(o.byPattern, (p) => obj(p) && oneOf(["opener", "cta", "hook", "proof", "length"])(p.dimension) && str(p.value) && nums(p, ["sent", "replied", "noReply", "unknown"]) && typeof p.enough === "boolean");
+const isCadence = (c: unknown) =>
+  obj(c) &&
+  nums(c, ["threads", "followUps", "threadsWithFollowUp", "maxFollowUps", "timingUnclear"]) &&
+  (c.medianDaysToFollowUp === null || num(c.medianDaysToFollowUp)) &&
+  shares(c, ["followUpMoves"]) &&
+  typeof c.enough === "boolean";
+
+/** Every field drafting, the dry run, PLAYBOOK.md and promotion read, with its nested shape. A file that only carries
+ * the schema string (or a hand edit that broke a field) is not a playbook. */
+export function isPlaybook(v: unknown): v is Playbook {
+  return (
+    obj(v) &&
+    v.schema === PLAYBOOK_SCHEMA &&
+    num(v.version) &&
+    str(v.workflowId) &&
+    oneOf(CHANNELS)(v.channel) &&
+    num(v.builtAt) &&
+    obj(v.sources) &&
+    nums(v.sources, ["messages", "threads"]) &&
+    str(v.message) &&
+    arr(v.rules, isRule) &&
+    arr(v.templates, isTemplate) &&
+    arr(v.skeletons, str) &&
+    isCadence(v.cadence) &&
+    arr(v.avoid, str) &&
+    isStats(v.stats) &&
+    isOutcomes(v.outcomes) &&
+    str(v.notes) &&
+    arr(v.history, (h) => obj(h) && num(h.version) && num(h.at) && oneOf(["built", "notes"])(h.change)) &&
+    obj(v.models) &&
+    str(v.models.label) &&
+    str(v.models.synth) &&
+    typeof v.models.synthUsed === "boolean" &&
+    arr(v.warnings, str)
+  );
 }
 
 /** The build's identity set as salted hashes (a fresh salt per build). */
