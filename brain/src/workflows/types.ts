@@ -25,6 +25,9 @@ export interface WorkflowStep {
   script?: string;
   /** Tool the step uses, as the gate sees it (mcp__<server>__<tool>). */
   tool?: string;
+  /** s20 review 5: "computer" = this side effect is a UI commit done on screen (computer use) on `connector`'s app,
+   * never through that app's connector tools (e.g. "delete the email in Gmail" is not Gmail's send). */
+  method?: "computer";
 }
 
 export type TemplateId = "investor_outreach" | "scheduling_reply" | "generic";

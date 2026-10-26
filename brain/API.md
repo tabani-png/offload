@@ -134,12 +134,86 @@ identifiers{items, containers[]} }`. v1 responses never carry it.
 Known-answer fixtures: `bun run brain/fixtures/gen-domains.ts --out DIR [--persona recruiter|bookkeeper|support|salesops|mixed|all]`;
 agreement report: `bun run brain/fixtures/domains-report.ts [--embedder ollama]`.
 
+### Blind-test fixes (s20)
+From a 7-day blind test on screenshot-only data (one synthetic app, captions from a small local vision model):
+- Verbs: captioned gerunds are base verbs (`understanding/verbs.ts baseVerb`: writing → write, typing → type,
+  filling in → fill in, ...) everywhere a verb is classed; typing / editing a message, note, reply or post is a text
+  write (draft + gated commit). Generic looking verbs (reviewing, viewing, reading, ...) are left out of the embedded
+  description text and earn no same-verb bonus in induction.
+- Surfaces: caption surface names are normalised before the vote (`understanding/surfaces.ts`: case, scheme/www, a
+  domain → its product, known aliases → one name: Instagram = instagram.com, Chrome = Google Chrome). On a stand-in
+  app (a browser with no URL, or an app whose captions name >= 2 other known products in >= half of its framed
+  spans) a span whose caption names a known product takes that product's app/host/path/category, so v2 `steps`,
+  `surfaces` and capability targets name Gmail, Granola, Linear, Google Docs instead of the stand-in.
+- Saving: `saving` never claims more than the task's own observed weekly time (`activeMinutes` × 7 / window days):
+  when items × minutes is more than 10% over it, or the saving alone would exceed it, the estimate starts from the
+  observed time and `arithmetic` says "…, capped at the X h/wk observed". Additive `saving.confidence` =
+  `{ level: "low", capped, observedWeeklyHours, reasons[] }`, present only on a low-confidence estimate (capped, < 5
+  instances, one day, one task > 50% of all time across >= 4 apps, >= 50% of its time described only as looking).
+  A task whose every step only reads (no text or record write) claims no saving: `arithmetic` ends "… → every step
+  only reads, nothing is done for you = X h/wk → saves 0.0 h/wk (0%)", so it falls under the insight threshold and the
+  flat "read + approve" 87-90% figure is not shown.
+  Read-only means every verb is positively a read or judgement (read, view, watch, attend, review, approve, ...).
+  Action verbs (submit, pay, publish, delete, export, download, run, code, fix, merge, deploy, ...) are record writes
+  with a gated commit; a verb no table knows is `unknown`: it is planned as a read (no unasked commit) but never makes
+  a task read-only, and the judge gives it risk 0.2 instead of "reading only". One verb table
+  (`understanding/verbs.ts`) serves the plan, the judge and the saving. In a phrase of several verbs a write wins
+  ("reading and replying" = reply), the most dangerous one first (irreversible > action > other writes: "update the
+  sheet and pay the invoice" = pay); sign in / up / out, log in / out and share screen are reads ("log in the call"
+  logs the call). Approving a payment, expense, invoice or refund is an irreversible commit, not a judgement. The judge gives risk
+  0.5 to any text to a person and to irreversible actions (pay, refund, delete, publish, deploy, ...).
+- Plan needs (`serve`): resolved through the connector chain (`plan/chain-resolver.ts`) instead of `pending`. A
+  product a caption named that the catalog lacks tries a connector on this Mac, then Composio through its toolkit
+  (s17 universe target), then its direct API, and only then computer use; `GET /connectors/:id` for such an app target
+  lists `methods: ["mcp","composio","api","computer"]`. Other app targets are unchanged. A need is matched to what
+  each method advertises (`chain-resolver.ts serves`): the exact capability; computer use's `screen.read` for any read
+  and its gated commit for `ui.commit`; for an app's generic read (`screen.read`, `file.read`) any read that a
+  connector, Composio or the app's own API offers for that app. A `ui.commit` is served only by computer use or a
+  Composio toolkit's generic commit, never by a write of another name. A specific catalog commit (`mail.send`, ...)
+  needs exactly that capability, and a step's commit capability must match its verb (`plan/capabilities.ts
+  CAPABILITY_VERBS`): "delete the email" in Gmail or "pay the invoice" in Xero is `ui.commit` (gated, on screen), never
+  `mail.send` / `accounting.bill`. A broad verb (add, create, record, update, log, enter, ...) maps to a catalog commit
+  only when the step's object is what it makes (`CAPABILITY_OBJECTS`: "create the invoice" in Xero = `accounting.bill`,
+  "create the contact" = `ui.commit`). A `ui.commit` commit keeps its target in the legacy steps with
+  `method: "computer"`: it is declared to the gate as a computer-use action (only computer-use tools may do it, never
+  the app's connector send), the chain is built with computer use only, and it requires no connector. A log step runs
+  only after its item's send went through (`sent`); after a failed or unknown send it is refused.
+  Open items: a Composio toolkit's generic commit still serves `ui.commit` (exact approval of the call the agent
+  picks); "typing a reply" in Gmail commits as `mail.send` (a new message), not a threaded reply. A local document's `file.read` resolves with `method: "local"` ("reading the
+  file on this Mac") without probing the chain. An app's identity for the chain (bundle ids, hosts) comes from what
+  was observed first (the current analysis' steps), then the app target stored from the insights, and only then the
+  product table, which otherwise only gives name and toolkit; a catalog app's observed host goes before its catalog
+  pattern (acme.zendesk.com before .zendesk.com).
+
 ## GET /insights/:id/evidence → `EvidenceResponse`
 The proof behind every number: `figures.<name>.eventIds` (all figures plus `saving`), the task's `instances`
 (with span ids and counterparties) and its `spans` (with their event ids). Use it for "show me the rows".
 
 ## GET /timeline?day=YYYY-MM-DD → `TimelineResponse`
 That day's spans in time order, each with its `taskId`, plus `byTask` minutes (sums to `activeMinutes`).
+
+## GET /time[?day=YYYY-MM-DD][&window=week] → `TimeBreakdownResponse` (s23)
+Where the time goes, then what could be faster (`brain/src/time/`). No `day`: the store's 7-day window; `day=`: that
+stored day only (400 malformed, 404 not stored). `window` other than `week` is 400. GET only (405). Reads spans, never
+content (ADR 0003); every number is code and carries its event ids (ADR 0005); no model call; drafts nothing (ADR 0006).
+- `total`: active minutes of every span in the window (sessionized as `analyze.ts` does); `eventIds` = the events
+  behind those spans.
+- `byTask` (one row per task, `unsorted` for spans in no task), `byApp` (per app bundle id, `name` the app name) and
+  `byKind` (fixed ids `code docs meeting sheet email chat browse other`, from the app bundle id, host and URL path)
+  each partition the spans: a row's `minutes` is the sum of its spans, its `eventIds` the union of their events,
+  `share` = minutes / total. Rows sort by minutes, most first, ties by id. Two tasks with one label name are told
+  apart by their masked title template.
+- `findings`: the analysis's insights (same ids and task ids), most hours freed first. `taskMinutes` = the task's
+  row (same value and display); `observedHoursPerWeek` = task minutes / 60 × 7 / window days; `hoursFreed` =
+  min(observed, the fix's estimate): s22's top option `weeklyHoursSaved` (the same `top` as
+  `GET /insights/:id/solutions`, rules only) when `brain/src/solutions/` is present, else the s04 estimate
+  (`saving.weeklyHoursSaved`). Never above observed. `arithmetic` shows the inputs and ends with `hoursFreed.display`.
+  No percentage, range or review chain.
+- Fix-kind fallback: `fixKind` is the s22 top kind (`workflow | tool | setup | remove_step | leave_alone`), or `fixKind: null`
+  when s22 is absent or answered a kind outside the five (never guessed); `fixKinds` says `"s22"` or `"absent"`.
+  `workflowInsightId` = `insightId` only when `fixKind` is null or `workflow`, else null. No workflow list of its own.
+- Rounding (`rounding: "tenths-half-up"`, one rule for brain and app): tenths = floor(hours × 10 + 0.5 + 1e-9),
+  display `"<tenths/10 with 1 decimal> h"`; minutes are shown as hours. 1479 min (24.65 h) → `24.7 h`.
 
 ## GET /dashboard → `DashboardResponse`
 `automations`: one per workflow. Existing fields are unchanged (`status` keeps its 4 legacy values: draft, dry_run,
@@ -166,7 +240,13 @@ Brain keys (s05c, closes REVIEW-1 H4): by default the observer holds them, Keych
 (creates it) or `unwrap-key --name DAY` (binary: `OFFLOAD_OBSERVER_BIN`, else `engine/.build/offload-observer`) and
 keeps it in memory only. A missing or failing observer is an error (sealing fails, a sealed file reads as missing and
 is NOT purged); there is no fallback to raw keys. `OFFLOAD_KEYS=file` (tests, fixtures only) keeps the s05b raw
-32-byte files in `$OFFLOAD_HOME/brain-keys/`. Raw key files left from s05b are wrapped with the same bytes and deleted
+32-byte files in `$OFFLOAD_HOME/brain-keys/`. s20: with `OFFLOAD_KEYS` unset, a plain-mode home (day files
+`days/*.jsonl`, no `.jsonl.enc`, no `keys/` folder: written with `OFFLOAD_PLAIN=1` or by an importer) uses file keys
+too, since no observer Keychain stands behind it; `OFFLOAD_KEYS=keychain` forces the Keychain. The mode a home
+settles on (file for a plain home, Keychain for one with `keys/` or `.jsonl.enc` days) is kept in
+`$OFFLOAD_HOME/brain-key-mode` (0600) and wins over the day files from then on, so purging day files never flips it;
+a home with no evidence yet is Keychain and is not marked. A "file" mark is ignored when `keys/` exists (only
+`OFFLOAD_KEYS=file` forces raw keys there). Raw key files left from s05b are wrapped with the same bytes and deleted
 when `serve` starts (and when a day with only a raw key is next used); a conflict is logged and the raw file kept.
 States: `drafting` → `ready_for_review` → (approve the dry-run batch) → `active` ⇄ `paused`; `needs_you` is shown on
 top of `active` when a batch waits or a connector is missing. Auto-run is off by default.
@@ -406,6 +486,79 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
 - CLI: `draft` and `dry-run` take `--understanding v1|v2` (and the embedder flags); `draft` of a general insight uses
   the stub design model unless `--model real` is given.
 
+## s19: messaging playbook (additive, ADR 0011)
+A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,
+the patterns behind it and what got replies, with nothing personal kept, so a successor or a cloud worker can keep the
+same message going in their own voice. The style card (`/tone`) stays the voice; the playbook is the message.
+- `GET /workflows/:id/playbook` -> `{version, workflowId, playbook | null, markdown | null}`. `playbook` is
+  `playbook.json` (`schema: "offload.playbook/1"`, brain/src/playbook/types.ts `Playbook`): `version` (+1 on every
+  build and notes edit), `message` (2-3 plain sentences), `rules` (`{id, kind: do|dont, text, check?}`; `check` is
+  what the dry run tests in code), `templates` (first message, follow-up, reply: slots in order such as
+  `{greeting} {claim} {proof} {ask} {sign_off}`, each slot with what it says), `skeletons` (3-5), `cadence`, `avoid`,
+  `stats` and `outcomes` (counts, shares and lengths computed in code; outcomes are counts with sample sizes, a pattern
+  needs 5 known outcomes before it is compared and otherwise reads "too few to say"; no rate is ever written), `notes`,
+  `history`, `models`, `warnings`. `markdown` is `PLAYBOOK.md`, a fixed render of the same JSON.
+- `POST /workflows/:id/playbook {action: "build"}` builds from the sealed tone pack: the workflow's own sent messages
+  and the follow-ups in the threads they opened; later replies by the user count as "they replied". Each message is
+  labelled within fixed vocabularies (intent, opener, moves, CTA, proof, personal-hook kind, objection handling,
+  audience) by the rules and Haiku 5.5 (route classify), the wording by Opus 5.5 (route understand), from masked text
+  only. 409 when there is no tone pack or fewer than 3 messages, or when the de-personalisation check fails closed
+  (the message names the kind and field, never the value; nothing is written).
+- `POST /workflows/:id/playbook {action: "notes", notes}`: the user's notes (a string of at most 4000 characters, no
+  control characters), checked like every other field: a name, address, phone, link, figure or the author's identity
+  is 400 and nothing changes. 400 too before the first build and for any other key or action.
+- With a playbook, email drafts (dry run and live runs) say the playbook's message in the current user's voice (their
+  style card and sent mail; with none of this kind, all their sent mail). Dry-run instances gain
+  `playbook: {version, verdict: "yes"|"partly"|"no", rules: [{id, text, pass}]}`. Auto-run pins `playbook.json` once
+  it exists, so a rebuilt playbook holds the next auto batch for review.
+- Promotion seam (S2-06): `playbookForPromotion(home, workflowId)` (brain/src/playbook/promote.ts) returns the
+  re-checked playbook without `history`, `builtAt` and `warnings`, and `playbookHash` = sha256 of its JCS. The registry
+  field is proposed in plan/stage-2/adr/0112-playbook-on-promotion.md (schemas/stage2 is unchanged).
+- Re-checks (ADR 0012): a build also writes `playbook-identity.json` (0600, salted hashes of the identity set, never
+  promoted). Notes and `playbookForPromotion` are checked against the tone pack, facts.md and that digest; with
+  neither the tone pack nor a digest they are 409 (rebuild the playbook). A failed model call never fails a build:
+  the message keeps its rule read, the wording keeps the code baseline, and `warnings` says so (at most 60 label calls
+  per build). A `playbook.json` that does not parse reads as `playbook: null`; a dry run adds a warning.
+
+## Solutions (s22): the best kind of fix per task (additive)
+For every insight, and every task the judge holds back because a person is at the keyboard (e.g. watching a coding
+agent), the brain ranks five kinds of fix (`brain/src/solutions/`):
+`workflow` (automate it: the existing drafter, MCP -> Composio -> API -> computer use), `tool` (build a custom tool or
+script), `setup` (change the setup: IDE, coding-agent rules and permissions, shortcuts, templates), `remove_step`
+(replace a manual sub-process with a pipeline, e.g. post images generated from the post text), `leave_alone`.
+Numbers are code (ADR 0005): observed h/wk = `activeMinutes` / 60 × 7 / window days; each option saves
+min(observed, observed × share × factor) (factor ≤ 0.5; remove_step: the s04 review model's low case on the measured
+minutes per item; workflow: min(observed, the s04 estimate) × share), never more than
+observed; confidence = fit × (0.6 + 0.4 × min(1, √(instances/8))); rank = saving × confidence (ties: fewer setup
+hours), `leave_alone` first when nothing clears 0.5 h/wk × confidence or the task is one-off reading. Opus 5.5 (role
+`solution_design`, router route `design`) may reword only `what`, `why` and the brief text; a reply that changes a
+kind, the order, a figure or holds a digit is ignored (`designedBy: "rules"`).
+
+- `GET /insights` gains `solutions` on each insight (`{top, observedWeeklyHours, options[{kind, what,
+  weeklyHoursSaved, effort, confidence}]}`, rules only, no model call) and a top-level `heldBack[]` (`{id, taskId,
+  kind, name, description, category, reason, activeMinutes, instances, solutions}`). Every existing key is unchanged.
+- `GET /insights/:id/solutions` -> `SolutionSet` (`solutions/types.ts`): `{version, subjectId, taskId, name, heldBack,
+  observedWeeklyHours, observedArithmetic, parts[{id, name, activeMs, spanIds, tags}], options[], top, designedBy}`;
+  each option `{kind, what, why, weeklyHoursSaved, share, arithmetic, effort{level, setupHours, paybackWeeks},
+  confidence{value, level, reasons}, evidence{spanIds, instanceIds, parts}, handoff}`; `handoff` is
+  `{to: "workflow_drafter", insightId}`, `{to: "brief", spec{inputs, outputs, runsWhere, builderPrompt, acceptance}}`
+  or `{to: "none"}`. `:id` is an `ins_…` id of an insight or a held-back task.
+- `POST /insights/:id/solutions/choose {kind}`: `workflow` -> `{kind, workflow: WorkflowDetailDTO}`, exactly what
+  `POST /workflows/draft` makes (201 new, 200 existing); `tool` / `setup` / `remove_step` -> `{kind, brief}` (201
+  new), a draft in `$OFFLOAD_HOME/solutions/<sol_id>/{brief.json, BRIEF.md}` (0600). `leave_alone` or an option that
+  is not a fit -> 409.
+- `GET /solutions/:id` -> the brief (`status` draft | approved | handed_off, `hash` = sha256 of its canonical content).
+  `POST /solutions/:id/approve {briefHash}` -> `{brief, token}`: only the exact current hash of a draft, or of an
+  approved brief not yet handed off (a new token replaces a lost one; the old one stops working); 409 otherwise, also
+  when the file changed on disk. The token is single use and only its sha256 is stored. Choosing the solution again
+  redrafts a brief that was edited on disk or lost its approval, and a handed-off brief whose content changed (its
+  files move to `history/`).
+  `POST /solutions/:id/handoff {token}` -> `{brief, builderPrompt, briefMd}` once (403 wrong token, 409 reused or not
+  approved). Nothing is executed: a brief is text for a builder (e.g. a Claude Code session).
+- CLI: `solutions (--insight N|ins_ID | --held N) --home DIR [--choose KIND] [--json] [--model stub|real]` (stub design
+  model unless `--model` is given, like `draft`); `solutions approve --brief sol_ID --hash H --home DIR`;
+  `solutions handoff --brief sol_ID --token T --home DIR`. `analyze --json` carries the same additive fields.
+
 ## Company sync (S2-02, ADR 0103)
 The brain's sync client (`src/sync/`) connects this Mac to the company control plane (`OFFLOAD_CONTROL_URL`, https;
 http only on 127.0.0.1). It can emit only the seven sync objects of `schemas/stage2` (`notice_ack`, `run_outcome`,
@@ -463,6 +616,29 @@ Routes (bearer token as everywhere):
   top-level domain); `?confirm=1&hash=<definitionHash>` -> 201 `{confirmed: true, proposal}` and queues it. The hash is
   required (400 without it): the confirm queues exactly what was previewed (409 when it no longer matches). 404 unknown
   workflow.
+
+## s18: person names (ADR 0010; no API change)
+- No new route and no DTO change. Person names are masked in code before text leaves the Mac or is stored in a note:
+  frame-note fields (activity, verb, object, surface, step, inputs, outputs) and span descriptions store `<name>`;
+  every model request (every router route and backend) carries per-run placeholders with a random run tag
+  (`<person:qzkt.1>`, `<person:qzkt.1.first>`, `<person:qzkt.me>` for the user). Placeholder-shaped text already in
+  the input (a notes cell, an inbound message) becomes `<name>` before masking, so it can never be restored to anyone's
+  name. Drafts the user reviews (email drafts, text-step drafts in dry runs and runs, style cards) come back with the
+  real names, so batch items, `batchHash` and approvals are on the real text. Task names, refined descriptions and
+  workflow wording keep `<name>`. A draft that still holds a placeholder or `<name>` gets the warning "a name Offload
+  could not fill in: check the names before you approve", and auto-run never sends it: it is split into a pending
+  batch for review and the needs-you line reads "N draft(s) ha(s/ve) a name Offload could not fill in: ...".
+- `$OFFLOAD_HOME/privacy.json` (optional, file only): `{ "ownName": "Muhammad Ali", "ownNameToClaude": "mask" |
+  "keep" }`. Default `mask`: the user's own name goes out as `<person:me>` and is restored on the Mac; `keep` sends it
+  as written. A workflow's facts.md `sign:` line also counts as the user's own name for its runs. People in any
+  workflow's `recipients.csv` are masked wherever they appear, in any case.
+- Identifiers (record ids) in notes and descriptions stay as they are: sealed on disk, used for grouping, never sent.
+- Limits. The masker is rules over embedded word lists: a name that is in no list and has no cue ("CV - Njeri
+  Wambugu.pdf", "Aroha Ngata left a comment") is NOT masked; `tests/s18-name-masking/heldout.ts` measures this
+  (printed by the s18 verify.sh, not a gate). Contacts in a `recipients.csv` are masked anywhere. Three model paths do
+  not go through the router and are not name-masked: screenshot captioning (the engine-masked frame image itself; its
+  text turn is masked), the computer-use planner (screenshots and the AX outline), and the approved batch handed to the
+  executor (real text by design: it is what the user approved and what is sent).
 
 ## Connections (s17)
 Any app Composio supports (brain/CONNECTORS.md "Connect anything (s17)"). Nothing here sends: setup and test only

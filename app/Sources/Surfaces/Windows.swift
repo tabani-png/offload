@@ -232,6 +232,12 @@ final class DashboardWindowController: TitledWindowController {
       window.performClose(nil)
       return true
     }
+    // s10f (M4): ⌘K, the sidebar's Connections link.
+    if DashboardSidebarLink.forShortcut(character: e.charactersIgnoringModifiers ?? "", command: e.flags.contains(.command)) == .connections,
+       let open = model.onOpenConnections {
+      open()
+      return true
+    }
     // ⌘1…⌘4: the sidebar's places.
     if e.flags.contains(.command), let n = Int(e.charactersIgnoringModifiers ?? ""), let s = DashboardSection.forShortcut(n) {
       model.show(s)
@@ -242,6 +248,41 @@ final class DashboardWindowController: TitledWindowController {
     guard let key = DashboardKey(characters: e.charactersIgnoringModifiers ?? "", keyCode: e.keyCode,
                                  command: e.flags.contains(.command) || e.flags.contains(.control)) else { return false }
     model.send(key)
+    return true
+  }
+}
+
+// MARK: company (S2-13)
+
+/// S2-13: the Company window (connect, notice, share, sync state). Additive: the app opens it from its menu with a
+/// model on the brain's company-sync routes. Esc closes a sheet; ⌘↩ is the sheet's (or the page's) white action.
+@MainActor
+final class CompanyWindowController: TitledWindowController {
+  let model: CompanyModel
+
+  init(model: CompanyModel) {
+    self.model = model
+    super.init(title: CompanyCopy.title, subtitle: CompanyCopy.subtitle, size: NSSize(width: CompanyView.width, height: 720),
+               minSize: NSSize(width: CompanyNoticeSheet.width + Tokens.Space.s48, height: 560), autosave: "OffloadCompany")
+    let host = NSHostingView(rootView: CompanyWindowRoot(model: model))
+    host.sceneBridgingOptions = []
+    window.contentView = host
+  }
+
+  override var toolbarButtons: [ToolbarButton] {
+    [ToolbarButton(id: "company-refresh", symbol: "arrow.clockwise", label: "Check sync status") { [weak self] in self?.model.refresh() }]
+  }
+
+  override func handleKey(_ e: NSEvent) -> Bool {
+    guard owns(e) else { return false }
+    if (e.window?.firstResponder as? NSTextView)?.isEditable == true { return false }
+    if e.keyCode == ReviewKey.escapeKeyCode, model.sheet != nil { model.dismissSheet(); return true }
+    guard ReviewKey.returnKeyCodes.contains(e.keyCode), e.flags.contains(.command) else { return false }
+    switch model.sheet {
+    case .notice: model.acknowledge()
+    case .share: model.confirmShare()
+    case nil: model.primary()
+    }
     return true
   }
 }

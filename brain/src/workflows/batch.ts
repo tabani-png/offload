@@ -70,7 +70,7 @@ export interface Batch {
   /** s10b N1: sha256 of facts.md, the tone card and SKILL.md as they were when this batch was drafted. */
   draftedWith?: Record<string, string>;
   /** s10b N1: why auto-run did not send this pending batch on its own. */
-  review?: { newRecipients: number; changedRecipients: number; changedFiles: string[] };
+  review?: { newRecipients: number; changedRecipients: number; changedFiles: string[]; unfilledNames?: number };
 }
 
 export function batchHash(workflowId: string, kind: BatchKind, items: readonly (Pick<BatchItem, "to" | "subject" | "body"> & { commit?: ItemCommit })[]): string {

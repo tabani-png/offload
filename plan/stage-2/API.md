@@ -117,6 +117,17 @@ Proposals arrive only through `POST /v1/sync/batches` (kind `workflow_proposal`)
 Owner/admin do not approve other people's batches unless the role policy names them; seeing a batch's item fields
 (recipients, bodies) is limited to the runner and the approvers, and each view is an audit event.
 
+Clearing a kill switch (S2-07 follow-up): nobody clears a person switch that targets themselves, whatever their role;
+a switch an owner or admin set is cleared only by an owner or admin (a tenant switch an owner set, only by an owner);
+a dept lead clears only switches set by a dept lead or member of their department (or by themselves), inside their
+scope; a member clears only switches they set. A person switch also stops that person's approvals: their unspent
+approvals are revoked and execute refuses an approval whose approver is switched off.
+
+Open question (S2-07 follow-up, not decided): several overnight policies may name the same workflow version (one per
+owner today; nothing stops one owner creating two). A run names the policy it uses (`overnightPolicyId`), so caps,
+budget and breaker state are per policy, not per workflow version: two policies of one owner double the night cap.
+Options: one active policy per (owner, workflow, version), or caps summed per workflow version. Needs a product call.
+
 ### Cloud workers
 | method path | body → response | O | A | L | M | U | D |
 |---|---|---|---|---|---|---|---|

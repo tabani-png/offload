@@ -1,6 +1,7 @@
 // s05 routes: workflows, dry run, approval, run, pause/resume, delete, connectors (brain/API.md).
 // s05c: GET/PUT /workflows/:id/tone (the style card) and /workflows/:id/skill (SKILL.md text only).
 // s09b: GET /workflows/:id/dry-runs/latest (the last sealed dry run, opened for the response only).
+// s19: GET/POST /workflows/:id/playbook (the messaging playbook: build, read, edit notes).
 // Writes are POST/PUT/DELETE with a JSON body of at most 64 KB. The approval gate itself lives in workflows/gate.ts.
 import type { Analysis } from "../analyze.ts";
 import { loadConnectorsConfig, toMcpServers, type Env } from "../connectors/config.ts";
@@ -25,6 +26,9 @@ import { applySkillUpdate, SkillEditError, skillDTO } from "../workflows/skill.t
 import { loadTonePack, MAX_TONE_CARD_BYTES, readStyleCard, writeStyleCard, type StyleCard } from "../tone/pack.ts";
 import { toneMeasured } from "../tone/style.ts";
 import type { WorkflowJson } from "../workflows/types.ts";
+import { buildWorkflowPlaybook, identityForWorkflow, PlaybookInputError } from "../playbook/build.ts";
+import { PlaybookLeakError } from "../playbook/leak.ts";
+import { PlaybookNotesError, readPlaybook, readPlaybookMd, setPlaybookNotes } from "../playbook/store.ts";
 import { error, json } from "./http.ts";
 import { API_VERSION, type ApproveResponse, type ConnectorChainDTO, type ModelLabel, type RunResponse, type ToneCardDTO, type WorkflowsResponse } from "./types.ts";
 
@@ -122,6 +126,8 @@ export async function workflowRoute(req: Request, path: string, ctx: WorkflowCon
     if (err instanceof NotFoundError || err instanceof DryRunError) return error(404, "not_found", err.message);
     if (err instanceof RunError) return error(err.code === "not_found" ? 404 : err.code === "conflict" ? 409 : 400, err.code, err.message);
     if (err instanceof SkillEditError) return error(400, "bad_request", err.message);
+    if (err instanceof PlaybookNotesError) return error(400, "bad_request", err.message);
+    if (err instanceof PlaybookInputError) return error(409, "conflict", err.message);
     throw err;
   }
 }
@@ -183,6 +189,8 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
     if (req.method === "PUT") return json(200, toneDTO(ctx, wf, writeStyleCard(ctx.home, wf.bucket, toneText(await body(req)))));
     return json(200, toneDTO(ctx, wf, readStyleCard(ctx.home, wf.bucket)));
   }
+
+  if (action === "playbook") return playbookRoute(req, ctx, mustWorkflow(ctx.home, id));
 
   methods(req, "POST");
   const wf = mustWorkflow(ctx.home, id);
@@ -260,6 +268,36 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
   }
 }
 
+/** s19: GET /workflows/:id/playbook, POST {action: "build"} | {action: "notes", notes} (brain/API.md). */
+async function playbookRoute(req: Request, ctx: WorkflowContext, wf: WorkflowJson): Promise<Response> {
+  methods(req, "GET", "POST");
+  const dto = () => ({ version: API_VERSION, workflowId: wf.id, playbook: readPlaybook(ctx.home, wf.id), markdown: readPlaybookMd(ctx.home, wf.id) });
+  if (req.method !== "POST") return json(200, dto());
+  const b = await body(req);
+  for (const k of Object.keys(b)) if (k !== "action" && k !== "notes") throw new HttpError(400, "bad_request", `${k} is not a playbook field (send { action, notes? })`);
+  if (b.action === "build") {
+    if (b.notes !== undefined) throw new HttpError(400, "bad_request", "build takes no notes");
+    try {
+      await buildWorkflowPlaybook(ctx.home, wf, ctx.model, ctx.now());
+    } catch (err) {
+      // Fail closed: nothing was written; the reason names kinds and fields, never the value.
+      if (err instanceof PlaybookLeakError) throw new HttpError(409, "conflict", err.message);
+      throw err;
+    }
+    return json(200, dto());
+  }
+  if (b.action === "notes") {
+    try {
+      setPlaybookNotes(ctx.home, wf.id, b.notes, identityForWorkflow(ctx.home, wf, ctx.now()), ctx.now());
+    } catch (err) {
+      if (err instanceof PlaybookLeakError) throw new HttpError(400, "bad_request", `notes ${err.message.replace(/^the playbook /, "")}`);
+      throw err;
+    }
+    return json(200, dto());
+  }
+  throw new HttpError(400, "bad_request", 'action must be "build" or "notes"');
+}
+
 // Control characters other than tab, newline and carriage return.
 const CARD_CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
@@ -310,15 +348,15 @@ export function dispatchAuto(ctx: WorkflowContext, id: string, batch: Batch, now
   // Auto-run on with nothing pinned (set by hand in workflow.json): every recipient is new to it.
   if (wf.autoRunPin == null) return { sending: null, held: holdBatch(ctx.home, batch, { newRecipients: batch.items.length, changedRecipients: 0, changedFiles: [] }) };
   if (p.stale) return { sending: null, held: batch };
-  const review = { newRecipients: p.newItems.length, changedRecipients: p.changedItems.length, changedFiles: p.changedFiles };
+  const review = { newRecipients: p.newItems.length, changedRecipients: p.changedItems.length, changedFiles: p.changedFiles, ...(p.unfilledItems.length === 0 ? {} : { unfilledNames: p.unfilledItems.length }) };
   if (p.changedFiles.length > 0) return { sending: null, held: holdBatch(ctx.home, batch, review) };
   let sendable: Batch | null = batch;
   let held: Batch | null = null;
-  if (p.newItems.length + p.changedItems.length > 0) {
+  if (p.newItems.length + p.changedItems.length + p.unfilledItems.length > 0) {
     const split = splitBatch(ctx.home, batch, new Set(p.eligible.map((i) => i.key)), review, now);
     sendable = split.kept;
     held = split.held;
-    log(`brain: ${id}: auto-run held ${review.newRecipients} new and ${review.changedRecipients} changed recipient(s) for review`);
+    log(`brain: ${id}: auto-run held ${review.newRecipients} new and ${review.changedRecipients} changed recipient(s)${p.unfilledItems.length === 0 ? "" : ` and ${p.unfilledItems.length} draft(s) with an unfilled name`} for review`);
   }
   if (sendable === null) return { sending: null, held };
   const { workflow, token } = approveBatch(ctx.home, id, sendable.hash, now, { auto: true });

@@ -7,8 +7,11 @@ import { join } from "node:path";
 
 /** draft = per-recipient emails (best model); bucket and style_card = cheap steps.
  * s14: workflow_design = the general workflow builder rewriting step text (best model); step = one text step of a
- * general workflow, e.g. a ticket reply (cheap model). Both see masked text only, never images (ADR 0007). */
-export type ModelRole = "draft" | "bucket" | "style_card" | "workflow_design" | "step" | "label" | "refine" | "explain";
+ * general workflow, e.g. a ticket reply (cheap model). Both see masked text only, never images (ADR 0007).
+ * s19: playbook_label = one sent message labelled within the playbook vocabularies (Haiku); playbook = the messaging
+ * playbook worded from its counts (Opus). Masked text only.
+ * s22: solution_design = the solution designer wording each kind of fix and its builder brief (best model). */
+export type ModelRole = "draft" | "bucket" | "style_card" | "workflow_design" | "step" | "label" | "refine" | "explain" | "playbook_label" | "playbook" | "solution_design";
 
 export interface ModelRequest {
   role: ModelRole;
@@ -23,6 +26,9 @@ export interface ModelRequest {
   stepKey?: string;
   /** s14 router: a check of the reply; a non-null reason escalates to the next tier (Haiku -> Sonnet -> Opus). */
   validate?: (text: string) => string | null;
+  /** s18: the run's name map (privacy/names.ts). The router masks the request with it and restores the reply; one map
+   * per run keeps placeholders stable across calls. Never sent: only its placeholders are. */
+  names?: import("../privacy/names.ts").NameMap;
 }
 
 export interface Model {
@@ -38,7 +44,7 @@ export interface ModelConfig {
 export const DEFAULT_MODELS: Readonly<ModelConfig> = { draft: TIER_MODELS.opus, cheap: TIER_MODELS.sonnet };
 
 export function modelFor(role: ModelRole, cfg: ModelConfig): string {
-  return role === "draft" || role === "workflow_design" ? cfg.draft : cfg.cheap;
+  return role === "draft" || role === "workflow_design" || role === "playbook" || role === "solution_design" ? cfg.draft : cfg.cheap;
 }
 
 const MODEL_ID_RE = /^[a-z0-9][a-z0-9.\-]{2,80}$/;
@@ -88,10 +94,17 @@ export class StubModel implements Model {
     if (req.role === "bucket") return tagged(req.prompt, "bucket_hint") ?? "other";
     // s14: the design model echoes the rules variants (so stub plans equal the rules plans); a step draft is built
     // from the source text and the facts only (plan/text-step.ts stubStepDraft).
-    if (req.role === "workflow_design") return tagged(req.prompt, "baseline") ?? "{}";
+    if (req.role === "workflow_design" || req.role === "solution_design") return tagged(req.prompt, "baseline") ?? "{}";
     if (req.role === "step") return stubStepDraft(req.prompt);
+    // s19: the labeller echoes the rule read, the playbook model echoes the code baseline.
+    if (req.role === "playbook_label") return tagged(req.prompt, "label_hint") ?? "{}";
+    if (req.role === "playbook") return tagged(req.prompt, "baseline") ?? "{}";
     const examples = parseExamples(tagged(req.prompt, "examples") ?? "");
     if (req.role === "style_card") return stubStyleCard(examples);
+    // s22 bias audit: only the email draft role gets the email-shaped stub; label, refine and explain get no text
+    // (their callers fall back to the rules), never an investor email.
+    if (req.role !== "draft") return "";
+    if (tagged(req.prompt, "playbook") !== null) return stubPlaybookDraft(req.prompt, examples);
     return stubDraft(req.prompt, examples);
   }
 }
@@ -109,7 +122,8 @@ const sentence = (s: string) => (/[.!?]$/.test(s.trim()) ? s.trim() : `${s.trim(
 
 /** The name the examples sign with, when most of them agree. */
 function exampleSign(examples: readonly string[]): string | null {
-  const names = examples.map(lastLine).filter((l): l is string => l !== null && /^[A-Z][\w'-]{1,30}$/.test(l));
+  // s18: a masked sign-off is a person placeholder (<person:2>); the router restores it.
+  const names = examples.map(lastLine).filter((l): l is string => l !== null && /^(?:[A-Z][\w'-]{1,30}|<person:[\w.~]{1,20}>)$/.test(l));
   const top = names[0];
   return top !== undefined && names.filter((n) => n === top).length * 2 > names.length ? top : null;
 }
@@ -144,6 +158,28 @@ function stubDraft(prompt: string, examples: readonly string[]): string {
   return lines.join("\n");
 }
 
+/** s19 draft with a playbook: the playbook's first-message template in slot order, filled from the facts and the
+ * recipient, in the voice of the examples (their greeting word, closing line, ask and name), never the playbook's. */
+function stubPlaybookDraft(prompt: string, examples: readonly string[]): string {
+  const recipient = JSON.parse(tagged(prompt, "recipient") ?? "{}") as Record<string, string>;
+  const facts = parseFactLines(tagged(prompt, "facts") ?? "");
+  const order = /^template: (.+)$/m.exec(tagged(prompt, "playbook") ?? "")?.[1]?.match(/\{[a-z_]+\}/g)?.map((x) => x.slice(1, -1)) ?? ["greeting", "claim", "proof", "ask", "sign_off"];
+  const greetWord = examples.map((e) => /^(Hi|Hello|Hey|Dear|Morning)\b/.exec(e.trim())?.[1]).find((g) => g !== undefined) ?? "Hi";
+  const closes = examples.map((e) => e.split("\n").map((l) => l.trim()).filter((l) => l !== "").at(-2) ?? "").filter((l) => /^(?:best|thanks|thank you|cheers|regards|kind regards|best regards|warm regards|speak soon|talk soon|many thanks|all the best)[,.!]?$/i.test(l));
+  const close = closes.length * 2 > examples.length ? closes[0]! : null;
+  const sign = facts.sign ?? exampleSign(examples) ?? "[missing: your name]";
+  const first = recipient.firstName !== undefined && recipient.firstName !== "" ? recipient.firstName : "there";
+  const part: Record<string, string | null> = {
+    greeting: `${greetWord} ${first},`,
+    hook: recipient.notes !== undefined && recipient.notes.trim() !== "" ? sentence(recipient.notes) : null,
+    claim: facts.pitch !== undefined ? sentence(facts.pitch) : "[missing: pitch]",
+    proof: [facts.raise !== undefined ? sentence(facts.raise) : null, facts.traction !== undefined ? sentence(facts.traction) : null].filter((x) => x !== null).join(" ") || "[missing: proof]",
+    ask: facts.ask ?? exampleAsk(examples) ?? "[missing: ask]",
+    sign_off: close === null ? sign : `${close}\n${sign}`,
+  };
+  return order.map((s) => part[s] ?? null).filter((x): x is string => x !== null && x !== "").join("\n\n");
+}
+
 /** Voice notes a person would write about their own emails, read from the examples. No numbers (code measures). */
 function stubStyleCard(examples: readonly string[]): string {
   const greet = examples.map((e) => /^(Hi|Hello|Hey|Dear)\b/.exec(e.trim())?.[1]).find((g) => g !== undefined);
@@ -176,8 +212,13 @@ function stubStepDraft(prompt: string): string {
   const sign = /sign-off: "([^"]+)"/.exec(card)?.[1] ?? exampleSign(examples) ?? "The team";
   const topic = source.split("\n").map((l) => l.trim()).find((l) => l !== "" && !/^customer:/i.test(l)) ?? "your message";
   const what = /Write the (.+?) now\.\s*$/m.exec(prompt)?.[1] ?? "reply";
+  if (!/reply|answer|message|respon/i.test(what) && !/scorecard|assessment|feedback|evaluation|review/i.test(what)) {
+    // s22 bias audit: any other text (a post, a prompt, a description, a note) is a neutral draft of that text with
+    // the gap a person fills in, not a recruiter scorecard. No number.
+    return [`${what.charAt(0).toUpperCase()}${what.slice(1)}: ${topic.replace(/[.?!]+$/, "")}`, "", `[missing: your ${what}]`].join("\n");
+  }
   if (!/reply|answer|message|respon/i.test(what)) {
-    // A note (scorecard, comment): what it is about and the gaps a person fills in. No number, no verdict.
+    // A scorecard or assessment: what it is about and the gaps a person fills in. No number, no verdict.
     return [`${what.charAt(0).toUpperCase()}${what.slice(1)}: ${topic.replace(/[.?!]+$/, "")}`, "- What stands out: [missing: your read of the source]", "- Gaps against what you look for: [missing: your read]", "- Recommendation: [missing: your decision]"].join("\n");
   }
   const ask = /order #\d+/i.exec(source)?.[0];
