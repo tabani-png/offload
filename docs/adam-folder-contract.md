@@ -24,7 +24,7 @@ project-root/
 │   ├── README.md             # index + dependency Mermaid
 │   └── <slice-id>/
 │       ├── SPEC.md           # the brief; subagents read but never modify
-│       ├── verify.sh         # runnable done-signal; Tier-1 orchestrator re-runs independently
+│       ├── verify.sh         # runnable done-signal; Tier-1 orchestrator re-runs independently; scope check via scripts/lib/slice-changes.sh
 │       └── tests/            # failing tests; subagents read but never modify
 ├── scratch/                  # WORKING NOTES — orchestrator + subagent write
 │   ├── intake-notes.md

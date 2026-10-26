@@ -14,6 +14,8 @@ final class InboxModel: ObservableObject {
   @Published private(set) var pressedOption: Int?
   @Published var micRecording = false
   @Published var hoveringStatus = false
+  /// S2-13: company sync on the rail, already through `CompanyEntry.railState` (nil = show nothing).
+  @Published var companyRail: CompanySyncState?
 
   /// Called when Esc peels past the last layer, or an action lands and the card should get out of the way.
   var onClose: (() -> Void)?
@@ -23,6 +25,8 @@ final class InboxModel: ObservableObject {
   var onConnect: ((Connector) -> Void)?
   /// Pause/resume from the rail: the app forwards it to `offload-observer pause|resume` (s09a).
   var onTogglePause: ((Bool) -> Void)?
+  /// S2-13: the rail's company mark opens the Company window.
+  var onOpenCompany: (() -> Void)?
 
   private let client: BrainClient
   private let clock: () -> Date
