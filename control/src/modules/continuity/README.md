@@ -28,8 +28,10 @@ lock) LAST, then S2-10's own audit events, which were queued until then. After c
 
 ## Lock order (with the broker's, control/src/modules/broker/broker.ts)
 S2-10's rows come before the broker's step 1, in this order, and no path goes back up:
-0. the advisory lock `owners:<tenant>` (POST /v1/people/:id/offboard only), so the last-owner check cannot race;
-1. the leaver's `people` row (`FOR UPDATE`): freeze, depart, and every hand-over route (`lockHandover`, before the hand-over);
+0. the tenant's owners lock (`lockOwners`, db/people.ts: the same key and hash as people PATCH and directory
+   deactivation), taken by POST /v1/people/:id/offboard, so the last-owner check cannot race;
+1. the leaver's `people` row (`FOR UPDATE`): freeze, depart, every sweep step, and every hand-over route (`lockHandover`,
+   before the hand-over); then a person successor's row `FOR SHARE` (assign, accept);
 2. the advisory lock `continuity:<person>` (freeze, and its after-commit worker pause);
 3. `handovers` rows, by id;
 4. `offboardings` row;
@@ -45,6 +47,13 @@ tokens (`broker.revokeTokensFor`), the same as `broker.stopRunsFor` without its 
 (`person.workers_paused`). Registry calls (`workflowsOf`, `getVersion`) and the run-record reads are in-process reads without locks. The
 end-date sweep re-reads the end date under the person lock before it freezes.
 
+## Decisions are re-read under the lock
+Every sweep step lists candidates in one transaction and decides in another: each one re-reads under the person lock
+(departure: state, open hand-overs and the 30-day expiry; end date due; early hand-overs: state, end date, no
+offboarding yet). The proposeBatch gate is a pre-check in its own transaction; the broker re-checks the hold (and the
+runner's state) inside its own transaction at propose, approval and before every call.
+
 ## Gate
-Mounting routes wraps `registry.isRunnableBy` and `broker.proposeBatch` (ADR 0113 §1). A test or wiring that overrides
+Mounting routes wraps `registry.isRunnableBy` and `broker.proposeBatch` (ADR 0113 §1). The broker also asks
+`continuity.held` itself in `runRefusal`, so an approved batch of a held workflow is revoked before it sends. A test or wiring that overrides
 `ports.continuity` gets no gate.

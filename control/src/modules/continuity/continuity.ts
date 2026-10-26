@@ -568,9 +568,10 @@ export function createContinuity(deps: Deps): Continuity {
     }
     if (s.type === "person") {
       if (s.personId === h.person_id) throw conflict("the leaver cannot be their own successor");
+      // FOR SHARE: a concurrent freeze of the successor waits (lock order: the leaver's row, then the successor's).
       const [p] = await tx`select p.state, exists (select 1 from job_role_holders j where j.person_id = p.id
           and j.job_role_id = ${h.job_role_id}) as holds
-        from people p where p.id = ${s.personId}`;
+        from people p where p.id = ${s.personId} for share of p`;
       if (!p || !["active", "leaving"].includes(p.state as string)) throw conflict("the successor must be an active person");
       if (!p.holds) throw conflict("the successor must hold the workflow's job role");
     } else {
@@ -610,7 +611,7 @@ export function createContinuity(deps: Deps): Continuity {
     }
     const [p] = await tx`select p.state, exists (select 1 from job_role_holders j where j.person_id = p.id
         and j.job_role_id = ${h.job_role_id}) as holds
-      from people p where p.id = ${by.personId}`;
+      from people p where p.id = ${by.personId} for share of p`;
     if (!p || !["active", "leaving"].includes(p.state as string) || !p.holds) {
       throw conflict("only an active holder of the workflow's job role can accept it");
     }
@@ -664,8 +665,15 @@ export function createContinuity(deps: Deps): Continuity {
     const frozen = await sys((tx) => tx`select o.person_id, o.frozen_at <= ${cutoff} as expired from offboardings o
       join people p on p.tenant_id = o.tenant_id and p.id = o.person_id where o.state = 'frozen' and p.state = 'frozen'
       order by o.person_id`);
-    for (const r of frozen as Array<{ person_id: string; expired: boolean }>) {
-      if (await sys((tx) => departIfDone(tx, r.person_id, SYSTEM, r.expired))) out.departed++;
+    for (const r of frozen as Array<{ person_id: string }>) {
+      const departed = await sys(async (tx) => {
+        // Re-read under the person lock: the list above is from another transaction.
+        await personState(tx, r.person_id, true);
+        const [o] = await tx`select frozen_at <= ${cutoff} as expired from offboardings where person_id = ${r.person_id} and state = 'frozen'`;
+        if (!o) return false;
+        return departIfDone(tx, r.person_id, SYSTEM, o.expired === true);
+      });
+      if (departed) out.departed++;
     }
     // 2. End dates that have come.
     const due = await sys(async (tx) => tx`select id from people where state = 'leaving' and leaving_on is not null
@@ -685,9 +693,18 @@ export function createContinuity(deps: Deps): Continuity {
       where p.state = 'leaving' and p.leaving_on is not null
         and not exists (select 1 from offboardings o where o.tenant_id = p.tenant_id and o.person_id = p.id)
       order by p.id`);
-    for (const r of leavers as Array<{ id: string; leaving_on: string }>) {
-      await sys((tx) => markLeaving(tx, r.id, { reason: "end_date", effectiveOn: r.leaving_on, actor: SYSTEM, requestedBy: null }));
-      out.leavingOpened++;
+    for (const r of leavers as Array<{ id: string }>) {
+      const opened = await sys(async (tx) => {
+        // Re-read under the person lock: an end date cleared or moved since the list above is honoured.
+        const [p] = await tx`select to_char(p.leaving_on, 'YYYY-MM-DD') as leaving_on from people p
+          where p.id = ${r.id} and p.state = 'leaving' and p.leaving_on is not null
+            and not exists (select 1 from offboardings o where o.tenant_id = p.tenant_id and o.person_id = p.id)
+          for update of p`;
+        if (!p) return false;
+        await deferAudits(tx, () => markLeaving(tx, r.id, { reason: "end_date", effectiveOn: p.leaving_on as string, actor: SYSTEM, requestedBy: null }));
+        return true;
+      });
+      if (opened) out.leavingOpened++;
     }
     // 4. Worker pauses whose after-commit follow-up failed.
     await idle();
