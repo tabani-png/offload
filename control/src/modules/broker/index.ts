@@ -4,10 +4,10 @@
  * (`proposeBatch`, `approve`, `commitApproved`, `revokeTokensFor`, `stopRunsFor`, ...) is the same object, bound to
  * the app's deps when routes are mounted, and reached by other modules with `brokerOf(deps.ports)`.
  */
-import type { ModuleDef } from "../../app.ts";
+import type { Deps, Job, ModuleDef } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
 import type { BrokerPort } from "../../ports.ts";
-import { createBroker, type Broker } from "./broker.ts";
+import { brokerOf, createBroker, type Broker } from "./broker.ts";
 import { batchRoutes, killRoutes } from "./routes.ts";
 
 export { brokerOf, createBroker } from "./broker.ts";
@@ -28,9 +28,26 @@ const unbound: BrokerPort = {
   },
 };
 
+/**
+ * Every minute, per tenant: `sending` rows the broker stopped during become `unknown` (never retried), then approved
+ * items whose send-window time has come run. The core has no scheduler yet; whatever runs `jobs` (S2-12 / ops) runs it
+ * once per tenant. `Job.run(deps)` carries no tenant, so the tenant is a second argument; without one the job refuses.
+ */
+export const commitDueJob: Job & { run(deps: Deps, tenantId?: string): Promise<void> } = {
+  name: "broker.commit_due",
+  schedule: "* * * * *",
+  async run(deps: Deps, tenantId?: string) {
+    if (!tenantId) throw new Error("broker.commit_due runs once per tenant: pass the tenant id");
+    const b = brokerOf(deps.ports);
+    await b.reconcile(tenantId);
+    await b.runDue(tenantId);
+  },
+};
+
 const broker: ModuleDef = {
   name: "broker",
   provides: { broker: unbound },
+  jobs: [commitDueJob],
   routes(app, deps) {
     let full: Broker | null = null;
     const get = () => (full ??= createBroker(deps));

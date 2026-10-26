@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { report } from "../../../packages/hours-saved/src/index.ts";
+import { report, reportInputsDigest } from "../../../packages/hours-saved/src/index.ts";
 import { asPrincipal, type Client } from "../helpers/harness.ts";
 import { goldenReport, type Sender } from "./golden.ts";
 import { WF2, at, populate, receipt, reviewEvent, runOutcome, sendObjects, setup, type S205 } from "./helpers.ts";
@@ -47,14 +47,17 @@ describe("HOURS endpoint = packages/hours-saved on the same rows", () => {
     const sales = s.h.a.departments.sales;
     const r = await owner.get(q(`department:${sales}`));
     const children = [{ scope: { type: "job_role" as const, id: s.h.a.jobRoles.sdr }, label: "SDR" }];
-    expect(r.json).toEqual({ ...report(goldenReport(senders, { type: "department", id: sales }, children, { period: OCT })), final: false });
+    // Below the company the digest covers only the scope's own inputs (PR #9 round 5): the golden of Sales' senders.
+    const own = reportInputsDigest(goldenReport(senders.filter((x) => x.departmentId === sales), { type: "department", id: sales }, children, { period: OCT }));
+    expect(r.json).toEqual({ ...report(goldenReport(senders, { type: "department", id: sales }, children, { period: OCT })), inputsDigest: own, final: false });
     expect(r.json.children.map((c: { label: string }) => c.label)).toEqual(["SDR"]);
   });
 
   test("HOURS: job_role scope equals hs-1", async () => {
     const ap = s.h.a.jobRoles.ap;
     const r = await owner.get(q(`job_role:${ap}`));
-    expect(r.json).toEqual({ ...report(goldenReport(senders, { type: "job_role", id: ap }, [], { period: OCT })), final: false });
+    const own = reportInputsDigest(goldenReport(senders.filter((x) => x.jobRoleId === ap), { type: "job_role", id: ap }, [], { period: OCT }));
+    expect(r.json).toEqual({ ...report(goldenReport(senders, { type: "job_role", id: ap }, [], { period: OCT })), inputsDigest: own, final: false });
     expect(r.json.total.people).toBe(6);
   });
 

@@ -1,7 +1,7 @@
 # 0112 Amendment to 0104: a promoted messaging workflow carries its playbook
 
 Date: 2026-10-25. Status: **proposed** (s19). Amends ADR 0104 and `schemas/stage2/workflow-definition.schema.json`
-(frozen: not changed by s19; this ADR is the proposal). Depends on plan/adr/0010-messaging-playbook.md.
+(frozen: not changed by s19; this ADR is the proposal). Depends on plan/adr/0011-messaging-playbook.md.
 
 ## Context
 ADR 0104 strips facts values, recipient lists and tone examples on promotion, so a role workflow keeps its steps but

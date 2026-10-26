@@ -79,12 +79,15 @@ describe("FLOOR group floor of 5 people with data, complementary suppression", (
     expect(fin.json.topWorkflows.length).toBe(1);
   });
 
-  test("FLOOR: adoption under the floor is suppressed; at the floor it has numbers", async () => {
+  test("FLOOR: adoption under the floor is suppressed, complementarily hidden too; a visible department has numbers", async () => {
     const fin = await owner.get(`/v1/metrics/adoption?scope=department:${s.h.a.departments.finance}&from=2026-10-01&to=2026-11-01`);
     expect(fin.status).toBe(200);
     expect(fin.json.value).toEqual(SUPPRESSED);
+    // Sales (5) is the complementary cell for Finance in the company tree, so it is hidden here as in hours saved.
     const sales = await owner.get(`/v1/metrics/adoption?scope=department:${s.h.a.departments.sales}&from=2026-10-01&to=2026-11-01`);
-    expect(sales.json.value.peopleWithActiveWorkflow).toBe(5);
+    expect(sales.json.value).toEqual(SUPPRESSED);
+    const o = await owner.get(`/v1/metrics/adoption?scope=department:${ops}&from=2026-10-01&to=2026-11-01`);
+    expect(o.json.value.peopleWithActiveWorkflow).toBe(6);
   });
 
   test("FLOOR: a tenant floor raised to 6 suppresses the 5-person department (configurable upward)", async () => {

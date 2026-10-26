@@ -25,10 +25,10 @@ export interface DraftRequest {
   facts: string;
   model: Model;
   models: ModelConfig;
-  /** s18: the run's name map; the router masks the request and restores the draft with it. */
-  names?: NameMap;
   /** s19: the workflow's messaging playbook. The draft says its message in the voice of `pack` (the current user). */
   playbook?: Playbook | null;
+  /** s18: the run's name map; the router masks the request and restores the draft with it. */
+  names?: NameMap;
 }
 
 export interface DraftResult {

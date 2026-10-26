@@ -10,6 +10,7 @@
 import { cosine } from "./embed.ts";
 import { RULES_CONFIDENCE, type SpanDescription } from "./describe.ts";
 import type { InstanceBoundaryReason } from "../types.ts";
+import { isGenericVerb } from "./verbs.ts";
 
 export interface InduceOptions {
   /** Score needed to join an existing step cluster (0..1). */
@@ -155,7 +156,8 @@ function score(d: SpanDescription, v: readonly number[], c: StepCluster): number
   const top = topOf(c.surfaceKeys);
   const sameKey = c.surfaceKeys.has(d.surfaceKey) ? 1 : 0;
   const sameSurface = c.surfaces.has(d.surface.toLowerCase()) ? 1 : 0;
-  const sameVerb = topOf(c.verbs) === d.verb ? 1 : 0;
+  // s20: a generic looking verb ("reviewing") shared by two spans says nothing about them being one step.
+  const sameVerb = topOf(c.verbs) === d.verb && !isGenericVerb(d.verb) ? 1 : 0;
   const sameObject = topOf(c.objects) === d.object ? 1 : 0;
   const otherCategory = c.members[0]?.category !== d.category ? 1 : 0;
   const otherApp = appOfKey(top) !== d.app ? 1 : 0;

@@ -19,6 +19,8 @@ struct Palette {
   // Rings and fills.
   var ring: Color { isDark ? .white.opacity(0.10) : .black.opacity(0.10) }
   var ringStrong: Color { isDark ? .white.opacity(0.22) : .black.opacity(0.18) }
+  /// s10f: keyboard focus ring (getone): white 40% on dark, black 40% on light. Not a state colour.
+  var focusRing: Color { isDark ? .white.opacity(FocusRing.opacity) : .black.opacity(FocusRing.opacity) }
   // Light: a faint grey well instead of white-on-white, so rows and wells separate from light glass (s10a).
   var fill: Color { isDark ? .white.opacity(0.06) : .black.opacity(0.055) }
   var fillStrong: Color { isDark ? .white.opacity(0.12) : .white.opacity(0.96) }

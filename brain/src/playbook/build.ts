@@ -6,11 +6,12 @@ import { loadTonePack, type TonePack } from "../tone/pack.ts";
 import { readText } from "../workflows/store.ts";
 import type { WorkflowJson } from "../workflows/types.ts";
 import { assertDepersonalised } from "./leak.ts";
-import { buildIdentity, type Identity } from "./mask.ts";
+import { readNamePolicy } from "../privacy/policy.ts";
+import { buildIdentity, type Identity, type NameRegistry } from "./mask.ts";
 import { readMessages, threadMessages } from "./read.ts";
 import { computeCadence, computeOutcomes, computeStats } from "./stats.ts";
 import { baselinePlaybook, synthesise } from "./synth.ts";
-import { readPlaybook, writePlaybook } from "./store.ts";
+import { readIdentityDigest, readPlaybook, writeIdentityDigest, writePlaybook } from "./store.ts";
 import { MIN_MESSAGES, PLAYBOOK_SCHEMA, type Channel, type MessageRead, type Playbook, type PlaybookMessage } from "./types.ts";
 
 /** Not enough to learn from (no tone pack, too few messages): the API answers 409. */
@@ -27,8 +28,12 @@ export interface BuildPlaybookOptions {
   facts?: string;
   /** null = rules only (no model call). */
   model: Model | null;
+  /** Labeller calls at most (default MAX_LABEL_CALLS). */
+  maxLabelCalls?: number;
   now: number;
   previous?: Playbook | null;
+  /** s18's name registry (every workflow's recipients, the user's own name): joins the identity set. */
+  registry?: NameRegistry;
 }
 
 export interface BuildPlaybookResult {
@@ -40,10 +45,10 @@ export interface BuildPlaybookResult {
 }
 
 export async function buildPlaybook(o: BuildPlaybookOptions): Promise<BuildPlaybookResult> {
-  const identity = buildIdentity(o.messages, o.facts ?? "");
+  const identity = buildIdentity(o.messages, o.facts ?? "", o.registry ?? {});
   const threaded = threadMessages(o.messages).filter((t) => o.readIds === undefined || o.readIds.has(t.message.id));
   if (threaded.length < MIN_MESSAGES) throw new PlaybookInputError(`a playbook needs at least ${MIN_MESSAGES} sent messages of this workflow (found ${threaded.length})`);
-  const { reads, prompts } = await readMessages(threaded, identity, o.model);
+  const { reads, prompts, warnings } = await readMessages(threaded, identity, o.model, o.maxLabelCalls);
   const stats = computeStats(reads);
   const outcomes = computeOutcomes(reads);
   const cadence = computeCadence(reads, o.messages);
@@ -69,8 +74,8 @@ export async function buildPlaybook(o: BuildPlaybookOptions): Promise<BuildPlayb
     outcomes,
     notes: prev?.notes ?? "",
     history: [...(prev?.history ?? []), { version, at: o.now, change: "built" as const }].slice(-50),
-    models: { label: o.model === null ? "rules" : TIER_MODELS.haiku, synth: TIER_MODELS.opus, synthUsed: synth.used },
-    warnings: synth.warning === null ? [] : [synth.warning],
+    models: { label: reads.some((r) => r.labelledBy === "model") ? TIER_MODELS.haiku : "rules", synth: TIER_MODELS.opus, synthUsed: synth.used },
+    warnings: [...warnings, ...(synth.warning === null ? [] : [synth.warning])],
   };
   assertDepersonalised(playbook, identity);
   return { playbook, reads, identity, prompts };
@@ -88,11 +93,22 @@ export function workflowMessages(pack: TonePack, bucket: string): { messages: Pl
   return { messages: inThreads.map((t) => t.message), readIds };
 }
 
-/** The identity set of a workflow now: its tone pack threads (when the pack is still there) and facts.md. */
+/** s18's registry for this home: every workflow's recipients and the user's own name (privacy.json). */
+function registryOf(home: string): NameRegistry {
+  const p = readNamePolicy(home);
+  return { contacts: p.contacts ?? [], self: p.self ?? [] };
+}
+
+/** The identity set a notes edit or a promotion is re-checked against: the tone pack threads (when the pack is still
+ * there), facts.md and the build's identity digest. With neither the pack nor a digest the names of the build are
+ * unknown, so nothing is reported re-checked: PlaybookInputError (409). */
 export function identityForWorkflow(home: string, wf: WorkflowJson, now: number): Identity {
   const pack = loadTonePack(home, now);
+  const digest = readIdentityDigest(home, wf.id);
+  if ((pack === null || pack.corpus.length === 0) && digest === null) throw new PlaybookInputError("the tone pack is gone and this playbook has no identity digest, so it cannot be re-checked: run `tone build`, then rebuild the playbook");
   const messages = pack === null ? [] : workflowMessages(pack, wf.bucket).messages;
-  return buildIdentity(messages, readText(home, wf.id, "facts.md") ?? "");
+  const id = buildIdentity(messages, readText(home, wf.id, "facts.md") ?? "", registryOf(home));
+  return digest === null ? id : { ...id, hashed: digest };
 }
 
 /** POST /workflows/:id/playbook {action: "build"}: from the sealed tone pack, written to the workflow folder. */
@@ -100,7 +116,8 @@ export async function buildWorkflowPlaybook(home: string, wf: WorkflowJson, mode
   const pack = loadTonePack(home, now);
   if (pack === null || pack.corpus.length === 0) throw new PlaybookInputError("no tone pack yet: run `tone build` so Offload can read your sent messages");
   const { messages, readIds } = workflowMessages(pack, wf.bucket);
-  const { playbook } = await buildPlaybook({ workflowId: wf.id, channel: "email", messages, readIds, facts: readText(home, wf.id, "facts.md") ?? "", model, now, previous: readPlaybook(home, wf.id) });
+  const { playbook, identity } = await buildPlaybook({ workflowId: wf.id, channel: "email", messages, readIds, facts: readText(home, wf.id, "facts.md") ?? "", model, now, previous: readPlaybook(home, wf.id), registry: registryOf(home) });
   writePlaybook(home, playbook);
+  writeIdentityDigest(home, wf.id, identity);
   return playbook;
 }

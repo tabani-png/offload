@@ -93,6 +93,54 @@ export function recipientAllowed(policy: Pick<OvernightPolicy, "recipients">, it
   return policy.recipients.repliesToThreadsStartedByIdentity && item.replyToIdentityThread;
 }
 
+/**
+ * What an edit does to the trust a policy grants (ADR 0112 §1-2). `narrowed`: something it allowed before is no
+ * longer allowed, so what it already approved and has not sent loses that approval. `widened`: it allows something it
+ * did not, so its dry-run nights start again. A new template or a switched timezone basis is both. Breakers that get
+ * stricter are neither (they act on signals, not on what was approved); state is handled by the caller (re-arm keeps
+ * the nights, anything but active narrows).
+ */
+export function trustChange(a: OvernightPolicy, b: OvernightPolicy): { narrowed: boolean; widened: boolean } {
+  const set = (xs: readonly string[]) => new Set(xs.map((x) => x.trim().toLowerCase().replace(/^@/, "")));
+  const lost = (x: Set<string>, y: Set<string>) => [...x].some((v) => !y.has(v));
+  const [ea, eb, da, db] = [set(a.recipients.emails), set(b.recipients.emails), set(a.recipients.domains), set(b.recipients.domains)];
+  const [wa, wb] = [a.sendWindow, b.sendWindow];
+  const [daysA, daysB] = [new Set(wa.days.map(String)), new Set(wb.days.map(String))];
+  let narrowed = b.state !== "active";
+  let widened = false;
+  const both = a.templateHash !== b.templateHash || wa.recipientTimezone !== wb.recipientTimezone;
+  narrowed ||=
+    both ||
+    lost(ea, eb) ||
+    lost(da, db) ||
+    (a.recipients.repliesToThreadsStartedByIdentity && !b.recipients.repliesToThreadsStartedByIdentity) ||
+    (a.mode === "preapproved" && b.mode === "drafts_only") ||
+    lost(daysA, daysB) ||
+    wb.startHour > wa.startHour ||
+    wb.endHour < wa.endHour ||
+    b.maxCommitsPerNight < a.maxCommitsPerNight ||
+    b.maxPerRecipientPerWeek < a.maxPerRecipientPerWeek ||
+    b.budgetCentsPerNight < a.budgetCentsPerNight ||
+    (a.attachmentsAllowed && !b.attachmentsAllowed);
+  widened ||=
+    both ||
+    lost(eb, ea) ||
+    lost(db, da) ||
+    (!a.recipients.repliesToThreadsStartedByIdentity && b.recipients.repliesToThreadsStartedByIdentity) ||
+    (a.mode === "drafts_only" && b.mode === "preapproved") ||
+    lost(daysB, daysA) ||
+    wb.startHour < wa.startHour ||
+    wb.endHour > wa.endHour ||
+    b.maxCommitsPerNight > a.maxCommitsPerNight ||
+    b.maxPerRecipientPerWeek > a.maxPerRecipientPerWeek ||
+    b.budgetCentsPerNight > a.budgetCentsPerNight ||
+    (!a.attachmentsAllowed && b.attachmentsAllowed) ||
+    b.circuitBreakers.bounceRatePct > a.circuitBreakers.bounceRatePct ||
+    b.circuitBreakers.negativeReplySpike > a.circuitBreakers.negativeReplySpike ||
+    b.circuitBreakers.consecutiveFailures > a.circuitBreakers.consecutiveFailures;
+  return { narrowed, widened };
+}
+
 export function evaluateOvernight(
   policy: OvernightPolicy,
   item: OvernightItem,
@@ -174,7 +222,30 @@ export function nextWindowStart(w: SendWindow, tz: string, now: number): number 
   return Number.POSITIVE_INFINITY;
 }
 
-/** The night an instant belongs to: the local date of (t − 12 h) in `tz` (a night spanning midnight is one night). */
+/**
+ * Nights. A night is named by a local calendar date D and runs from local noon of D to local noon of D + 1 in `tz` (a
+ * night spanning midnight is one night). `nightOf` and `nightStart` are the only definition of that boundary: every
+ * night id and every "since tonight began" cutoff comes from them, so they agree on DST days too (a night is 23 or 25
+ * hours long then; subtracting a fixed 12 h is not the same boundary).
+ */
+export const NIGHT_START_HOUR = 12;
+
+const nextDate = (d: string, days: number) => new Date(Date.parse(`${d}T00:00:00Z`) + days * 24 * 3600_000).toISOString().slice(0, 10);
+
+/** The night an instant belongs to: its local date, or the day before when it is before local noon. */
 export function nightOf(t: number, tz: string): string {
-  return localParts(t - 12 * 3600_000, tz).day;
+  const p = localParts(t, tz);
+  return p.hour >= NIGHT_START_HOUR ? p.day : nextDate(p.day, -1);
+}
+
+/** The instant night `night` starts: the first instant of local noon on that date. Every real UTC offset is a multiple
+ * of 15 minutes (-12:00 .. +14:00), so local noon falls on a UTC quarter hour in that range. */
+export function nightStart(night: string, tz: string): number {
+  const utcNoon = Date.parse(`${night}T${String(NIGHT_START_HOUR).padStart(2, "0")}:00:00Z`);
+  for (let t = utcNoon - 14 * 3600_000; t <= utcNoon + 12 * 3600_000; t += QUARTER) {
+    const p = localParts(t, tz);
+    if (p.day === night && p.hour >= NIGHT_START_HOUR) return t;
+    if (p.day > night) break;
+  }
+  throw new Error(`nightStart: no local noon on ${night} in ${tz}`);
 }

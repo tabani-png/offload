@@ -1,22 +1,41 @@
 // s18 person-name masker (ADR 0010). Deterministic rules, no model: names from the run so far, the user's own name and
 // their contacts; honorific + name; greeting/role cue + name; given + family pairs; signatures; lone given names; email
 // local parts that equal a name. Common words, UI labels, months, products and organisations are left alone
-// (privacy/lexicon.ts). `NameMap.mask` gives stable per-run placeholders (<person:1>, <person:1.first>, <person:me>) so
-// a model can refer to people consistently; `unmask` restores them exactly, on the Mac. The map lives in memory only.
+// (privacy/lexicon.ts). `NameMap.mask` gives stable per-run placeholders (<person:qzkt.1>, <person:qzkt.1.first>,
+// <person:qzkt.me>; "qzkt" is the run's random tag) so a model can refer to people consistently; `unmask` restores them
+// exactly, on the Mac. The map lives in memory only. Placeholder-shaped text that arrives in the input (a notes cell, an
+// inbound message) carries no run tag: it becomes <name> before masking, so it can never restore to a real name.
+// Rules read an NFC view with zero-width characters dropped; every surface matches in any case, except a single
+// everyday word ("Will", "May"), which matches only as written. Known limit (not fixed, measured apart as held-out
+// recall): a name outside the lexicon with no cue, no contact entry and no earlier sighting ("José García sent it")
+// is not found. Contacts (`known`) and the user's own name close that gap for the people that matter most.
+import { randomBytes } from "node:crypto";
 import { AMBIGUOUS_GIVEN, CLOSINGS, COMMON, FAMILY, GIVEN, GREETING_CUES, HONORIFICS, ORG, PARTICLES, PRODUCT, PROTECTED_PHRASES, ROLE_CUES, ROLE_MAILBOXES, STRONG_CUE_PAIRS, WEAK_CUES } from "./lexicon.ts";
 
-/** Every placeholder a NameMap writes. */
-export const PERSON_PLACEHOLDER_RE = /<person:(?:\d+|me)(?:\.[a-z]+)?(?:~\d+)?>/g;
+/** Every placeholder a NameMap writes: <person:TAG.N>, <person:TAG.N.first>, <person:TAG.me~2> (TAG = 4 letters). */
+export const PERSON_PLACEHOLDER_RE = /<person:[a-z]{4}\.(?:\d+|me)(?:\.[a-z]+)?(?:~\d+)?>/g;
+/** Anything shaped like a person placeholder, in any case, with or without a run tag (also after maskText turned its
+ * digits into <n>): what input text may carry to impersonate one. */
+const PERSON_LIKE_RE = /<\s*person\s*:[^\n>]{0,40}>+/gi;
 /** The grouping code's token for a name in stored text (grouping/normalize.ts NAME). */
 export const NAME_TOKEN = "<name>";
 
 export interface NameMapOptions {
-  /** Names known to be people (contacts): matched wherever they appear, any case. */
+  /** Names known to be people (contacts): every part (full, first, last) is matched wherever it appears, any case,
+   * from the first call on; the full name does not have to appear. */
   known?: readonly string[];
+  /** Contacts with separate fields (a recipient list): first, last, full name and the email's local part. */
+  contacts?: readonly ContactEntry[];
   /** The user's own name(s), e.g. "Muhammad Ali" (placeholder <person:me>). */
   self?: readonly string[];
   /** true = the user's own name is sent as written and never masked. Default false (masked, restored locally). */
   keepSelf?: boolean;
+}
+
+export interface ContactEntry {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
 }
 
 type Part = "full" | "first" | "last" | "email";
@@ -52,6 +71,31 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const B_START = "(?<![\\p{L}\\p{N}_])";
 const B_END = "(?![\\p{L}\\p{N}_])";
 
+/** Zero-width and invisible characters that can sit inside a name without showing: ZWSP, ZWNJ, ZWJ, word joiner, BOM,
+ * soft hyphen, Mongolian vowel separator. */
+const INVISIBLE_RE = /^[\u200b-\u200d\u2060\ufeff\u00ad\u180e]$/u;
+/** One base character with its combining marks, or one invisible character. */
+const CLUSTER_RE = /[\u200b-\u200d\u2060\ufeff\u00ad\u180e]|\P{M}\p{M}*|\p{M}+/gsu;
+
+/** The text the rules read: NFC (a decomposed "José" is one word) with invisible characters dropped ("Am\u200bara"
+ * is "Amara"). `from[k]`/`to[k]`: the input range that character k of `text` came from, so a match maps back to the
+ * exact input text and the round trip restores what the user wrote, byte for byte. */
+function matchView(input: string): { text: string; from: number[]; to: number[] } {
+  let text = "";
+  const from: number[] = [];
+  const to: number[] = [];
+  for (const m of input.matchAll(CLUSTER_RE)) {
+    if (INVISIBLE_RE.test(m[0])) continue;
+    const n = m[0].normalize("NFC");
+    for (let k = 0; k < n.length; k++) {
+      from.push(m.index!);
+      to.push(m.index! + m[0].length);
+    }
+    text += n;
+  }
+  return { text, from, to };
+}
+
 const isNameWord = (t: Tok) => NAME_RE.test(t.text) && t.text.length >= 2 && !COMMON.has(t.lower) && !GREETING_CUES.has(t.lower) && !HONORIFICS.has(t.lower);
 const isBlocker = (lower: string) => ORG.has(lower) || PRODUCT.has(lower);
 /** An organisation or product word ("Couriers", "Xero"): a run with one is never a person. */
@@ -62,6 +106,14 @@ function usablePart(s: string | undefined): s is string {
   if (s === undefined || s.length < 2 || !NAME_RE.test(s)) return false;
   const l = s.toLowerCase();
   return !COMMON.has(l) && !isBlocker(l) && !GREETING_CUES.has(l) && !HONORIFICS.has(l);
+}
+
+/** A name part the user gave (their own name, a contact) or a cue confirmed ("Dear Will,"): any word of two letters
+ * or more except a title or a greeting. The common-word filter is not applied again, so "Will" and "May" count. */
+function trustedPart(s: string | undefined): s is string {
+  if (s === undefined || s.length < 2 || !/^\p{L}[\p{L}\p{M}'’-]*$/u.test(s)) return false;
+  const l = s.toLowerCase();
+  return !GREETING_CUES.has(l) && !HONORIFICS.has(l);
 }
 
 /** The words of one line, with the punctuation around each. Words are letter runs (apostrophes and hyphens inside),
@@ -152,34 +204,50 @@ export class NameMap {
   private readonly people: Person[] = [];
   /** Candidate surfaces (exact text) -> the person and part they name. */
   private readonly surfaces = new Map<string, { person: Person; part: Part }>();
-  /** Contacts not met yet: lower-case full name -> the name as written. */
-  private readonly known = new Map<string, string>();
   private readonly toPlaceholder = new Map<string, string>();
   private readonly toSurface = new Map<string, string>();
   private readonly kept = new Set<string>();
   private readonly regexes = new Map<string, RegExp>();
   private keptRes: RegExp[] = [];
   private next = 1;
+  /** This map's random run tag: input text cannot know it, so it cannot name a placeholder this map wrote. */
+  private readonly tag = [...randomBytes(4)].map((b) => String.fromCharCode(97 + (b % 26))).join("");
 
   constructor(o: NameMapOptions = {}) {
-    for (const k of o.known ?? []) {
-      const t = k.replace(/\s+/g, " ").trim();
-      if (t.split(" ").filter(usablePart).length >= 1 && t.length >= 2) this.known.set(t.toLowerCase(), t);
-    }
     const self = (o.self ?? []).map((s) => s.replace(/\s+/g, " ").trim()).filter((s) => s.length >= 2);
     if (self.length > 0) {
       if (o.keepSelf === true) {
         for (const s of self) {
           this.kept.add(s.toLowerCase());
-          for (const p of s.split(" ")) if (usablePart(p)) this.kept.add(p.toLowerCase());
+          for (const p of s.split(" ")) if (trustedPart(p)) this.kept.add(p.toLowerCase());
         }
         this.keptRes = [...this.kept].sort((a, b) => b.length - a.length).map((k) => new RegExp(`${B_START}${escapeRe(k)}${B_END}`, "giu"));
       } else {
         const me: Person = { id: "me", bareUsed: false };
         this.people.push(me);
-        for (const s of self) this.attach(me, s.split(" "));
+        for (const s of self) this.attach(me, s.split(" "), true);
       }
     }
+    // Contacts register every trusted part up front (round 3: "Ask Zorblax" with no "Zorblax Quux" in the text, or a
+    // recipient JSON with lower-case firstName / lastName fields, must not reach the model readable).
+    const contacts: ContactEntry[] = [...(o.known ?? []).map((k) => ({ firstName: k })), ...(o.contacts ?? [])];
+    for (const c of contacts) {
+      const tokens = `${c.firstName ?? ""} ${c.lastName ?? ""}`.replace(/\s+/g, " ").trim().split(" ").filter((t) => t !== "");
+      const usable = tokens.filter(trustedPart);
+      const email = c.email?.trim();
+      const local = email === undefined || !email.includes("@") ? "" : email.slice(0, email.indexOf("@"));
+      const localOk = local.length >= 3 && !ROLE_MAILBOXES.has(local.toLowerCase()) && !COMMON.has(local.toLowerCase()) && !this.isKept(local);
+      if (usable.length === 0 && !localOk) continue;
+      if (tokens.length > 0 && tokens.every((t) => this.isKept(t))) continue;
+      const p = usable.length > 0 ? this.personFor(tokens, true) : this.newPerson();
+      if (localOk && !this.surfaces.has(local)) this.surfaces.set(local, { person: p, part: "email" });
+    }
+  }
+
+  private newPerson(): Person {
+    const p: Person = { id: "", bareUsed: false };
+    this.people.push(p);
+    return p;
   }
 
   /** People this map has placeholders for. */
@@ -192,7 +260,10 @@ export class NameMap {
     return { people: this.size };
   }
 
-  private attach(p: Person, tokens: readonly string[]): void {
+  /** `trusted`: the user gave the name or a cue confirmed it, so its parts skip the common-word filter. A name found in
+   * uncued prose keeps it: "Will Smith" there registers the full name, not "Will" alone. */
+  private attach(p: Person, tokens: readonly string[], trusted = false): void {
+    const ok = trusted ? trustedPart : usablePart;
     const words = tokens.filter((t) => t !== "" && !PARTICLES.has(t) && !/^\p{Lu}\.?$/u.test(t));
     if (tokens.length >= 2) {
       p.full ??= tokens.join(" ");
@@ -200,11 +271,11 @@ export class NameMap {
     }
     const first = words[0];
     const last = words.length >= 2 ? words[words.length - 1] : undefined;
-    if (usablePart(first)) {
+    if (ok(first)) {
       p.first ??= first;
       this.addSurface(first, p, "first");
     }
-    if (usablePart(last)) {
+    if (ok(last)) {
       p.last ??= last;
       this.addSurface(last, p, "last");
     }
@@ -214,7 +285,7 @@ export class NameMap {
     if (!this.surfaces.has(s) && !this.kept.has(s.toLowerCase())) this.surfaces.set(s, { person, part });
   }
 
-  private personFor(tokens: readonly string[]): Person {
+  private personFor(tokens: readonly string[], trusted = false): Person {
     const text = tokens.join(" ");
     const lower = text.toLowerCase();
     for (const p of this.people) if (p.full?.toLowerCase() === lower) return p;
@@ -226,13 +297,13 @@ export class NameMap {
       // "Amara" seen alone first, then "Amara Okafor": the same person.
       const lone = this.people.find((p) => p.full === undefined && p.last === undefined && p.first === words[0]);
       if (lone !== undefined) {
-        this.attach(lone, tokens);
+        this.attach(lone, tokens, trusted);
         return lone;
       }
     }
     const p: Person = { id: "", bareUsed: false };
     this.people.push(p);
-    this.attach(p, tokens);
+    this.attach(p, tokens, trusted);
     return p;
   }
 
@@ -242,11 +313,11 @@ export class NameMap {
     if (person.id === "") person.id = String(this.next++);
     let ph: string;
     if (!person.bareUsed) {
-      ph = `<person:${person.id}>`;
+      ph = `<person:${this.tag}.${person.id}>`;
       person.bareUsed = true;
     } else {
-      ph = `<person:${person.id}.${part}>`;
-      for (let k = 2; this.toSurface.has(ph); k++) ph = `<person:${person.id}.${part}~${k}>`;
+      ph = `<person:${this.tag}.${person.id}.${part}>`;
+      for (let k = 2; this.toSurface.has(ph); k++) ph = `<person:${this.tag}.${person.id}.${part}~${k}>`;
     }
     this.toPlaceholder.set(surface, ph);
     this.toSurface.set(ph, surface);
@@ -259,9 +330,14 @@ export class NameMap {
 
   /** Finds names in `text` by rule and adds them to the map (no replacement). */
   learn(text: string): void {
+    this.learnView(matchView(text).text);
+  }
+
+  private learnView(text: string): void {
     const prot = protectedRanges(text, this.keptRes);
     const isProt = (s: number, e: number) => prot.some(([a, b]) => s < b && e > a);
-    const found: string[][] = [];
+    /** Names found, and whether a cue (greeting, role, honorific, signature) confirmed each one. */
+    const found: Array<{ name: string[]; cued: boolean }> = [];
     let offset = 0;
     let prevLine = "";
     for (const line of text.split("\n")) {
@@ -299,21 +375,18 @@ export class NameMap {
           j = k - 1;
         }
         while (seg.length > 0 && (INITIAL_RE.test(seg[seg.length - 1]!.text) || PARTICLES.has(seg[seg.length - 1]!.text))) seg.pop();
-        const name = ambiguous ? seg : decide(seg, contextBefore(toks, i, signature));
-        if (name !== null && !this.isKept(name.map((x) => x.text).join(" ")) && !(name.length === 1 && this.isKept(name[0]!.text))) found.push(name.map((x) => x.text));
+        const c = contextBefore(toks, i, signature);
+        const name = ambiguous ? seg : decide(seg, c);
+        const cued = c.greeting || c.role || c.honorific || c.signature;
+        if (name !== null && !this.isKept(name.map((x) => x.text).join(" ")) && !(name.length === 1 && this.isKept(name[0]!.text))) found.push({ name: name.map((x) => x.text), cued });
         i = j + 1;
       }
       offset += line.length + 1;
       if (line.trim() !== "") prevLine = line;
     }
     // Full names before lone names, so "Amara" after "Amara Okafor" is the same person.
-    for (const n of found.filter((f) => f.length > 1)) this.personFor(n);
-    for (const n of found.filter((f) => f.length === 1)) if (!this.surfaces.has(n[0]!)) this.personFor(n);
-    // Contacts and names already known that appear in this text, any case.
-    for (const [lower, written] of this.known) {
-      if ([...this.people].some((p) => p.full?.toLowerCase() === lower || (p.full === undefined && p.first?.toLowerCase() === lower))) continue;
-      if (surfaceRegex(written, written.includes(" ")).test(text)) this.personFor(written.split(" "));
-    }
+    for (const f of found.filter((x) => x.name.length > 1)) this.personFor(f.name, f.cued);
+    for (const f of found.filter((x) => x.name.length === 1)) if (!this.surfaces.has(f.name[0]!)) this.personFor(f.name, f.cued);
     for (const m of text.matchAll(EMAIL_RE)) this.learnEmail(m[0]);
   }
 
@@ -322,26 +395,40 @@ export class NameMap {
     if (ROLE_MAILBOXES.has(local.toLowerCase()) || this.isKept(local)) return;
     const segs = local.split(/[._+-]/).filter((s) => s !== "" && !/^\d+$/.test(s));
     if (segs.length === 0 || segs.length > 3) return;
+    // Parts compare without case or accents: "xantippe.dovrel@" is the user "Xantippe Dovrél".
     const knownParts = new Map<string, Person>();
-    for (const [s, v] of this.surfaces) if (v.part !== "email" && !s.includes(" ")) knownParts.set(s.toLowerCase(), v.person);
-    const ok = segs.every((s) => s.length === 1 || GIVEN.has(s.toLowerCase()) || FAMILY.has(s.toLowerCase()) || knownParts.has(s.toLowerCase()));
-    const anchor = segs.find((s) => knownParts.has(s.toLowerCase()) || GIVEN.has(s.toLowerCase()));
+    for (const [s, v] of this.surfaces) if (v.part !== "email" && !s.includes(" ")) knownParts.set(foldPart(s), v.person);
+    const own = segs.map(foldPart).find((s) => knownParts.has(s));
+    // A segment that names a known person makes the whole local part theirs; otherwise every segment must be a name.
+    const ok = own !== undefined || segs.every((s) => s.length === 1 || GIVEN.has(s.toLowerCase()) || FAMILY.has(s.toLowerCase()));
+    const anchor = own ?? segs.find((s) => GIVEN.has(s.toLowerCase()));
     if (!ok || anchor === undefined || segs.some((s) => ROLE_MAILBOXES.has(s.toLowerCase()))) return;
     if (this.surfaces.has(local)) return;
-    const person = knownParts.get(segs.map((s) => s.toLowerCase()).find((s) => knownParts.has(s)) ?? "") ?? this.personFor([cap(anchor)]);
+    const person = (own === undefined ? undefined : knownParts.get(own)) ?? this.personFor([cap(anchor)]);
     this.surfaces.set(local, { person, part: "email" });
   }
 
-  /** `text` with every person name replaced by its placeholder. Idempotent; placeholders already in the text stay. */
-  mask(text: string): string {
-    if (text === "") return text;
-    this.learn(text);
+  /** Placeholder-shaped text this map did not write becomes <name>: only the map's own placeholders survive. */
+  neutralise(text: string): string {
+    return text.includes("<") ? text.replace(PERSON_LIKE_RE, (m) => (this.toSurface.has(m) ? m : NAME_TOKEN)) : text;
+  }
+
+  /** `text` with every person name replaced by its placeholder. Idempotent: this map's placeholders already in the text
+   * stay; any other placeholder-shaped text (injected in the input) becomes <name>. */
+  mask(input: string): string {
+    if (input === "") return input;
+    const raw = this.neutralise(input);
+    // Rules and surfaces run on the normalised view; replacements cut the input itself (see matchView).
+    const view = matchView(raw);
+    const text = view.text;
+    this.learnView(text);
     const prot = protectedRanges(text, this.keptRes);
     const spans: Array<{ start: number; end: number; found: string; person: Person; part: Part }> = [];
-    const add = (start: number, end: number, found: string, person: Person, part: Part) => {
+    const add = (start: number, end: number, person: Person, part: Part) => {
       if (prot.some(([a, b]) => start < b && end > a)) return;
       if (spans.some((x) => start < x.end && end > x.start)) return;
-      spans.push({ start, end, found, person, part });
+      // The placeholder stands for the input text as written (decomposed accents and zero-width characters kept).
+      spans.push({ start, end, found: raw.slice(view.from[start], view.to[end - 1]), person, part });
     };
     // Longest first, so "Amara Okafor" wins over "Amara"; full names match any case and across . _ - (slugs, ids).
     const lower = text.toLowerCase();
@@ -352,17 +439,18 @@ export class NameMap {
         re = surfaceRegex(surface, part === "full");
         this.regexes.set(surface, re);
       }
-      for (const m of text.matchAll(re)) add(m.index!, m.index! + m[0].length, m[0], person, part);
+      for (const m of text.matchAll(re)) add(m.index!, m.index! + m[0].length, person, part);
     }
     // Placeholders are numbered in order of first appearance.
     spans.sort((a, b) => a.start - b.start);
     let out = "";
     let at = 0;
     for (const s of spans) {
-      out += text.slice(at, s.start) + this.placeholderFor(s.found, s.person, s.part);
-      at = s.end;
+      const a = view.from[s.start]!;
+      out += raw.slice(at, a) + this.placeholderFor(s.found, s.person, s.part);
+      at = view.to[s.end - 1]!;
     }
-    return out + text.slice(at);
+    return out + raw.slice(at);
   }
 
   /** Placeholders back to the real names. A placeholder this map never wrote stays as it is. */
@@ -371,11 +459,20 @@ export class NameMap {
   }
 }
 
+/** A name part compared without case or accents ("Dovrél" = "dovrel"). */
+const foldPart = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 
-/** Regex for one surface: multi-word names match any case and across space . _ - ("amara.okafor", "amara-okafor"). */
+/** Regex for one surface, any case ("AMARA", "amara's", "zorblax"); multi-word names also across space . _ - ("amara.okafor",
+ * "amara-okafor"). A single word that is also an everyday word ("Will", "May", "Bill") matches only as written: the
+ * lower-case "will" is the verb, and masking it would garble every sentence the model reads. */
 function surfaceRegex(surface: string, loose: boolean): RegExp {
-  if (!loose) return new RegExp(`${B_START}${escapeRe(surface)}${B_END}`, "gu");
+  if (!loose) {
+    const l = surface.toLowerCase();
+    const word = COMMON.has(l) || AMBIGUOUS_GIVEN.has(l) || isBlocker(l);
+    return new RegExp(`${B_START}${escapeRe(surface)}${B_END}`, word ? "gu" : "giu");
+  }
   const parts = surface.split(/[\s._-]+/).filter((p) => p !== "").map(escapeRe);
   return new RegExp(`${B_START}${parts.join("[\\s._-]+")}${B_END}`, "giu");
 }
@@ -389,14 +486,15 @@ function protectedRanges(text: string, kept: readonly RegExp[]): Array<[number, 
   return out;
 }
 
-/** Placeholders -> the grouping token <name>; a run of them ("<name> <name>") becomes one. */
+/** Placeholders (any placeholder-shaped text) -> the grouping token <name>; a run of them ("<name> <name>") becomes one. */
 export function collapsePlaceholders(text: string): string {
-  return text.replace(PERSON_PLACEHOLDER_RE, NAME_TOKEN).replace(/<name>(?:[ \t]+<name>)+/g, NAME_TOKEN);
+  return text.replace(PERSON_LIKE_RE, NAME_TOKEN).replace(/<name>(?:[ \t]+<name>)+/g, NAME_TOKEN);
 }
 
-/** Placeholders a reply still carries after unmasking (the model invented them). */
+/** Names a reply still leaves unfilled after unmasking: any placeholder-shaped text (the model invented it, or echoed
+ * one from the input) and the <name> token. */
 export function unrestoredPlaceholders(text: string): string[] {
-  return [...new Set(text.match(PERSON_PLACEHOLDER_RE) ?? [])];
+  return [...new Set([...(text.match(PERSON_LIKE_RE) ?? []), ...(text.match(/<name>/g) ?? [])])];
 }
 
 /** Text for a note or a description: every person name becomes <name> (no numbering, no map kept). */

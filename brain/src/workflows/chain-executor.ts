@@ -140,7 +140,9 @@ export async function buildChain(o: BuildChainOptions): Promise<ChainBuild | nul
   const now = o.resolver.deps.now();
   const target = knownTarget(o.home, send.connector, now);
   if (target === null) return null;
-  const plan = await o.resolver.plan(target, target.sends);
+  // s20 review 5: a UI commit (method computer) is done by computer use only: the app's connector, Composio and API
+  // methods are never built for it, whatever they could send.
+  const plan = send.method === "computer" ? (await o.resolver.resolve(target)).methods.filter((m) => m.method === "computer" && m.health === "ok") : await o.resolver.plan(target, target.sends);
   const logIds = [...new Set(o.actions.filter((a) => a.role === "log").map((a) => a.connector))];
   const logTargets = logIds.map((id) => knownTarget(o.home, id, now)).filter((t): t is ChainTarget => t !== null);
   const logStates = new Map<string, MethodState[]>();

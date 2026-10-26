@@ -61,7 +61,7 @@ export function toStage1(item: Stage2Item): { item: BatchItem } | { reason: stri
   for (const r of ["to", "subject", "body"]) if (!seen.has(r)) return { reason: `field "${r}" is required` };
   const to = seen.get("to")!;
   if (to.trim() === "") return { reason: "the recipient (to) is empty" };
-  if (item.key !== to.toLowerCase()) return { reason: `item key must be the lowercased recipient (${JSON.stringify(item.key).slice(0, 60)})` };
+  if (item.key !== to.toLowerCase()) return { reason: "item key must be the lowercased recipient" };
   const verb = seen.get("verb");
   if (verb !== undefined && verb.trim() === "") return { reason: "verb is empty" };
   const commit: ItemCommit | undefined =

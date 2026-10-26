@@ -241,7 +241,7 @@ struct ConnectCopy: Equatable, Sendable {
       if let l = flow.link, l.simulated, !l.message.isEmpty { status = l.message } else { status = "Finish in your browser." }
       note = flow.link?.simulated == true ? nil : "Offload checks every second and carries on by itself."
     case .connected:
-      primary = returnsToConfirm ? "Back to Turn on" : "Done"
+      primary = returnsToConfirm ? "Back to review" : "Done"
       status = "\(c.name) connected"
     case .failed:
       // s10e: when the brain offers another way, that is the one white button ("Use Composio instead").

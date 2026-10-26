@@ -33,7 +33,7 @@ function holds(c: RuleCheck, r: MessageRead): boolean {
 /** The read of a draft: its body without greeting and sign-off, contacts and figures masked. */
 export function readDraft(draft: string, role: MessageRead["role"] = "first_touch"): MessageRead {
   const c = cleanEmail({ id: "draft", to: [], subject: "", body: draft, sentAt: 0 });
-  return ruleRead(maskContacts(c.core), draft, { id: "draft", threadKey: "draft", role, outcome: "unknown", subject: "" });
+  return ruleRead(maskContacts(c.core), { id: "draft", threadKey: "draft", role, outcome: "unknown", subject: "" });
 }
 
 export function checkPlaybook(draft: string, pb: Playbook): PlaybookVerdict {

@@ -3,13 +3,15 @@ import { connectorsFor, type ConnectorMatch } from "./connectors/catalog.ts";
 import { groupTasks, indexSpans, type Labeler } from "./grouping/group.ts";
 import { heuristicJudge, type Judge, type JudgeResult } from "./insights/judge.ts";
 import { rankingScore, type ScoreFactors } from "./insights/rank.ts";
-import { estimateSaving, type SavingEstimate } from "./insights/saving.ts";
+import { estimateSaving, type SavingEstimate, type SavingSignals } from "./insights/saving.ts";
 import { DEFAULT_SESSION_OPTIONS, sessionizeDays, totalActiveMs, type SessionOptions } from "./sessionize.ts";
 import { computeTaskStats } from "./stats.ts";
 import { readStore, type ReaderEnv, type StoreRead } from "./store/reader.ts";
 import type { DayLabel, OffloadEvent, Span, Task, TaskLabel, TaskProfile, TaskStats, UserContext } from "./types.ts";
 import type { SpanDescription } from "./understanding/describe.ts";
 import { StubEmbedder, type Embedder } from "./understanding/embed.ts";
+import { isGenericVerb } from "./understanding/verbs.ts";
+import { isReadOnlyStep } from "./plan/steps.ts";
 import { framesFromEvents, mergeFrames, type FrameNote } from "./understanding/frames.ts";
 import { understandingJudge } from "./understanding/labeler.ts";
 import { understandSpans } from "./understanding/pipeline.ts";
@@ -87,7 +89,25 @@ export interface Analysis {
   totalActiveMs: number;
   /** v2 only. */
   understanding?: UnderstandingInfo;
+  /** s22 (additive): tasks that repeat enough but the judge holds back (a person is at the keyboard, e.g. watching a
+   * coding agent). Not insights and not ranked; the solution designer still proposes setup or tool fixes for them. */
+  heldBack?: HeldBackTask[];
 }
+
+/** s20: what makes a task's saving low-confidence: its share, how many apps it spans, how much of it is only "looking". */
+export function savingSignals(p: TaskProfile, share: number): SavingSignals {
+  const u = p.understanding;
+  if (u === undefined) return { share };
+  const total = u.steps.reduce((n, s) => n + s.activeMs, 0);
+  const generic = u.steps.filter((s) => isGenericVerb(s.verb)).reduce((n, s) => n + s.activeMs, 0);
+  const surfaces = new Set(u.surfaces.map((s) => `${s.app}|${s.host}`)).size;
+  // s20 review: no text or record write anywhere = the plan can only read and ask (no saving is claimed for it).
+  // s20 review 3: only when every step POSITIVELY reads or judges; an unknown verb is not read-only.
+  const readOnly = u.steps.length > 0 && u.steps.every((s) => isReadOnlyStep(s));
+  return { share, surfaces, genericShare: total === 0 ? 0 : generic / total, ...(readOnly ? { readOnly } : {}) };
+}
+
+export type HeldBackTask = Omit<Insight, "rank"> & { heldBack: { reason: string } };
 
 export const insightIdFor = (taskId: string) => `ins_${taskId.replace(/^t_/, "")}`;
 
@@ -123,12 +143,16 @@ export async function analyzeStore(store: StoreRead, opts: AnalyzeOptions = {}):
   }
 
   const candidates: Omit<Insight, "rank">[] = [];
+  const heldBack: HeldBackTask[] = [];
   for (const t of tasks) {
     const st = stats.get(t.id);
     if (st === undefined || st.instances.value < minInstances) continue;
     const verdict = await judge.judge({ profile: t.profile, sameness: st.sameness.value, ...(user === undefined ? {} : { user }) });
-    if (verdict.judgement >= maxJudgement) continue;
     const connectors = t.profile.understanding === undefined ? connectorsFor(t.profile) : connectorsForReach(t.profile.understanding.reach);
+    if (verdict.judgement >= maxJudgement) {
+      heldBack.push(heldBackTask(t, st, verdict, connectors, windowDays.length, opts.reviewSeconds));
+      continue;
+    }
     const factors: ScoreFactors = {
       volume: st.share.value,
       sameness: st.sameness.value,
@@ -139,7 +163,7 @@ export async function analyzeStore(store: StoreRead, opts: AnalyzeOptions = {}):
     const value = rankingScore(factors);
     if (value <= 0) continue;
     const saving = estimateSaving(
-      { instances: st.instances.value, daysActive: st.daysActive.value, windowDays: Math.max(1, windowDays.length), medianMinutes: st.medianMinutes.value, eventIds: st.instances.eventIds },
+      { instances: st.instances.value, daysActive: st.daysActive.value, windowDays: Math.max(1, windowDays.length), medianMinutes: st.medianMinutes.value, eventIds: st.instances.eventIds, activeMinutes: st.activeMinutes.value, signals: savingSignals(t.profile, st.share.value) },
       opts.reviewSeconds === undefined ? {} : { reviewSeconds: opts.reviewSeconds },
     );
     if (saving.weeklyHoursSaved < minSaved) continue;
@@ -160,7 +184,17 @@ export async function analyzeStore(store: StoreRead, opts: AnalyzeOptions = {}):
     insights: candidates.map((c, i) => ({ ...c, rank: i + 1 })),
     totalActiveMs: total,
     ...(understanding === undefined ? {} : { understanding }),
+    heldBack: heldBack.sort((a, b) => b.stats.activeMinutes.value - a.stats.activeMinutes.value || (a.id < b.id ? -1 : 1)),
   };
+}
+
+function heldBackTask(t: Task, st: TaskStats, verdict: JudgeResult, connectors: ConnectorMatch, windowDays: number, reviewSeconds: number | undefined): HeldBackTask {
+  const factors: ScoreFactors = { volume: st.share.value, sameness: st.sameness.value, reachability: connectors.reachability, judgement: verdict.judgement, risk: verdict.risk };
+  const saving = estimateSaving(
+    { instances: st.instances.value, daysActive: st.daysActive.value, windowDays: Math.max(1, windowDays), medianMinutes: st.medianMinutes.value, eventIds: st.instances.eventIds },
+    reviewSeconds === undefined ? {} : { reviewSeconds },
+  );
+  return { id: insightIdFor(t.id), taskId: t.id, label: t.label, profile: t.profile, stats: st, judge: verdict, connectors, score: { value: rankingScore(factors), factors }, saving, heldBack: { reason: verdict.reasons[0] ?? "needs a person" } };
 }
 
 export async function analyzeHome(home: string, opts: AnalyzeOptions = {}): Promise<Analysis> {

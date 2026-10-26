@@ -13,7 +13,8 @@ import { createSession, type SeededTenant } from "../helpers/seed.ts";
 /** Every table this slice creates (0500-0599). */
 export const S205_TABLES = [
   "device_seq", "sync_objects", "run_outcomes", "review_events", "baseline_samples", "baseline_sample_instances",
-  "daily_aggregates", "daily_aggregate_workflows", "working_time_aggregates", "metric_snapshots", "metric_alerts",
+  "daily_aggregates", "daily_aggregate_workflows", "working_time_aggregates", "metric_snapshots", "metric_alerts", "metric_dirty",
+  "sync_accepts", "run_owners",
 ];
 
 /** Consent and features as S2-08 will answer them, held in memory. */
@@ -61,7 +62,7 @@ export async function setup(extraModules: Record<string, string> = {}): Promise<
   };
 }
 
-/** A modules dir with copies of every real module (imports pointed back at the source tree) plus `extra`. */
+/** A modules dir with copies of the org, sync and metrics modules (imports pointed back at the source tree) plus `extra`. */
 function modulesWith(extra: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), "offload-s205-"));
   const src = join(MODULES_DIR, "..");

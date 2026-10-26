@@ -1,7 +1,7 @@
-# 0010 Messaging playbook: the message and its patterns, not the person
+# 0011 Messaging playbook: the message and its patterns, not the person
 
-Date: 2026-10-25. Status: accepted (operator decision, s19). Builds on 0005 (numbers are code), 0006 (gates), 0007
-(masked text only) and 0009 (model router).
+Date: 2026-10-25. Status: accepted (operator decision, s19); amended by 0012. Builds on 0005 (numbers are code),
+0006 (gates), 0007 (masked text only) and 0009 (model router).
 
 ## Context
 Operator: when a workflow is about messaging (outreach, follow-ups, replies), Offload must understand the style of the

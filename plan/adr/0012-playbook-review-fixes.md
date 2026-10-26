@@ -1,0 +1,161 @@
+# 0012 Messaging playbook: review fixes (names, identity digest, model errors)
+
+Date: 2026-10-26. Status: accepted (s19 fix round, slices/S2-review/REVIEW-wave-B.md PR #11). Amends 0011.
+
+## Context
+The wave-B review found that a capitalised word at the start of a sentence ("Priya is an engineer at Ramp.") and any
+non-Latin name passed the playbook masker and the leak check; that a notes edit or a promotion after the tone pack had
+expired was checked against facts.md only while reporting "re-checked"; and that one model error aborted a build.
+
+## Decision
+1. **Masking (amends 0011 §2, §4).** Words are Unicode letters (`\p{L}`). A word is capitalised when it starts with an
+   upper- or title-case letter or a letter of a script without case. A capitalised word at the start of a sentence is
+   masked unless it is generic, one of a fixed list of common words, or written in lower case elsewhere in the
+   messages. A `coreClaim` never starts with an unmasked capitalised word.
+2. **Leak check (amends 0011 §4).** Besides the identity set, any capitalised word that is not generic, not a common
+   word and not written in lower case anywhere in the playbook's own text is a name. The check depends on the playbook
+   and the identity only, so it answers the same with or without the tone pack.
+3. **Identity digest (amends 0011 "Consequences": "never stored").** A build writes
+   `workflows/<id>/playbook-identity.json` (0600): the identity set as salted SHA-256 hashes (a fresh random salt per
+   build), never plain words. It stays on the Mac and is not part of the promotable playbook. A notes edit and
+   `playbookForPromotion` check against the tone pack identity, facts.md and this digest. With neither the tone pack
+   nor a digest they are refused with 409 (PlaybookInputError): rebuild the playbook.
+4. **Model errors.** A failed Haiku label keeps that message's rule read; a failed Opus wording keeps the code
+   baseline. Each adds a fixed warning (counts only, no content). At most 60 label calls per build; the rest keep
+   their rule read.
+5. **Corrupt playbook.json** reads as no playbook with a fixed warning; a dry run or a run drafts without it.
+
+## Consequences
+- The masker errs further toward masking: an uncommon ordinary word at the start of a sentence that the messages
+  never write in lower case becomes `[name]`, which can cost a label but never leaks. A model wording that starts a
+  sentence with such a word is dropped for the baseline.
+- A hashed name set can be tested against a guessed name by someone holding the file and its salt; the file is 0600
+  in the user's own home, like the sealed tone pack keys.
+
+## Fix round 2 (independent re-review of PR #11)
+6. **Known contacts in any case (amends §1, §2).** The recipients' names and organisations (from addresses and
+   greetings, not from capitalisation) are masked and counted as leaks whatever their case ("we help alice at
+   northzone"), unless the word is also a common or generic word ("will", "hope"), where only the capitalised form is
+   taken for the name. Role address local parts (`sales@`, `support@`, ...) are not people. The identity digest keeps
+   these contacts as their own hashed set (`contacts`); a digest without it treats every hashed name as a contact.
+7. **Auto-run pin (amends 0011 "auto-run").** Changed files are the union of pinned, current and drafted-with names:
+   a pinned `playbook.json` that is removed, or one a batch was drafted with that the pin never saw, holds the batch.
+8. **Shape.** Links are counted once, as the `[link]` placeholders of the masked core.
+9. **Labeller free text.** A model's `coreClaim` / `positioning` is kept only when, masked, it is a passage of the
+   masked core the model was shown; otherwise the rule read stands. No model wording of its own reaches the playbook
+   through these fields.
+
+### Follow-ups (not fixed in this round)
+- `playbook-identity.json` hashes are salted but the salt sits beside them, so a holder of the file can test a guessed
+  or dictionary name. Proposed: delete the digest with the playbook and when the tone pack is deleted, and expire it
+  with the tone pack's retention (rebuild re-creates it); or key the hashes with a secret from the keychain instead of
+  a stored salt.
+- `buildWorkflowPlaybook` takes no per-workflow lock: two concurrent builds (up to 61 model calls each) can race on
+  `playbook.json` and the digest. Proposed: a per-workflow build lock (409 while one runs).
+
+## Fix round 4 (Codex re-review of 5b955cc)
+10. **Only name-like words join the identity (amends §1).** The author and company sets are matched whatever the case,
+    so every heuristic that fills them (facts `sign:`/`company:`, the sign name, the signature block, subject brand
+    words) adds a word only when it is two letters or more, letters only, not a common or generic word, not a job-title
+    word and not a word the generator writes (`GENERATOR_WORDS`, guarded by a drift test over `synth.ts`). A Title Case
+    subject gives no capitalisation evidence: it adds no brand word and its words count as sentence-initial. Greeting
+    names skip honorifics ("Dear Ms Kowalski" -> kowalski) and single letters; an address organisation is the
+    registrable label ("app.northzone.com" -> northzone), not a subdomain.
+11. **Ordinary words are never masked in lower case or read as a leak**, even when an older identity digest holds them,
+    so routine subjects or recipients named like generator words ("Tom Hook at Progress") cannot fail the build closed.
+    A real name that is also an ordinary word is still masked when capitalised mid-sentence (`[name]`); it is no longer
+    matched in lower case, which is the accepted cost.
+
+## Fix round 5 (Codex re-review of adcba7b)
+12. **One decision for masking and the leak check.** `identityHit` (mask.ts) says what a word is (author, company,
+    this recipient, a name, or nothing); `maskText` and `findTextLeaks` both call it, and a property test checks they
+    agree on generated text and that masked text never leaks. A known contact named like an ordinary word ("Will",
+    "Hope") is a name whenever it is capitalised, except a generator opener ("Short") at the start of a sentence,
+    where the generator writes the word itself (`GENERATOR_OPENERS`, drift-tested). Capitalised ordinary words that are
+    not contacts are no longer masked mid-sentence; the leak check never flagged them, so they now agree.
+13. **s18 registry (merge of PR #7).** The playbook identity takes s18's name registry (`readNamePolicy`: every
+    workflow's recipients.csv and the user's own name in privacy.json) at build time and for notes and promotion
+    re-checks, so a contact s18 masks on the way to a model is a known contact (masked and a leak in any case) for s19,
+    its address domain is a known organisation, and the user's own name is the author. The digest keeps them.
+
+## Fix round 6 (independent review of fda41c2)
+14. **Default deny (amends 12).** A capitalised word that is not at the start of a sentence is a name unless it is on
+    a small allow list (`CAP_ALLOW`: weekdays, languages, common acronyms such as CTA/CRM/ROI, funding stages,
+    honorifics; a month only in a date: before a digit or after in/on/by). Product and company names are not on it.
+    At the start of a sentence a word is a name when it is a known contact, when the next word is a name too ("Will
+    Smith"), or on evidence: a name of these messages, an unambiguous given or family name of s18's lexicon, the same
+    word capitalised mid-sentence in the text, or a non-Latin word the vocabulary never writes in lower case. Masking
+    never adds to the identity set (promotion stays as strict as round 4), so masking an unknown word cannot fail a
+    build. `maskText` and `findTextLeaks` still share `identityHit`. Notes may hold small plain numbers ("under 100
+    words"), not phone- or id-shaped ones, and a refused note names the offending words (only the user's own notes;
+    mail and model text are never echoed) and says to reword.
+    Accepted cost: products and platforms are masked mid-sentence ("a [name] app", "on [name]"); the word before a
+    name at a sentence start goes with it ("[name] [name] for an intro" for "Ask Will for an intro"); a lone unknown
+    Latin-script name at the start of a sentence with no other evidence ("Njeri replied.") in notes or model wording
+    is not caught (in mail it is, through the identity's proper nouns).
+
+## Fix round 7 (independent review of 9437da5)
+15. **Vocabulary default deny (amends 14).** Capitalisation alone failed seven rounds, so a word of mail is now kept
+    only when it is known vocabulary: the bundled common-English list (SCOWL 2020.12.07, size 50, lower-case entries
+    of the english/american/british/canadian/australian lists; 63,900 words; permissive licence kept in
+    `brain/src/playbook/wordlist/SCOWL-Copyright.txt`; minus every unambiguous given or family name of the s18 lexicon),
+    a short hand-reviewed supplement of business words SCOWL lacks (app, signup, saas, ...), this file's common and
+    generic words, the generator's words, or `CAP_ALLOW`. Anything else is a name in any case ("priya raman",
+    "o'brien"). On top: handles, snake_case names and paths (`@x`, `a_b`, `[link]/in/x`, any token with `/`) are
+    masked and are leaks; round 6's capital rules stay for known words; a month is kept only before a figure or after
+    in/on/by/... with no name after it; a given name that is also a word ("grace", "Will") next to a name goes with it.
+    `maskText` repeats until nothing changes, so masked text is never a leak; masking still never adds to the identity
+    set, so builds do not fail.
+    Accepted cost: lower-case names that are dictionary words ("will", "grace", "mark"; surnames such as "smith" and
+    "lee" are stripped from the list) stay when used alone as plain words; jargon, typos and new words outside the list are masked
+    (`[name]`), and "and/or" style tokens become `[name]`.
+
+## Fix round 8 (independent review of be859cf)
+16. **Lexicon names in any case (narrows the cost of 15).** A given or family name of the s18 lexicon, ambiguous or
+    not, is a name when capitalised anywhere ("Frank called", "Mark and Grace"), except a month in a date, a modal
+    opening a question ("Will you", "May I") and the generator's own sentence openers. In lower case it, or a dictionary
+    word SCOWL also lists as a proper noun (`wordlist/proper-words.ts`, common and generator words left out), is a
+    name next to another person or masked token ("frank baker", "king young", "[name] baker"), after "and"/"or" that
+    follows one ("hunter and mason"), after a cue (hi, hey, dear, thanks, cc, to, with, ask, from, met, spoke with,
+    loop in, intro, ping, colleague, cofounder, boss, manager, wife, husband, partner) or before one (said, says,
+    wrote, replied, called, will, is my). Lower-case "will" and "may" are the verbs. A spelled-out address ("priya at
+    acme dot com", "(at)/(dot)") is masked whole, and "X at Y" at the end of a clause after a person masks Y. Same
+    decision in `findTextLeaks` through `identityHit`.
+    Accepted cost now: only a lone lower-case dictionary-word name with no cue and no neighbouring name stays ("bill me
+    later" is kept, and so would "grace" alone be). Over-masking: a lexicon word after a cue used as a plain word
+    ("to mark", "with grace"), and the capitalised word before a name at a sentence start ("The young king").
+
+## Fix round 9 (independent review of 1111dce)
+17. **Sign-offs in any case.** `stripSignOff` (mask.ts) removes the sign-off from every core after `cleanEmail`, in
+    any case: from the last closing line ("Best,", "Thanks!", "Kind regards", "Talk soon", ...) when at most six short
+    lines follow, from a `--` separator, or a lone short last paragraph ("- name" always; "frank" when not ordinary
+    words). Its name line joins the author set. `cleanEmail` (tone/clean.ts) is shared with the tone pack and outside
+    this slice, so the playbook strips on top of it rather than changing it. `identityHit` also reads, any case, a
+    short line (three words at most) right after a closing line, a lone short last paragraph and the first part of a
+    "name | title | company" line as a name, so the leak check catches the same text.
+    Accepted cost: a two-word last paragraph after a blank line that is not ordinary words ("Deck attached" is,
+    "Zentrix rocks" is not) and the words of a short line right after a closing are masked.
+
+## Fix round 10 (independent review of 8581c6c)
+18. **Mask, never delete (replaces the cutting in 17).** `stripSignOff` is gone: nothing after a closing is removed
+    to protect privacy. A name-like line (one to three words, no sentence punctuation or digits, not a closing, with
+    a word that is a name by vocabulary: unknown, or a lexicon or proper-noun word) is masked when it comes right after
+    a closing line (or is the second of two such lines), when it is the last line after a blank line or after a short
+    line ending in a comma, or is the first part of a "name | title" line. Requests, questions and P.S. paragraphs
+    stay as content and go through the normal rules. Closings are a phrase lexicon (English formal and informal: cheers
+    mate, xo, thx, take care, ...; and common Spanish, German, French, Portuguese, Dutch and Italian closings), whose
+    words are vocabulary. `cleanEmail` stays as is; a last line it drops as a sign name that is not name-like ("ASAP")
+    comes back into the core, and only a name-like sign name joins the author set. A known word at a sentence start is
+    no longer a proper noun of the identity by itself. "Will do" / "May be" read as the verb.
+    Accepted cost: a name-like line in those positions is masked even when it is a word that happens to be a lexicon
+    name ("Thanks,\nfrank" and "Thanks,\nFrank" alike, but also "Best,\nhope"); a sign name that is all known non-name
+    words ("The Team") stays.
+
+## Fix round 11 (independent review of bed5b7d)
+19. **Initials and bullets.** In the name-like test a single letter with a period ("b.", "F.") is an initial, not
+    sentence punctuation: "frank b.", "f. baker" are name-like, and a line that is only an initial after a closing
+    ("Best,\nf.") is masked; a sign-off line is masked whole, initials included. A bullet marker at the start of a line
+    (-, *, •, –, —; numbered items already end in ".") starts a sentence, so a capitalised verb after it stays ("- Send
+    invoice") while a name there is still masked by the sentence-start rules. Lower-case "will"/"may" next to a name
+    stay verbs ("[name] will send it").
+    Accepted cost: a short sign-off line made of initials and words ("P.S." alone after a closing) is masked.

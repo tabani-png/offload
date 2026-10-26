@@ -76,9 +76,11 @@ export function overnightDto(r: Row): OvernightPolicy {
   };
 }
 
+/** `lock` takes the policy row FOR NO KEY UPDATE (broker.ts lock order, step 2): exclusive against other writers, never
+ * against the FK KEY SHARE an insert referencing the policy takes. */
 export async function overnightById(tx: Tx, id: string, lock = false): Promise<OvernightPolicy | null> {
   const [r] = lock
-    ? await tx`select * from overnight_policies where id = ${id} for update`
+    ? await tx`select * from overnight_policies where id = ${id} for no key update`
     : await tx`select * from overnight_policies where id = ${id}`;
   return r ? overnightDto(r) : null;
 }

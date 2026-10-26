@@ -74,10 +74,24 @@ describe("RECOMPUTE nightly equality check (ADR 0109 §11)", () => {
     const before = (await alerts()).length;
     const run = runOutcome({ endedAt: at("2026-10-24") });
     receipt(await sendObjects(s.h, people[1]!.dev, [run, reviewEvent(run.runId)]));
-    expect((await snapshots()).every((x) => x.stale)).toBe(true);
+    // Ingest records new data in metric_dirty; the report is no longer final until the job took it in.
+    expect((await owner.get(OCT)).json.final).toBe(false);
     await nightly();
     expect((await alerts()).length).toBe(before);
-    expect((await snapshots()).every((x) => !x.stale && !x.final)).toBe(true);
+    const snaps = await snapshots();
+    expect(snaps.every((x) => !x.stale)).toBe(true);
+    // The company sees all data: not final until the next run. Below it only a cell whose shown inputs moved waits.
+    // Here Sales (and SDR) are hidden (the empty Finance is under the floor, so hs-1 hides Sales with it): they show
+    // nothing, so they keep their flag like Finance and AP, or it would tell their reader that data arrived.
+    const final = Object.fromEntries(snaps.map((x) => [`${x.month} ${x.scope_key}`, x.final]));
+    expect(final["2026-10 company:"]).toBe(false);
+    // September has no data: the company is suppressed there and keeps its flag too.
+    expect(final["2026-09 company:"]).toBe(true);
+    expect(final[`2026-10 department:${s.h.a.departments.sales}`]).toBe(true);
+    expect(final[`2026-10 job_role:${s.h.a.jobRoles.sdr}`]).toBe(true);
+    expect(final[`2026-10 department:${s.h.a.departments.finance}`]).toBe(true);
+    expect(final[`2026-10 job_role:${s.h.a.jobRoles.ap}`]).toBe(true);
+    expect(final[`2026-09 department:${s.h.a.departments.sales}`]).toBe(true);
     await nightly();
     expect((await owner.get(OCT)).json.final).toBe(true);
   });

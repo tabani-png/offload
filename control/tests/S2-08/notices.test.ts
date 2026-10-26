@@ -5,7 +5,9 @@ import { HttpError } from "../../src/schema/http.ts";
 import { ulid } from "../../src/schema/encoding.ts";
 import compliance from "../../src/modules/compliance/index.ts";
 import { allowsAt } from "../../src/modules/compliance/consent.ts";
-import { noticeBody, publishNotice, signIn, sys, type Who } from "./fixtures.ts";
+import { listTemplates, templateById } from "../../src/modules/compliance/templates.ts";
+import { consentSince } from "../../src/modules/compliance/consent.ts";
+import { filledMarkdown, noticeBody, publishNotice, signIn, sys, type Who } from "./fixtures.ts";
 
 let h: Harness;
 let who: Who;
@@ -71,7 +73,7 @@ describe("NOTICE", () => {
   });
 
   test("NOTICE: publish stamps publishedAt once; a second publish is 409; versions increase", async () => {
-    const a = await who.admin.post("/v1/compliance/notices", noticeBody());
+    const a = await who.admin.post("/v1/compliance/notices", noticeBody({ markdown: filledMarkdown("ontario-esa-policy") }));
     const b = await who.admin.post("/v1/compliance/notices", noticeBody());
     expect(b.json.version).toBe(a.json.version + 1);
     const pub = await who.admin.post(`/v1/compliance/notices/${a.json.id}/publish`);
@@ -160,7 +162,7 @@ describe("NOTICE", () => {
     expect(await ok()).toBe(false);
     await lead.post(`/v1/me/notices/${v2.id}/ack`);
     expect(await ok()).toBe(true);
-    await publishNotice(who.owner, { features: ["workflow_metrics", "per_person_views"], markdown: "Clearer wording, same scope." });
+    await publishNotice(who.owner, { features: ["workflow_metrics", "per_person_views"], template: "custom", markdown: "Clearer wording, same scope." });
     expect(await ok()).toBe(true);
   });
 
@@ -201,5 +203,109 @@ describe("NOTICE", () => {
     expect(ids(await who.lead.get(`/v1/compliance/notices/${n.id}/acks`))).toEqual([h.a.people.member.id]);
     expect((await who.member.get(`/v1/compliance/notices/${n.id}/acks`)).status).toBe(403);
     expect((await who.owner.get(`/v1/compliance/notices/${crypto.randomUUID()}/acks`)).status).toBe(404);
+  });
+  test("NOTICE: a template notice missing its required sections, or filled with TBD, is not published (422 naming the fields)", async () => {
+    const on = templateById("ontario-esa-policy")!;
+    const ny = templateById("ny-notice-and-ack")!;
+    const tryPublish = async (template: string, markdown: string, jurisdictions: string[]) => {
+      const created = await who.owner.post("/v1/compliance/notices", noticeBody({ template, markdown, jurisdictions }));
+      expect(created.status).toBe(201);
+      return who.owner.post(`/v1/compliance/notices/${created.json.id}/publish`);
+    };
+    const bare = await tryPublish(on.id, "# Policy\nNothing here.", ["CA-ON"]);
+    expect(bare.status).toBe(422);
+    expect(bare.json.error.code).toBe("validation_failed");
+    expect([...bare.json.error.details.fields].sort()).toEqual([...on.requiredFields].sort());
+    const hello = await tryPublish(ny.id, "hello", ["US-NY"]);
+    expect(hello.status).toBe(422);
+    expect([...hello.json.error.details.fields].sort()).toEqual([...ny.requiredFields].sort());
+    const tbd = await tryPublish(ny.id, ny.body.replace(/\{\{[a-z_]+\}\}/g, "TBD"), ["US-NY"]);
+    expect(tbd.status).toBe(422);
+    expect([...tbd.json.error.details.fields].sort()).toEqual([...ny.requiredFields].sort());
+    for (const r of [bare, hello, tbd]) expect(r.json.error.message).toContain(r.json.error.details.fields.join(", "));
+  });
+
+  test("NOTICE: concurrent web acks of one notice by one person record one ack and both get it back (no 500)", async () => {
+    for (let round = 0; round < 5; round++) {
+      const n = await publishNotice(who.owner);
+      const rs = await Promise.all([1, 2, 3].map(() => who.member.post(`/v1/me/notices/${n.id}/ack`)));
+      for (const r of rs) expect([200, 201]).toContain(r.status);
+      expect(rs.filter((r) => r.status === 201).length).toBe(1);
+      expect(new Set(rs.map((r) => r.json.id)).size).toBe(1);
+      for (const r of rs) expect(h.deps.validator.validate(ACK_SCHEMA, r.json)).toEqual({ ok: true });
+      const rows = await h.db.migrator`select id from notice_acks where person_id = ${h.a.people.member.id} and notice_id = ${n.id}`;
+      expect(rows.map((x: { id: string }) => x.id)).toEqual([rs[0]!.json.id]);
+      const audits = await h.db.migrator`select count(*)::int as n from audit_events
+        where action = 'notice.ack' and resource_id = ${n.id} and subject_person_id = ${h.a.people.member.id}`;
+      expect(audits[0].n).toBe(1);
+    }
+  });
+
+  test("NOTICE: a web ack racing a device sync ack of the same notice records one ack; neither side errors", async () => {
+    for (let round = 0; round < 5; round++) {
+      const n = await publishNotice(who.owner);
+      const [web, synced] = await Promise.all([
+        who.member2.post(`/v1/me/notices/${n.id}/ack`),
+        syncAck(h.a.people.member2.id, ackObject(n)).then(() => "ok", (e: unknown) => e),
+      ]);
+      expect([200, 201]).toContain(web.status);
+      expect(synced).toBe("ok");
+      const rows = await h.db.migrator`select id from notice_acks where person_id = ${h.a.people.member2.id} and notice_id = ${n.id}`;
+      expect(rows.length).toBe(1);
+      expect(web.json.id).toBe(rows[0].id);
+    }
+  });
+
+  test("NOTICE: a device cannot back-date an ack: it is recorded at server receipt, the device's time kept alongside", async () => {
+    const n = await publishNotice(who.owner, { features: ["workflow_metrics", "per_person_views", "working_time"] });
+    const deviceTime = n.publishedAt + 1;
+    h.clock.advance(6 * 60 * 60_000);
+    const received = h.clock.now();
+    const obj = ackObject(n, { acknowledgedAt: deviceTime });
+    await syncAck(h.a.people.member2.id, obj);
+    const [row] = await h.db.migrator`select acknowledged_at_ms, device_acknowledged_at_ms from notice_acks where id = ${obj.id}`;
+    expect(row).toEqual({ acknowledged_at_ms: String(received), device_acknowledged_at_ms: String(deviceTime) });
+    expect(await sys(h, (tx) => consentSince(tx, h.a.people.member2.id, received))).toBe(received);
+    expect(await sys(h, (tx) => consentSince(tx, h.a.people.member2.id, received - 1))).toBeNull();
+    const ack = (await who.member2.get("/v1/me/data")).json.acks.find((a: { id: string }) => a.id === obj.id);
+    expect(ack.acknowledgedAt).toBe(received);
+  });
+
+  test("NOTICE: a template notice with a {{field}} left or a required field emptied is not published (422)", async () => {
+    const t = listTemplates().find((x) => x.id === "ontario-esa-policy")!;
+    const values: Record<string, string> = {
+      employer_name: "Acme Ltd",
+      how: "Offload runs on work Macs and records which apps are active.",
+      circumstances: "During working hours on company Macs only.",
+      purposes: "To find repeated work worth automating.",
+      date_prepared: "2026-10-01",
+      dates_changed: "none yet",
+    };
+    const fill = (v: Record<string, string>) => t.body.replace(/\{\{([a-z_]+)\}\}/g, (_, f: string) => v[f]!);
+    const tryPublish = async (markdown: string, template = t.id) => {
+      const created = await who.owner.post("/v1/compliance/notices", noticeBody({ template, markdown, jurisdictions: ["CA-ON"] }));
+      expect(created.status).toBe(201);
+      return who.owner.post(`/v1/compliance/notices/${created.json.id}/publish`);
+    };
+    const raw = await tryPublish(t.body);
+    expect(raw.status).toBe(422);
+    expect(raw.json.error.code).toBe("validation_failed");
+    expect(raw.json.error.details.fields.sort()).toEqual([...t.requiredFields].sort());
+    expect((await tryPublish(fill({ ...values, how: "{{how}}" }))).json.error.details.fields).toEqual(["how"]);
+    // A labelled field left blank, and a field that is a section of its own left blank.
+    expect((await tryPublish(fill({ ...values, date_prepared: "" }))).json.error.details.fields).toEqual(["date_prepared"]);
+    const noHow = await tryPublish(fill({ ...values, how: "" }));
+    expect(noHow.status).toBe(422);
+    expect(noHow.json.error.details.fields).toEqual(["how"]);
+    // Any other placeholder left in is refused too.
+    expect((await tryPublish(fill(values) + "\nContact: {{hr_contact}}\n")).json.error.details.fields).toEqual(["hr_contact"]);
+    // Nothing was published by the refused attempts.
+    const list = (await who.owner.get("/v1/compliance/notices?limit=200")).json.items;
+    expect(list.filter((n: { publishedAt: number | null; markdown: string }) => n.publishedAt !== null && n.markdown.includes("{{")).length).toBe(0);
+    const ok = await tryPublish(fill(values));
+    expect(ok.status).toBe(200);
+    expect(ok.json.publishedAt).not.toBeNull();
+    // A custom notice is the tenant's own text, not a template to fill.
+    expect((await tryPublish("# Our notice\n\nWe use {{braces}} literally here.", "custom")).status).toBe(200);
   });
 });

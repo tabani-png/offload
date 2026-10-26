@@ -127,16 +127,3 @@ export async function personRead(
   });
   await tx`select set_config('app.person_read', 'on', true)`;
 }
-
-/** Children of a group scope: a company's departments, a department's job roles (by name, then id). */
-export async function childrenOf(tx: Tx, scope: Scope): Promise<Array<{ scope: Scope; label: string }>> {
-  if (scope.type === "company") {
-    const rows = await tx`select id, name from departments order by name, id limit 500`;
-    return rows.map((r: { id: string; name: string }) => ({ scope: { type: "department" as const, id: r.id }, label: r.name }));
-  }
-  if (scope.type === "department") {
-    const rows = await tx`select id, name from job_roles where department_id = ${scope.id} order by name, id limit 500`;
-    return rows.map((r: { id: string; name: string }) => ({ scope: { type: "job_role" as const, id: r.id }, label: r.name }));
-  }
-  return [];
-}

@@ -17,6 +17,37 @@ const ENVELOPE_KEYS = ["deviceId", "objects", "sentAt", "seq", "v"];
 export const badSignature = (m = "envelope signature does not verify") => new HttpError(401, "bad_signature", m);
 export const replay = (m: string) => new HttpError(409, "replay", m);
 
+/**
+ * The request body, at most MAX_ENVELOPE_BYTES. A declared Content-Length over the cap is refused before reading;
+ * otherwise the stream is read with a running count and cancelled as soon as it passes the cap, so an oversize body
+ * is never buffered whole.
+ */
+export async function readCapped(req: Request, max = MAX_ENVELOPE_BYTES): Promise<Uint8Array<ArrayBuffer>> {
+  const tooBig = () => invalid("envelope is over 1 MiB");
+  const declared = req.headers.get("content-length");
+  if (declared !== null && Number(declared) > max) throw tooBig();
+  const chunks: Uint8Array[] = [];
+  let n = 0;
+  const reader = req.body?.getReader();
+  while (reader) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.byteLength;
+    if (n > max) {
+      await reader.cancel().catch(() => {});
+      throw tooBig();
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(new ArrayBuffer(n));
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.byteLength;
+  }
+  return out;
+}
+
 /** `keyid=<deviceId>, sig=<b64url>` (the form brain/src/sync/envelope.ts sends); null when malformed. */
 export function parseSignatureHeader(h: string | undefined): { keyid: string; sig: string } | null {
   const m = /^keyid=([0-9a-f-]{36}),\s*sig=([A-Za-z0-9_-]+)$/.exec((h ?? "").trim());

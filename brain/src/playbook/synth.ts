@@ -1,10 +1,10 @@
 // The playbook text. Code writes a complete baseline from the counts; Opus 5.5 (route understand) may reword it.
 // The model's reply is used only when it keeps the shape, every id and slot, adds no number that is not one of the
-// counts and names nobody (leak.ts); otherwise the baseline stands and a warning says why.
+// counts and names nobody (leak.ts); otherwise, or when the model call fails, the baseline stands and a warning says why.
 import { TIER_MODELS } from "../models/router.ts";
 import type { Model } from "../models/model.ts";
 import { untrustedBlock } from "../workflows/untrusted.ts";
-import { allowedNumbers, findTextLeaks } from "./leak.ts";
+import { allowedNumbers, findTextLeaks, lowerWords } from "./leak.ts";
 import type { Identity } from "./mask.ts";
 import { leadReads, moveSequence } from "./stats.ts";
 import {
@@ -286,8 +286,10 @@ export function acceptWording(reply: string, b: Baseline, nums: ReadonlySet<stri
   if (avoid === null) return { ok: false, reason: "avoid is not 1-8 strings" };
   const value = { message: o.message.trim(), rules, skeletons: sk, avoid };
   const texts: Array<[string, string]> = [["message", value.message], ...rules.map((r, i): [string, string] => [`rules[${i}].text`, r.text]), ...sk.map((s, i): [string, string] => [`skeletons[${i}]`, s]), ...avoid.map((a, i): [string, string] => [`avoid[${i}]`, a])];
+  // The vocabulary of the playbook this wording makes (its own text and the code's templates), as leak.ts sees it.
+  const vocab = lowerWords([...texts.map(([, t]) => t), ...b.templates.flatMap((t) => [t.text, ...t.slots.map((x) => x.says)])]);
   for (const [path, t] of texts) {
-    const leaks = findTextLeaks(t, id, nums, path);
+    const leaks = findTextLeaks(t, id, nums, path, vocab);
     if (leaks.some((l) => l.kind === "number")) return { ok: false, reason: `it adds a number that is not one of the counts (${path})` };
     if (leaks.length > 0) return { ok: false, reason: `it kept a personal detail (${leaks[0]!.kind} in ${path})` };
   }
@@ -299,7 +301,12 @@ export async function synthesise(b: Baseline, stats: Stats, outcomes: Outcomes, 
   if (model === null) return { text: b, used: false, warning: null, prompt: null };
   const nums = allowedNumbers({ stats, outcomes, cadence });
   const prompt = synthPrompt(b, stats, outcomes, cadence);
-  const reply = await model.complete({ role: "playbook", route: "understand", model: TIER_MODELS.opus, system: SYNTH_SYSTEM, prompt, maxTokens: 3000 });
+  let reply: string;
+  try {
+    reply = await model.complete({ role: "playbook", route: "understand", model: TIER_MODELS.opus, system: SYNTH_SYSTEM, prompt, maxTokens: 3000 });
+  } catch {
+    return { text: b, used: false, warning: "the model's wording was not used: the model call failed", prompt };
+  }
   const got = acceptWording(reply, b, nums, id);
   if (!got.ok) return { text: b, used: false, warning: `the model's wording was not used: ${got.reason}`, prompt };
   return { text: { ...b, ...got.value }, used: true, warning: null, prompt };

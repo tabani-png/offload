@@ -38,9 +38,16 @@ function device(p: Principal): { deviceId: string; personId: string } {
   return { deviceId: p.deviceId, personId: p.personId };
 }
 
-/** New hs-1 inputs: every stored monthly snapshot must be recomputed before it may be final again. */
+/**
+ * New hs-1 inputs: every stored monthly snapshot must be recomputed before it may be final again. One metric_dirty row
+ * per ingest transaction (migration 0502); no snapshot row is touched here, so envelopes never queue on each other or
+ * on the nightly job. The flag is transaction-local and rolls back with the object's savepoint, like the row.
+ */
 async function markStale(tx: Tx): Promise<void> {
-  await tx`update metric_snapshots set stale = true where stale = false`;
+  const [m] = await tx`select coalesce(current_setting('app.metrics_dirty', true), '') as v`;
+  if (m!.v === "on") return;
+  await tx`insert into metric_dirty (tenant_id) values (current_setting('app.tenant_id')::uuid)`;
+  await tx`select set_config('app.metrics_dirty', 'on', true)`;
 }
 
 const runOutcome: SyncHandler = async (tx, object, { principal }) => {
@@ -65,6 +72,11 @@ const runOutcome: SyncHandler = async (tx, object, { principal }) => {
       overnight_policy_id = excluded.overnight_policy_id, cost_cents = excluded.cost_cents,
       error_code = excluded.error_code, overnight = excluded.overnight, received_at = excluded.received_at
     where run_outcomes.seq <= excluded.seq`;
+  // The first copy of a run id stored in the tenant owns it (migration 0505): a claim, settled by the primary key in
+  // commit order, never by a clock. Later copies, from this device or another, leave it as it is.
+  await tx`insert into run_owners (tenant_id, run_id, device_id, person_id)
+    values (current_setting('app.tenant_id')::uuid, ${o.runId}, ${deviceId}, ${personId})
+    on conflict (tenant_id, run_id) do nothing`;
   await markStale(tx);
 };
 
