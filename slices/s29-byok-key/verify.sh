@@ -44,7 +44,7 @@ fi
 echo "== hygiene (the key has no sink but the Keychain)"
 for f in "$S/Core/ClaudeKey.swift" "$S/Surfaces/ClaudeKeychain.swift"; do
   [ -f "$f" ] || { fail "missing ${f#$ROOT/}"; continue; }
-  grep -nE "NSLog|print\(|UserDefaults|\.write\(|FileManager|/usr/bin/security|setenv|environment\[" "$f" && fail "${f#$ROOT/} has a log, file, defaults, env or security-CLI sink"
+  grep -nE "NSLog|print\(|UserDefaults|\.write\(|FileManager|Process\(|executableURL|setenv|environment\[" "$f" && fail "${f#$ROOT/} has a log, file, defaults, env or security-CLI sink"
 done
 grep -q "claudeKeyEnvironment" "$S/App/OffloadApp.swift" || fail "OffloadApp does not launch the brain through BrainLaunch.claudeKeyEnvironment"
 grep -q "claudeKeyEnvironment" "$S/Core/BrainCheck.swift" || fail "--brain-check does not launch the brain through BrainLaunch.claudeKeyEnvironment"

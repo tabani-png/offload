@@ -5,7 +5,7 @@ depends_on: [s24-brief-runner (Keychain key rule), s25-standalone-install (Brain
 parallel_safe: true
 human_gated: false
 verify: bash slices/s29-byok-key/verify.sh
-paths_in_scope: [app/Sources/Core/ClaudeKey.swift, app/Sources/Core/BrainCheck.swift, app/Sources/Surfaces/ClaudeKeychain.swift, app/Sources/Surfaces/OnboardingWindow.swift, app/Sources/Surfaces/DashboardModel.swift, app/Sources/Surfaces/DashboardView.swift, app/Sources/App/OffloadApp.swift, app/build.sh (test list), slices/s25-standalone-install/verify.sh (key line), slices/s29-byok-key/**]
+paths_in_scope: [app/Sources/Core/ClaudeKey.swift, app/Sources/Core/BrainCheck.swift, app/Sources/Surfaces/ClaudeKeychain.swift, app/Sources/Surfaces/ClaudeKeyViews.swift, app/Sources/Surfaces/OnboardingWindow.swift, app/Sources/Surfaces/DashboardModel.swift, app/Sources/Surfaces/DashboardView.swift, app/Sources/App/OffloadApp.swift, app/build.sh (test list), slices/s25-standalone-install/verify.sh (key line), slices/s29-byok-key/**]
 paths_out_of_scope: [brain/**, engine/**, control/**, web/**, schemas/**, packages/**]
 ---
 
