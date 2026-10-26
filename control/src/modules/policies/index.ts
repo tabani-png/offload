@@ -11,6 +11,7 @@ import { conflict, forbidden, invalid, notFound, page, pageParams } from "../../
 import { brokerOf } from "../broker/broker.ts";
 import { OVERNIGHT_LIST, OVERNIGHT_PATCH, readLocal, replyLocal } from "../broker/schemas.ts";
 import { itemRef } from "../broker/stage1.ts";
+import type { RegistryApi, RegistryVersion } from "../registry/port.ts";
 import { trustChange, type OvernightPolicy } from "./evaluate.ts";
 import {
   OVERNIGHT_POLICY,
@@ -56,6 +57,43 @@ async function ownerAccess(tx: Tx, p: Principal, ownerPersonId: string, write: b
   if (p.accessRole === "dept_lead" && p.departmentScope.includes(o.department_id as string)) return;
   throw notFound();
 }
+
+/** The role workflow version a policy names (S2-06 registry). Without the registry nothing can be checked: fail closed. */
+async function workflowOf(tx: Tx, deps: Deps, workflowId: string, version: number): Promise<RegistryVersion> {
+  const reg = deps.ports.registry as Partial<RegistryApi>;
+  if (typeof reg.getVersion !== "function") throw invalid("the workflow registry is not loaded");
+  const v = await reg.getVersion(tx, workflowId, version);
+  if (!v || v.state !== "role") throw invalid("workflowId and version must name a live role workflow version");
+  return v;
+}
+
+/** Does the person hold the workflow's job role (an active or leaving holder)? */
+async function holds(tx: Tx, wf: RegistryVersion, personId: string): Promise<boolean> {
+  const [h] = await tx`select 1 from job_role_holders h join people p on p.tenant_id = h.tenant_id and p.id = h.person_id
+    where h.job_role_id = ${wf.jobRoleId} and h.person_id = ${personId} and p.state in ('active', 'leaving')`;
+  return h !== undefined;
+}
+
+/** The owner runs the workflow (N1): a holder of its job role, or a dept lead of its department. */
+async function ownerRuns(tx: Tx, wf: RegistryVersion, ownerPersonId: string): Promise<boolean> {
+  if (await holds(tx, wf, ownerPersonId)) return true;
+  const [o] = await tx`select access_role, dept_lead_of from people where id = ${ownerPersonId} and state in ('active', 'leaving')`;
+  return o?.access_role === "dept_lead" && (o.dept_lead_of as string[]).includes(wf.departmentId);
+}
+
+/**
+ * Who may let a policy approve in a person's place (N1): someone who could approve the batches it approves under the
+ * role policy (the owner as runner, when the role policy names the runner), or a dept lead of the workflow's
+ * department, an admin or the tenant owner signing off. Without a role policy nothing is approvable.
+ */
+async function maySignOff(tx: Tx, p: Principal, wf: RegistryVersion, rp: RolePolicy | null, ownerPersonId: string): Promise<boolean> {
+  if (rp === null) return false;
+  if (p.accessRole === "owner" || p.accessRole === "admin") return true;
+  if (p.accessRole === "dept_lead" && p.departmentScope.includes(wf.departmentId)) return true;
+  return (rp.approvers === "runner" || rp.approvers === "runner_or_dept_lead") && p.personId === ownerPersonId && (await holds(tx, wf, ownerPersonId));
+}
+
+const overBudget = (rp: RolePolicy | null, cents: number) => rp !== null && cents > rp.dailyBudgetCents;
 
 /** Fewer dry-run nights than this is an owner or admin decision (ADR 0112 §3). */
 export const MIN_DRY_RUN_NIGHTS = 3;
@@ -140,6 +178,13 @@ function routes(app: App, deps: Deps): void {
     }
     const out = await tenantTx(c, deps, async (tx, p) => {
       await ownerAccess(tx, p, req.ownerPersonId, true);
+      const wf = await workflowOf(tx, deps, req.workflowId, req.version);
+      if (!(await ownerRuns(tx, wf, req.ownerPersonId))) throw invalid("the owner does not run this workflow");
+      const rp = await rolePolicyOf(tx, wf.jobRoleId);
+      if (overBudget(rp, req.budgetCentsPerNight)) throw invalid("budgetCentsPerNight is above the role policy's dailyBudgetCents");
+      if (req.mode === "preapproved" && !(await maySignOff(tx, p, wf, rp, req.ownerPersonId))) {
+        throw forbidden("only an approver under the role policy, a dept lead or an admin makes a policy preapproved");
+      }
       if (req.dryRunNights < MIN_DRY_RUN_NIGHTS && !mayShortenDryRun(p)) {
         throw forbidden(`only an owner or admin sets fewer than ${MIN_DRY_RUN_NIGHTS} dry-run nights`);
       }
@@ -183,6 +228,15 @@ function routes(app: App, deps: Deps): void {
       // preapproved) is a new policy as far as trust goes: its dry-run nights start again (ADR 0112 §2).
       const change = trustChange(cur, next);
       if (change.widened) next.dryRunNightsDone = 0;
+      const wf = await workflowOf(tx, deps, cur.workflowId, cur.version);
+      const rp = await rolePolicyOf(tx, wf.jobRoleId);
+      if (next.budgetCentsPerNight > cur.budgetCentsPerNight && overBudget(rp, next.budgetCentsPerNight)) {
+        throw invalid("budgetCentsPerNight is above the role policy's dailyBudgetCents");
+      }
+      // Making a policy preapproved, or widening one, lets it approve more in a person's place (N1).
+      if (next.mode === "preapproved" && (cur.mode !== "preapproved" || change.widened) && !(await maySignOff(tx, p, wf, rp, cur.ownerPersonId))) {
+        throw forbidden("only an approver under the role policy, a dept lead or an admin makes a policy preapproved or widens it");
+      }
       const v = deps.validator.validate(OVERNIGHT_POLICY, next);
       if (!v.ok) throw invalid("policy does not match its schema", v.errors);
       checkPolicy(next);

@@ -664,7 +664,9 @@ export function createBroker(deps: Deps): Broker {
     }
     if (prior === null) await tx`update overnight_policies set connection_fingerprint = ${fp} where id = ${policy.id}`;
     const nr = await nightRow(tx, policy, night);
-    const fresh = (await overnightById(tx, policy.id))!;
+    // The role policy's daily budget caps the night's, whatever the policy says (N1).
+    const stored = (await overnightById(tx, policy.id))!;
+    const fresh = { ...stored, budgetCentsPerNight: Math.min(stored.budgetCentsPerNight, v.policy.dailyBudgetCents) };
     const [tonight] = await tx`select count(*)::int as n from batch_items i join batches b on b.tenant_id = i.tenant_id and b.hash = i.batch_hash
       where b.overnight_policy_id = ${policy.id} and i.policy_night = ${night}::date and i.state not in ('failed_before_send', 'rejected')`;
     let commits = Number(tonight!.n);
@@ -734,8 +736,9 @@ export function createBroker(deps: Deps): Broker {
       let policy: OvernightPolicy | null = null;
       if (run.overnight === true && run.overnightPolicyId && isUuid(run.overnightPolicyId)) {
         const p = await overnightById(tx, run.overnightPolicyId, true);
-        const ownerOk = run.identity.type === "role_identity" || p?.ownerPersonId === run.identity.id;
-        if (p && p.workflowId === run.workflowId && p.version === run.version && ownerOk) policy = p;
+        // The policy is the runner's own (N1): a person run sends as its runner, and a role-identity run uses only a
+        // policy its runner owns, never another person's for the same workflow version.
+        if (p && p.workflowId === run.workflowId && p.version === run.version && p.ownerPersonId === run.runnerPersonId) policy = p;
       }
       const checked = await validate(tx, run, input);
       if (!checked.ok) return auditReject(checked.r);
