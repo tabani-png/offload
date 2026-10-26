@@ -6,7 +6,7 @@ import type { Tx } from "../../db/pool.ts";
 import { HttpError, invalid, page, pageParams } from "../../schema/http.ts";
 import {
   SUPPRESSED, anomalies, baselinesFor, buildRows, cellOf, evidence, inScope, isSuppressed, report, reportInputsDigest, selectRows,
-  type Anomaly, type HoursSavedReport, type Period, type ReportInput, type RunInput, type RunRow, type Scope,
+  type Anomaly, type Grade, type TopWorkflow, type HoursSavedReport, type Period, type ReportInput, type RunInput, type RunRow, type Scope,
 } from "../../../../packages/hours-saved/src/index.ts";
 import { COMPANY, childrenIn, floorNode, hiddenInTree, loadHierarchy, type Cells, type Hierarchy } from "./floor.ts";
 import { aggregateRead, loadInputs, loadReviews, loadRuns, loadSamples, withAggregateRead } from "./load.ts";
@@ -21,6 +21,34 @@ const MAX_SAMPLES = 500;
 const MAX_CHILDREN = 500;
 /** hours-saved-report.schema.json caps the anomaly list. */
 const MAX_ANOMALIES = 100;
+/** hours-saved-report.schema.json caps the top workflows. */
+const MAX_TOP = 10;
+const GRADE_RANK = { A: 0, B: 1, C: 2 } as const;
+
+/**
+ * hs-1's top-workflow ranking (packages/hours-saved report.ts topWorkflows) over the scope's rows, uncut: report() cuts
+ * to 10 before S2-05 can floor, so dropped workflows would push out allowed ones (Codex review of 015c487). Same rule:
+ * graded runs with seconds saved, at least `floor` people (group views), the worst grade seen, by seconds then id.
+ * The golden HOURS tests hold it equal to report() whenever the floor drops nothing.
+ */
+function rankedWorkflows(rows: readonly RunRow[], floor: number): TopWorkflow[] {
+  const agg = new Map<string, { seconds: number; grade: Grade | null; people: Set<string>; jobRoleId: string | null }>();
+  for (const r of rows) {
+    const e = agg.get(r.workflowId) ?? { seconds: 0, grade: null, people: new Set<string>(), jobRoleId: r.jobRoleId };
+    e.people.add(r.personId);
+    if (r.saved > 0 && r.grade !== null) {
+      e.seconds += r.saved;
+      if (e.grade === null || GRADE_RANK[r.grade] > GRADE_RANK[e.grade]) e.grade = r.grade;
+    }
+    agg.set(r.workflowId, e);
+  }
+  const out: TopWorkflow[] = [];
+  for (const [workflowId, e] of agg) {
+    if (e.grade === null || e.seconds === 0 || e.people.size < floor) continue;
+    out.push({ workflowId, name: workflowId, jobRoleId: e.jobRoleId, grade: e.grade, seconds: e.seconds });
+  }
+  return out.sort((a, b) => b.seconds - a.seconds || (a.workflowId < b.workflowId ? -1 : a.workflowId > b.workflowId ? 1 : 0));
+}
 
 /**
  * The hs-1 input for a group scope over a period: every run of the tenant in the period (scope selection is hs-1's)
@@ -208,7 +236,9 @@ async function hoursSaved(c: Context<AppEnv>, deps: Deps): Promise<HoursSavedRep
         ? floorNode(scope, scope.type === "company" ? null : COMPANY, input.children, all, floor).children.slice(0, MAX_CHILDREN)
         : [];
     const listed = workflowLister(v, floor);
-    const topWorkflows = r.topWorkflows.filter((w) => listed(scope, (x) => x.workflowId === w.workflowId));
+    const topWorkflows = rankedWorkflows(cells.sel(cells.rows, scope), floor)
+      .filter((w) => listed(scope, (x) => x.workflowId === w.workflowId))
+      .slice(0, MAX_TOP);
     return { ...r, inputsDigest, children, topWorkflows, anomalies: groupAnomalies(scope, v, timezone, listed), final };
   });
 }
