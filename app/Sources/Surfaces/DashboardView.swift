@@ -137,6 +137,12 @@ struct DashboardDetail: View {
           HeroSection(copy: copy)
           NeedsYouSection(model: model, copy: copy)
           ObservingSummary(model: model, observing: d.observing)
+          // S2-13: last, under where your time goes. State only; "Connect…" is a quiet secondary, never the primary.
+          if let c = model.company, CompanyEntry.showsOnDashboard(c.state) {
+            WindowSection(title: CompanyCopy.title) {
+              CompanySyncRow(status: c.status, state: c.state, now: now, onOpen: { model.onOpenCompany?() })
+            }
+          }
         case .automations:
           AutomationsSection(model: model, copy: copy)
         case .week:

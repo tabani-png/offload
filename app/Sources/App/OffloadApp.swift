@@ -53,6 +53,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var connections: ConnectionsWindowController?
   private var connectionsModel: ConnectionsModel?
   private let dashboardModel: DashboardModel
+  /// S2-13: company sync (connect, notice, share) on the brain's /sync routes, its window, and the live state the
+  /// rail and the dashboard show.
+  private let companyModel: CompanyModel
+  private var company: CompanyWindowController?
+  private var companyBag = Set<AnyCancellable>()
   private var qaBackdrop: NSWindow?
   private var refreshTimer: Timer?
   private var lastObserverPaused: Bool?
@@ -70,18 +75,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                         repo: repo)
     let obs = ObserverControl(binary: obsBin, home: options.home)
     observer = obs
+    let companyAPI: CompanyAPI
     switch options.brain {
     case .mock:
       client = MockBrainClient()
+      companyAPI = MockCompanyAPI()
     case .attach(let url):
       endpoint.endpoint = BrainEndpoint(baseURL: url, token: env["OFFLOAD_TOKEN"] ?? "")
-      client = HTTPBrainClient(endpoint: endpoint, permissions: { await obs.permissionRows() })
+      let http = HTTPBrainClient(endpoint: endpoint, permissions: { await obs.permissionRows() })
+      client = http
+      companyAPI = CompanyClient(brain: http)
     case .spawn:
       endpoint.starting = true
-      client = HTTPBrainClient(endpoint: endpoint, permissions: { await obs.permissionRows() })
+      let http = HTTPBrainClient(endpoint: endpoint, permissions: { await obs.permissionRows() })
+      client = http
+      companyAPI = CompanyClient(brain: http)
     }
     model = InboxModel(client: client)
     dashboardModel = DashboardModel(client: client)
+    let brain = client
+    companyModel = CompanyModel(service: CompanyService(api: companyAPI),
+                                loadWorkflows: { (try? await brain.automations()) ?? [] })
     super.init()
   }
 
@@ -115,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     dashboardModel.onOpenInbox = { [weak self] in self?.card.show() }
     dashboardModel.onTogglePause = { [weak self] paused in self?.setObserverPaused(paused) }
     dashboardModel.onOpenURL = { NSWorkspace.shared.open($0) }
+    wireCompany()
     dashboardModel.claudeVision = ClaudeVisionSetting.load(.standard).enabled
     dashboardModel.onClaudeVision = { [weak self] on in self?.setClaudeVision(on) }
     dashboardModel.onReveal = { path in
@@ -134,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       await waitForBrain(timeout: 30)
       await model.load()
       await refreshObserver()
+      await companyModel.refreshQuietly()
       runQAHooks()
     }
   }
@@ -284,7 +300,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tick += 1
         Task {
           await self?.refreshObserver()
-          if tick % 3 == 0 { await self?.model.load() }
+          if tick % 3 == 0 {
+            await self?.model.load()
+            await self?.companyModel.refreshQuietly()
+          }
         }
       }
     }
@@ -559,6 +578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     Task {
       await dashboardModel.load()
       await refreshObserver()
+      await companyModel.refreshQuietly()
       c.show()
       qaRecord("dashboard", c.window)
       await qaTime(c.window)
@@ -602,6 +622,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
+  // MARK: company (S2-13)
+
+  /// The live Company model feeds the rail's mark and the dashboard's row; both open the Company window. The
+  /// self-view link opens in the browser. The sign-in page is not opened here: the brain opens it on POST /sync/connect.
+  private func wireCompany() {
+    companyModel.onOpenURL = { NSWorkspace.shared.open($0) }
+    model.onOpenCompany = { [weak self] in self?.openCompany() }
+    dashboardModel.onOpenCompany = { [weak self] in self?.openCompany() }
+    // @Published fires before the value lands; hop once so syncState reads the new status and connect state.
+    companyModel.$status.map { _ in () }.merge(with: companyModel.$connect.map { _ in () })
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] in self?.applyCompany() }
+      .store(in: &companyBag)
+  }
+
+  private func applyCompany() {
+    let state = companyModel.syncState
+    let rail = CompanyEntry.railState(state)
+    if model.companyRail != rail { model.companyRail = rail }
+    dashboardModel.updateCompany(CompanyGlance(status: companyModel.status, state: state))
+  }
+
+  /// The Company window: connect, the notice, share with my team, pause. Not connected, it says so calmly.
+  @objc func openCompany() {
+    if let c = company { c.show(); return }
+    let c = CompanyWindowController(model: companyModel)
+    c.onClose = { [weak self] in self?.company = nil }
+    company = c
+    c.show()
+    qaRecord("company", c.window)
+  }
+
   /// QA: appends `name=windowNumber` to $OFFLOAD_QA_WINDOWS so live captures take our windows only.
   private func qaRecord(_ name: String, _ w: NSWindow) {
     guard let path = ProcessInfo.processInfo.environment["OFFLOAD_QA_WINDOWS"] else { return }
@@ -626,6 +678,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func runQAHooks() {
     let args = CommandLine.arguments
     if args.contains("--open-connections") { openConnections() }
+    if args.contains("--open-company") { openCompany() }
     if args.contains("--open-review") { openReview(insightId: model.state.insights.first?.id ?? MockBrainClient.outreach.id) }
     if args.contains("--open-dashboard") {
       openDashboard()
@@ -737,6 +790,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let conn = menu.addItem(withTitle: "Connections…", action: #selector(openConnections), keyEquivalent: "k")
     conn.keyEquivalentModifierMask = .command
     conn.target = self
+    // S2-13: "Connect your company…" until a company is in play, then "Company…". Never a warning.
+    menu.addItem(withTitle: CompanyEntry.menuTitle(companyModel.syncState), action: #selector(openCompany), keyEquivalent: "").target = self
     menu.addItem(withTitle: "Welcome and permissions…", action: #selector(openOnboardingMenu), keyEquivalent: "").target = self
     menu.addItem(.separator())
     menu.addItem(withTitle: "Quit Offload", action: #selector(quit), keyEquivalent: "q").target = self

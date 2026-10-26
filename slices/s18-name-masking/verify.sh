@@ -18,7 +18,10 @@ command -v bun >/dev/null 2>&1 || { echo "FAIL bun not on PATH"; exit 1; }
 [ -d "$BRAIN/node_modules/typescript" ] || (cd "$BRAIN" && bun install --frozen-lockfile >/dev/null 2>&1) || fail "bun install failed"
 
 echo "== dependencies"
-if git -C "$ROOT" diff --quiet "$BASE" -- brain/package.json brain/bun.lock; then echo "no new dependency"; else fail "brain/package.json or bun.lock changed since $BASE"; fi
+. "$ROOT/scripts/lib/slice-changes.sh"   # this branch's own changes; merges of main are not counted
+if ! slice_files "$BASE" -- brain/package.json brain/bun.lock; then fail "dependency check could not run: $SLICE_ERROR"
+elif [ -z "$SLICE_FILES" ]; then echo "no new dependency"
+else fail "brain/package.json or bun.lock changed on this branch since $BASE"; fi
 
 echo "== typecheck"
 tsc_out="$(cd "$BRAIN" && bunx tsc --noEmit 2>&1)" && echo "typecheck ok" || { echo "$tsc_out" | head -20; fail "typecheck (bunx tsc --noEmit)"; }
@@ -60,8 +63,16 @@ fi
 grep -q "names.mask" "$BRAIN/src/models/router.ts" 2>/dev/null || fail "the router does not mask requests"
 
 echo "== scope (files touched by s18 commits since $BASE)"
-touched="$(git -C "$ROOT" log --no-merges --format= --name-only --grep='^s18' "$BASE..HEAD" 2>/dev/null | sort -u)"
-for f in $touched; do
+# s18 commits not on main, plus edits made inside merge commits (scripts/lib/slice-changes.sh)
+SLICE_GREP='^s18' slice_files --allow-skip "$BASE"; scope_rc=$?
+case $scope_rc in
+  0) ;;
+  3) echo "scope: SKIPPED ($SLICE_ERROR)" ;;
+  *) fail "scope check could not run: $SLICE_ERROR" ;;
+esac
+touched="$SLICE_FILES"
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
   case "$f" in
     brain/src/privacy/*|brain/src/grouping/normalize.ts|brain/src/models/router.ts|brain/src/models/model.ts) ;;
     brain/src/vision/notes.ts|brain/src/vision/prompt.ts|brain/src/understanding/describe.ts) ;;
@@ -73,7 +84,7 @@ for f in $touched; do
     brain/tests/s05b-runner/idempotency.test.ts) ;;  # the H3 fix ported from S2-02 (SPEC "Scope changes")
     *) fail "s18 commit touched out-of-scope $f";;
   esac
-done
+done <<< "$touched"
 echo "scope checked ($(echo "$touched" | grep -c . ) files in s18 commits)"
 
 if [ $fails -ne 0 ]; then echo "s18 verify: $fails check(s) failed"; exit 1; fi
