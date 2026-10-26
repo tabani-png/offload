@@ -232,6 +232,12 @@ final class DashboardWindowController: TitledWindowController {
       window.performClose(nil)
       return true
     }
+    // s10f (M4): ⌘K, the sidebar's Connections link.
+    if DashboardSidebarLink.forShortcut(character: e.charactersIgnoringModifiers ?? "", command: e.flags.contains(.command)) == .connections,
+       let open = model.onOpenConnections {
+      open()
+      return true
+    }
     // ⌘1…⌘4: the sidebar's places.
     if e.flags.contains(.command), let n = Int(e.charactersIgnoringModifiers ?? ""), let s = DashboardSection.forShortcut(n) {
       model.show(s)

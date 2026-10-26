@@ -142,7 +142,7 @@ function viaWords(o: ToolOptionDTO): string {
   if (o.needsYou != null) return o.connected ? "Connected, reads only for now." : "Reads only for now.";
   if (o.connected) return "Already connected.";
   if (o.via === "composio") return "Connect via Composio.";
-  if (o.via === "mcp") return "Connect its MCP server.";
+  if (o.via === "mcp") return `Connect ${o.name}.`;
   if (o.via === "api") return "Connect with an API key.";
   if (o.via === "local") return "Nothing to connect.";
   return "Runs on screen.";

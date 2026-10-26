@@ -46,6 +46,8 @@ final class DashboardModel: ObservableObject {
   }
 
   var onOpenWorkflow: ((String) -> Void)?
+  /// s10f (M4): the sidebar's Connections link (⌘K).
+  var onOpenConnections: (() -> Void)?
   /// s10e: the inbox (the empty Automations page's one action).
   var onOpenInbox: (() -> Void)?
   var onTogglePause: ((Bool) -> Void)?
@@ -211,7 +213,7 @@ final class DashboardModel: ObservableObject {
 
   func point(at a: DashboardAutomation) {
     let t = Self.pointerTarget(for: a)
-    startPointer(PointerRequest(targetId: t.id, originId: "lead.\(a.id)", label: t.label, startedAt: clock()))
+    startPointer(PointerRequest(targetId: t.id, originId: "lead.\(a.id)", label: t.label, startedAt: clock(), rowId: "rowband.\(a.id)"))
   }
 
   /// "Show the evidence" on the timeline: fly to the span the top insight is built on.

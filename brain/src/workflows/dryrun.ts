@@ -19,6 +19,8 @@ import { generalDryRun } from "../plan/dryrun.ts";
 import type { GeneralDryRunDTO } from "../api/s14-types.ts";
 import type { UserContext } from "../types.ts";
 import { readUserContext } from "../context/store.ts";
+import { NameMap } from "../privacy/names.ts";
+import { readNamePolicy, signNames } from "../privacy/policy.ts";
 
 export class DryRunError extends Error {}
 
@@ -62,13 +64,15 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
 
   const items: BatchItem[] = [];
   const out: DryRunInstanceDTO[] = [];
+  // s18: one name map per dry run (stable placeholders across instances); the facts `sign:` line is the user's name.
+  const names = new NameMap(readNamePolicy(o.home, signNames(factsText)));
   for (const ob of observed) {
     let draft: string | null = null;
     let examplesUsed: string[] = [];
     let itemWarnings: string[] = [];
     if (emailWorkflow) {
       // The observed subject stands in for the template so the two sides are the same email.
-      const d = await draftInTone({ pack, bucket: wf.bucket, recipient: ob.recipient, subject: ob.subject, facts: factsText, model: o.model, models });
+      const d = await draftInTone({ pack, bucket: wf.bucket, recipient: ob.recipient, subject: ob.subject, facts: factsText, model: o.model, models, names });
       draft = d.body;
       examplesUsed = d.examplesUsed;
       itemWarnings = d.warnings;

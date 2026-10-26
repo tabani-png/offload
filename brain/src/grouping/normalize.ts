@@ -11,8 +11,13 @@ const NUMBER_RE = /\d+(?:[.,]\d+)*/g;
 
 export const WILDCARD = "<*>";
 
+/** s18: a person placeholder (privacy/names.ts) keeps its number, so a masked prompt can still be un-masked. */
+const PERSON_RE = /(<person:[a-z]{4}\.(?:\d+|me)(?:\.[a-z]+)?(?:~\d+)?>)/;
+
 /** Masks the parts of a title or OCR text that vary per item: emails, URLs, dates, times, ids, numbers. */
 export function maskText(text: string): string {
+  const parts = text.includes("<person:") ? text.split(PERSON_RE) : [text];
+  if (parts.length > 1) return parts.map((part, i) => (i % 2 === 1 ? part : maskText(part))).join("");
   return text
     .replace(EMAIL_RE, "<email>")
     .replace(URL_RE, "<url>")

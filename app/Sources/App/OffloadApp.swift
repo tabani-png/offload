@@ -111,6 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
     }
     dashboardModel.onOpenWorkflow = { [weak self] id in self?.openReview(workflowId: id) }
+    dashboardModel.onOpenConnections = { [weak self] in self?.openConnections() }
     dashboardModel.onOpenInbox = { [weak self] in self?.card.show() }
     dashboardModel.onTogglePause = { [weak self] paused in self?.setObserverPaused(paused) }
     dashboardModel.onOpenURL = { NSWorkspace.shared.open($0) }
@@ -655,7 +656,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Puts a plain white (or near-black) window of our own under the card and rail, one level below them, and
   /// reports a capture rect that lies entirely on it, so a screenshot of that rect shows only our pixels.
   private func qaGlass(_ kind: String) {
-    guard let screen = NSScreen.main else { return }
+    // s10f: the card's own screen, not NSScreen.main (the key window's screen can be another display).
+    guard let screen = card.panel.screen ?? NSScreen.main else { return }
     let union = card.panel.frame.union(rail.panel.frame)
     let backdropFrame = union.insetBy(dx: -80, dy: -80).intersection(screen.frame)
     let w = NSWindow(contentRect: backdropFrame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -665,6 +667,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     w.ignoresMouseEvents = true
     w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
     w.backgroundColor = kind == "dark" ? NSColor(srgbRed: 0.07, green: 0.07, blue: 0.08, alpha: 1) : .white
+    if kind == "color" {
+      // s10f (M7): a coloured wallpaper stand-in (our own window): the glass must visibly pick its colour up.
+      let v = NSView(frame: NSRect(origin: .zero, size: backdropFrame.size))
+      v.wantsLayer = true
+      let g = CAGradientLayer()
+      g.frame = v.bounds
+      g.colors = [NSColor(srgbRed: 0.10, green: 0.35, blue: 0.95, alpha: 1).cgColor,
+                  NSColor(srgbRed: 0.95, green: 0.45, blue: 0.20, alpha: 1).cgColor]
+      g.startPoint = CGPoint(x: 0, y: 0)
+      g.endPoint = CGPoint(x: 1, y: 1)
+      v.layer?.addSublayer(g)
+      w.contentView = v
+    }
     if kind == "split" {
       // Left half white, right half black: the hardest case, both at once.
       let v = NSView(frame: NSRect(origin: .zero, size: backdropFrame.size))
@@ -679,8 +694,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     qaBackdrop = w
     rail.panel.orderFrontRegardless()
     card.panel.orderFrontRegardless()
-    let capture = union.insetBy(dx: -40, dy: -40)
-    let topLeftY = screen.frame.maxY - capture.maxY
+    // Inside our backdrop, which is itself clipped to the card's screen: never a pixel of another app or display.
+    let capture = union.insetBy(dx: -40, dy: -40).intersection(backdropFrame)
+    // screencapture -R measures from the top-left of the PRIMARY display (the one with the menu bar), so flip
+    // against it, not against the card's screen: with two displays the old flip captured another app's window.
+    let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? screen.frame.maxY
+    let topLeftY = primaryMaxY - capture.maxY
     let line = String(format: "rect=%.0f,%.0f,%.0f,%.0f card=%d rail=%d backdrop=%d\n", capture.minX, topLeftY,
                       capture.width, capture.height, card.panel.windowNumber, rail.panel.windowNumber, w.windowNumber)
     if let path = ProcessInfo.processInfo.environment["OFFLOAD_QA_FILE"] {
