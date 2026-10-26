@@ -543,6 +543,9 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   - Round 6: reading an answer has four outcomes: ok (rows and skipped rows, even 0 complete), empty (a recognised
     empty collection: "nothing new", no fall back), wrong_context (a conflicting report or filter anywhere: that
     method is marked failed, the next is tried), unreadable (the next is tried; the list only after all).
+  - Round 7: text answers go through the same pipeline; every value is exactly what the source shows (sign and
+    formatting kept). Workflow runs get the Claude key through `settings.apiKeyHelper` (Keychain reference), never in
+    the child's env.
 
 ## s19: messaging playbook (additive, ADR 0011)
 A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,

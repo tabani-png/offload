@@ -43,7 +43,7 @@ describe("s27 executor key", () => {
     const shown = JSON.stringify({ env: o.options.env, settings: o.options.settings, args: o.options.extraArgs ?? null });
     expect(shown).not.toContain("sk-ant-s27-not-real");
     expect(shown).not.toContain("oat-s27-not-real");
-    expect(o.options.settings?.apiKeyHelper).toBe(cred.command);
+    expect((o.options.settings as { apiKeyHelper?: string } | undefined)?.apiKeyHelper).toBe(cred.command);
   });
 
   test("LIVE: no key configured: no helper, no key, the child relies on its own sign-in", () => {

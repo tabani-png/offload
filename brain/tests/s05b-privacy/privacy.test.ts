@@ -205,7 +205,9 @@ describe("s05b privacy: instruction isolation", () => {
     const env = executorEnv({ PATH: "/usr/bin", HOME: "/Users/x", OFFLOAD_TOKEN: "secret-token", COMPOSIO_API_KEY: "ck_live", GMAIL_OAUTH_PATH: "/creds.json", ANTHROPIC_API_KEY: "sk-ant-x", AWS_SECRET_ACCESS_KEY: "aws" });
     expect(env.PATH).toBe("/usr/bin");
     expect(env.HOME).toBe("/Users/x");
-    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-x");
+    // s27 scope change: the Claude key no longer rides in the child's env; it reaches Claude Code only through the
+    // apiKeyHelper (workflows/executor.ts executorCredential, the builder's helper). Still no connector secret either.
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     for (const k of ["OFFLOAD_TOKEN", "COMPOSIO_API_KEY", "GMAIL_OAUTH_PATH", "AWS_SECRET_ACCESS_KEY"]) expect(env[k]).toBeUndefined();
     const batch = { version: 1 as const, workflowId: "wf_a", kind: "live" as const, hash: "0".repeat(64), createdAt: 1, state: "approved" as const, items: [], approvedAt: 1, results: [] };
     const gate = createGate({ workflowId: "wf_a", mode: "live", batch, autoRun: false, runToken: null, approvals: () => undefined });

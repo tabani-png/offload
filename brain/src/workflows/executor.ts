@@ -11,6 +11,11 @@ import type { Batch } from "./batch.ts";
 import type { CrmSheet } from "./allowlist.ts";
 import type { Gate, GateAction } from "./gate.ts";
 import { UNTRUSTED_RULE, untrustedBlock } from "./untrusted.ts";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+// s27: reuse the builder's key helper (never a copy).
+import { writeCredentialHelper } from "../builder/runner.ts";
 
 export interface ExecJob {
   batch: Batch;
@@ -128,9 +133,8 @@ const ENV_ALLOW = [
   "LC_ALL",
   "LC_CTYPE",
   "TERM",
-  "ANTHROPIC_API_KEY",
+  // s27: never ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN: the key reaches the child only through apiKeyHelper.
   "ANTHROPIC_BASE_URL",
-  "CLAUDE_CODE_OAUTH_TOKEN",
   "CLAUDE_CONFIG_DIR",
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
@@ -149,8 +153,30 @@ export function executorEnv(env: Readonly<Record<string, string | undefined>> = 
   return out;
 }
 
+/** s27: the person's Claude key for a workflow run, as the builder gives it (builder/runner.ts writeCredentialHelper,
+ * reused): a 0700 helper script in a fresh 0700 folder that reads the Keychain item named by OFFLOAD_ANTHROPIC_KEYCHAIN
+ * (or a key in the brain's own env, from a 0600 file) when Claude Code asks. The key is never in the child's env or
+ * argv. null when no key is configured (the child then uses its own sign-in, if any). `cleanup` removes the folder. */
+export function executorCredential(env: Readonly<Record<string, string | undefined>> = process.env): { helper: string; command: string; cleanup: () => void } | null {
+  const dir = mkdtempSync(join(tmpdir(), "offload-key-"));
+  chmodSync(dir, 0o700);
+  const cleanup = () => rmSync(dir, { recursive: true, force: true });
+  let c: ReturnType<typeof writeCredentialHelper>;
+  try {
+    c = writeCredentialHelper(join(dir, "cred"), env);
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+  if (c === null) {
+    cleanup();
+    return null;
+  }
+  return { helper: c.helper, command: c.command, cleanup };
+}
+
 /** The exact query() arguments the SDK executor uses (exported so tests can pin them without a network call). */
-export function sdkQueryOptions(job: ExecJob, env: Readonly<Record<string, string | undefined>> = process.env): { prompt: string; options: Options } {
+export function sdkQueryOptions(job: ExecJob, env: Readonly<Record<string, string | undefined>> = process.env, credential: { command: string } | null = null): { prompt: string; options: Options } {
   const abort = new AbortController();
   if (job.signal !== undefined) {
     if (job.signal.aborted) abort.abort(job.signal.reason);
@@ -169,6 +195,7 @@ export function sdkQueryOptions(job: ExecJob, env: Readonly<Record<string, strin
       permissionMode: "default",
       maxTurns: job.batch.items.length * 2 + 4,
       env: executorEnv(env),
+      ...(credential === null ? {} : { settings: { apiKeyHelper: credential.command } }),
       abortController: abort,
       ...(job.cwd === undefined ? {} : { cwd: job.cwd }),
     },
@@ -178,9 +205,18 @@ export function sdkQueryOptions(job: ExecJob, env: Readonly<Record<string, strin
 export class AgentSdkExecutor implements Executor {
   async execute(job: ExecJob): Promise<ExecResult> {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    const credential = executorCredential();
+    try {
+      return await this.run(job, query, credential);
+    } finally {
+      credential?.cleanup();
+    }
+  }
+
+  private async run(job: ExecJob, query: typeof import("@anthropic-ai/claude-agent-sdk").query, credential: { command: string } | null): Promise<ExecResult> {
     const toolCalls: ToolCallRecord[] = [];
     const byId = new Map<string, ToolCallRecord>();
-    const base = sdkQueryOptions(job);
+    const base = sdkQueryOptions(job, process.env, credential);
     const q = query({
       prompt: base.prompt,
       options: {
