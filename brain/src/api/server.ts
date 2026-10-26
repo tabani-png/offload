@@ -8,7 +8,8 @@ import { randomBytes } from "node:crypto";
 import { analyzeHome, type Analysis, type AnalyzeOptions } from "../analyze.ts";
 import { DAY_RE, storeFingerprint } from "../store/reader.ts";
 import type { Env } from "../connectors/config.ts";
-import { AgentSdkModel, StubModel, type Model } from "../models/model.ts";
+import { StubModel, type Model } from "../models/model.ts";
+import { createRoutedModel } from "../models/factory.ts";
 import { RoutedModel } from "../models/router.ts";
 import { AgentSdkExecutor, type Executor } from "../workflows/executor.ts";
 import { dashboard, keptFiles } from "../workflows/service.ts";
@@ -17,6 +18,10 @@ import { BRAIN_READY_PREFIX, CAPTIONER_OFF, MODEL_HEADER, type BrainReadyDTO, ty
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
 import { workflowRoute } from "./workflow-routes.ts";
 import { s14Route } from "./s14-routes.ts";
+import { ChainCapabilityResolver, observedTargets } from "../plan/chain-resolver.ts";
+import { solutionsRoute } from "../solutions/routes.ts";
+import { withSolutions } from "../solutions/service.ts";
+import { timeBreakdown } from "../time/breakdown.ts";
 import { syncRoute } from "./sync-routes.ts";
 import { SyncClient, type SyncDeps } from "../sync/client.ts";
 import { contextStamp, readUserContext } from "../context/store.ts";
@@ -38,7 +43,7 @@ export interface BrainOptions {
   token: string;
   now?: () => number;
   analyze?: Omit<AnalyzeOptions, "reviewSeconds" | "now">;
-  /** s05: model for drafts and cards (default: Agent SDK), executor for approved batches (default: Agent SDK),
+  /** s05: model for drafts and cards (default: the router over the Claude API or the Agent SDK, as `serve`), executor for approved batches (default: Agent SDK),
    * env for connector secrets (default process.env). Tests pass StubModel and ScriptedExecutor. */
   workflows?: { model?: Model; executor?: Executor; env?: Env; modelLabel?: ModelLabel };
   /** OFFLOAD_OBSERVER_BIN for GET /observer (default process.env). */
@@ -189,7 +194,8 @@ export function createBrain(opts: BrainOptions): Brain {
 
   const background = new Set<Promise<unknown>>();
   const env = opts.workflows?.env ?? process.env;
-  const model = opts.workflows?.model ?? new AgentSdkModel();
+  // s18: the default is the router too (as `serve` builds it), so no model call skips name masking (ADR 0010).
+  const model = opts.workflows?.model ?? createRoutedModel({ home: opts.home, env });
   const modelLabel: ModelLabel = opts.workflows?.modelLabel ?? (model instanceof StubModel ? "stub" : "real");
   // s14: the model router behind `model` (ADR 0009), for GET /status `models` and GET /models/usage.
   const router = model instanceof RoutedModel ? model.router : undefined;
@@ -201,6 +207,8 @@ export function createBrain(opts: BrainOptions): Brain {
     chainDeps({ home: opts.home, env, now, simulated, ...(opts.link?.runner === undefined ? {} : { runner: opts.link.runner }), ...(opts.log === undefined ? {} : { log: opts.log }), ...(opts.chain?.deps ?? {}) }),
     opts.chain?.probes,
   );
+  // s20 review 2: the observed bundle ids and hosts of the current analysis win over the product table.
+  const planResolver = new ChainCapabilityResolver(resolver, opts.home, { observed: async () => observedTargets(await analysis(undefined)) });
   const sessions = new ComputerSessions();
   // Computer use: injected (tests), or the real driver and Claude planner only when the person turned it on.
   let computer: { driver: ComputerDriver; planner: Planner; sessions: ComputerSessions } | undefined;
@@ -287,8 +295,12 @@ export function createBrain(opts: BrainOptions): Brain {
     if (!authorized(req, opts.token)) return error(401, "unauthorized");
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
+    // s22: solution options per insight and solution briefs (solutions/routes.ts); null = not one of its routes.
+    const sol = await solutionsRoute(req, path, { home: opts.home, env, model, modelLabel, now, analysis: () => analysis(undefined) });
+    if (sol !== null) return sol;
     // s14: context, general drafting and plan choice (api/s14-routes.ts); null = not one of its routes.
-    const s14 = await s14Route(req, path, { home: opts.home, env, model, modelLabel, now, analysis: () => analysis(undefined), ...(router === undefined ? {} : { router }) });
+    // s20: plan needs resolve through the connector chain (stub probes with the stub model), not "pending".
+    const s14 = await s14Route(req, path, { home: opts.home, env, model, modelLabel, now, analysis: () => analysis(undefined), resolver: planResolver, ...(router === undefined ? {} : { router }) });
     if (s14 !== null) return s14;
     // S2-02: company sync (status, connect, pause/resume, preview, notice ack) and POST /workflows/:id/share.
     const sr = await syncRoute(req, path, sync);
@@ -355,7 +367,9 @@ export function createBrain(opts: BrainOptions): Brain {
     if (path === "/insights") {
       const review = parseReviewSeconds(url.searchParams.get("reviewSeconds"));
       if (review === "invalid") return error(400, "bad_request", "reviewSeconds must be a number in (0, 600]");
-      return json(200, toInsights(await analysis(review)));
+      // s22: plus `solutions` per insight and `heldBack[]` (additive; rules only, no model call).
+      const a = await analysis(review);
+      return json(200, withSolutions(a, toInsights(a)));
     }
     const ev = /^\/insights\/([A-Za-z0-9_-]+)\/evidence$/.exec(path);
     if (ev?.[1] !== undefined) {
@@ -369,6 +383,16 @@ export function createBrain(opts: BrainOptions): Brain {
       const a = await analysis(undefined);
       if (!a.windowDays.includes(day)) return error(404, "not_found", `no stored day ${day}`);
       return json(200, toTimeline(a, day));
+    }
+    // s23: where the time goes (by task, app and kind of work) and what could be faster, numbers by code, no model call.
+    if (path === "/time") {
+      const win = url.searchParams.get("window");
+      if (win !== null && win !== "week") return error(400, "bad_request", "window must be week (or leave it out)");
+      const day = url.searchParams.get("day");
+      if (day !== null && !DAY_RE.test(day)) return error(400, "bad_request", "day must be YYYY-MM-DD");
+      const a = await analysis(undefined);
+      if (day !== null && !a.windowDays.includes(day)) return error(404, "not_found", `no stored day ${day}`);
+      return json(200, await timeBreakdown(a, day === null ? {} : { day }));
     }
     return error(404, "not_found");
   }

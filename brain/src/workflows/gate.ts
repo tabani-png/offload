@@ -75,7 +75,12 @@ export interface GateDecisionLog {
 export interface GateAction {
   role: Exclude<Role, "read" | "input">;
   connector: string;
+  /** s20 review 5: only computer-use tools (flavor computer) may do this action. */
+  method?: "computer";
 }
+
+/** An action the policy may do: same role and connector, and a computer-use action only through computer use. */
+const covers = (a: GateAction, role: string, p: ToolPolicy) => a.role === role && a.connector === p.connector && (a.method !== "computer" || p.flavor === "computer");
 
 export interface GateContext {
   workflowId: string;
@@ -232,11 +237,11 @@ export function createGate(ctx: GateContext): Gate {
     // s13: a local UI edit (computer use) needs the approved batch and a declared commit through this connector, and
     // never uses up an item. What it typed is checked again, in full, by the commit's hash.
     if (p.role === "input") {
-      if (!actions.some((a) => a.role === "send" && a.connector === p.connector)) return deny(`this workflow declares no send step through ${p.connector}`);
+      if (!actions.some((a) => covers(a, "send", p))) return deny(`this workflow declares no send step through ${p.connector}`);
       return { allow: true, reason: `input for approved batch ${shortHash(ctx.batch.hash)}`, toolClass, role: "input" };
     }
     const role = p.role;
-    if (!actions.some((a) => a.role === role && a.connector === p.connector)) return deny(`this workflow declares no ${role} step through ${p.connector}`);
+    if (!actions.some((a) => covers(a, role, p))) return deny(`this workflow declares no ${role} step through ${p.connector}${actions.some((a) => a.role === role && a.connector === p.connector) ? " with this tool (it is done on screen)" : ""}`);
 
     const found = matchItem(p, input);
     if ("reason" in found) return deny(found.reason);
@@ -247,6 +252,8 @@ export function createGate(ctx: GateContext): Gate {
     const state = ctx.itemState?.(item.key);
     if (role === "send" && state !== undefined && state !== "pending") return deny(`${item.key} is ${state}: never sent twice without your explicit release`, item.key);
     if (role === "log" && !done.get("send")!.has(item.key) && state !== "sent") return deny(`log for ${item.key} comes only after its send`, item.key);
+    // s20 review 5: a send that was allowed but did not go through (failed or unknown) is not a send: no later step.
+    if (role === "log" && state !== undefined && state !== "sent" && state !== "sending") return deny(`log for ${item.key} comes only after its send went through (it is ${state})`, item.key);
     if (consume) {
       try {
         ctx.onAllow?.(item.key, role, toolName);

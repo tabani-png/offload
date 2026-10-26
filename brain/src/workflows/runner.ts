@@ -17,6 +17,9 @@ import { addressHash, autoSendable, pinFiles, rowHash } from "./autorun.ts";
 import { join } from "node:path";
 import type { Model } from "../models/model.ts";
 import { draftInTone } from "../tone/draft.ts";
+import { readPlaybook } from "../playbook/store.ts";
+import { NameMap } from "../privacy/names.ts";
+import { readNamePolicy, signNames } from "../privacy/policy.ts";
 import { loadTonePack } from "../tone/pack.ts";
 import { DEFAULT_SERVERS, type ToolPolicy } from "./allowlist.ts";
 import { makeBatch, type Batch, type BatchItem, type ItemState } from "./batch.ts";
@@ -228,13 +231,18 @@ export async function prepareLiveBatch(o: PrepareOptions): Promise<Batch> {
     writePrivate(preparingPath(o.home, wf.id), JSON.stringify({ keys: next.map((r) => r.email), at: now, pid: process.pid }) + "\n");
     reserved = true;
     const pack = loadTonePack(o.home, now) ?? { corpus: [], cards: {} };
+    // s19: the workflow's messaging playbook, when it has one (auto-run pins playbook.json).
+    const playbook = readPlaybook(o.home, wf.id);
     const items: BatchItem[] = [];
+    // s18: one name map per run (stable placeholders across recipients); drafts come back with the real names, so the
+    // batch the user approves (and its hash) is the real text.
+    const names = new NameMap(readNamePolicy(o.home, signNames(factsText)));
     for (const r of next) {
       const why = cancelReason(o.home, wf.id, ac);
       if (why !== null) throw new RunError(`stopped while drafting: ${why}`, "conflict");
       const recipient = { email: r.email, firstName: r.firstName, lastName: r.lastName, org: r.org, notes: r.notes };
       const subject = renderSubject(facts.subject ?? wf.inputs.subjectTemplate, facts, recipient);
-      const d = await draftInTone({ pack, bucket: wf.bucket, recipient, subject, facts: factsText, model: o.model, models: wf.models });
+      const d = await draftInTone({ pack, bucket: wf.bucket, recipient, subject, facts: factsText, model: o.model, models: wf.models, playbook, names });
       items.push({ key: r.email, to: r.email, subject, body: d.body, warnings: d.warnings, sourceRowHash: rowHash(r) });
     }
     const why = cancelReason(o.home, wf.id, ac);
@@ -338,8 +346,9 @@ export function declaredActions(wf: WorkflowJson): GateAction[] {
   const out: GateAction[] = [];
   for (const s of wf.steps) {
     if (!s.sideEffect || s.connector === null) continue;
-    if (s.type === "send") out.push({ role: "send", connector: s.connector });
-    else if (s.type === "log") out.push({ role: "log", connector: s.connector });
+    // s20 review 5: a UI commit (method computer) is declared as such: the gate lets only computer use do it.
+    if (s.type === "send") out.push({ role: "send", connector: s.connector, ...(s.method === "computer" ? { method: "computer" as const } : {}) });
+    else if (s.type === "log") out.push({ role: "log", connector: s.connector, ...(s.method === "computer" ? { method: "computer" as const } : {}) });
   }
   return out;
 }

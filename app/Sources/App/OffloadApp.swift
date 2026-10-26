@@ -53,6 +53,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var connections: ConnectionsWindowController?
   private var connectionsModel: ConnectionsModel?
   private let dashboardModel: DashboardModel
+  /// S2-13: company sync (connect, notice, share) on the brain's /sync routes, its window, and the live state the
+  /// rail and the dashboard show.
+  private let companyModel: CompanyModel
+  private var company: CompanyWindowController?
+  private var companyBag = Set<AnyCancellable>()
   private var qaBackdrop: NSWindow?
   private var refreshTimer: Timer?
   private var lastObserverPaused: Bool?
@@ -70,18 +75,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                         repo: repo)
     let obs = ObserverControl(binary: obsBin, home: options.home)
     observer = obs
+    let companyAPI: CompanyAPI
     switch options.brain {
     case .mock:
       client = MockBrainClient()
+      companyAPI = MockCompanyAPI()
     case .attach(let url):
       endpoint.endpoint = BrainEndpoint(baseURL: url, token: env["OFFLOAD_TOKEN"] ?? "")
-      client = HTTPBrainClient(endpoint: endpoint, permissions: { await obs.permissionRows() })
+      let http = HTTPBrainClient(endpoint: endpoint, permissions: { await obs.permissionRows() })
+      client = http
+      companyAPI = CompanyClient(brain: http)
     case .spawn:
       endpoint.starting = true
-      client = HTTPBrainClient(endpoint: endpoint, permissions: { await obs.permissionRows() })
+      let http = HTTPBrainClient(endpoint: endpoint, permissions: { await obs.permissionRows() })
+      client = http
+      companyAPI = CompanyClient(brain: http)
     }
     model = InboxModel(client: client)
     dashboardModel = DashboardModel(client: client)
+    let brain = client
+    companyModel = CompanyModel(service: CompanyService(api: companyAPI),
+                                loadWorkflows: { (try? await brain.automations()) ?? [] })
     super.init()
   }
 
@@ -111,9 +125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
     }
     dashboardModel.onOpenWorkflow = { [weak self] id in self?.openReview(workflowId: id) }
+    dashboardModel.onOpenConnections = { [weak self] in self?.openConnections() }
     dashboardModel.onOpenInbox = { [weak self] in self?.card.show() }
     dashboardModel.onTogglePause = { [weak self] paused in self?.setObserverPaused(paused) }
     dashboardModel.onOpenURL = { NSWorkspace.shared.open($0) }
+    wireCompany()
     dashboardModel.claudeVision = ClaudeVisionSetting.load(.standard).enabled
     dashboardModel.onClaudeVision = { [weak self] on in self?.setClaudeVision(on) }
     dashboardModel.onReveal = { path in
@@ -133,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       await waitForBrain(timeout: 30)
       await model.load()
       await refreshObserver()
+      await companyModel.refreshQuietly()
       runQAHooks()
     }
   }
@@ -283,7 +300,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tick += 1
         Task {
           await self?.refreshObserver()
-          if tick % 3 == 0 { await self?.model.load() }
+          if tick % 3 == 0 {
+            await self?.model.load()
+            await self?.companyModel.refreshQuietly()
+          }
         }
       }
     }
@@ -558,9 +578,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     Task {
       await dashboardModel.load()
       await refreshObserver()
+      await companyModel.refreshQuietly()
       c.show()
       qaRecord("dashboard", c.window)
+      await qaTime(c.window)
     }
+  }
+
+  /// s23 QA: on the time page, `--qa-time-day N` shows the Nth stored day; the window is recorded as time-week or
+  /// time-day, and $OFFLOAD_QA_TIME_FILE gets what the screen shows (`--demo-week neutral` marks the neutral demo).
+  private func qaTime(_ w: NSWindow) async {
+    let args = CommandLine.arguments
+    guard dashboardModel.section == .time else { return }
+    if let i = args.firstIndex(of: "--qa-time-day"), args.indices.contains(i + 1), let n = Int(args[i + 1]),
+       dashboardModel.timeWeekDays.indices.contains(n) {
+      await dashboardModel.loadTime(day: dashboardModel.timeWeekDays[n])
+    }
+    guard let b = dashboardModel.time else { return }
+    qaRecord(b.window.kind == .day ? "time-day" : "time-week", w)
+    guard let path = ProcessInfo.processInfo.environment["OFFLOAD_QA_TIME_FILE"] else { return }
+    let s = TimeScreen(b)
+    let demo = args.firstIndex(of: "--demo-week").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil } ?? "default"
+    let lines = ["demo=\(demo)", "window=\(b.window.kind.rawValue)", "sections=\(s.qaSections)", "total=\(b.total.display)",
+                 "findings=\(b.findings.count)", "fix-kinds=\(b.fixKinds)"]
+    try? (lines.joined(separator: "\n") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
   }
 
   /// s17: any app Composio supports, set up once, then handed to the workflow builder.
@@ -579,6 +620,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       c.show()
       qaRecord("connections", c.window)
     }
+  }
+
+  // MARK: company (S2-13)
+
+  /// The live Company model feeds the rail's mark and the dashboard's row; both open the Company window. The
+  /// self-view link opens in the browser. The sign-in page is not opened here: the brain opens it on POST /sync/connect.
+  private func wireCompany() {
+    companyModel.onOpenURL = { NSWorkspace.shared.open($0) }
+    model.onOpenCompany = { [weak self] in self?.openCompany() }
+    dashboardModel.onOpenCompany = { [weak self] in self?.openCompany() }
+    // @Published fires before the value lands; hop once so syncState reads the new status and connect state.
+    companyModel.$status.map { _ in () }.merge(with: companyModel.$connect.map { _ in () })
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] in self?.applyCompany() }
+      .store(in: &companyBag)
+  }
+
+  private func applyCompany() {
+    let state = companyModel.syncState
+    let rail = CompanyEntry.railState(state)
+    if model.companyRail != rail { model.companyRail = rail }
+    dashboardModel.updateCompany(CompanyGlance(status: companyModel.status, state: state))
+  }
+
+  /// The Company window: connect, the notice, share with my team, pause. Not connected, it says so calmly.
+  @objc func openCompany() {
+    if let c = company { c.show(); return }
+    let c = CompanyWindowController(model: companyModel)
+    c.onClose = { [weak self] in self?.company = nil }
+    company = c
+    c.show()
+    qaRecord("company", c.window)
   }
 
   /// QA: appends `name=windowNumber` to $OFFLOAD_QA_WINDOWS so live captures take our windows only.
@@ -605,6 +678,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func runQAHooks() {
     let args = CommandLine.arguments
     if args.contains("--open-connections") { openConnections() }
+    if args.contains("--open-company") { openCompany() }
     if args.contains("--open-review") { openReview(insightId: model.state.insights.first?.id ?? MockBrainClient.outreach.id) }
     if args.contains("--open-dashboard") {
       openDashboard()
@@ -655,7 +729,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Puts a plain white (or near-black) window of our own under the card and rail, one level below them, and
   /// reports a capture rect that lies entirely on it, so a screenshot of that rect shows only our pixels.
   private func qaGlass(_ kind: String) {
-    guard let screen = NSScreen.main else { return }
+    // s10f: the card's own screen, not NSScreen.main (the key window's screen can be another display).
+    guard let screen = card.panel.screen ?? NSScreen.main else { return }
     let union = card.panel.frame.union(rail.panel.frame)
     let backdropFrame = union.insetBy(dx: -80, dy: -80).intersection(screen.frame)
     let w = NSWindow(contentRect: backdropFrame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -665,6 +740,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     w.ignoresMouseEvents = true
     w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
     w.backgroundColor = kind == "dark" ? NSColor(srgbRed: 0.07, green: 0.07, blue: 0.08, alpha: 1) : .white
+    if kind == "color" {
+      // s10f (M7): a coloured wallpaper stand-in (our own window): the glass must visibly pick its colour up.
+      let v = NSView(frame: NSRect(origin: .zero, size: backdropFrame.size))
+      v.wantsLayer = true
+      let g = CAGradientLayer()
+      g.frame = v.bounds
+      g.colors = [NSColor(srgbRed: 0.10, green: 0.35, blue: 0.95, alpha: 1).cgColor,
+                  NSColor(srgbRed: 0.95, green: 0.45, blue: 0.20, alpha: 1).cgColor]
+      g.startPoint = CGPoint(x: 0, y: 0)
+      g.endPoint = CGPoint(x: 1, y: 1)
+      v.layer?.addSublayer(g)
+      w.contentView = v
+    }
     if kind == "split" {
       // Left half white, right half black: the hardest case, both at once.
       let v = NSView(frame: NSRect(origin: .zero, size: backdropFrame.size))
@@ -679,8 +767,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     qaBackdrop = w
     rail.panel.orderFrontRegardless()
     card.panel.orderFrontRegardless()
-    let capture = union.insetBy(dx: -40, dy: -40)
-    let topLeftY = screen.frame.maxY - capture.maxY
+    // Inside our backdrop, which is itself clipped to the card's screen: never a pixel of another app or display.
+    let capture = union.insetBy(dx: -40, dy: -40).intersection(backdropFrame)
+    // screencapture -R measures from the top-left of the PRIMARY display (the one with the menu bar), so flip
+    // against it, not against the card's screen: with two displays the old flip captured another app's window.
+    let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? screen.frame.maxY
+    let topLeftY = primaryMaxY - capture.maxY
     let line = String(format: "rect=%.0f,%.0f,%.0f,%.0f card=%d rail=%d backdrop=%d\n", capture.minX, topLeftY,
                       capture.width, capture.height, card.panel.windowNumber, rail.panel.windowNumber, w.windowNumber)
     if let path = ProcessInfo.processInfo.environment["OFFLOAD_QA_FILE"] {
@@ -698,6 +790,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let conn = menu.addItem(withTitle: "Connections…", action: #selector(openConnections), keyEquivalent: "k")
     conn.keyEquivalentModifierMask = .command
     conn.target = self
+    // S2-13: "Connect your company…" until a company is in play, then "Company…". Never a warning.
+    menu.addItem(withTitle: CompanyEntry.menuTitle(companyModel.syncState), action: #selector(openCompany), keyEquivalent: "").target = self
     menu.addItem(withTitle: "Welcome and permissions…", action: #selector(openOnboardingMenu), keyEquivalent: "").target = self
     menu.addItem(.separator())
     menu.addItem(withTitle: "Quit Offload", action: #selector(quit), keyEquivalent: "q").target = self

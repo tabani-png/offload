@@ -2,10 +2,15 @@
 // Deterministic composition: frame notes (confidence-weighted vote) first, then focus/title/URL/input counts/OCR rules.
 // An optional DescriptionRefiner (a local or remote model) may reword activity/verb/object/step; it can never touch
 // identifiers, ids, times or counts, and anything malformed is ignored.
+// s18 (ADR 0010): person names in the description fields and the embedded text become <name>; the names are learned
+// from every span title of the run first (privacy/names.ts). The raw title stays local; identifiers stay record ids.
 import { categoryFor, isMailListView, WRITING_KEYS_PER_MINUTE } from "../grouping/group.ts";
 import { clusterTitles, extractEmails, maskText, tokenize, urlPattern } from "../grouping/normalize.ts";
 import type { Category, DayLabel, Span } from "../types.ts";
+import { maskNamesForStorage, NameMap } from "../privacy/names.ts";
 import type { FrameNote } from "./frames.ts";
+import { knownSurfaceAt, knownSurfaceIn, normalizeSurface, surfaceKeyOf, type KnownSurface } from "./surfaces.ts";
+import { baseVerb, isGenericVerb } from "./verbs.ts";
 
 export interface SpanDescription {
   spanId: string;
@@ -20,8 +25,12 @@ export interface SpanDescription {
   title: string;
   /** Masked title template inside its app + host + path partition (v1 clustering). */
   template: string;
-  /** app | host | urlPattern | template: where on screen this happened. */
+  /** app | host | urlPattern | template: where on screen this happened. s20: on a stand-in app (see standIns)
+   * the app part is the captioned product (`~<id>` when it has no bundle id) or a `|~<surface>` suffix is added. */
   surfaceKey: string;
+  /** s20: "observed" = app/host are what the observer recorded; "caption" = the observed app was a stand-in and the
+   * frame notes named the product, so app/appName/host/urlPattern/category are that product's. */
+  surfaceFrom?: "observed" | "caption";
   /** v1 rule category: a feature only. */
   category: Category;
   activity: string;
@@ -139,10 +148,26 @@ function stripAll(text: string, parts: readonly string[]): string {
   return out;
 }
 
-/** The internal prompt that gets embedded. Identifiers and the counterpart vary per item, so they are left out. */
-export function descriptionText(d: Pick<SpanDescription, "activity" | "verb" | "object" | "surface" | "step" | "identifiers" | "counterpart">): string {
-  const raw = `${d.activity}. ${d.verb} ${d.object} on ${d.surface}. ${d.step}`;
-  return maskText(stripAll(raw, [...d.identifiers, d.counterpart])).replace(/\s+/g, " ").trim();
+const GENERIC_WORD_RE = new RegExp(
+  `\\b(?:${["review", "view", "look at", "read", "check", "browse", "watch", "scroll", "skim", "reviewing", "viewing", "looking", "reading", "checking", "browsing", "watching", "scrolling", "skimming"]
+    .sort((a, b) => b.length - a.length)
+    .map((v) => v.replace(/ /g, "\\s+"))
+    .join("|")})\\b(?:\\s+(?:at|over|through|on))?`,
+  "gi",
+);
+
+/** Text without the words that only say someone looks at a screen ("Reviewing a doc" -> "a doc"). */
+export function withoutGenericVerbs(text: string): string {
+  return text.replace(GENERIC_WORD_RE, " ").replace(/\s+/g, " ").trim();
+}
+
+/** The internal prompt that gets embedded. Identifiers and the counterpart vary per item, so they are left out.
+ * s20: generic looking verbs (reviewing, viewing, reading, ...) carry no task signal, so they are left out too and
+ * the surface and object lead (a small captioner says "reviewing" on 3 of 4 screens, which merged unrelated work). */
+export function descriptionText(d: Pick<SpanDescription, "activity" | "verb" | "object" | "surface" | "step" | "identifiers" | "counterpart">, names: NameMap = new NameMap()): string {
+  const verb = isGenericVerb(d.verb) ? "" : `${d.verb} `;
+  const raw = `${d.surface} ${d.object}. ${withoutGenericVerbs(d.activity)}. ${verb}${d.object} on ${d.surface}. ${withoutGenericVerbs(d.step)}`;
+  return maskNamesForStorage(maskText(stripAll(raw, [...d.identifiers, d.counterpart])), names).replace(/\s+/g, " ").trim();
 }
 
 export interface DescribeOptions {
@@ -169,10 +194,62 @@ function templates(spans: readonly Span[], threshold: number | undefined): Map<s
   return out;
 }
 
+const BROWSER_APPS = new Set(["com.google.Chrome", "com.apple.Safari", "org.mozilla.firefox", "com.microsoft.edgemac", "company.thebrowser.Browser", "com.brave.Browser"]);
+
+/** Confident frames only: what the caption says the screen is. */
+const confidentFrames = (frames: readonly FrameNote[]) => frames.filter((f) => f.confidence >= RULES_CONFIDENCE);
+
+/** The product the confident frames of a span name (vote by grouping key), or null. */
+function namedProduct(frames: readonly FrameNote[]): KnownSurface | null {
+  const n = new Map<string, { s: KnownSurface; w: number }>();
+  for (const f of confidentFrames(frames)) {
+    const k = f.surface === undefined ? null : knownSurfaceIn(f.surface);
+    if (k === null) continue;
+    const cur = n.get(k.id) ?? { s: k, w: 0 };
+    cur.w += f.confidence;
+    n.set(k.id, cur);
+  }
+  let best: { s: KnownSurface; w: number } | null = null;
+  for (const v of n.values()) if (best === null || v.w > best.w + 1e-9 || (Math.abs(v.w - best.w) <= 1e-9 && v.s.id < best.s.id)) best = v;
+  return best?.s ?? null;
+}
+
+/**
+ * s20 stand-in apps. An app is a stand-in when what it shows is other products: a browser with no URL, or an app
+ * whose captioned screens name at least two known products other than itself in at least half of its framed spans
+ * (a screen recorder, a remote desktop, the blind-test importer's one synthetic app). On a stand-in, a span whose
+ * caption names a known product takes that product's place (app, host, path, category), so grouping and routing see
+ * Gmail or Granola, not "Screen". Real apps whose captions name themselves are never touched.
+ */
+function standIns(spans: readonly Span[], framesBySpan: ReadonlyMap<string, readonly FrameNote[]>): Set<string> {
+  const per = new Map<string, { framed: number; named: number; products: Set<string> }>();
+  for (const s of spans) {
+    if (s.host !== "") continue;
+    const frames = confidentFrames(framesBySpan.get(s.id) ?? []);
+    if (frames.length === 0) continue;
+    const cur = per.get(s.app) ?? { framed: 0, named: 0, products: new Set<string>() };
+    cur.framed += 1;
+    const own = knownSurfaceAt(s.app, "") ?? knownSurfaceIn(s.appName);
+    const p = namedProduct(frames);
+    if (p !== null && p.id !== own?.id) {
+      cur.named += 1;
+      cur.products.add(p.id);
+    }
+    per.set(s.app, cur);
+  }
+  const out = new Set<string>();
+  for (const [app, v] of per) if (BROWSER_APPS.has(app) || (v.products.size >= 2 && v.named >= 0.5 * v.framed)) out.add(app);
+  return out;
+}
+
 export function describeSpans(spans: readonly Span[], framesBySpan: ReadonlyMap<string, readonly FrameNote[]>, opts: DescribeOptions = {}): SpanDescription[] {
   const own = new Set((opts.ownEmails ?? []).map((e) => e.toLowerCase()));
   const tpl = templates(spans, opts.clusterThreshold);
+  const standIn = standIns(spans, framesBySpan);
   const sorted = [...spans].sort((a, b) => a.start - b.start || (a.id < b.id ? -1 : 1));
+  const names = new NameMap();
+  for (const s of sorted) names.learn(s.title);
+  const noNames = (s: string) => maskNamesForStorage(s, names);
   return sorted.map((s) => {
     const path = urlPattern(s.url);
     const masked = maskText(s.title);
@@ -186,29 +263,39 @@ export function describeSpans(spans: readonly Span[], framesBySpan: ReadonlyMap<
     const rVerb = ruleVerb(category, kpm, template);
     const rObject = DOC_EXT_RE.test(s.title.trim()) ? "document" : OBJECT_FOR[category];
     const rSurface = surfaceLabel(s.appName, s.host, template);
-    const verb = fv((f) => f.verb) || rVerb;
-    const object = fv((f) => f.object) || rObject;
-    const surface = fv((f) => f.surface) || rSurface;
-    const step = fv((f) => f.step) || `${verb} ${object}`;
-    const activity = fv((f) => f.activity) || `${verb} ${object} in ${rSurface}`;
-    const counterpart = fv((f) => f.counterpart);
+    // s20: gerunds become base verbs ("writing" -> "write") and surface names are normalised before the vote, so
+    // "Instagram" and "instagram.com" are one vote and one surface. s22: names are masked.
+    const verb = fv((f) => (f.verb === undefined ? undefined : baseVerb(f.verb))) || rVerb;
+    const object = noNames(fv((f) => f.object) || rObject);
+    const surface = noNames(fv((f) => (f.surface === undefined ? undefined : normalizeSurface(f.surface))) || rSurface);
+    const step = noNames(fv((f) => f.step) || `${verb} ${object}`);
+    const activity = noNames(fv((f) => f.activity) || `${verb} ${object} in ${rSurface}`);
+    const counterpart = noNames(fv((f) => f.counterpart));
     const ids = new Set(ruleIdentifiers(s, own));
     for (const f of frames) for (const id of f.identifiers ?? []) if (!own.has(normId(id))) ids.add(normId(id));
     const identifiers = [...ids].filter((x) => x !== "").sort();
+    // s20: on a stand-in app the captioned product is the surface (see standIns).
+    const named = standIn.has(s.app) && s.host === "" ? namedProduct(frames) : null;
+    const product = named !== null && named.id !== (knownSurfaceAt(s.app, "") ?? knownSurfaceIn(s.appName))?.id ? named : null;
+    const where =
+      product !== null
+        ? { app: product.app ?? "", appName: product.name, host: product.host ?? "", path: product.path ?? "", keyApp: product.app ?? `~${product.id}`, suffix: "", from: "caption" as const }
+        : { app: s.app, appName: s.appName, host: s.host, path, keyApp: s.app, suffix: standIn.has(s.app) && !BROWSER_APPS.has(s.app) && frames.length > 0 ? `|~${surfaceKeyOf(surface)}` : "", from: "observed" as const };
     const d: SpanDescription = {
       spanId: s.id,
       day: s.day,
       start: s.start,
       end: s.end,
       activeMs: s.activeMs,
-      app: s.app,
-      appName: s.appName,
-      host: s.host,
-      urlPattern: path,
+      app: where.app,
+      appName: where.appName,
+      host: where.host,
+      urlPattern: where.path,
       title: s.title,
       template,
-      surfaceKey: `${s.app}|${s.host}|${path}|${template}`,
-      category,
+      surfaceKey: `${where.keyApp}|${where.host}|${where.path}|${template}${where.suffix}`,
+      surfaceFrom: where.from,
+      category: product === null ? category : categoryFor(where.app, where.host, where.path),
       activity,
       verb: verb.toLowerCase(),
       object: object.toLowerCase(),
@@ -221,10 +308,10 @@ export function describeSpans(spans: readonly Span[], framesBySpan: ReadonlyMap<
       eventIds: [...s.eventIds],
       keysPerMinute: kpm,
       confidence: frames.length === 0 ? RULES_CONFIDENCE : Math.max(...frames.map((f) => f.confidence)),
-      frameVerbs: [...new Set(frames.filter((f) => f.confidence >= RULES_CONFIDENCE && f.verb !== undefined).map((f) => f.verb!.trim().toLowerCase()))].sort(),
+      frameVerbs: [...new Set(frames.filter((f) => f.confidence >= RULES_CONFIDENCE && f.verb !== undefined).map((f) => baseVerb(f.verb!)))].sort(),
       text: "",
     };
-    d.text = descriptionText(d);
+    d.text = descriptionText(d, names);
     return d;
   });
 }
@@ -263,7 +350,7 @@ export async function refineDescriptions(descs: readonly SpanDescription[], refi
     if (r !== null && typeof r === "object") {
       for (const k of Object.keys(LIMITS) as Array<keyof typeof LIMITS>) {
         const v = (r as Record<string, unknown>)[k];
-        if (typeof v === "string" && v.trim() !== "" && v.length <= LIMITS[k]) next[k] = k === "verb" || k === "object" ? v.trim().toLowerCase() : v.trim();
+        if (typeof v === "string" && v.trim() !== "" && v.length <= LIMITS[k]) next[k] = k === "verb" ? baseVerb(v) : k === "object" ? v.trim().toLowerCase() : v.trim();
       }
     }
     next.text = descriptionText(next);

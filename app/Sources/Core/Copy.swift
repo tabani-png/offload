@@ -174,12 +174,19 @@ struct ReviewCopy: Equatable, Sendable {
   var dryRunTitle: String
   var dryRunTrailing: String
   var sampleChip: String?
+  /// s10f (M3): the amber header every sample draft card carries.
+  var sampleCardHeader: String?
+  /// Said in the action bar when Run with my voice came back as a sample again.
+  static let stillSample = "Still sample drafts: the offline sample model is on, so drafts cannot use your voice yet. Start Offload with Claude to draft in your voice."
   var oursTitle: String
   var diffNote: String
   var items: [Item]
   var emptyDryRun: String
   /// s14: "With Instantly and Google Sheets": the tools this dry run stood for.
   var dryRunWith: String?
+  /// s23 (PR #13 F3): the connector chips, from the same live connectors the tool picker reads, so the Google Sheets
+  /// chip is green exactly when the picker says Google Sheets is connected.
+  var chips: [ConnectorChipModel] = []
   /// s14: each step's tool suggestion, by step id.
   var tools: [String: ToolsCopy] = [:]
 
@@ -221,8 +228,9 @@ struct ReviewCopy: Equatable, Sendable {
     let sample = dryRun?.isSample == true
     dryRunTitle = "Dry run"
     sampleChip = sample ? "Sample drafts" : nil
+    sampleCardHeader = sample ? "Sample, not your voice" : nil
     oursTitle = sample ? "Sample draft" : "Our draft"
-    diffNote = "Highlighted: words in the draft that your own version did not use."
+    diffNote = "Highlighted: the sentences the draft words differently from what you sent, and a sign-off that differs."
     if let d = dryRun {
       let n = d.items.count
       // s10e: any task, not only email: the dry run re-does real examples of what you did.
@@ -232,7 +240,10 @@ struct ReviewCopy: Equatable, Sendable {
       dryRunTrailing = running ? "Re-doing last week's real examples…" : ""
     }
     emptyDryRun = running ? "Re-doing last week's real examples…" : "No dry run yet. Press R to run one."
-    dryRunWith = ToolsCopy.with(dryRun?.tools)
+    // s23 (PR #13 F1): the tools the run really used (runsWith), named from the step's options and connectors, so
+    // the header never says Instantly while Gmail does the sending. Without step tools, the dry run's own names.
+    dryRunWith = ToolsCopy.with(dryRun?.tools, steps: w.tools, connectors: w.connectors)
+    chips = w.connectors.map(ConnectorChipModel.init)
     if let with = dryRunWith, dryRun != nil { dryRunTrailing = "\(with) · \(dryRunTrailing)" }
     for t in w.tools { tools[t.stepId] = ToolsCopy(t, connectors: w.connectors) }
     items = (dryRun?.items ?? []).map {
@@ -256,7 +267,7 @@ struct ReviewCopy: Equatable, Sendable {
 
   var allStrings: [String] {
     [status, title, summary, savingChip ?? "", schedule, stepsTitle, stepsTrailing, dryRunTitle, dryRunTrailing,
-     sampleChip ?? "", oursTitle, diffNote, emptyDryRun, dryRunWith ?? ""]
+     sampleChip ?? "", sampleCardHeader ?? "", Self.stillSample, oursTitle, diffNote, emptyDryRun, dryRunWith ?? ""]
       + tools.values.flatMap(\.allStrings)
       + steps.flatMap { [$0.number, $0.title, $0.detail, $0.place] }
       + items.flatMap { [$0.who, $0.subject, $0.time, $0.saved, $0.theirsTitle, $0.check ?? ""] }
@@ -538,14 +549,25 @@ struct PlanCopy: Equatable, Sendable {
 
 /// The generic dry run: per instance, what Offload would do next to what you did, and how many fields match.
 struct GeneralDryRunCopy: Equatable, Sendable {
+  /// s10f (DESIGN-REVIEW-4 M6): one field compared on both sides.
+  enum FieldState: Equatable, Sendable {
+    /// Same value on both sides, or a field only one side has (nothing to compare).
+    case match
+    /// Both readable and different: an amber dot on both sides of the row.
+    case differs
+    /// One side's value could not be read: a grey dot, left out of the count.
+    case unknown
+  }
+
   struct Row: Equatable, Sendable, Identifiable {
     var id: String { label + "|" + value }
     var label: String
     var value: String
     /// The screen showed the field was filled but not its value.
     var hidden: Bool
-    /// "What you did" rows whose value differs from Offload's for the same label (an amber dot marks them).
-    var differs = false
+    var state: FieldState = .match
+    /// Rows whose value differs from the other side's for the same label (an amber dot marks them).
+    var differs: Bool { state == .differs }
   }
 
   struct Side: Equatable, Sendable {
@@ -579,25 +601,71 @@ struct GeneralDryRunCopy: Equatable, Sendable {
   var totals: String
   var trailing: String
 
+  /// Per instance: fields readable on both sides, and how many of those match.
+  struct Count: Equatable, Sendable { var matched: Int; var readable: Int; var unknown: [String] }
+
+  /// s10f (M6): three outcomes per label shared by both sides: match, differs, unknown (one side not readable).
+  static func compare(_ ours: inout Side, _ theirs: inout Side) -> Count {
+    func value(_ s: Side, _ label: String) -> Row? { s.rows.first { $0.label.lowercased() == label } }
+    var count = Count(matched: 0, readable: 0, unknown: [])
+    var labels: [String] = []
+    for r in ours.rows + theirs.rows where !labels.contains(r.label.lowercased()) { labels.append(r.label.lowercased()) }
+    for l in labels {
+      guard let o = value(ours, l), let t = value(theirs, l) else { continue }
+      let state: FieldState
+      if o.hidden || t.hidden {
+        state = .unknown
+        count.unknown.append(o.label)
+      } else {
+        count.readable += 1
+        state = o.value == t.value ? .match : .differs
+        if state == .match { count.matched += 1 }
+      }
+      for k in ours.rows.indices where ours.rows[k].label.lowercased() == l { ours.rows[k].state = state }
+      for k in theirs.rows.indices where theirs.rows[k].label.lowercased() == l { theirs.rows[k].state = state }
+    }
+    return count
+  }
+
   init(_ g: GeneralDryRun, ranAt: Date) {
+    var sumMatched = 0, sumReadable = 0, anyUnknown = false
     items = g.instances.map { i in
       var theirs = Self.side("What you did · \(Format.weekdayClock(i.startDate))", i.theirs)
-      let ours = Dictionary(i.ours.fields.map { ($0.label.lowercased(), $0.value) }, uniquingKeysWith: { a, _ in a })
-      for k in theirs.rows.indices where !theirs.rows[k].hidden {
-        if let o = ours[theirs.rows[k].label.lowercased()], let v = o, v != theirs.rows[k].value { theirs.rows[k].differs = true }
-      }
+      var ours = Self.side(Self.oursTitle, i.ours)
+      let c = Self.compare(&ours, &theirs)
+      // The brain's count holds for an instance whose fields are all readable; an unreadable field is left out of it.
+      let hasUnknown = !c.unknown.isEmpty && c.readable > 0
+      let matched = hasUnknown ? c.matched : i.match.matched
+      let total = hasUnknown ? c.readable : i.match.total
+      sumMatched += matched; sumReadable += total; anyUnknown = anyUnknown || hasUnknown
+      let chip = hasUnknown ? "\(matched) of \(total) readable fields match" : "\(matched) of \(total) match"
+      let line = hasUnknown
+        ? "\(matched) of \(total) readable fields the same = \(Format.percent(Double(matched) / Double(total))) · not readable: \(c.unknown.map { $0.lowercased() }.joined(separator: ", "))"
+        : i.match.arithmetic
       return Item(id: i.instanceId, heading: i.ours.summary, time: Figures.itemTime(observedMinutes: i.estimate.observedMinutes,
                                                                             reviewSeconds: i.estimate.reviewSeconds),
            saved: Figures.minutesSaved(i.estimate.savedMinutes),
-           ours: Self.side(Self.oursTitle, i.ours),
+           ours: ours,
            theirs: theirs,
-           matchChip: "\(i.match.matched) of \(i.match.total) match", matchLine: i.match.arithmetic,
-           matchRole: Self.role(i.match), warnings: i.warnings)
+           matchChip: chip, matchLine: line,
+           matchRole: total > 0 && matched >= total ? .done : .needsYou, warnings: i.warnings)
     }
-    totals = g.totals.arithmetic
+    if anyUnknown && sumReadable > 0 {
+      let n = g.instances.count
+      let noun = Self.noun(g.totals.arithmetic) ?? (n == 1 ? "example" : "examples")
+      totals = "\(sumMatched) of \(sumReadable) readable fields the same across \(n) \(noun) = \(Format.percent(Double(sumMatched) / Double(sumReadable)))"
+    } else {
+      totals = g.totals.arithmetic
+    }
     let n = g.instances.count
     let what = n == 1 ? "1 real example from last week" : "\(n) real examples from last week"
     trailing = "\(what) · ran \(Format.clock(ranAt)) · nothing was saved"
+  }
+
+  /// "… across 3 bills = 88%" → "bills".
+  static func noun(_ arithmetic: String) -> String? {
+    guard let r = arithmetic.range(of: "across [0-9]+ ([A-Za-z]+)", options: .regularExpression) else { return nil }
+    return arithmetic[r].split(separator: " ").last.map(String.init)
   }
 
   static func role(_ m: GeneralDryRunInstance.Match) -> StatusRole {

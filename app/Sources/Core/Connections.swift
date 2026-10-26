@@ -51,6 +51,8 @@ struct ConnectionRow: Equatable, Sendable, Identifiable {
   var reads: Int
   var commits: Int
   var method: SetupMethod?
+  /// s10f (DESIGN-REVIEW-4 M4): the tool whose name matched the search, when the app's own name did not.
+  var matchedTool: String? = nil
 }
 
 struct ConnectionsPage: Equatable, Sendable {
@@ -252,6 +254,9 @@ struct ConnectionsList: Equatable, Sendable {
 struct ConnectionSheetFlow: Equatable, Sendable {
   enum Phase: Equatable, Sendable {
     case choose, enterKey, enterServer
+    /// s10f: a connector server that is a command runs code on this Mac when it is checked. Asked first; Cancel is
+    /// the default.
+    case confirmRun(ServerRunConfirm)
     case working(String)
     case ready
     case failed(String)
@@ -305,6 +310,7 @@ struct ConnectionSheetFlow: Equatable, Sendable {
       }
     case .enterKey: return "Save in Keychain"
     case .enterServer: return "Add and check"
+    case .confirmRun: return "Cancel"
     case .working: return nil
     case .ready: return detail.canBuild ? "Build workflow" : "Done"
     case .failed: return "Try again"
@@ -363,8 +369,17 @@ struct ConnectionSheetFlow: Equatable, Sendable {
       return [.saveKey]
     case .enterServer:
       guard let s = Self.parseServer(serverText) else { return [] }
+      // s10f: a command is started by the check (it lists the server's tools). Ask before anything runs.
+      if case .serverCommand(let cmd, let args) = s {
+        phase = .confirmRun(ServerRunConfirm(command: cmd, args: args))
+        return []
+      }
       phase = .working(ConnectionsCopy.checking)
       return [.addServer(s)]
+    case .confirmRun:
+      // Cancel is the default: ↩ and ⌘↩ go back to the field, nothing runs.
+      phase = .enterServer
+      return []
     case .working:
       return []
     case .ready:
@@ -379,9 +394,19 @@ struct ConnectionSheetFlow: Equatable, Sendable {
     }
   }
 
+  /// s10f: the confirm's "Download and run" / "Run it". The only way a command server gets started.
+  mutating func confirmRun() -> [Effect] {
+    guard case .confirmRun(let c) = phase else { return [] }
+    phase = .working(ConnectionsCopy.checking)
+    return [.addServer(.serverCommand(c.command, args: c.args))]
+  }
+
   /// Esc: back one step, then close.
   mutating func back() -> [Effect] {
     switch phase {
+    case .confirmRun:
+      phase = .enterServer
+      return []
     case .enterKey, .enterServer, .failed:
       phase = .choose
       return []
@@ -475,6 +500,67 @@ enum ConnectionsCopy {
   }
 }
 
+// MARK: s10f: run confirm for a connector server that is a command (s17 security review)
+
+/// What the sheet says before a command server is started: whether it downloads code, the exact command line, and
+/// the two buttons (Cancel is the default).
+struct ServerRunConfirm: Equatable, Sendable {
+  var command: String
+  var args: [String]
+
+  /// Package runners fetch the package before they run it.
+  static let downloaders: Set<String> = ["npx", "uvx", "bunx", "docker", "pipx", "pnpx", "pnpm", "yarn", "npm"]
+
+  var downloads: Bool { Self.downloaders.contains((command as NSString).lastPathComponent) }
+  var commandLine: String { ([command] + args).joined(separator: " ") }
+  var title: String { downloads ? "This will download and run code on this Mac" : "This will run code on this Mac" }
+  var body: String {
+    (downloads ? "Checking this server downloads the package below and starts it on this Mac, with your user's access to files and the network."
+               : "Checking this server starts the program below on this Mac, with your user's access to files and the network.")
+      + " Only run a server from someone you trust."
+  }
+  var runTitle: String { downloads ? "Download and run" : "Run it" }
+}
+
+// MARK: s10f (DESIGN-REVIEW-4 M4): why a row is in the results, and its mark
+
+enum ConnectionsMatch {
+  /// True when a word of `text` starts with `q` (both lower-cased; "lin" starts "Linear", not "online").
+  static func wordStart(_ text: String, _ q: String) -> Bool {
+    let q = q.lowercased()
+    guard !q.isEmpty else { return false }
+    let words = text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+    if words.contains(where: { $0.hasPrefix(q) }) { return true }
+    // A multi-word query: the whole phrase at a word start.
+    return q.contains(" ") && (text.lowercased().hasPrefix(q) || text.lowercased().contains(" " + q))
+  }
+
+  /// The subtitle's reason line: nothing when the name matched (or no search); the tool that matched; otherwise what
+  /// the app does, so a row never appears without a visible reason.
+  static func line(_ r: ConnectionRow, query: String) -> String? {
+    let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !q.isEmpty else { return nil }
+    if wordStart(r.name, q) || wordStart(r.toolkit ?? "", q) { return nil }
+    if let t = r.matchedTool, !t.isEmpty { return "Matches: \(t)" }
+    let d = r.description.trimmingCharacters(in: .whitespacesAndNewlines)
+    return d.isEmpty ? nil : "Matches what it does: \(d)"
+  }
+}
+
+/// An app's mark in the list: a monogram on a neutral tile. Code-drawn, no third-party logos (s06 rule 5).
+enum AppMark {
+  static let tile: Double = 32
+  static let radius: Double = 12
+
+  /// "Google Sheets" → "GS", "HubSpot" → "H", "" → "?".
+  static func monogram(_ name: String) -> String {
+    let words = name.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+    guard let first = words.first?.first else { return "?" }
+    if words.count > 1, let second = words[1].first { return (String(first) + String(second)).uppercased() }
+    return String(first).uppercased()
+  }
+}
+
 // MARK: wire (brain/src/api/types.ts "s17")
 
 struct ConnectionRowDTO: Codable, Equatable {
@@ -488,10 +574,13 @@ struct ConnectionRowDTO: Codable, Equatable {
   var verified: Bool
   var tools: Tools
   var method: String?
+  /// s10f: optional; a brain that knows which tool matched the search names it.
+  var match: String? = nil
 
   func toRow() -> ConnectionRow {
     ConnectionRow(id: id, name: name, toolkit: toolkit, description: description, status: ConnectionStatus(wire: status), statusLine: statusLine,
-                  verified: verified, reads: tools.read, commits: tools.commit, method: method.flatMap(SetupMethod.init(rawValue:)))
+                  verified: verified, reads: tools.read, commits: tools.commit, method: method.flatMap(SetupMethod.init(rawValue:)),
+                  matchedTool: match)
   }
 }
 
@@ -593,10 +682,38 @@ enum MockConnections {
     row("tk-asana", "Asana", .notSetUp, verified: false, reads: 40, commits: 38, description: "Work management for teams."),
   ]
 
+  /// The sample brain's tool names per app (for search by tool).
+  static let toolNames: [String: [String]] = [
+    "gmail": ["Send email", "Create draft", "Search emails"],
+    "google-sheets": ["Append row", "Read range", "Update cell"],
+    "hubspot": ["Create contact", "Create deal", "Search contacts"],
+    "slack": ["Send message", "Search messages"],
+    "tk-linear": ["Get teams", "Search issues", "Get issue", "Create issue", "Create a comment", "Update issue"],
+    "tk-stripe": ["Create invoice", "Create refund", "Search payments"],
+    "tk-shopify": ["Create order", "Update product", "Search customers"],
+    "tk-freshdesk": ["Create ticket", "Reply to ticket"],
+    "tk-asana": ["Create task", "Update task", "Search tasks"],
+  ]
+
+  /// s10f (M4): the sample brain matches the app's name (or toolkit) first, then a tool's name, by word start. It no
+  /// longer matches inside descriptions ("lin" in "online"), which returned apps with no visible reason.
   static func page(_ q: String) -> ConnectionsPage {
     let t = q.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    let rows = t.isEmpty ? Self.rows : Self.rows.filter { $0.name.lowercased().contains(t) || $0.description.lowercased().contains(t) }
-      .sorted { ($0.name.lowercased().hasPrefix(t) ? 0 : 1, $0.verified ? 0 : 1) < ($1.name.lowercased().hasPrefix(t) ? 0 : 1, $1.verified ? 0 : 1) }
+    var rows: [ConnectionRow]
+    if t.isEmpty {
+      rows = Self.rows
+    } else {
+      var byName: [ConnectionRow] = [], byTool: [ConnectionRow] = []
+      for var r in Self.rows {
+        if ConnectionsMatch.wordStart(r.name, t) || ConnectionsMatch.wordStart(r.toolkit ?? "", t) {
+          byName.append(r)
+        } else if let tool = toolNames[r.id]?.first(where: { ConnectionsMatch.wordStart($0, t) }) {
+          r.matchedTool = tool
+          byTool.append(r)
+        }
+      }
+      rows = byName.sorted { ($0.verified ? 0 : 1) < ($1.verified ? 0 : 1) } + byTool
+    }
     return ConnectionsPage(query: q, rows: rows, apps: 1651, tools: 65602, syncedAt: Date(timeIntervalSince1970: 1_792_500_000), stale: false, note: nil)
   }
 

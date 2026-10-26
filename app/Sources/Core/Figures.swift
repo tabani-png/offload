@@ -17,9 +17,9 @@ struct ArithmeticStep: Equatable, Sendable {
 enum Figures {
   private static let posix = Locale(identifier: "en_US_POSIX")
 
-  /// Hours with one fixed decimal, the brain's own rule (`toFixed(1)` in brain/src/insights/saving.ts), so a chip and
-  /// the arithmetic under it print the same digits: "22.0 h".
-  static func hours(_ h: Double) -> String { String(format: "%.1f h", locale: posix, h) }
+  /// Hours with one decimal by the one rounding rule (s23, HoursFormat: tenths, half up, as brain/src/time/format.ts),
+  /// so the same hours print the same digits on every screen: "22.0 h", 24.65 h -> "24.7 h".
+  static func hours(_ h: Double) -> String { HoursFormat.display(hours: h) }
 
   /// "22.0 h a week"
   static func perWeek(_ h: Double) -> String { "\(hours(h)) a week" }
