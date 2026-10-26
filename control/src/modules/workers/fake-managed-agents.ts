@@ -341,6 +341,18 @@ export class FakeManagedAgents {
     return new Response(stream, { headers: { "content-type": "text/event-stream" } });
   }
 
+  /** Tests: the session emits these events now (the agent acting while no consumer listens, e.g. across a restart). */
+  inject(sessionId: string, events: Array<Partial<SessionEvent> & { type: string }>): void {
+    const s = this.sessions.get(sessionId);
+    if (!s) throw new Error(`no session ${sessionId}`);
+    for (const e of events) this.emit(s, e);
+  }
+
+  /** User events the session actually received (a failed request is recorded in `requests` but never arrives). */
+  receivedBy(sessionId: string): Array<Record<string, any>> {
+    return this.sessions.get(sessionId)?.received ?? [];
+  }
+
   streamCount(sessionId: string): number {
     return this.streamsOpened.get(sessionId) ?? 0;
   }
