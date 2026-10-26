@@ -51,6 +51,13 @@ final class DashboardModel: ObservableObject {
   /// s10e: the inbox (the empty Automations page's one action).
   var onOpenInbox: (() -> Void)?
   var onTogglePause: ((Bool) -> Void)?
+  /// S2-13: company sync for the overview's last row (set by the app from the live Company model), and its action.
+  @Published private(set) var company: CompanyGlance?
+  var onOpenCompany: (() -> Void)?
+
+  func updateCompany(_ glance: CompanyGlance?) {
+    if glance != company { company = glance }
+  }
 
   private let client: BrainClient
   private let clock: () -> Date
