@@ -98,11 +98,13 @@ async function workingTime(c: Context<AppEnv>, deps: Deps) {
       await checkGroupScope(c, tx, p, scope);
       await aggregateRead(tx);
     }
-    // Group scopes read the whole tenant, so the cell can be floored in the company tree below.
-    const rows = (await tx`select w.person_id, w.active_minutes, p.department_id, p.jurisdiction
+    // Group scopes read the whole tenant, so the cell can be floored in the company tree below. One value per
+    // person-day whatever the devices: the latest report (createdAt, then the device's seq).
+    const rows = (await tx`select distinct on (w.person_id, w.day) w.person_id, w.active_minutes, p.department_id, p.jurisdiction
       from working_time_aggregates w join people p on p.tenant_id = w.tenant_id and p.id = w.person_id
       where w.day >= ${period.from}::date and w.day < ${period.toExclusive}::date
-        and (${scope.type === "person" ? scope.id : null}::uuid is null or w.person_id = ${scope.type === "person" ? scope.id : null}::uuid)`) as Array<{
+        and (${scope.type === "person" ? scope.id : null}::uuid is null or w.person_id = ${scope.type === "person" ? scope.id : null}::uuid)
+      order by w.person_id, w.day, w.created_at_ms desc, w.seq desc, w.device_id`) as Array<{
       person_id: string; active_minutes: number; department_id: string | null; jurisdiction: string;
     }>;
     // Per-person data counts only where working_time is on for that person's jurisdiction (ADR 0111 §5).

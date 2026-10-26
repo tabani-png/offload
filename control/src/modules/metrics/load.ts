@@ -96,7 +96,10 @@ function runOf(r: RunRow): RunOutcome {
   };
 }
 
-/** Runs ending in [startMs, endMsExclusive), one per runId (the most recently received copy). */
+/**
+ * Runs ending in [startMs, endMsExclusive), one per runId as hs-1 requires. Each device's row is its latest report of
+ * the run; across devices the first device to report the run id keeps it (migration 0503).
+ */
 export async function loadRuns(tx: Tx, o: LoadOpts): Promise<RunInput[]> {
   const personId = o.personId ?? null;
   const wf = o.workflow?.workflowId ?? null;
@@ -107,7 +110,7 @@ export async function loadRuns(tx: Tx, o: LoadOpts): Promise<RunInput[]> {
      where r.ended_at_ms >= $1 and r.ended_at_ms < $2
        and ($3::uuid is null or r.person_id = $3::uuid)
        and ($4::uuid is null or (r.workflow_id = $4::uuid and r.version = $5::int))
-     order by r.run_id, r.received_at desc, r.device_id`,
+     order by r.run_id, r.first_received_at, r.device_id`,
     [o.startMs, o.endMsExclusive, personId, wf, ver],
   )) as RunRow[];
   const out: RunInput[] = [];

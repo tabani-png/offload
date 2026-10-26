@@ -66,6 +66,10 @@ export function siblingHandlers(dir = join(import.meta.dir, "..")): Promise<Read
       return out;
     });
     handlersByDir.set(dir, p);
+    // A failed load is not kept: the next batch loads again instead of failing with the same error forever.
+    p.catch(() => {
+      if (handlersByDir.get(dir) === p) handlersByDir.delete(dir);
+    });
   }
   return p;
 }
