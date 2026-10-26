@@ -575,11 +575,23 @@ check script exits 0, never "the model says done".
   releases the supervisor (it sweeps its sandbox instance first), the command socket and its /tmp/ofl-* folder, and
   `cred/`; any error after setup is a recorded FAIL (an unreadable workspace file: "artifact unreadable"). A check's
   report (JUnit / DONE marker) is read while the check runs, capped at 8 MB ("report too large" = not a pass).
-  Residual (routed to S2-12): macOS lets any same-user process read another non-platform process's argv and
-  environment (sysctl KERN_PROCARGS2); the sandbox does not filter it and unsetting a variable does not erase it.
-  Builds keep nothing secret in argv or environment, but any OTHER same-user process that holds a credential in its
-  environment (for example a terminal where the user exported ANTHROPIC_API_KEY) is readable by sandboxed builder
-  code. The artifact scan catches a copied known value; an unknown secret from another process is not known.
+  OFF BY DEFAULT: a build runs only when the brain has OFFLOAD_BUILDER_ENABLED=1 (else 403 / exit 2 with the reason),
+  because of this residual (routed to S2-12):
+  - What: sandboxed builder code can read the full command line AND environment of every process of the same user
+    that is not an Apple platform binary (e.g. bun, node, python, Claude Code, editors, terminals' child tools), via
+    sysctl KERN_PROCARGS2 ({CTL_KERN, KERN_PROCARGS2, pid}).
+  - Why sandbox-exec cannot stop it: the sandbox does not mediate KERN_PROCARGS2 at all. Verified on this macOS:
+    readable with `sysctl-read` fully denied, with a sysctl-name allow-list, with `(deny sysctl-read (sysctl-name
+    "kern.procargs2"))`, and with `(deny process-info*)` variants (which only break python). Unsetting a variable
+    does not erase it (the original stays in process memory).
+  - What builds do about it: nothing secret in any argv or environment of the build's own processes (the key goes
+    through apiKeyHelper); a brain whose launch environment holds a secret refuses to build; the artifact scan fails
+    a build that copies a known secret. Not covered: a secret in ANOTHER same-user process's environment (for
+    example a terminal where the user exported a token) that the brain does not know.
+  - Real fix: run builder code as a different user, in a VM or a container with its own user and filesystem, with
+    the runner, harness and credentials outside it (see the container-mode design note).
+  The apiKeyHelper setting is a shell command: its path is single-quoted, and it is dry-run before the approval is
+  used.
   Background Bash and timeouts above the run's wall cap are denied. Bun checks run the frozen copy with their module
   resolution root outside the workspace; any module whose resolved path is in the workspace is refused, and checks
   that import non-builtin bare specifiers are refused when written. No usable sandbox and no container profile = 403 / exit 2

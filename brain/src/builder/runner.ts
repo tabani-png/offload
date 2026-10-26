@@ -15,7 +15,7 @@
 // into the same sandbox + harness. No usable sandbox = UnsafeProfileError before the approval is consumed. Check output is
 // secret-redacted before it is stored or fed into the next prompt. Limits are validated before the approval is used.
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -228,7 +228,7 @@ export interface RunBuildOptions {
 /** The apiKeyHelper for Claude Code: prints the credential when Claude Code calls it. From the run's env object (API
  * route / tests): a 0600 file next to the 0700 helper; from the Keychain reference: `security` reads it at call time.
  * Both live in builds/<run>/cred/, which no sandbox profile can read; removed at the end of the run. */
-export function writeCredentialHelper(dir: string, env: Readonly<Record<string, string | undefined>>): { helper: string; value: string | null } | null {
+export function writeCredentialHelper(dir: string, env: Readonly<Record<string, string | undefined>>): { helper: string; command: string; value: string | null } | null {
   const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
   const direct = (env.ANTHROPIC_API_KEY ?? "").trim() || (env.CLAUDE_CODE_OAUTH_TOKEN ?? "").trim();
   let body: string;
@@ -252,8 +252,16 @@ export function writeCredentialHelper(dir: string, env: Readonly<Record<string, 
     }
   }
   const helper = join(dir, "key-helper.sh");
-  writeFileSync(helper, `#!/bin/sh\n${body}\n`, { mode: 0o700 });
-  return { helper, value };
+  // OFFLOAD_KEY_HELPER_CHECK=1: the dry run (checkCredentialHelper) answers without touching the key or the Keychain.
+  writeFileSync(helper, `#!/bin/sh\n[ "\${OFFLOAD_KEY_HELPER_CHECK:-}" = 1 ] && { echo offload-key-helper-ok; exit 0; }\n${body}\n`, { mode: 0o700 });
+  // The settings value is a SHELL COMMAND: the path is single-quoted (homes with spaces or quotes).
+  return { helper, command: q(helper), value };
+}
+
+/** Runs the apiKeyHelper command the way Claude Code does (through /bin/sh) in dry-run mode; refuses if it fails. */
+export function checkCredentialHelper(command: string): void {
+  const r = spawnSync("/bin/sh", ["-c", command], { env: { PATH: "/usr/bin:/bin", OFFLOAD_KEY_HELPER_CHECK: "1" }, encoding: "utf8", timeout: 10_000 });
+  if (r.status !== 0 || (r.stdout ?? "").trim() !== "offload-key-helper-ok") throw new BriefError(`the Claude key helper did not run (${String(r.stderr ?? "").trim().slice(0, 200) || `exit ${r.status}`})`, "conflict");
 }
 
 const leakReason = (leak: string) => (leak.includes("too large to scan") ? `artifact file too large to scan (${leak})` : `artifact contains a secret (${leak})`);
@@ -282,6 +290,12 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   // Absolute before any path is derived: workspace, profile and check paths are used with cwd = workspace.
   const home = resolve(o.home);
   const parentEnv = o.env ?? process.env;
+  // Off unless the operator opts in: macOS sandbox-exec cannot stop builder code from reading other same-user
+  // processes' argv and environment (sysctl KERN_PROCARGS2 is not mediated by the sandbox at all). See API.md.
+  if (process.env.OFFLOAD_BUILDER_ENABLED !== "1")
+    throw new UnsafeProfileError(
+      "the builder is off by default: builder code runs in a sandbox that cannot stop it from reading the command line and environment of your other processes (sysctl KERN_PROCARGS2); set OFFLOAD_BUILDER_ENABLED=1 to accept that and build",
+    );
   // Any secret in this process's ORIGINAL environment is readable by every same-user process (sysctl KERN_PROCARGS2,
   // which the sandbox does not filter; deleting it from process.env does not erase it). Refuse rather than build.
   // Names only in the message, never values.
@@ -301,7 +315,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
   const profilePath = join(runDir, "sandbox.sb");
   const harnessPath = join(frozenDir, "harness.py");
   let claimed: ReturnType<typeof claimBuildApproval>;
-  let credential: { helper: string; value: string | null } | null = null;
+  let credential: { helper: string; command: string; value: string | null } | null = null;
   const sock = supervisorSocket();
   let sup: Supervisor | null = null;
   const childEnv = checkEnv(ws, parentEnv);
@@ -323,6 +337,8 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
     // The key reaches Claude Code only through apiKeyHelper: a script in a 0700 folder outside every sandbox read
     // path, called by Claude Code itself; no credential is in any process environment or argv.
     credential = writeCredentialHelper(join(runDir, "cred"), parentEnv);
+    // Claude Code runs apiKeyHelper through a shell: prove the quoted command runs before the approval is used.
+    if (credential !== null) checkCredentialHelper(credential.command);
     // Nothing secret and no socket path in its argv (argv is readable by same-user processes).
     sup = await startSupervisor({ argv: [...harnessArgv(rt, profilePath, childEnv, harnessPath), "serve", sweepMode(rt), ws], cwd: ws, env: childEnv, dir: sock.dir, socket: sock.socket, ws });
     // Last: use the single-use approval (atomic claim). The inputs are re-verified against what was written above.
@@ -464,7 +480,7 @@ export async function runBuild(o: RunBuildOptions): Promise<RunRecord> {
         permissionMode: bypass ? "bypassPermissions" : "default",
         ...(bypass ? { allowDangerouslySkipPermissions: true } : { canUseTool: perms.canUseTool }),
         hooks: { PreToolUse: [{ hooks: [perms.preToolUse] }] },
-        ...(credential === null ? {} : { settings: { apiKeyHelper: credential.helper } }),
+        ...(credential === null ? {} : { settings: { apiKeyHelper: credential.command } }),
         maxTurns: limits.maxTurns,
         maxBudgetUsd: floorUsd(limits.maxUsd - spent),
         env,
