@@ -494,7 +494,7 @@ export interface RunResponse {
    * batch for review. Absent or null when nothing was held. */
   held?: BatchSummaryDTO | null;
   /** s27: plan workflows: where the items came from (the workflow's read source, or the person's list), in plain words. */
-  source?: { kind: "read" | "list"; name: string; via: string | null; message: string; skipped?: Array<{ missing: string[] }> };
+  source?: { kind: "read" | "list"; name: string; via: string | null; message: string; skipped?: Array<{ missing: string[]; ambiguous?: string[] }> };
 }
 
 export interface ConnectorsResponse {

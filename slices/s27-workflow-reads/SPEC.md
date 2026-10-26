@@ -5,7 +5,7 @@ depends_on: [s13 (chain, gate, computer use), s14 (general plan, dry run), s17 (
 parallel_safe: true (seams in runner.ts, gate.ts, drafter.ts, plan/dryrun.ts, workflows/dryrun.ts, service.ts, workflow-routes.ts, server.ts)
 human_gated: false
 verify: bash slices/s27-workflow-reads/verify.sh
-paths_in_scope: [brain/tests/s27-workflow-reads/**, slices/s27-workflow-reads/**, brain/src/plan/read-source.ts (new), brain/src/workflows/read-fetch.ts (new), brain/src/workflows/gate.ts (read mode only), brain/src/workflows/types.ts (additive), brain/src/workflows/drafter.ts (read step on build), brain/src/workflows/plan-live.ts, brain/src/workflows/runner.ts (prepareLiveBatch seam), brain/src/workflows/dryrun.ts (read preview, totals), brain/src/plan/dryrun.ts (source fields, read minutes), brain/src/workflows/service.ts (estimate and measured with reading), brain/src/api/workflow-routes.ts (pass the fetcher), brain/src/api/server.ts (readers option), brain/src/api/types.ts (additive), brain/src/api/s14-types.ts (additive), brain/src/workflows/batch.ts (additive `source`), brain/src/api/scheduler.ts (pass the fetcher), brain/src/understanding/surfaces.ts (one known product: PostHog), brain/src/connectors/api.ts (round 2: shared read resolver), brain/src/workflows/executor.ts (Claude key via apiKeyHelper), brain/tests/s05b-privacy/privacy.test.ts (one assertion, scope change below), brain/API.md, plan/plan.md (s27 row, ADR line), plan/adr/0015-read-steps.md]
+paths_in_scope: [brain/tests/s27-workflow-reads/**, slices/s27-workflow-reads/**, brain/src/plan/read-source.ts (new), brain/src/workflows/read-fetch.ts (new), brain/src/workflows/gate.ts (read mode only), brain/src/workflows/types.ts (additive), brain/src/workflows/drafter.ts (read step on build), brain/src/workflows/plan-live.ts, brain/src/workflows/runner.ts (prepareLiveBatch seam), brain/src/workflows/dryrun.ts (read preview, totals), brain/src/plan/dryrun.ts (source fields, read minutes), brain/src/workflows/service.ts (estimate and measured with reading), brain/src/api/workflow-routes.ts (pass the fetcher), brain/src/api/server.ts (readers option), brain/src/api/types.ts (additive), brain/src/api/s14-types.ts (additive), brain/src/workflows/batch.ts (additive `source`), brain/src/api/scheduler.ts (pass the fetcher), brain/src/understanding/surfaces.ts (one known product: PostHog), brain/src/connectors/api.ts (round 2: shared read resolver), brain/src/workflows/executor.ts (Claude key via apiKeyHelper), brain/tests/s05b-privacy/privacy.test.ts (one assertion, scope change below), brain/src/connectors/computer/{ax-text.ts (new), driver.ts, osa-driver.ts} (round 8: one accessibility-line format), brain/API.md, plan/plan.md (s27 row, ADR line), plan/adr/0015-read-steps.md]
 paths_out_of_scope: [engine/**, app/**, control/**, web/**, packet/**, schemas/**, brain/src/builder/** (the builder stays off), brain/fixtures/**, brain/src/connectors/** (read-only use, except the one shared read resolver `apiReadOperations` in connectors/api.ts, round 2), every other slice's tests]
 ---
 
@@ -115,7 +115,14 @@ only saving was the typing.
     from a 0600 file), removed after the run. ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are no longer passed in the
     child env. Scope change: `brain/tests/s05b-privacy/privacy.test.ts` L5 asserted the child env carried
     ANTHROPIC_API_KEY; it now asserts it does not (the key still reaches Claude Code, through the helper).
-15. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+15. **Round 8 (PR #35 review): repeated keys and accessibility lines.** Every declaration is kept (a multimap): one
+    conflicting repeat of a report or filter refuses the answer (I4). I7: a repeated key never silently picks one
+    value: two different values for one field in one row (text repeats, a table header twice, a literal JSON
+    duplicate key, a nested copy, snake/camel twins, the source label and the commit label disagreeing) skip that
+    row as ambiguous, named. JSON is parsed by an exact parser (numbers keep their text, duplicates kept). Accessibility
+    text has ONE format, `connectors/computer/ax-text.ts` (`<role> "<label>" = "<value>"`, JSON-quoted; curly quotes
+    read too): the stub driver and the real driver write it, the read step parses it.
+16. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)

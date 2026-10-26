@@ -5,6 +5,7 @@
 //      ("-25", "−25", "(25)", "+25", "1,234.50", "25.50", "1e3", "-0.0"); nothing is normalised or re-formatted.
 import { describe, expect, test } from "bun:test";
 import type { ReadQueryDTO } from "../../src/api/s14-types.ts";
+import { formatAxLine } from "../../src/connectors/computer/ax-text.ts";
 import { readValues, type ReadOutcome } from "../../src/plan/read-source.ts";
 
 const FIELDS = [
@@ -35,6 +36,9 @@ const RENDER: Record<string, (rows: Array<[string, string]>, ctx: Ctx) => string
   "label value lines": (rows, ctx) => [...ctx.map(([k, v]) => `${k}: ${v}`), `Signups ${rows[0]![0]}`, `Profit ${rows[0]![1]}`].join("\n"),
   "label = value lines": (rows, ctx) => [...ctx.map(([k, v]) => `${k} = ${v}`), `Signups = ${rows[0]![0]}`, `Profit = ${rows[0]![1]}`].join("\n"),
   "screen outline": (rows, ctx) => ['AXStaticText "Weekly metrics"', ...ctx.map(([k, v]) => `AXStaticText "${k}: ${v}"`), `AXStaticText "Signups ${rows[0]![0]}"`, `AXStaticText "Profit ${rows[0]![1]}"`].join("\n"),
+  // Round 8: the one accessibility-line format (ax-text.ts): fields with quoted values, context as label-only lines.
+  "accessibility fields": (rows, ctx) => [formatAxLine("AXStaticText", "Weekly metrics"), ...ctx.map(([k, v]) => formatAxLine("AXStaticText", `${k}: ${v}`)), formatAxLine("AXTextField", "Signups", rows[0]![0]), formatAxLine("AXTextField", "Profit", rows[0]![1])].join("\n"),
+  "accessibility fields, curly quotes": (rows, ctx) => ["AXStaticText “Weekly metrics”", ...ctx.map(([k, v]) => `AXStaticText “${k}: ${v}”`), `AXTextField “Signups” = “${rows[0]![0]}”`, `AXTextField “Profit” = “${rows[0]![1]}”`].join("\n"),
   mixed: (rows, ctx) => [...ctx.map(([k, v]) => `${k}: ${v}`), "Weekly metrics · updated hourly", "Signups | Profit", ...rows.map(([a, b]) => `${a} | ${b}`), "Notes: none"].join("\n"),
 };
 const TABLES = new Set(["pipe table", "tab table", "mixed"]);
@@ -63,6 +67,7 @@ cases.push({ name: "Codex repro P1: Profit -25 keeps its sign", text: "Signups 1
 cases.push({ name: "Profit: -25 keeps its sign", text: "Signups: 1\nProfit: -25", kind: "ok", rows: [["1", "-25"]] });
 cases.push({ name: "a row missing a value in a table is skipped", text: "Signups | Profit\n1 | -2\n3 | ", kind: "ok", rows: [["1", "-2"]], skipped: 1 });
 cases.push({ name: "a partial single answer is a skipped row", text: "Signups: 4", kind: "ok", rows: [], skipped: 1 });
+cases.push({ name: "an accessibility field with an empty value is a skipped row", text: `${formatAxLine("AXTextField", "Signups", "")}\n${formatAxLine("AXTextField", "Profit", "-1")}`, kind: "ok", rows: [], skipped: 1 });
 cases.push({ name: "text with none of the fields is unreadable", text: "Hello\nNothing to see", kind: "unreadable" });
 cases.push({ name: "a period declared in a table column that differs", text: "Signups | Profit | Period\n1 | 2 | last 7 days\n3 | 4 | last 30 days", kind: "wrong_context" });
 

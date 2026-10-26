@@ -546,6 +546,9 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   - Round 7: text answers go through the same pipeline; every value is exactly what the source shows (sign and
     formatting kept). Workflow runs get the Claude key through `settings.apiKeyHelper` (Keychain reference), never in
     the child's env.
+  - Round 8: a repeated report or filter with any conflicting value refuses the answer; a field shown twice with
+    different values in one row skips that row (`skipped[].ambiguous`). Accessibility lines use one format
+    (connectors/computer/ax-text.ts) written by both drivers and read by the read step.
 
 ## s19: messaging playbook (additive, ADR 0011)
 A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,

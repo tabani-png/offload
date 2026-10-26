@@ -10,6 +10,7 @@ import { SCREEN_READ, targetForProfile, type ChainTarget } from "../connectors/t
 import type { Span, TaskInstance } from "../types.ts";
 import type { FrameNote } from "../understanding/frames.ts";
 import { knownSurfaceAt } from "../understanding/surfaces.ts";
+import { parseAxLine } from "../connectors/computer/ax-text.ts";
 
 export const READ_STEP_ID = "read_source";
 /** A source span ends at most this long before the instance starts. */
@@ -320,41 +321,117 @@ const cleanValue = (v: unknown): string | null => {
   return t === "" || t.length > MAX_VALUE || /[\r\n]/.test(t) ? null : t;
 };
 
-/** JSON with every number turned into a string of its own text (25.50 stays "25.50", 1e3 stays "1e3", -0.0 stays). */
-function quoteNumbers(t: string): string {
-  let out = "";
-  let inStr = false;
-  for (let i = 0; i < t.length; ) {
-    const c = t[i]!;
-    if (inStr) {
-      out += c;
-      if (c === "\\") {
-        out += t[i + 1] ?? "";
-        i += 2;
-        continue;
-      }
-      if (c === '"') inStr = false;
-      i += 1;
-      continue;
-    }
-    if (c === '"') {
-      inStr = true;
-      out += c;
-      i += 1;
-      continue;
-    }
-    if (c === "-" || (c >= "0" && c <= "9")) {
-      const m = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(t.slice(i, i + 400));
-      if (m !== null) {
-        out += JSON.stringify(m[0]);
-        i += m[0].length;
-        continue;
-      }
-    }
-    out += c;
-    i += 1;
+/** s27 round 8 (I7): a key that appeared more than once with different values. Never picked from: a field holding
+ * one makes its row ambiguous (skipped); a context key holding one counts every value as a declaration (I4). */
+export class Repeated {
+  constructor(readonly values: unknown[]) {}
+}
+const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/** Sets `k` on `o`; a second, different value makes it Repeated (never first-wins, never last-wins). */
+function putKey(o: Obj, k: string, v: unknown): void {
+  if (!Object.hasOwn(o, k)) {
+    o[k] = v;
+    return;
   }
-  return out;
+  const cur = o[k];
+  if (cur instanceof Repeated) {
+    if (!cur.values.some((x) => sameValue(x, v))) cur.values.push(v);
+  } else if (!sameValue(cur, v)) o[k] = new Repeated([cur, v]);
+}
+
+/**
+ * JSON parsed exactly: every number keeps its own text (25.50 stays "25.50", 1e3 stays "1e3", -0.0 stays), and a key
+ * repeated in one object with another value is Repeated (JSON.parse would silently keep the last). Throws on invalid.
+ */
+function parseExact(t: string): unknown {
+  let i = 0;
+  const ws = () => {
+    while (i < t.length && (t[i] === " " || t[i] === "\n" || t[i] === "\r" || t[i] === "\t")) i += 1;
+  };
+  const fail = (): never => {
+    throw new Error(`not JSON at ${i}`);
+  };
+  const str = (): string => {
+    const start = i;
+    i += 1;
+    while (i < t.length && t[i] !== '"') i += t[i] === "\\" ? 2 : 1;
+    if (i >= t.length) fail();
+    i += 1;
+    return JSON.parse(t.slice(start, i)) as string;
+  };
+  const value = (depth: number): unknown => {
+    if (depth > 200) fail();
+    ws();
+    const c = t[i];
+    if (c === "{") {
+      i += 1;
+      const o: Obj = {};
+      ws();
+      if (t[i] === "}") {
+        i += 1;
+        return o;
+      }
+      for (;;) {
+        ws();
+        if (t[i] !== '"') fail();
+        const k = str();
+        ws();
+        if (t[i] !== ":") fail();
+        i += 1;
+        putKey(o, k, value(depth + 1));
+        ws();
+        if (t[i] === ",") {
+          i += 1;
+          continue;
+        }
+        if (t[i] === "}") {
+          i += 1;
+          return o;
+        }
+        fail();
+      }
+    }
+    if (c === "[") {
+      i += 1;
+      const a: unknown[] = [];
+      ws();
+      if (t[i] === "]") {
+        i += 1;
+        return a;
+      }
+      for (;;) {
+        a.push(value(depth + 1));
+        ws();
+        if (t[i] === ",") {
+          i += 1;
+          continue;
+        }
+        if (t[i] === "]") {
+          i += 1;
+          return a;
+        }
+        fail();
+      }
+    }
+    if (c === '"') return str();
+    const m = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(t.slice(i, i + 400));
+    if (m !== null) {
+      i += m[0].length;
+      return m[0];
+    }
+    for (const [w, v] of [["true", true], ["false", false], ["null", null]] as const) {
+      if (t.startsWith(w, i)) {
+        i += w.length;
+        return v;
+      }
+    }
+    return fail();
+  };
+  const v = value(0);
+  ws();
+  if (i !== t.length) fail();
+  return v;
 }
 
 /** Context words that, at the start of a text line without a ":" or "=", still declare a report or filter. */
@@ -367,18 +444,19 @@ const TEXT_DECLARATIONS = ["report", "insight", "dashboard", "period", "date ran
  * tabs) becomes its rows. Values are kept exactly as shown.
  */
 function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): Obj {
-  const lines = text
-    .split("\n")
-    .map((l) => {
-      const ax = /^AX[A-Za-z]+\s+"(.*)"(?:\s*=\s*"(.*)")?\s*$/.exec(l.trim());
-      return (ax === null ? l : ax[2] === undefined ? ax[1]! : `${ax[1]} = ${ax[2]}`).replace(/\s+$/, "").replace(/^\s+/, "");
-    })
-    .filter((l) => l !== "");
   const obj: Obj = {};
   const rows: Obj[] = [];
-  const put = (k: string, v: string) => {
-    if (!Object.hasOwn(obj, k)) obj[k] = v;
-  };
+  // Every declaration and every field value is kept (a multimap, I4/I7): a repeat with another value is Repeated.
+  const put = (k: string, v: string) => putKey(obj, normKey(k), v);
+  const lines: string[] = [];
+  for (const l of text.split("\n")) {
+    // Accessibility lines in the one shared format (connectors/computer/ax-text.ts): a field's label and value are
+    // read separately and exactly; a label-only element is read as the text it shows.
+    const ax = parseAxLine(l);
+    if (ax !== null && ax.value !== null) put(ax.label, ax.value);
+    else if (ax !== null) lines.push(ax.label.trim());
+    else if (l.trim() !== "") lines.push(l.trim());
+  }
   const words = [...new Set([...fields.flatMap((f) => [f.sourceLabel, f.label]), ...TEXT_DECLARATIONS])].sort((a, b) => b.length - a.length);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
@@ -389,7 +467,9 @@ function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | 
       for (; j < lines.length; j++) {
         const raw = lines[j]!.includes("|") ? lines[j]!.split("|") : lines[j]!.includes("\t") ? lines[j]!.split("\t") : null;
         if (raw === null || raw.length !== head.length) break;
-        rows.push(Object.fromEntries(head.map((h, k) => [h, raw[k]!.trim()])));
+        const r: Obj = {};
+        head.forEach((h, k) => putKey(r, normKey(h), raw[k]!.trim()));
+        rows.push(r);
       }
       i = j - 1;
       continue;
@@ -414,22 +494,28 @@ function textAnswer(text: string, fields: readonly Pick<ReadFieldDTO, "label" | 
 
 function flat(o: Record<string, unknown>, depth = 0): Map<string, unknown> {
   const out = new Map<string, unknown>();
+  const set = (k: string, v: unknown) => {
+    const cur = out.get(k);
+    // A null never hides a value under the same key ("active_users": null beside "activeUsers": 2455); two
+    // different values under one key (snake/camel twins, a nested copy) are Repeated, never first-wins (I7).
+    if (cur == null) out.set(k, v);
+    else if (v == null) return;
+    else if (cur instanceof Repeated) {
+      for (const x of v instanceof Repeated ? v.values : [v]) if (!cur.values.some((y) => sameValue(y, x))) cur.values.push(x);
+    } else if (v instanceof Repeated) out.set(k, new Repeated([cur, ...v.values.filter((x) => !sameValue(x, cur))]));
+    else if (!sameValue(cur, v)) out.set(k, new Repeated([cur, v]));
+  };
   for (const [k, v] of Object.entries(o)) {
-    if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+    if (isObj(v)) {
       if (depth >= 2) continue;
-      for (const [k2, v2] of flat(v as Record<string, unknown>, depth + 1)) {
-        if (!out.has(k2)) out.set(k2, v2);
-      }
-    } else if (out.get(normKey(k)) == null) {
-      // A null never hides a value under the same key ("active_users": null beside "activeUsers": 2455).
-      out.set(normKey(k), v);
-    }
+      for (const [k2, v2] of flat(v, depth + 1)) set(k2, v2);
+    } else if (!Array.isArray(v)) set(normKey(k), v);
   }
   return out;
 }
 
 type Obj = Record<string, unknown>;
-const isObj = (x: unknown): x is Obj => x !== null && typeof x === "object" && !Array.isArray(x);
+const isObj = (x: unknown): x is Obj => x !== null && typeof x === "object" && !Array.isArray(x) && !(x instanceof Repeated);
 /** How deep an answer's envelopes are walked ({ data: { results: [...] } } is 2). */
 const MAX_DEPTH = 4;
 
@@ -440,7 +526,11 @@ function tableRows(o: Obj): Obj[] | null {
   if (!Array.isArray(cols) || rows === null || rows.length === 0 || !rows.every(Array.isArray)) return null;
   const names = cols.map((c) => (typeof c === "string" ? c : isObj(c) && typeof c.name === "string" ? c.name : null));
   if (names.some((n) => n === null)) return null;
-  return (rows as unknown[][]).map((r) => Object.fromEntries(names.map((n, i) => [n as string, r[i]])));
+  return (rows as unknown[][]).map((r) => {
+    const out: Obj = {};
+    names.forEach((n, i) => putKey(out, n as string, r[i]));
+    return out;
+  });
 }
 
 /** Pagination markers: a non-empty next link or cursor, or has_more true. Only page one was read. */
@@ -488,7 +578,11 @@ function collections(v: unknown): { all: Collection[]; more: boolean } {
     if (t !== null) all.push({ rows: t, depth, context: here, order: all.length });
     // The object itself as one row: its own scalars are the row's, only the envelopes above are context.
     all.push({ rows: [x], depth, context: ctx, order: all.length });
-    for (const k of Object.keys(x)) walk(x[k], depth + 1, here);
+    for (const k of Object.keys(x)) {
+      const v = x[k];
+      if (v instanceof Repeated) for (const y of v.values) walk(y, depth + 1, here);
+      else walk(v, depth + 1, here);
+    }
   };
   walk(v, 0, []);
   return { all, more };
@@ -513,6 +607,8 @@ function conflictOf(pairs: Iterable<[string, unknown]>, q: ReadQueryDTO): string
 /** A row the source returned that is not complete: SKIPPED (never done, never guessed), with the fields it lacked. */
 export interface SkippedRow {
   missing: string[];
+  /** Fields shown with two different values in this row (I7). */
+  ambiguous?: string[];
 }
 
 export type ValueRow = Array<[string, string]>;
@@ -554,8 +650,11 @@ function declarations(v: unknown, out: Array<[string, unknown]> = [], depth = 0)
   const t = tableRows(v);
   if (t !== null) for (const r of t) declarations(r, out, depth + 1);
   for (const [k, x] of Object.entries(v)) {
-    if (typeof x === "string" || typeof x === "number") out.push([normKey(k), x]);
-    else declarations(x, out, depth + 1);
+    // Every value of a repeated key is its own declaration (I4): one conflicting repeat refuses the answer.
+    for (const y of x instanceof Repeated ? x.values : [x]) {
+      if (typeof y === "string" || typeof y === "number") out.push([normKey(k), y]);
+      else declarations(y, out, depth + 1);
+    }
   }
   return out;
 }
@@ -589,7 +688,7 @@ export function readValues(
   let answer: unknown;
   let textual = false;
   try {
-    answer = JSON.parse(quoteNumbers(text.trim()));
+    answer = parseExact(text.trim());
     if (answer === null || typeof answer !== "object") throw new Error("not an object");
   } catch {
     // Text answers go through the SAME pipeline and invariants as JSON (round 7).
@@ -624,13 +723,23 @@ export function readValues(
   for (const f of best.flats) {
     const row: ValueRow = [];
     const lacks: string[] = [];
+    const unsure: string[] = [];
     fields.forEach((fd, i) => {
-      const v = cleanValue(f.get(wanted[i]![0]) ?? f.get(wanted[i]![1]));
+      const [k0, k1] = wanted[i]!;
+      const a = f.get(k0);
+      const b = k1 === k0 ? undefined : f.get(k1);
+      // I7: two different values for one field in one row (repeated key, or its source label and its own label) are
+      // ambiguous: the row is skipped, never first-wins.
+      if (a instanceof Repeated || b instanceof Repeated || (a != null && b != null && !sameValue(a, b))) {
+        unsure.push(fd.label);
+        return;
+      }
+      const v = cleanValue(a ?? b);
       if (v === null) lacks.push(fd.label);
       else row.push([fd.label, v]);
     });
-    if (lacks.length === 0) rows.push(row);
-    else skipped.push({ missing: lacks });
+    if (lacks.length === 0 && unsure.length === 0) rows.push(row);
+    else skipped.push({ missing: lacks, ...(unsure.length === 0 ? {} : { ambiguous: unsure }) });
   }
   return { kind: "ok", rows, skipped, ...extra };
 }

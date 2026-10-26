@@ -119,10 +119,11 @@ export class OsaDriver implements ComputerDriver {
     }
   }
 
+  /** s27: the same accessibility-line format as ax-text.ts formatAxLine (JSON-quoted label, ` = "value"` for fields). */
   async readUi(): Promise<string> {
     return this.jxa(`var se = Application('System Events'); var p = se.processes.whose({ frontmost: true })[0];
       var all = p.windows[0].entireContents(); var out = [];
-      for (var i = 0; i < all.length && out.length < 200; i++) { try { var el = all[i]; var n = el.name() || el.description() || ''; if (!n) continue; out.push(el.role() + ' "' + n + '"'); } catch (x) {} }
+      for (var i = 0; i < all.length && out.length < 200; i++) { try { var el = all[i]; var n = el.name() || el.description() || ''; if (!n) continue; var role = el.role(); var line = role + ' ' + JSON.stringify(String(n)); if (['AXTextField','AXTextArea','AXComboBox','AXSearchField'].indexOf(role) >= 0) { var v = ''; try { v = el.value() || ''; } catch (y) {} line += ' = ' + JSON.stringify(String(v)); } out.push(line); } catch (x) {} }
       out.join('\\n')`).catch(() => "");
   }
 

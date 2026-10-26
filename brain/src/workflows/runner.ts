@@ -30,8 +30,10 @@ import { queryText, type SkippedRow } from "../plan/read-source.ts";
 
 /** s27: rows a source returned without every value: skipped (never done), said plainly with the fields. */
 export function skippedWords(name: string, sk: readonly SkippedRow[]): string {
-  const fields = [...new Set(sk.flatMap((x) => x.missing))].join(", ");
-  return `${sk.length} row${sk.length === 1 ? "" : "s"} at ${name} ${sk.length === 1 ? "was" : "were"} skipped: ${fields} missing or unreadable (not entered, not counted as done).`;
+  const missing = [...new Set(sk.flatMap((x) => x.missing))].join(", ");
+  const twice = [...new Set(sk.flatMap((x) => x.ambiguous ?? []))].join(", ");
+  const why = [missing === "" ? "" : `${missing} missing or unreadable`, twice === "" ? "" : `${twice} shown with two different values`].filter((x) => x !== "").join("; ");
+  return `${sk.length} row${sk.length === 1 ? "" : "s"} at ${name} ${sk.length === 1 ? "was" : "were"} skipped: ${why} (not entered, not counted as done).`;
 }
 import { recordRead, type SourceFetcher } from "./read-fetch.ts";
 import type { RunSourceDTO } from "../api/s14-types.ts";
