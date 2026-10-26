@@ -70,7 +70,8 @@ describe("FLOOR anomalies of hidden groups (PR #9 round 3 item 1)", () => {
     const ids = (r.json.anomalies as Array<{ workflowId: string | null }>).map((a) => a.workflowId);
     expect(ids).not.toContain(WF2);
     expect(ids).toContain(WF3);
-    // The person-month anomaly carries no workflow and no person id; with 12 people in scope it stays.
-    expect((r.json.anomalies as Array<{ code: string }>).some((a) => a.code === "residual_zero_share")).toBe(true);
+    // The person-month anomaly's detail is one person's counts ("residual 0 on 4 of 4"): never in a group view
+    // (PR #9 round 5), only in that person's own scope.
+    expect((r.json.anomalies as Array<{ code: string }>).some((a) => a.code === "residual_zero_share")).toBe(false);
   });
 });
