@@ -484,7 +484,8 @@ struct ReviewActionBar: View {
             CountdownStrip(text: "Discarding", countdown: c, now: ctx.date)
           }
         } else {
-          SecondaryButton(title: "Discard", key: "⌘⌫") { model.send(.discard) }
+          // s23 (PR #13 F4): after Turn on the footer is ReviewFooterButtons: no Discard, no Approve, Done is primary.
+          if primary != .done { SecondaryButton(title: "Discard", key: "⌘⌫") { model.send(.discard) } }
           if let m = model.message ?? (model.textEditing ? "Typing in your voice: R, E and S type letters. Press esc to stop typing." : nil) {
             Text(m).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink2)
               .lineLimit(2).fixedSize(horizontal: false, vertical: true)
@@ -503,6 +504,9 @@ struct ReviewActionBar: View {
           // s10e (M8): while a step's tool is not connected, Connect is the white primary on ⌘↩ and Approve is
           // secondary, so the block is met here and not only in the next sheet.
           switch primary {
+          case .done:
+            PrimaryButton(title: primary.title, key: "⌘↩") { NSApp.keyWindow?.performClose(nil) }
+              .fixedSize().layoutPriority(2)
           case .runWithVoice:
             SecondaryButton(title: "Approve") { model.approveNow() }
               .disabled(!model.flow.canApprove || model.runningDryRun || model.sheet != nil)

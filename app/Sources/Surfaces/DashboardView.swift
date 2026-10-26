@@ -1,7 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Dashboard window, s10d: a source-list sidebar (Overview, Automations, This week, Observing) and one page at a
+/// Dashboard window, s10d: a source-list sidebar (s23: Your time first, then Overview, Automations, This week,
+/// Observing) and one page at a
 /// time, the way a first-party Mac app separates an overview from its detail. Live, the sidebar sits in an
 /// NSSplitViewController sidebar item (system material); snapshots draw the same rows in WindowChrome's sidebar
 /// column. Every string comes from DashboardCopy or the s10d models.
@@ -124,9 +125,14 @@ struct DashboardDetail: View {
 
   private var content: some View {
     VStack(alignment: .leading, spacing: Tokens.Space.s32) {
-      if let d = model.data {
+      if model.section == .time {
+        // s23: the home page: where the time goes leads, workflows come last (TimeView, TimeScreen order).
+        TimeView(model: model)
+      } else if let d = model.data {
         let copy = DashboardCopy(d, now: now)
         switch model.section {
+        case .time:
+          EmptyView()
         case .overview:
           HeroSection(copy: copy)
           NeedsYouSection(model: model, copy: copy)

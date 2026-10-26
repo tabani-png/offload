@@ -323,12 +323,12 @@ struct S10DRailTests {
     #expect(DashboardCopy(before, now: MockBrainClient.reviewNow).heroNote == nil)
   }
 
-  @Test("sections: four places, ⌘1 to ⌘4")
+  @Test("sections: five places, Your time first, ⌘1 to ⌘5")
   func sections() {
-    #expect(DashboardSection.allCases.map(\.title) == ["Overview", "Automations", "This week", "Observing"])
-    #expect(DashboardSection.forShortcut(3) == .week)
-    #expect(DashboardSection.forShortcut(5) == nil)
-    #expect(DashboardSection.observing.shortcut == "⌘4")
+    #expect(DashboardSection.allCases.map(\.title) == ["Your time", "Overview", "Automations", "This week", "Observing"])
+    #expect(DashboardSection.forShortcut(4) == .week)
+    #expect(DashboardSection.forShortcut(6) == nil)
+    #expect(DashboardSection.observing.shortcut == "⌘5")
   }
 }
 
