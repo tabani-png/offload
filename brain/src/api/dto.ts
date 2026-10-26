@@ -94,6 +94,8 @@ function insightDTO(a: Analysis, i: Insight): InsightDTO {
       range: { low: { ...s.range.low }, high: { ...s.range.high } },
       arithmetic: s.arithmetic,
       assumptions: [...s.assumptions],
+      // s20: only when there is something to flag, so unflagged insights stay byte-identical (s12 V1GOLDEN).
+      ...(s.confidence === "low" ? { confidence: { level: "low" as const, capped: s.capped, observedWeeklyHours: s.observedWeeklyHours, reasons: [...s.confidenceReasons] } } : {}),
     },
     score: { value: i.score.value, formula: "volume × sameness × reachability × (1 − judgement) × (1 − risk/2)", factors: { ...i.score.factors } },
     judge: { judgement: i.judge.judgement, risk: i.judge.risk, reasons: [...i.judge.reasons] },

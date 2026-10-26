@@ -18,6 +18,7 @@ import { BRAIN_READY_PREFIX, CAPTIONER_OFF, MODEL_HEADER, type BrainReadyDTO, ty
 import { authorized, error, gate, json, LOOPBACK, secure } from "./http.ts";
 import { workflowRoute } from "./workflow-routes.ts";
 import { s14Route } from "./s14-routes.ts";
+import { ChainCapabilityResolver, observedTargets } from "../plan/chain-resolver.ts";
 import { solutionsRoute } from "../solutions/routes.ts";
 import { withSolutions } from "../solutions/service.ts";
 import { syncRoute } from "./sync-routes.ts";
@@ -205,6 +206,8 @@ export function createBrain(opts: BrainOptions): Brain {
     chainDeps({ home: opts.home, env, now, simulated, ...(opts.link?.runner === undefined ? {} : { runner: opts.link.runner }), ...(opts.log === undefined ? {} : { log: opts.log }), ...(opts.chain?.deps ?? {}) }),
     opts.chain?.probes,
   );
+  // s20 review 2: the observed bundle ids and hosts of the current analysis win over the product table.
+  const planResolver = new ChainCapabilityResolver(resolver, opts.home, { observed: async () => observedTargets(await analysis(undefined)) });
   const sessions = new ComputerSessions();
   // Computer use: injected (tests), or the real driver and Claude planner only when the person turned it on.
   let computer: { driver: ComputerDriver; planner: Planner; sessions: ComputerSessions } | undefined;
@@ -295,7 +298,8 @@ export function createBrain(opts: BrainOptions): Brain {
     const sol = await solutionsRoute(req, path, { home: opts.home, env, model, modelLabel, now, analysis: () => analysis(undefined) });
     if (sol !== null) return sol;
     // s14: context, general drafting and plan choice (api/s14-routes.ts); null = not one of its routes.
-    const s14 = await s14Route(req, path, { home: opts.home, env, model, modelLabel, now, analysis: () => analysis(undefined), ...(router === undefined ? {} : { router }) });
+    // s20: plan needs resolve through the connector chain (stub probes with the stub model), not "pending".
+    const s14 = await s14Route(req, path, { home: opts.home, env, model, modelLabel, now, analysis: () => analysis(undefined), resolver: planResolver, ...(router === undefined ? {} : { router }) });
     if (s14 !== null) return s14;
     // S2-02: company sync (status, connect, pause/resume, preview, notice ack) and POST /workflows/:id/share.
     const sr = await syncRoute(req, path, sync);
