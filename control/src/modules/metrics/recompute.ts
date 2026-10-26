@@ -11,7 +11,7 @@ import {
 } from "../../../../packages/hours-saved/src/index.ts";
 import { loadHierarchy } from "./floor.ts";
 import { groupView } from "./hours.ts";
-import { aggregateRead } from "./load.ts";
+import { aggregateRead, loadAttribution } from "./load.ts";
 import { nextMonthStart, prevMonthStart, tenantSettings } from "./scope.ts";
 
 async function groupScopes(tx: Tx): Promise<Scope[]> {
@@ -70,14 +70,22 @@ async function recomputePass(deps: Deps, tx: Tx): Promise<void> {
   const thisMonth = `${localDay(deps.clock.now(), timezone).slice(0, 7)}-01`;
   const at = new Date(deps.clock.now());
   const h = await loadHierarchy(tx);
+  // The hierarchy this pass computes under (migration 0507): a change there is no data edit.
+  const who = await loadAttribution(tx);
+  const hier = sha256OfString(jcs({
+    departments: h.departments.map((d) => [d.scope.id, d.label]),
+    roles: [...h.roleDept.entries()].sort().map(([id, dept]) => [id, dept, (h.rolesOf.get(dept ?? "") ?? []).find((r) => r.scope.id === id)?.label ?? null]),
+    people: [...who.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([id, x]) => [id, x.departmentId, x.jobRoleId]),
+  }));
   for (const from of [prevMonthStart(thisMonth), thisMonth]) {
     const period: Period = { from, toExclusive: nextMonthStart(from) };
     const month = from.slice(0, 7);
     for (const scope of await groupScopes(tx)) {
       const v = await groupView(tx, scope, period, timezone, floor, h);
       const { input, r: fresh } = v;
-      const [snap] = await tx`select report, stale, final, scope_digest from metric_snapshots
+      const [snap] = await tx`select report, stale, final, scope_digest, hier_digest from metric_snapshots
         where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid for update`;
+      const hierSame = snap !== undefined && snap.hier_digest === hier;
       if (!snap) {
         await tx`insert into metric_snapshots (tenant_id, month, scope_type, scope_id, inputs_digest, report, computed_at, scope_digest)
           values (current_setting('app.tenant_id')::uuid, ${month}, ${scope.type}, ${scope.id}, ${fresh.inputsDigest},
@@ -91,7 +99,7 @@ async function recomputePass(deps: Deps, tx: Tx): Promise<void> {
         const same = snap.scope_digest === v.digest;
         const stored = snap.report as HoursSavedReport;
         const matches = v.hidden || jcs({ ...stored, inputsDigest: fresh.inputsDigest, final: false }) === jcs({ ...fresh, final: false });
-        const mismatch = same ? !matches : !taken && !v.hidden && snap.scope_digest !== null;
+        const mismatch = hierSame && (same ? !matches : !taken && !v.hidden && snap.scope_digest !== null);
         if (mismatch) {
           await tx`insert into metric_alerts (tenant_id, code, month, scope_key, stored_digest, fresh_digest, at)
             values (current_setting('app.tenant_id')::uuid, 'recompute_mismatch', ${month},
@@ -99,7 +107,7 @@ async function recomputePass(deps: Deps, tx: Tx): Promise<void> {
             on conflict (tenant_id, month, scope_key, stored_digest, fresh_digest) do nothing`;
           await tx`update metric_snapshots set final = false, stale = false, checked_at = ${at}
             where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid`;
-        } else if (same) {
+        } else if (same && matches) {
           await tx`update metric_snapshots set final = true, stale = false, checked_at = ${at}
             where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid`;
         } else {
@@ -107,7 +115,7 @@ async function recomputePass(deps: Deps, tx: Tx): Promise<void> {
               scope_digest = ${v.digest}, final = false, stale = false, computed_at = ${at}, checked_at = ${at}
             where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid`;
         }
-      } else if (snap.stale) {
+      } else if (snap.stale || !hierSame) {
         await tx`update metric_snapshots set inputs_digest = ${fresh.inputsDigest}, report = ${fresh}::jsonb, final = false,
             stale = false, computed_at = ${at}, checked_at = ${at}, scope_digest = ${v.digest}
           where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid`;
@@ -124,6 +132,8 @@ async function recomputePass(deps: Deps, tx: Tx): Promise<void> {
         await tx`update metric_snapshots set final = false, checked_at = ${at}
           where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid`;
       }
+      await tx`update metric_snapshots set hier_digest = ${hier}
+        where month = ${month} and scope_type = ${scope.type} and scope_id is not distinct from ${scope.id}::uuid`;
     }
   }
 }
