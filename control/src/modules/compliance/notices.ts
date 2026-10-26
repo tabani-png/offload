@@ -8,7 +8,7 @@ import type { Tx } from "../../db/pool.ts";
 import { ulid } from "../../schema/encoding.ts";
 import { HttpError, conflict, invalid, notFound, page, pageParams } from "../../schema/http.ts";
 import {
-  applies, listNotices, ms, noticeById, noticeDto, offsetOf, personRow, sameSet, uuidParam, type Feature, type NoticeRow,
+  applies, listNotices, liveAt, ms, noticeById, noticeDto, offsetOf, personRow, sameSet, uuidParam, type Feature, type NoticeRow,
 } from "./common.ts";
 import { CUSTOM_TEMPLATE, isTemplate, templateById, unfilledFields } from "./templates.ts";
 import { P, bodyOf, replyLocal } from "./schemas.ts";
@@ -90,7 +90,12 @@ async function recordAck(
     if (!prior) throw conflict("this acknowledgement id is already taken");
     return { row: prior, created: false };
   }
-  await tx`update people set notice_ack_version_id = ${n.id} where id = ${principal.personId}`;
+  // The person's recorded notice is the latest-published one they acknowledged, whatever order the acks arrive in
+  // (a late device sync of an older notice must not move it back), so it matches the current notice once acked.
+  await tx`update people pe set notice_ack_version_id = ${n.id} where pe.id = ${principal.personId}
+    and (pe.notice_ack_version_id is null
+      or coalesce((select o.publish_seq from notices o where o.id = pe.notice_ack_version_id), 0)
+        < (select m.publish_seq from notices m where m.id = ${n.id}))`;
   await deps.ports.audit.write(tx, {
     actor: actorOf(principal),
     action: "notice.ack",
@@ -187,7 +192,8 @@ export function noticeRoutes(app: App, deps: Deps): void {
       if (unfilled.length > 0) {
         throw new HttpError(422, "validation_failed", `fill in every template field before publishing: ${unfilled.join(", ")}`, { fields: unfilled });
       }
-      await tx`update notices set published_at_ms = ${now} where id = ${id}`;
+      await tx`update notices set published_at_ms = ${now},
+        publish_seq = (select coalesce(max(publish_seq), 0) + 1 from notices) where id = ${id}`;
       // The new version replaces every current one whose readers it fully covers.
       const replaced = await tx`update notices set replaced_at_ms = ${now}
         where id <> ${id} and published_at_ms is not null and replaced_at_ms is null
@@ -236,13 +242,13 @@ export function noticeRoutes(app: App, deps: Deps): void {
     const now = deps.clock.now();
     const res = await tenantTx(c, deps, async (tx, principal) => {
       const n = await noticeById(tx, id);
-      if (!n || n.published_at_ms === null) throw notFound();
+      if (!n || n.published_at_ms === null || Number(n.published_at_ms) > now) throw notFound();
       const prior = await ackOf(tx, principal.personId, id);
       if (prior) return { status: 200 as const, ack: ackDto(prior) };
       const p = await personRow(tx, principal.personId);
       if (!p) throw notFound();
       if (!applies(n, p.jurisdiction)) throw conflict("this notice does not apply to your jurisdiction");
-      if (n.replaced_at_ms !== null) throw new HttpError(409, "conflict", "a newer notice replaced this one; acknowledge the current notice");
+      if (!liveAt(n, now)) throw new HttpError(409, "conflict", "a newer notice replaced this one; acknowledge the current notice");
       const { row, created } = await recordAck(tx, deps, principal, n, {
         id: ulid(now), acknowledgedAt: now, deviceAcknowledgedAt: null, jurisdiction: p.jurisdiction, channel: "web",
       });
