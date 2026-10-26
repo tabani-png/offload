@@ -402,9 +402,15 @@ export class NameMap {
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 
-/** Regex for one surface: multi-word names match any case and across space . _ - ("amara.okafor", "amara-okafor"). */
+/** Regex for one surface, any case ("AMARA", "amara's", "zorblax"); multi-word names also across space . _ - ("amara.okafor",
+ * "amara-okafor"). A single word that is also an everyday word ("Will", "May", "Bill") matches only as written: the
+ * lower-case "will" is the verb, and masking it would garble every sentence the model reads. */
 function surfaceRegex(surface: string, loose: boolean): RegExp {
-  if (!loose) return new RegExp(`${B_START}${escapeRe(surface)}${B_END}`, "gu");
+  if (!loose) {
+    const l = surface.toLowerCase();
+    const word = COMMON.has(l) || AMBIGUOUS_GIVEN.has(l) || isBlocker(l);
+    return new RegExp(`${B_START}${escapeRe(surface)}${B_END}`, word ? "gu" : "giu");
+  }
   const parts = surface.split(/[\s._-]+/).filter((p) => p !== "").map(escapeRe);
   return new RegExp(`${B_START}${parts.join("[\\s._-]+")}${B_END}`, "giu");
 }
