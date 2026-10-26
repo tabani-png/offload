@@ -222,7 +222,30 @@ export function nextWindowStart(w: SendWindow, tz: string, now: number): number 
   return Number.POSITIVE_INFINITY;
 }
 
-/** The night an instant belongs to: the local date of (t − 12 h) in `tz` (a night spanning midnight is one night). */
+/**
+ * Nights. A night is named by a local calendar date D and runs from local noon of D to local noon of D + 1 in `tz` (a
+ * night spanning midnight is one night). `nightOf` and `nightStart` are the only definition of that boundary: every
+ * night id and every "since tonight began" cutoff comes from them, so they agree on DST days too (a night is 23 or 25
+ * hours long then; subtracting a fixed 12 h is not the same boundary).
+ */
+export const NIGHT_START_HOUR = 12;
+
+const nextDate = (d: string, days: number) => new Date(Date.parse(`${d}T00:00:00Z`) + days * 24 * 3600_000).toISOString().slice(0, 10);
+
+/** The night an instant belongs to: its local date, or the day before when it is before local noon. */
 export function nightOf(t: number, tz: string): string {
-  return localParts(t - 12 * 3600_000, tz).day;
+  const p = localParts(t, tz);
+  return p.hour >= NIGHT_START_HOUR ? p.day : nextDate(p.day, -1);
+}
+
+/** The instant night `night` starts: the first instant of local noon on that date. Every real UTC offset is a multiple
+ * of 15 minutes (-12:00 .. +14:00), so local noon falls on a UTC quarter hour in that range. */
+export function nightStart(night: string, tz: string): number {
+  const utcNoon = Date.parse(`${night}T${String(NIGHT_START_HOUR).padStart(2, "0")}:00:00Z`);
+  for (let t = utcNoon - 14 * 3600_000; t <= utcNoon + 12 * 3600_000; t += QUARTER) {
+    const p = localParts(t, tz);
+    if (p.day === night && p.hour >= NIGHT_START_HOUR) return t;
+    if (p.day > night) break;
+  }
+  throw new Error(`nightStart: no local noon on ${night} in ${tz}`);
 }

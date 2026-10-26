@@ -46,6 +46,7 @@ import {
   isTimezone,
   nextWindowStart,
   nightOf,
+  nightStart,
   recipientAllowed,
   windowTimezone,
   type OvernightDecision,
@@ -1264,7 +1265,7 @@ export function createBroker(deps: Deps): Broker {
         // row lock above).
         const ownerTz = await tenantTimezone(tx);
         const [journaled] = await tx`select count(*)::int as n from contacted_ledger where policy_id = ${pol.id}
-          and at >= ((${night}::date + time '12:00') at time zone ${ownerTz})`;
+          and at >= ${new Date(nightStart(night, ownerTz))}`;
         if (Number(journaled!.n) >= pol.maxCommitsPerNight) return takeBack("night cap reached");
         // The night's budget (capped by the role policy's daily budget) as spent now.
         const rp = await rolePolicyOf(tx, b.jobRoleId);

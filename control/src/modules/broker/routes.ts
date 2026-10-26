@@ -130,9 +130,15 @@ const killRow = (r: Record<string, unknown>): KillRow => ({
 
 const killDto = (k: KillRow) => ({ scope: k.scope, targetId: k.targetId, active: k.active, setBy: k.setBy, setAt: k.setAt, reason: k.reason });
 
-/** Departments a workflow belongs to, as far as the broker knows it (its batches' job roles, its policies' owners). */
+/**
+ * Departments a workflow belongs to. The registry (S2-06) decides first: a role or retired workflow's owning department,
+ * a proposal's proposer department. A safety control must be reachable for a workflow with no history (Codex P2, round
+ * 6); the broker's own rows (batches, policy owners) only add departments, never gate.
+ */
 async function workflowDepartments(tx: Tx, workflowId: string): Promise<string[]> {
-  const rows = await tx`select department_id from batches where workflow_id = ${workflowId}
+  const rows = await tx`select department_id from workflows where id = ${workflowId} and department_id is not null
+    union select proposer_department_id from workflows where id = ${workflowId} and proposer_department_id is not null
+    union select department_id from batches where workflow_id = ${workflowId}
     union select p.department_id from overnight_policies o join people p on p.tenant_id = o.tenant_id and p.id = o.owner_person_id
       where o.workflow_id = ${workflowId} and p.department_id is not null`;
   return rows.map((r: Record<string, unknown>) => r.department_id as string);
