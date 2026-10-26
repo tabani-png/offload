@@ -27,16 +27,18 @@ async function buildWith(file: CheckFile, content: string, tries: FakeTry[], lim
 const PY_SLUG = "import re\ndef slug(s):\n    return re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-')\n";
 
 describe("s24 check import resolution", () => {
-  test("LOOP: a python check that imports the built module from the workspace passes", async () => {
-    const check = ["import sys", "from slug_lib import slug", "ok = slug('Hello World') == 'hello-world'", "print(('PASS' if ok else 'FAIL') + ' slug_lib.slug')", "sys.exit(0 if ok else 1)", ""].join("\n");
+  // Builder code is never imported into the check process (it could forge the result); the check runs it as a
+  // subprocess with cwd = workspace, and that resolves from the workspace.
+  test("LOOP: a python check that runs the built module as a subprocess from the workspace passes", async () => {
+    const check = ["import subprocess, sys", "r = subprocess.run([sys.executable, '-c', 'import slug_lib; print(slug_lib.slug(\"Hello World\"))'], capture_output=True, text=True)", "ok = r.stdout.strip() == 'hello-world'", "print(('PASS' if ok else 'FAIL') + ' slug_lib.slug ' + r.stdout.strip() + r.stderr.strip())", "sys.exit(0 if ok else 1)", ""].join("\n");
     const { rec } = await buildWith("accept.py", check, [{ act: (ws) => writeFileSync(join(ws, "slug_lib.py"), PY_SLUG) }]);
     expect(rec.tries[0]!.checkOutput).toContain("PASS slug_lib.slug");
     expect(rec.outcome).toBe("PASS");
   }, 30_000);
 
-  test("LOOP: a bun check with a relative import of the built file (from accept/) passes", async () => {
-    const check = ['import { expect, test } from "bun:test";', 'import { slug } from "../slug.ts";', 'test("slug", () => { expect(slug("Hello World")).toBe("hello-world"); });', ""].join("\n");
-    const ts = 'export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");\n';
+  test("LOOP: a bun check that runs the built TS file with bun from the workspace passes", async () => {
+    const check = ['import { expect, test } from "bun:test";', 'test("slug", () => {', '  const r = Bun.spawnSync([process.execPath, "run", "slug.ts", "Hello World"]);', '  expect(r.stdout.toString().trim()).toBe("hello-world");', "});", ""].join("\n");
+    const ts = 'const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");\nconsole.log(slug(process.argv[2] ?? ""));\n';
     const { rec } = await buildWith("accept.test.ts", check, [{ act: (ws) => writeFileSync(join(ws, "slug.ts"), ts) }]);
     expect(rec.tries[0]!.checkOutput).toContain("1 pass");
     expect(rec.outcome).toBe("PASS");
