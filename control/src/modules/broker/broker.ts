@@ -1069,6 +1069,15 @@ export function createBroker(deps: Deps): Broker {
       | { done: "failed_before_send" | "waiting" }
       | { call: CommitCall; executor: Executor; target: CommitTarget; policy: ToolPolicy; b: BatchRow; policyId: string | null; recipient: string };
     const prepared = await service(tenantId, async (tx): Promise<Prepared> => {
+      // The policies this item depends on are read under FOR SHARE (N6), so an edit that pauses or narrows one either
+      // commits first and is seen, or waits for this send's journal. Taken before the batch and item locks: a policy
+      // edit locks its policy, then the batches it unlinks.
+      const pids = (await tx`select b.overnight_policy_id as id from batches b where b.hash = ${hash} and b.overnight_policy_id is not null
+        union select t.policy_id from batch_items i join approval_tokens t on t.tenant_id = i.tenant_id and t.id = i.token_id
+          where i.batch_hash = ${hash} and i.key = ${key} and t.policy_id is not null`).map((r: Record<string, unknown>) => r.id as string);
+      if (pids.length > 0) {
+        await tx`select id from overnight_policies where id in (select jsonb_array_elements_text(${pids}::jsonb)::uuid) order by id for share`;
+      }
       const b = await loadBatch(tx, hash, true);
       if (!b) return { done: "waiting" as const };
       const [raw] = await tx`select * from batch_items where batch_hash = ${hash} and key = ${key} for update`;
@@ -1081,6 +1090,8 @@ export function createBroker(deps: Deps): Broker {
       // A policy approval holds only while its policy is active (ADR 0112 §1): paused, tripped or gone fails closed and
       // the policy's unsent items go back to a person.
       if (tk.policy_id !== null) {
+        // A token re-minted since the lock above is read next time, under its lock.
+        if (!pids.includes(tk.policy_id as string)) return { done: "waiting" as const };
         const pol = await overnightById(tx, tk.policy_id as string);
         if (pol?.state !== "active") {
           await unlinkPolicy(tx, tk.policy_id as string, `policy ${pol?.state ?? "gone"}`);
