@@ -46,10 +46,14 @@ describe("s24 no secret in any readable environment", () => {
       {
         act: async (ws, o) => {
           writeSlug("good")(ws);
-          const helper = (o.settings as { apiKeyHelper?: string } | undefined)?.apiKeyHelper ?? "";
-          writeFileSync(join(ws, "peek.py"), `import sys\nfor p in sys.argv[1:]:\n    try:\n        print('ESCAPED ' + open(p).read()[:200])\n    except Exception as e:\n        print('BLOCKED ' + p)\n`);
+          // apiKeyHelper is a shell command: a single-quoted path.
+          const cmd = (o.settings as { apiKeyHelper?: string } | undefined)?.apiKeyHelper ?? "";
+          const helper = cmd.replace(/^'(.*)'$/s, "$1").replace(/'\\''/g, "'");
+          // The paths go through a file in the workspace, so the command itself is allowed and the OS sandbox decides.
+          writeFileSync(join(ws, "peek.py"), `for p in open('paths.txt').read().split('\\n'):\n    if not p:\n        continue\n    try:\n        print('ESCAPED ' + open(p).read()[:200])\n    except Exception as e:\n        print('BLOCKED ' + p)\n`);
           const keyFile = readFileSync(helper, "utf8").match(/'([^']+)'/)?.[1] ?? helper;
-          const r = await o.canUseTool!("Bash", { command: `python3 peek.py ${helper} ${keyFile}` }, { signal: new AbortController().signal, toolUseID: "t" } as never);
+          writeFileSync(join(ws, "paths.txt"), `${helper}\n${keyFile}\n`);
+          const r = await o.canUseTool!("Bash", { command: "python3 peek.py" }, { signal: new AbortController().signal, toolUseID: "t" } as never);
           blocked = r?.behavior === "allow" ? (await shell(String((r as unknown as { updatedInput: { command: string } }).updatedInput.command), ws)).stdout : `DENIED ${(r as { message?: string } | null)?.message ?? ""}`;
         },
       },
@@ -62,6 +66,7 @@ describe("s24 no secret in any readable environment", () => {
     const helper = (o.settings as { apiKeyHelper?: string } | undefined)?.apiKeyHelper;
     expect(typeof helper).toBe("string");
     expect(JSON.stringify(o.settings)).not.toContain("S24KEYSENTINEL");
+    expect(blocked).toContain("BLOCKED");
     expect(blocked).not.toContain("ESCAPED");
     expect(blocked).not.toContain("S24KEYSENTINEL");
   }, 30_000);
