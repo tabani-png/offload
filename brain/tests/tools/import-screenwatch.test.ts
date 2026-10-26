@@ -315,10 +315,12 @@ describe("v2: cost cap and persistent errors", () => {
 });
 
 describe("v2: regrouping spans by captioned task", () => {
-  test("frameKey: app part of the surface + verb + object, normalised; no note = no key", () => {
+  test("frameKey: app part of the surface + verb, normalised; the object may vary; no note = no key", () => {
     const n = (surface: string, verb: string, object: string) => ({ activity: "x", surface, verb, object, confidence: 1 });
     expect(frameKey(n("Helpdesk - Inbox", "Writing", "Support reply."))).toBe(frameKey(n("helpdesk — Ticket 3", "writing", "support reply")));
     expect(frameKey(n("Helpdesk - Inbox", "writing", "support reply"))).not.toBe(frameKey(n("Helpdesk - Inbox", "reviewing", "support reply")));
+    expect(frameKey(n("Claude desktop app, New session view", "prompting", "pull request"))).toBe(frameKey(n("Claude app - Trade UI session", "prompting", "coding session")));
+    expect(frameKey(n("Claude app", "prompting", "x"))).not.toBe(frameKey(n("Terminal", "prompting", "x")));
     expect(frameKey(undefined)).toBeNull();
   });
 

@@ -26,7 +26,7 @@
 //   home's ledger plus the frames in flight would pass it; a fatal captioner error (key, model, request shape) or
 //   25 failures in a row also stop the run. All stops are clean: the cache keeps what is done and a rerun resumes.
 // - regroup: after captioning, consecutive kept frames in one activity run whose captioned task (frameKey: app part
-//   of the surface + verb + object) is the same are merged into one span, so an instance is a task occurrence, not a
+//   of the surface + verb) is the same are merged into one span, so an instance is a task occurrence, not a
 //   screenshot. It always starts from the import's original events (<work>/events-orig), so it can be rerun.
 // - stats: caption counts, the share of generic verbs (GENERIC_VERBS) and the caption cost from the home's ledger.
 import { createHash } from "node:crypto";
@@ -522,15 +522,21 @@ export function claudeCaptioner(opts: ClaudeOptions & { addendum?: string }): Cl
 
 const norm = (s: string | undefined) => (s ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
 
-/** The captioned task of a frame: the app part of the surface ("App - view" -> "app"), the verb and the object,
- * normalised. null when there is no note (a failed caption) or nothing to compare. */
+/** The captioned task of a frame: the app part of the surface ("App - view", "App, view" -> "app", with filler words
+ * such as "desktop" and "app" dropped) and the verb, normalised. The object is left out on purpose: captions name the
+ * same piece of work differently frame to frame ("coding session", "pull request"), so an occurrence is an unbroken
+ * stretch of one kind of action in one app. null when there is no note (a failed caption) or nothing to compare. */
+const APP_FILLER = new Set(["app", "application", "desktop", "the", "web", "site", "window"]);
 export function frameKey(note: Pick<CaptionFields, "surface" | "verb" | "object"> | undefined): string | null {
   if (note === undefined) return null;
-  const app = norm((note.surface ?? "").split(/\s+[-\u2013\u2014|:>\u00b7\u2022\/]\s+/)[0]);
+  const head = (note.surface ?? "").split(/\s+[-\u2013\u2014|:>\u00b7\u2022\/]\s+|,|\(/)[0];
+  const app = norm(head)
+    .split(" ")
+    .filter((w) => w !== "" && !APP_FILLER.has(w))
+    .join(" ");
   const verb = norm(note.verb);
-  const object = norm(note.object);
-  if (app === "" && verb === "" && object === "") return null;
-  return `${app}|${verb}|${object}`;
+  if (app === "" && verb === "") return null;
+  return `${app}|${verb}`;
 }
 
 /**
