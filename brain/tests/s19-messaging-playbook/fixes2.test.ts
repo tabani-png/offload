@@ -88,6 +88,15 @@ describe("s19 fix 2: auto-run and a removed playbook", () => {
     expect(partitionForAuto(w.home, wf, batch).changedFiles).toContain("playbook.json");
     expect(autoSendable(w.home, wf, batch)).toBe(false);
   });
+
+  test("DRYRUN: a batch drafted with a playbook the pin never saw is held even once that playbook is gone", () => {
+    enableAutoRun(w.home, w.outreach.id, NOW + 2);
+    const wf = readWorkflow(w.home, w.outreach.id)!;
+    expect(Object.keys(wf.autoRunPin!.files)).not.toContain("playbook.json");
+    const batch = { items: [], createdAt: NOW + 3, draftedWith: { ...pinFiles(w.home, wf), "playbook.json": "f".repeat(64) } } as unknown as Batch;
+    expect(partitionForAuto(w.home, wf, batch).changedFiles).toEqual(["playbook.json"]);
+    expect(autoSendable(w.home, wf, batch)).toBe(false);
+  });
 });
 
 describe("s19 fix 2: shape and extractive labels", () => {

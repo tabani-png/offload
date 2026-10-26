@@ -77,7 +77,8 @@ export interface AutoPartition {
   eligible: BatchItem[];
   newItems: BatchItem[];
   changedItems: BatchItem[];
-  /** Pinned files that changed since the pin (now, or when the batch was drafted). Non-empty = hold everything. */
+  /** Pinned files that changed since the pin (now, or when the batch was drafted), and files the batch was drafted
+   * with that the pin never saw. Non-empty = hold everything. */
   changedFiles: string[];
   /** Drafted before the pin: hold everything. */
   stale: boolean;
@@ -90,7 +91,7 @@ export function partitionForAuto(home: string, wf: WorkflowJson, batch: Batch): 
   const files = new Set(changedFiles(pin, now));
   if (batch.draftedWith !== undefined) for (const f of changedFiles(pin, batch.draftedWith)) files.add(f);
   else for (const f of fileNames(pin, now)) files.add(f); // drafted before s10b: nothing to compare with.
-  const out: AutoPartition = { eligible: [], newItems: [], changedItems: [], changedFiles: fileNames(pin, now).filter((f) => files.has(f)), stale: pin === null || batch.createdAt < pin.at };
+  const out: AutoPartition = { eligible: [], newItems: [], changedItems: [], changedFiles: [...files], stale: pin === null || batch.createdAt < pin.at };
   for (const i of batch.items) {
     const pinned = pin?.rows[addressHash(wf.id, i.key)];
     if (pinned === undefined) out.newItems.push(i);
