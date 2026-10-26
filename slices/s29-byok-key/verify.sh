@@ -24,7 +24,7 @@ echo "== swift (app/build.sh test)"
 st="$(OFFLOAD_BUILD_DIR="$T/testbuild" "$ROOT/app/build.sh" test 2>&1)"; scode=$?
 echo "$st" | grep -E "Test run with [0-9]+ tests" | tail -1
 [ $scode -eq 0 ] || { echo "$st" | grep -E "failed|error:" | head -20; fail "app/build.sh test exited $scode"; }
-for tag in FORMAT VALIDATE FLOW SETTINGS LAUNCH ONBOARD CHECK; do
+for tag in FORMAT VALIDATE FLOW SETTINGS LAUNCH ONBOARD CHECK CANCEL REPLACE; do
   n="$(echo "$st" | grep -cE "Test \"$tag: .*\" passed")"
   [ "$n" -gt 0 ] && echo "$tag: $n passing" || fail "no passing Swift test named \"$tag: ...\""
 done

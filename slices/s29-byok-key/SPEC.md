@@ -47,10 +47,16 @@ secret.
    supervised brain so it picks the change up. Neither argv nor env ever holds the key.
 6. **Onboarding (ONBOARD)** - the first-run window opens on "Your Claude API key" when no key is set (before the four
    existing steps, which are unchanged). Save checks and stores; "Skip for now" goes on without Claude.
-7. **Check (CHECK)** - `Offload --brain-check` prints `key: set` or `key: missing`, never the key.
+7. **Cancel-safe (CANCEL, review round 1)** - `ClaudeKeyController` (Core, main actor) owns the check task and a
+   submission generation. Cancel, Skip for now, Remove or a new submit cancels the task and bumps the generation; a
+   late answer from an older generation is dropped: nothing is saved and `onChange` (the brain restart) does not fire.
+8. **No lost key (REPLACE, review round 1)** - the Keychain item is updated in place (`SecItemUpdate`), added only
+   when absent, so a failed replace keeps the working key. After every write the status is read back from the store;
+   on any failure the old status stays, the error is shown and the brain is not restarted.
+9. **Check (CHECK)** - `Offload --brain-check` prints `key: set` or `key: missing`, never the key.
 
 ## Acceptance (tags = Swift test name prefixes in tests/S29Tests.swift, brain test name prefixes in tests/brain)
-- FORMAT, VALIDATE, FLOW, SETTINGS, LAUNCH, ONBOARD, CHECK: Swift tests with a fake Keychain and a fake validator.
+- FORMAT, VALIDATE, FLOW, SETTINGS, LAUNCH, ONBOARD, CHECK, CANCEL, REPLACE: Swift tests with a fake Keychain and a fake validator.
 - BRAIN: with only `OFFLOAD_ANTHROPIC_KEYCHAIN` set, the brain reads the key through the Keychain runner (argv holds
   service and account, never the key), the API backend sends it in a request header to api.anthropic.com only, the
   serve path picks the API backend from the reference alone, and process.env never gains it. These pass on main
