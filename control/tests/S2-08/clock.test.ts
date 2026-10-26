@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createApp, type Deps } from "../../src/app.ts";
+import { createApp, resolvePorts, type Deps } from "../../src/app.ts";
 import { generateEs256SigningKey } from "../../src/auth/jwt.ts";
 import { createHarness, T0, TestClock, testConfig, type Harness } from "../helpers/harness.ts";
 import { FakeWorkOS } from "../helpers/fake-workos.ts";
@@ -82,5 +82,31 @@ describe("CONSENT", () => {
     expect({ status: r.status, code: r.json?.error?.code }).toEqual({ status: 403, code: "feature_disabled" });
     h.clock.t = effective;
     expect((await who.member.get(self)).json?.error?.code).not.toBe("feature_disabled");
+  });
+});
+
+describe("CONSENT", () => {
+  test("CONSENT: ports resolved without mounting the module refuse to answer instead of guessing a clock", async () => {
+    const compliance = (await import("../../src/modules/compliance/index.ts")).default;
+    const ports = resolvePorts({ now: () => T0 }, [compliance]);
+    await sys(h, async (tx) => {
+      await expect(ports.consent.allows(tx, who.member.personId, "run_outcome")).rejects.toThrow(/mounted/);
+      await expect(ports.features.enabledFor(tx, "CA-ON")).rejects.toThrow(/mounted/);
+    });
+  });
+
+  test("CONSENT: a port the app overrides (a test spy) is left alone when the module mounts", async () => {
+    const spy = { allows: async () => true };
+    const clock = new TestClock(T0);
+    const { deps } = await createApp({
+      db: h.db.app,
+      config: testConfig(h.db.appUrl, h.db.schema),
+      workos: await FakeWorkOS.create(clock.now),
+      deviceKey: await generateEs256SigningKey(),
+      clock,
+      ports: { consent: spy },
+    });
+    expect(deps.ports.consent).toBe(spy);
+    expect((await decide(deps, who.owner.personId)).features).toEqual([]);
   });
 });
