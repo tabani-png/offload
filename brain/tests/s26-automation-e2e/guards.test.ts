@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { expectedCommit } from "../../src/connectors/computer/actions.ts";
 import { StubModel } from "../../src/models/model.ts";
 import { NOTHING_TO_FILL } from "../../src/plan/dryrun.ts";
 import { readItemRows, rowKey } from "../../src/workflows/plan-live.ts";
@@ -63,6 +64,31 @@ describe("s26 live batch guards", () => {
       [["Name", "Ann"], ["Note", ""]],
     ]);
     expect(rowKey("wf_a", rows[0]!.fields)).not.toBe(rowKey("wf_b", rows[0]!.fields));
+  });
+
+  test("LIVE: a row's identity is its canonical form (the gate's): reordered columns, label case and spacing do not make a new row", () => {
+    const a = rowKey("wf_a", [["Week", "43"], ["Signups", "352"]]);
+    expect(rowKey("wf_a", [["Signups", "352"], ["Week", "43"]])).toBe(a);
+    expect(rowKey("wf_a", [[" signups ", " 352 "], ["WEEK", "43"]])).toBe(a);
+    // The gate's form check sees these two rows as the same commit, so they are the same row.
+    expect(expectedCommit({ key: "k", to: "k", subject: "", body: "", warnings: [], commit: { verb: "save", fields: [["Signups", "352"], ["Week", "43"]] } }).fields).toEqual(
+      expectedCommit({ key: "k", to: "k", subject: "", body: "", warnings: [], commit: { verb: "save", fields: [["Week", "43"], ["Signups", "352"]] } }).fields,
+    );
+    expect(rowKey("wf_a", [["Week", "44"], ["Signups", "352"]])).not.toBe(a);
+  });
+
+  test("LIVE: a done row re-exported with its columns reordered is never committed again", async () => {
+    w = world();
+    const { id, dir } = await activeMetricsWorkflow(w);
+    writeFileSync(join(dir, "items.csv"), itemsCsv([["43", "352", "2410", "3"]]));
+    const live = (await w.call(`/workflows/${id}/run`, "POST", {})).body;
+    await w.call(`/workflows/${id}/approve`, "POST", { batchHash: live.batch.hash });
+    await w.brain.idle();
+    expect(w.driver.pressed).toHaveLength(1);
+    writeFileSync(join(dir, "items.csv"), "Churn,Active,Signups,Week\n3,2410,352,43\n");
+    const again = await w.call(`/workflows/${id}/run`, "POST", {});
+    expect(again.status).toBe(409);
+    expect(again.body.message).toMatch(/every row in items\.csv is done/);
   });
 
   test("LIVE: commits through a tool's own fields (Xero) and text replies (Zendesk) are not built yet and say so", async () => {

@@ -2,11 +2,11 @@
 //   setup       (held-back coding-agent watching, neutral week)  -> brief, exact approval, one hand-off, build refused
 //   remove_step (s22 LinkedIn image fixture: the neutral week has none) -> the same brief path
 //   tool        (the metrics task's tool option)                  -> the same brief path
-//   leave_alone (inbox triage, neutral week)                      -> 409 "nothing to build", nothing written
+//   leave_alone (inbox triage, neutral week)                      -> nothing built; the choice is remembered
 // The builder (s24) is OFF by default (it cannot stop builder code reading other same-user processes' argv/env):
 // a build is refused with that reason, the approval is kept, and no workspace is created.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { writeFixture } from "../../fixtures/gen.ts";
 import { DEFAULT_MODELS, StubModel } from "../../src/models/model.ts";
@@ -102,19 +102,37 @@ describe("s26 other fix kinds: honest end states", () => {
     await briefPath(metrics.id, "tool");
   });
 
-  test("LEAVE: inbox triage is best left alone; choosing it builds nothing (409, plain words) and the time screen says leave alone", async () => {
+  test("LEAVE: inbox triage is best left alone; choosing it builds nothing, is remembered, and the task is not suggested again", async () => {
     const triage = (insights.insights as any[]).find((i) => i.kind === "email.triage");
     expect(triage).toBeDefined();
     expect(triage.solutions.top).toBe("leave_alone");
+    expect(triage.solutions.leftAlone).toBe(false);
     const before = existsSync(join(w.home, "solutions")) ? readdirSync(join(w.home, "solutions")).length : 0;
     const r = await w.call(`/insights/${triage.id}/solutions/choose`, "POST", { kind: "leave_alone" });
-    expect(r.status).toBe(409);
-    expect(r.body.message).toMatch(/nothing to build/);
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ kind: "leave_alone", leftAlone: { taskId: triage.taskId, insightId: triage.id, at: SUNDAY_NIGHT } });
+    // Nothing built: no brief, no workflow. The choice is one 0600 file.
     expect(existsSync(join(w.home, "solutions")) ? readdirSync(join(w.home, "solutions")).length : 0).toBe(before);
     expect(existsSync(join(w.home, "workflows")) ? readdirSync(join(w.home, "workflows")).length : 0).toBe(0);
+    expect(statSync(join(w.home, "left-alone.json")).mode & 0o777).toBe(0o600);
+    // Remembered across a restart: flagged on the insight, gone from the dashboard's suggestions.
+    w.rebrain();
+    const again = (await w.call("/insights")).body.insights.find((i: any) => i.id === triage.id);
+    expect(again.solutions.leftAlone).toBe(true);
+    expect((await w.call("/dashboard")).body.suggestions.map((x: any) => x.insightId)).not.toContain(triage.id);
     const t = (await w.call("/time")).body;
     const f = t.findings.find((x: any) => x.insightId === triage.id);
     expect(f.fixKind).toBe("leave_alone");
     expect(f.workflowInsightId).toBeNull();
+  });
+
+  test("LEAVE: choosing another kind of fix later takes the task back (the left-alone mark is cleared)", async () => {
+    const triage = (insights.insights as any[]).find((i) => i.kind === "email.triage");
+    const r = await w.call(`/insights/${triage.id}/solutions/choose`, "POST", { kind: "workflow" });
+    expect(r.status).toBe(201);
+    const again = (await w.call("/insights")).body.insights.find((i: any) => i.id === triage.id);
+    expect(again.solutions.leftAlone).toBe(false);
+    // Only a known insight can be marked: unknown ids are 404.
+    expect((await w.call(`/insights/ins_doesnotexist/solutions/choose`, "POST", { kind: "leave_alone" })).status).toBe(404);
   });
 });
