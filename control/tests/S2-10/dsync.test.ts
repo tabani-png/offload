@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { audits, handoversOf, stateOf, world, type World } from "./world.ts";
+import { withTenant } from "../../src/db/tenant.ts";
+import { ComposioCliExecutor } from "../../src/modules/broker/executors.ts";
+import { FakeComposio } from "../S2-07/setup.ts";
+import { audits, email, handoversOf, principal, run, stateOf, to, world, type World } from "./world.ts";
 
 let w: World;
 beforeAll(async () => {
@@ -25,6 +28,34 @@ async function deliver(event: string, data: Record<string, unknown>) {
 }
 
 describe("DSYNC", () => {
+  test("DSYNC: a directory freeze racing a send keeps the lock order: no lock retries, and person.directory_sync is written after the freeze (audit lock last)", async () => {
+    const rep2 = w.extra.rep2;
+    const mail = `rep2@${w.t.id.slice(0, 8)}.example.com`;
+    expect((await deliver("dsync.user.updated", user("dir_rep2", mail))).status).toBe(204);
+    w.broker.configure({ executors: { composio: new ComposioCliExecutor(new FakeComposio()) } });
+    const r = await w.broker.proposeBatch(w.t.id, run(w, w.wf.sdr1, { type: "person", id: rep2 }, rep2, w.rep2Gmail), [email(to())]);
+    if (!r.ok) throw new Error(`${r.code} ${r.message}`);
+    const lead = await principal(w, "lead");
+    const { token } = await withTenant(w.h.db.app, { tenantId: w.t.id, principalPersonId: lead.personId, accessRole: lead.accessRole }, (t) =>
+      w.broker.approve(t, lead, r.batchHash, { batchHash: r.batchHash, itemKeys: null, edits: [] }),
+    );
+    const retries = w.broker.lockRetries;
+    const [, hook] = await Promise.all([
+      w.broker.commitApproved(w.t.id, r.batchHash, token).catch(() => null),
+      deliver("dsync.user.updated", user("dir_rep2", mail, "inactive")),
+    ]);
+    await w.broker.idle();
+    expect(hook.status).toBe(204);
+    expect(await stateOf(w, rep2)).toBe("frozen");
+    expect(w.broker.lockRetries).toBe(retries);
+    const rows = (await w.h.db.migrator`select action, detail from audit_events where tenant_id = ${w.t.id} and subject_person_id = ${rep2}
+      and action in ('person.freeze', 'person.directory_sync') order by seq`) as Array<{ action: string; detail: { state?: string } }>;
+    const freeze = rows.findIndex((e) => e.action === "person.freeze");
+    const sync = rows.findIndex((e) => e.action === "person.directory_sync" && e.detail.state === "inactive");
+    expect(freeze).toBeGreaterThanOrEqual(0);
+    expect(sync).toBeGreaterThan(freeze);
+  });
+
   test("DSYNC: a directory deactivation (S2-01 webhook) ends in a frozen person with every continuity effect", async () => {
     const member = w.t.people.member.id;
     await w.as("member");
@@ -75,4 +106,5 @@ describe("DSYNC", () => {
     expect(await stateOf(w, m2)).toBe("frozen");
     expect((await handoversOf(w, m2)).map((h) => h.workflow_id)).toEqual([w.wf.ap]);
   });
+
 });
