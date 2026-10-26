@@ -8,13 +8,15 @@
 import type { CapabilityNeedDTO, OutputType, PlanStepDTO, PlanVariantDTO } from "../api/s14-types.ts";
 import type { TaskUnderstanding, UnderstandingStep } from "../types.ts";
 import type { FrameNote } from "../understanding/frames.ts";
-import { baseVerb } from "../understanding/verbs.ts";
+import { ACTION_VERBS, baseVerb } from "../understanding/verbs.ts";
 import { commitCapability, readCapability, targetOf, type StepTarget } from "./capabilities.ts";
 
-export const READ_VERBS = new Set(["read", "view", "browse", "skim", "check", "look up", "find", "open", "search", "watch", "scroll", "look at", "reading", "reviewing", "comparing"]);
+export const READ_VERBS = new Set(["read", "view", "browse", "skim", "check", "look up", "find", "open", "search", "watch", "scroll", "look at", "reading", "reviewing", "comparing",
+  // s20 review 3: being there (a call, a meeting) and looking closely are reads too: nothing is changed.
+  "attend", "meet", "call", "present", "listen", "join", "monitor", "observe", "wait", "inspect", "examine", "study"]);
 export const JUDGE_VERBS = new Set(["review", "screen", "assess", "evaluate", "compare", "triage", "decide", "approve", "score", "grade", "vet"]);
 export const RECORD_VERBS = new Set(["enter", "key in", "fill in", "update", "edit", "create", "add", "move", "log", "record", "tag", "file", "upload", "match", "reconcile", "copy", "paste", "type", "entering", "editing", "updating", "book", "schedule", "assign", "close"]);
-export const TEXT_VERBS = new Set(["reply", "answer", "respond", "write", "send", "message", "comment", "post", "draft", "compose"]);
+export const TEXT_VERBS = new Set(["reply", "answer", "respond", "write", "send", "message", "comment", "post", "draft", "compose", "note"]);
 
 export type VerbClass = "read" | "judge" | "record" | "text";
 
@@ -22,14 +24,24 @@ export function verbClass(verb: string): VerbClass {
   // s20: gerunds ("writing", "typing", "filling in") are typed as their base verb, never as reading.
   const v = baseVerb(verb);
   if (TEXT_VERBS.has(v)) return "text";
-  if (RECORD_VERBS.has(v)) return "record";
+  if (RECORD_VERBS.has(v) || ACTION_VERBS.has(v)) return "record";
   if (JUDGE_VERBS.has(v)) return "judge";
+  // A verb no table knows is PLANNED as a read (s14 contract: no unasked commit), but it is not a known read:
+  // isReadOnlyStep is false for it, so it never makes a task read-only (s20 review 3).
   return "read";
 }
 
 /** s20: typing (or editing, creating) a message, note, reply or post writes text: it gets a draft, like "write". */
 const TYPED_TEXT_VERBS = new Set(["type", "edit", "create", "add"]);
 const TEXT_OBJECT_RE = /\b(message|messages|note|notes|reply|replies|email|emails|comment|comments|post|posts|draft|memo|answer|response)\b/i;
+
+/** s20 review 3: a step that POSITIVELY only reads or judges (its verb is in READ_VERBS or JUDGE_VERBS). A verb no
+ * table knows, or any write, is not read-only. */
+export function isReadOnlyStep(s: Pick<UnderstandingStep, "verb" | "object">): boolean {
+  const c = stepClass(s);
+  const v = baseVerb(s.verb);
+  return (c === "read" && READ_VERBS.has(v)) || (c === "judge" && JUDGE_VERBS.has(v));
+}
 
 /** The verb class of a step: its verb's class, except that typing a text object is a text write. */
 export function stepClass(s: Pick<UnderstandingStep, "verb" | "object">): VerbClass {

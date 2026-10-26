@@ -111,6 +111,8 @@ export const brainKeyMode = (env: ObserverEnv = process.env, home?: string): Bra
   if (env.OFFLOAD_KEYS === "keychain") return "keychain";
   if (home === undefined) return "keychain";
   const kept = rememberedMode(home);
+  // s20 review 3: a "file" mark never downgrades a home the observer keys (keys/ folder); only OFFLOAD_KEYS=file does.
+  if (kept === "file" && existsSync(join(home, "keys"))) return "keychain";
   if (kept !== null) return kept;
   const mode: BrainKeyMode | null = isPlainHome(home) ? "file" : isObserverHome(home) ? "keychain" : null;
   if (mode === null) return "keychain";

@@ -9,9 +9,16 @@ const KNOWN = new Set(
     "read view browse skim check find open search watch scroll chat attend meet call present " +
     "review screen assess evaluate compare triage decide approve score grade vet " +
     "enter copy paste update edit create add move log record tag file upload match reconcile type book schedule assign close " +
-    "reply answer respond write send message comment post draft compose fill key look note fix code test run debug plan"
+    "reply answer respond write send message comment post draft compose fill key look note fix code test run debug plan " +
+    // s20 review 3: action verbs and presence verbs, so their gerunds ("paying", "listening") map too.
+    "submit pay publish delete remove export download import deploy merge sign invoice share archive rename order buy purchase refund " +
+    "transfer install configure build commit push listen join monitor observe wait inspect examine study"
   ).split(" "),
 );
+
+/** s20 review 3: actions that change something outside (a payment, a deletion, a deploy): a gated commit, like a record
+ * write. Before, they fell through to reading. */
+export const ACTION_VERBS: ReadonlySet<string> = new Set(["submit", "pay", "publish", "delete", "remove", "export", "download", "import", "run", "code", "fix", "debug", "test", "merge", "deploy", "sign", "invoice", "share", "archive", "rename", "order", "buy", "purchase", "refund", "transfer", "install", "configure", "build", "commit", "push"]);
 
 /** Particle verbs kept as two words, gerund -> base. */
 const PHRASES: Readonly<Record<string, string>> = {

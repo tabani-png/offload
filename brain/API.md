@@ -153,6 +153,10 @@ From a 7-day blind test on screenshot-only data (one synthetic app, captions fro
   A task whose every step only reads (no text or record write) claims no saving: `arithmetic` ends "… → every step
   only reads, nothing is done for you = X h/wk → saves 0.0 h/wk (0%)", so it falls under the insight threshold and the
   flat "read + approve" 87-90% figure is not shown.
+  Read-only means every verb is positively a read or judgement (read, view, watch, attend, review, approve, ...).
+  Action verbs (submit, pay, publish, delete, export, download, run, code, fix, merge, deploy, ...) are record writes
+  with a gated commit; a verb no table knows is `unknown`: it is planned as a read (no unasked commit) but never makes
+  a task read-only, and the judge gives it risk 0.2 instead of "reading only".
 - Plan needs (`serve`): resolved through the connector chain (`plan/chain-resolver.ts`) instead of `pending`. A
   product a caption named that the catalog lacks tries a connector on this Mac, then Composio through its toolkit
   (s17 universe target), then its direct API, and only then computer use; `GET /connectors/:id` for such an app target
@@ -161,7 +165,10 @@ From a 7-day blind test on screenshot-only data (one synthetic app, captions fro
   and its gated commit for `ui.commit`; for an app's generic need (`screen.read`, `file.read`, `ui.commit`) any read /
   write that a connector, Composio or the app's own API offers for that app. A specific catalog commit (`mail.send`,
   ...) needs exactly that capability. A local document's `file.read` resolves with `method: "local"` ("reading the
-  file on this Mac") without probing the chain.
+  file on this Mac") without probing the chain. An app's identity for the chain (bundle ids, hosts) comes from what
+  was observed first (the current analysis' steps), then the app target stored from the insights, and only then the
+  product table, which otherwise only gives name and toolkit; a catalog app's observed host goes before its catalog
+  pattern (acme.zendesk.com before .zendesk.com).
 
 ## GET /insights/:id/evidence → `EvidenceResponse`
 The proof behind every number: `figures.<name>.eventIds` (all figures plus `saving`), the task's `instances`
@@ -200,7 +207,8 @@ is NOT purged); there is no fallback to raw keys. `OFFLOAD_KEYS=file` (tests, fi
 too, since no observer Keychain stands behind it; `OFFLOAD_KEYS=keychain` forces the Keychain. The mode a home
 settles on (file for a plain home, Keychain for one with `keys/` or `.jsonl.enc` days) is kept in
 `$OFFLOAD_HOME/brain-key-mode` (0600) and wins over the day files from then on, so purging day files never flips it;
-a home with no evidence yet is Keychain and is not marked. Raw key files left from s05b are wrapped with the same bytes and deleted
+a home with no evidence yet is Keychain and is not marked. A "file" mark is ignored when `keys/` exists (only
+`OFFLOAD_KEYS=file` forces raw keys there). Raw key files left from s05b are wrapped with the same bytes and deleted
 when `serve` starts (and when a day with only a raw key is next used); a conflict is logged and the raw file kept.
 States: `drafting` → `ready_for_review` → (approve the dry-run batch) → `active` ⇄ `paused`; `needs_you` is shown on
 top of `active` when a batch waits or a connector is missing. Auto-run is off by default.
