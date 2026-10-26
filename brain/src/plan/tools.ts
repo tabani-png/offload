@@ -102,26 +102,33 @@ export const OPTIONS: Readonly<Record<string, readonly Candidate[]>> = {
 };
 
 /** The capability family of one plan step, from its type, the plan's output type, the target and the daily volume. */
-export function capabilityFamily(step: { type: string; capability: { target: string; capability: string; via: string; role: string } | null }, out: OutputType, perDay: number): string | null {
+export function capabilityFamily(step: { type: string; capability: { target: string; capability: string; via: string; role: string; need?: string } | null }, out: OutputType, perDay: number): string | null {
   const c = step.capability;
   if (c === null) return null;
   const t = c.target;
   if (c.via === "local_file") return "doc.read";
   if (step.type === "read") {
-    if (/linkedin/.test(t)) return "enrich.person";
+    // s22 bias audit: reading LinkedIn is a person lookup only when a person is what is read (not a feed or a post).
+    if (/linkedin/.test(t) && (c.need === undefined || PERSON_WORDS.test(c.need))) return "enrich.person";
     if (/shopify/.test(t)) return "order.lookup";
     return null;
   }
   if (step.type !== "commit") return null;
   if (out === "email") return perDay >= 30 ? "email.send_bulk" : "email.send";
   if (out === "ticket_reply") return "ticket.reply";
-  if (out === "message") return "chat.message";
+  // s22 bias audit: a text output is a chat message only in a chat app; a post, a prompt or a note is not Slack.
+  if (out === "message") return CHAT_TARGETS.test(t) ? "chat.message" : null;
   if (out === "rows") return "sheet.update";
   if (out === "form_fields" && /xero/.test(t)) return "accounting.bill";
   if (out === "stage_change" && /greenhouse/.test(t)) return "ats.stage";
-  if (c.role === "log") return "crm.log";
+  // s22 bias audit: a second commit is a CRM log only when it lands in a CRM or a sheet.
+  if (c.role === "log") return CRM_TARGETS.test(t) ? "crm.log" : null;
   return null;
 }
+
+const PERSON_WORDS = /\b(profile|person|people|contact|candidate|lead|prospect)s?\b/i;
+const CHAT_TARGETS = /slack|teams|discord|whatsapp|telegram|chat|messages|intercom/;
+const CRM_TARGETS = /hubspot|attio|salesforce|pipedrive|crm|sheets|airtable/;
 
 /** The family of a legacy (template) step: s05 email templates send through Gmail and log to the CRM sheet. */
 export function legacyFamily(step: { type: string; connector: string | null }, kind: string, perDay: number): string | null {
@@ -135,7 +142,7 @@ function viaWords(o: ToolOptionDTO): string {
   if (o.needsYou != null) return o.connected ? "Connected, reads only for now." : "Reads only for now.";
   if (o.connected) return "Already connected.";
   if (o.via === "composio") return "Connect via Composio.";
-  if (o.via === "mcp") return "Connect its MCP server.";
+  if (o.via === "mcp") return `Connect ${o.name}.`;
   if (o.via === "api") return "Connect with an API key.";
   if (o.via === "local") return "Nothing to connect.";
   return "Runs on screen.";

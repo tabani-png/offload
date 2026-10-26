@@ -41,6 +41,8 @@ struct PointerRequest: Equatable, Sendable {
   var originId: String?
   var label: String
   var startedAt: Date
+  /// s10f (P9): the anchor of the table row the target sits in; the label then goes below that row.
+  var rowId: String? = nil
 }
 
 private struct PointerLayer: View {
@@ -64,11 +66,12 @@ private struct PointerLayer: View {
       let flight = PointerFlight(origin: origin, target: proxy[target], bounds: bounds, label: r.label,
                                  startedAt: r.startedAt, reduceMotion: reduceMotion)
       let targetRect = proxy[target]
-      let obstacles = anchors.filter { $0.key != r.targetId }.map { proxy[$0.value] }
+      let obstacles = anchors.filter { $0.key != r.targetId && $0.key != r.rowId }.map { proxy[$0.value] }
+      let row = r.rowId.flatMap { anchors[$0] }.map { proxy[$0] }
       let label = PointerLabelPlacement.place(
         label: PointerGlyph.labelSize(r.label), tip: flight.landing,
         arrow: CGSize(width: PointerGlyph.size, height: PointerGlyph.size),
-        target: targetRect, obstacles: obstacles, bounds: bounds)
+        target: targetRect, obstacles: obstacles, bounds: bounds, row: row)
       if let frozenAt {
         PointerGlyph(frame: flight.frame(at: frozenAt), label: r.label, labelRect: label.rect, bounds: bounds)
       } else {

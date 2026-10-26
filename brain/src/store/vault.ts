@@ -52,8 +52,73 @@ export const isExpired = (day: string, now: number) => {
 };
 
 export type BrainKeyMode = "keychain" | "file";
-/** OFFLOAD_KEYS=file = raw key files; anything else = Keychain-wrapped through the observer. */
-export const brainKeyMode = (env: ObserverEnv = process.env): BrainKeyMode => (env.OFFLOAD_KEYS === "file" ? "file" : "keychain");
+
+/**
+ * s20: a plain-mode home (docs/store-contract.md "Plain mode": day files `days/*.jsonl` without `.enc`, written with
+ * OFFLOAD_PLAIN=1 or by an importer) has no observer and no Keychain master key behind it: its day files are not
+ * encrypted and there is no `keys/` folder. Sealing there used to ask the observer's Keychain and fail.
+ */
+export function isPlainHome(home: string): boolean {
+  if (existsSync(join(home, "keys"))) return false;
+  let names: string[];
+  try {
+    names = readdirSync(join(home, "days"));
+  } catch {
+    // No days folder: nothing says this home is plain.
+    return false;
+  }
+  return names.some((n) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)) && !names.some((n) => n.endsWith(".jsonl.enc"));
+}
+
+/** True when the home shows observer evidence: a `keys/` folder or an encrypted day file. */
+function isObserverHome(home: string): boolean {
+  if (existsSync(join(home, "keys"))) return true;
+  try {
+    return readdirSync(join(home, "days")).some((n) => n.endsWith(".jsonl.enc"));
+  } catch {
+    return false;
+  }
+}
+
+/** s20 review: the key mode a home settled on, kept in $OFFLOAD_HOME/brain-key-mode ("file" or "keychain", 0600). The
+ * day files the mode is first read from expire after 7 days; the keys sealed under it (day keys, the sync device
+ * keys) do not, so the mode must never be re-derived from what retention left. */
+export const keyModePath = (home: string) => join(home, "brain-key-mode");
+
+function rememberedMode(home: string): BrainKeyMode | null {
+  try {
+    const v = readFileSync(keyModePath(home), "utf8").trim();
+    return v === "file" || v === "keychain" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberMode(home: string, mode: BrainKeyMode): void {
+  try {
+    writeAtomic(keyModePath(home), `${mode}\n`);
+  } catch {
+    // A home that cannot be written to cannot seal either; the mode is derived again next time.
+  }
+}
+
+/** OFFLOAD_KEYS=file = raw key files; OFFLOAD_KEYS=keychain = Keychain-wrapped through the observer. Unset: the mode
+ * the home remembered; else file for a plain-mode home (s20, isPlainHome) and Keychain for an observer home, either of
+ * which is then remembered (s20 review: a purge of day files never flips it); a home with no evidence yet is Keychain,
+ * not remembered. */
+export const brainKeyMode = (env: ObserverEnv = process.env, home?: string): BrainKeyMode => {
+  if (env.OFFLOAD_KEYS === "file") return "file";
+  if (env.OFFLOAD_KEYS === "keychain") return "keychain";
+  if (home === undefined) return "keychain";
+  const kept = rememberedMode(home);
+  // s20 review 3: a "file" mark never downgrades a home the observer keys (keys/ folder); only OFFLOAD_KEYS=file does.
+  if (kept === "file" && existsSync(join(home, "keys"))) return "keychain";
+  if (kept !== null) return kept;
+  const mode: BrainKeyMode | null = isPlainHome(home) ? "file" : isObserverHome(home) ? "keychain" : null;
+  if (mode === null) return "keychain";
+  rememberMode(home, mode);
+  return mode;
+};
 
 /** Raw key folder (OFFLOAD_KEYS=file, and s05b leftovers waiting for migration). */
 export const brainKeysDir = (home: string) => join(home, "brain-keys");
@@ -169,7 +234,7 @@ function keychainKey(home: string, day: string, create: boolean, env: ObserverEn
 }
 
 function keyFor(home: string, day: string, create: boolean, env: ObserverEnv = process.env): Buffer | null {
-  if (brainKeyMode(env) === "file") return readRaw(home, day) ?? (create ? createRaw(home, day) : null);
+  if (brainKeyMode(env, home) === "file") return readRaw(home, day) ?? (create ? createRaw(home, day) : null);
   return keychainKey(home, day, create, env);
 }
 
@@ -249,7 +314,7 @@ export interface MigrateResult {
  * OFFLOAD_KEYS=file: does nothing. */
 export function migrateBrainKeys(home: string, now: number, env: ObserverEnv = process.env): MigrateResult {
   const res: MigrateResult = { migrated: 0, errors: [] };
-  if (brainKeyMode(env) === "file" || !existsSync(brainKeysDir(home))) return res;
+  if (brainKeyMode(env, home) === "file" || !existsSync(brainKeysDir(home))) return res;
   for (const n of readdirSync(brainKeysDir(home)).sort()) {
     const m = /^(\d{4}-\d{2}-\d{2})\.key$/.exec(n);
     if (m?.[1] === undefined || isExpired(m[1], now)) continue;

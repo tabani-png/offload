@@ -32,11 +32,15 @@ describe("CONFIG GET /v1/sync/config", () => {
       allowedKinds: ["notice_ack"],
       features: { workflow_metrics: true, per_person_views: false, working_time: false },
       workingTimeStartsAt: null,
-      // No broker module yet: the default BrokerPort reports stopped, so the Mac holds runs (fail closed).
-      killSwitch: false, // S2-07's broker answers: no kill switch is set for this tenant
+      // The S2-07 broker is now wired in: no kill switch is set, so none is reported.
+      killSwitch: false,
       minAppVersion: "2.0.0",
       flushSeconds: 900,
     });
+    // And the flag follows the broker: a kill switch on this person turns it on.
+    await plain.db.migrator`insert into kill_switches (tenant_id, scope, target_id, set_by, set_by_role, set_at, reason)
+      values (${plain.a.id}, 'person', ${p}, ${plain.a.people.owner.id}, 'owner', now(), 'test')`;
+    expect((await getConfig(plain, d)).json.killSwitch).toBe(true);
   });
 
   test("CONFIG: allowedKinds follow ConsentPort; working time also needs the feature for the person's jurisdiction", async () => {

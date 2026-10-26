@@ -2,12 +2,13 @@
 // feature re-check, dispatch to the owning module's syncHandlers[kind], idempotent ledger, one transaction.
 import { join } from "node:path";
 import type { Context } from "hono";
+import { SYNC_OBJECTS_PER_HOUR, SYNC_RATE_WINDOW_MS } from "../../config.ts";
 import { loadModules, principalOf, tenantTx, type AppEnv, type Deps, type Principal, type SyncHandler } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
 import { jcs, sha256Hex } from "../../schema/encoding.ts";
 import { forbidden, invalid } from "../../schema/http.ts";
 import {
-  MAX_ENVELOPE_BYTES, SENT_AT_WINDOW_MS, SIGNATURE_HEADER, badSignature, parseEnvelope, parseSignatureHeader, replay, verifyBytes,
+  SENT_AT_WINDOW_MS, SIGNATURE_HEADER, badSignature, parseEnvelope, parseSignatureHeader, readCapped, replay, verifyBytes,
 } from "./envelope.ts";
 
 /** The closed set of sync kinds (ADR 0103 §1) and the schema each object must match. */
@@ -57,7 +58,7 @@ export function siblingHandlers(dir = join(import.meta.dir, "..")): Promise<Read
       const by = new Map<string, string>();
       for (const m of mods) {
         for (const [kind, fn] of Object.entries(m.syncHandlers ?? {})) {
-          if (!(kind in KIND_SCHEMAS)) throw new Error(`module ${m.name} handles unknown sync kind ${kind}`);
+          if (!Object.hasOwn(KIND_SCHEMAS, kind)) throw new Error(`module ${m.name} handles unknown sync kind ${kind}`);
           if (by.has(kind)) throw new Error(`sync kind ${kind} handled by both ${by.get(kind)} and ${m.name}`);
           by.set(kind, m.name);
           out.set(kind, fn);
@@ -66,6 +67,10 @@ export function siblingHandlers(dir = join(import.meta.dir, "..")): Promise<Read
       return out;
     });
     handlersByDir.set(dir, p);
+    // A failed load is not kept: the next batch loads again instead of failing with the same error forever.
+    p.catch(() => {
+      if (handlersByDir.get(dir) === p) handlersByDir.delete(dir);
+    });
   }
   return p;
 }
@@ -80,8 +85,7 @@ export async function ingest(c: Context<AppEnv>, deps: Deps): Promise<Receipt> {
   if (p0.kind !== "device") throw forbidden("only devices post sync batches");
   const sig = parseSignatureHeader(c.req.header(SIGNATURE_HEADER));
   if (!sig) throw invalid(`missing or malformed ${SIGNATURE_HEADER} (keyid=<deviceId>, sig=<b64url>)`);
-  const bytes = new Uint8Array(await c.req.arrayBuffer());
-  if (bytes.byteLength > MAX_ENVELOPE_BYTES) throw invalid("envelope is over 1 MiB");
+  const bytes = await readCapped(c.req.raw);
   if (sig.keyid !== p0.deviceId) throw badSignature("keyid is not this device");
   const handlers = await siblingHandlers();
 
@@ -107,14 +111,24 @@ export async function ingest(c: Context<AppEnv>, deps: Deps): Promise<Receipt> {
       if (Number(last!.last_seq) >= env.seq) throw replay(`seq ${env.seq} is not above the last accepted ${last!.last_seq}`);
     }
 
+    // Per-device budget of accepted objects per rolling hour, replacements of a run outcome included (migration 0504);
+    // the device_seq lock above makes the count exact.
+    const [used] = await tx`select coalesce(sum(accepted), 0)::int as n from sync_accepts
+      where device_id = ${device.deviceId} and at > ${new Date(now - SYNC_RATE_WINDOW_MS)}`;
+    const budget = { left: (deps.config.syncObjectsPerHour ?? SYNC_OBJECTS_PER_HOUR) - used!.n };
+
     const receipt: Receipt = { seq: env.seq, accepted: [], rejected: [] };
     const reject = (id: string, code: RejectCode) => receipt.rejected.push({ id, code, retryable: RETRYABLE.has(code) });
     for (const obj of env.objects) {
-      const code = await one(tx, deps, device, handlers, obj, env.seq, now);
+      const code = await one(tx, deps, device, handlers, obj, env.seq, now, budget);
       if (code === null) receipt.accepted.push(obj.id);
       else reject(obj.id, code);
     }
 
+    if (receipt.accepted.length > 0) {
+      await tx`insert into sync_accepts (tenant_id, device_id, seq, at, accepted)
+        values (current_setting('app.tenant_id')::uuid, ${device.deviceId}, ${env.seq}, ${new Date(now)}, ${receipt.accepted.length})`;
+    }
     await tx`update device_seq set last_seq = ${env.seq}, last_sent_at_ms = ${env.sentAt}, updated_at = ${new Date(now)}
       where device_id = ${device.deviceId}`;
     await tx`update devices set last_sync_at = ${new Date(now)} where id = ${device.deviceId}`;
@@ -122,7 +136,7 @@ export async function ingest(c: Context<AppEnv>, deps: Deps): Promise<Receipt> {
   });
 }
 
-/** One object: schema, duplicate, consent, feature, handler, ledger. Returns null when accepted. */
+/** One object: schema, duplicate, rate limit, consent, feature, handler, ledger. Returns null when accepted. */
 async function one(
   tx: Tx,
   deps: Deps,
@@ -131,15 +145,18 @@ async function one(
   obj: Record<string, unknown> & { id: string },
   seq: number,
   now: number,
+  budget: { left: number },
 ): Promise<RejectCode | null> {
   const kind = typeof obj.kind === "string" ? obj.kind : "";
-  const schema = KIND_SCHEMAS[kind];
+  // Own entries only: a kind like "constructor" or "__proto__" must not find an inherited property (Codex, 9c2c93b).
+  const schema = Object.hasOwn(KIND_SCHEMAS, kind) ? KIND_SCHEMAS[kind] : undefined;
   // Any field outside the kind's schema (a recipient, a title) fails here, before anything is stored.
   if (schema === undefined || !deps.validator.validate(schema, obj).ok) return "validation_failed";
   const digest = sha256Hex(jcs(obj));
   const [prev] = await tx`select kind, digest from sync_objects where device_id = ${p.deviceId} and object_id = ${obj.id}`;
   // Idempotent on (tenant, device, object id). A run outcome may come again under its id with a newer state (ADR 0111 §4).
   if (prev && (prev.digest === digest || prev.kind !== kind || kind !== "run_outcome")) return "duplicate";
+  if (budget.left <= 0) return "rate_limited";
   if (!(await deps.ports.consent.allows(tx, p.personId, kind))) return "consent_missing";
   if (kind === "working_time_aggregate" && !(await deps.ports.features.enabledFor(tx, p.jurisdiction)).has("working_time")) {
     return "feature_disabled";
@@ -161,5 +178,6 @@ async function one(
     console.error(`sync: ${kind} handler failed`, err);
     return "server_error";
   }
+  budget.left--;
   return null;
 }

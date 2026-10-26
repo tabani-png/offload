@@ -13,6 +13,9 @@ import type { PersonKey, SeededTenant } from "../helpers/seed.ts";
 export const TPL = "c".repeat(64);
 export const WF = "0b6c2f1e-9a3d-4c1b-8e7f-1234567890ab";
 export const WF2 = "1b6c2f1e-9a3d-4c1b-8e7f-1234567890ab";
+export const WF3 = "2b6c2f1e-9a3d-4c1b-8e7f-1234567890ab";
+/** A role workflow of the finance job role (ap): the sales member does not run it. */
+export const WF_AP = "3b6c2f1e-9a3d-4c1b-8e7f-1234567890ab";
 
 export interface Conns {
   memberGmail: string;
@@ -23,6 +26,11 @@ export interface Conns {
   api: string;
   org: string;
   roleIdentity: string;
+  /** Role identities of the sales job role on the company MCP, API and Composio org connections (round 3: a company
+   * connection sends only as a role identity). */
+  roleMcp: string;
+  roleApi: string;
+  roleOrg: string;
 }
 
 /** Records every argv; answers as told. `during` runs inside the call (to look at the journal mid-call). */
@@ -99,12 +107,23 @@ export async function world(): Promise<World> {
     api: await conn("api", "company", "api", null, "api_sales"),
     org: await conn("composio_org", "company", "composio", null, "acct_org"),
     roleIdentity: "",
+    roleMcp: "",
+    roleApi: "",
+    roleOrg: "",
   };
   const [ri] = await db`insert into role_identities (tenant_id, job_role_id, label, address, connection_id)
     values (${t.id}, ${t.jobRoles.sdr}, 'Sales inbox', 'sales@acme.example.com', ${t.connections.company}) returning id`;
   conns.roleIdentity = ri!.id as string;
+  const role = async (label: string, connectionId: string) =>
+    ((await db`insert into role_identities (tenant_id, job_role_id, label, connection_id)
+      values (${t.id}, ${t.jobRoles.sdr}, ${label}, ${connectionId}) returning id`)[0]!.id as string);
+  conns.roleMcp = await role("Sales MCP", conns.mcp);
+  conns.roleApi = await role("Sales Slack", conns.api);
+  conns.roleOrg = await role("Sales outreach", conns.org);
   await db`insert into job_role_holders (tenant_id, job_role_id, person_id) values (${t.id}, ${t.jobRoles.sdr}, ${member})`;
   await setRolePolicy(h, t, t.jobRoles.sdr, {});
+  for (const wf of [WF, WF2, WF3]) await roleWorkflow(h, t, wf, t.jobRoles.sdr, t.departments.sales);
+  await roleWorkflow(h, t, WF_AP, t.jobRoles.ap, t.departments.finance);
   const broker = brokerOf(h.deps.ports);
   const composio = new FakeComposio();
   const mcp = new FakeMcp();
@@ -132,6 +151,17 @@ export async function world(): Promise<World> {
       await h.close();
     },
   };
+}
+
+/** A role workflow (S2-06 registry) owned by a job role, with versions 1..`versions`. */
+export async function roleWorkflow(h: Harness, t: SeededTenant, id: string, jobRoleId: string, departmentId: string, versions = 2): Promise<void> {
+  const db = h.db.migrator;
+  await db`insert into workflows (tenant_id, id, name, state, job_role_id, department_id, latest_version, created_at_ms)
+    values (${t.id}, ${id}, 'Investor outreach', 'role', ${jobRoleId}, ${departmentId}, ${versions}, 0)`;
+  for (let v = 1; v <= versions; v++) {
+    await db`insert into workflow_versions (tenant_id, workflow_id, version, definition, definition_hash, baseline_carry_over, created_by, created_at_ms)
+      values (${t.id}, ${id}, ${v}, '{}'::jsonb, ${"a".repeat(64)}, false, ${t.people.admin.id}, 0)`;
+  }
 }
 
 export async function setRolePolicy(
@@ -168,6 +198,9 @@ export function memberRun(w: World, over: Partial<ProposeRun> = {}): ProposeRun 
     ...over,
   };
 }
+
+/** The run of a role identity through its company connection. */
+export const asRole = (id: string, connectionId: string): Partial<ProposeRun> => ({ identity: { type: "role_identity", id }, connectionId });
 
 export async function propose(w: World, items: Stage2Item[], over: Partial<ProposeRun> = {}) {
   const r = await w.broker.proposeBatch(w.t.id, memberRun(w, over), items);
@@ -264,7 +297,8 @@ export async function overnightPolicy(w: World, over: Record<string, unknown> = 
     ownerPersonId: w.t.people.member.id,
     ...over,
   };
-  const r = await (await client(w, "member")).post("/v1/overnight-policies", body);
+  // Fewer than 3 dry-run nights is an owner/admin decision (ADR 0112 §3); the member owns the policy either way.
+  const r = await (await client(w, body.dryRunNights < 3 ? "admin" : "member")).post("/v1/overnight-policies", body);
   if (r.status !== 201) throw new Error(`policy create ${r.status} ${JSON.stringify(r.json)}`);
   return id;
 }

@@ -272,20 +272,27 @@ const KEPT_NOTES: Record<KeptFileDTO["kind"], string> = {
   tone_card: "A tone card you edited. Kept until you delete it; cards you did not edit are deleted with the mail they came from after 7 days.",
 };
 
+/** s22 bias audit: a general (plan) workflow keeps items and a done log, not recipients and an email log. */
+const KEPT_NOTES_PLAN: Partial<Record<KeptFileDTO["kind"], string>> = {
+  recipients: "Your item list. Kept until you delete it; auto-run only works on rows pinned when you turned it on.",
+  send_log: "Your record of what was already done, so no item is done twice. Kept until you delete it.",
+};
+
 /** Files with the user's own content that are not purged at 7 days: recipients.csv, facts.md, crm-log.csv per
  * workflow, and tone cards the user edited. Everything else holding observed or mail text is sealed and purged. */
 export function keptFiles(home: string): KeptFileDTO[] {
   const out: KeptFileDTO[] = [];
-  const add = (path: string, kind: KeptFileDTO["kind"], workflowId: string | null) => {
+  const add = (path: string, kind: KeptFileDTO["kind"], workflowId: string | null, plan = false) => {
     if (!existsSync(path)) return;
     const st = statSync(path);
-    out.push({ path, kind, workflowId, bytes: st.size, updatedAt: Math.round(st.mtimeMs), note: KEPT_NOTES[kind] });
+    out.push({ path, kind, workflowId, bytes: st.size, updatedAt: Math.round(st.mtimeMs), note: (plan ? KEPT_NOTES_PLAN[kind] : undefined) ?? KEPT_NOTES[kind] });
   };
   for (const wf of listWorkflows(home)) {
     const dir = workflowDir(home, wf.id);
-    add(join(dir, wf.inputs.list), "recipients", wf.id);
-    add(join(dir, "facts.md"), "facts", wf.id);
-    add(join(dir, wf.inputs.crmLog), "send_log", wf.id);
+    const plan = wf.plan !== undefined;
+    add(join(dir, wf.inputs.list), "recipients", wf.id, plan);
+    add(join(dir, "facts.md"), "facts", wf.id, plan);
+    add(join(dir, wf.inputs.crmLog), "send_log", wf.id, plan);
   }
   for (const b of BUCKETS) {
     const card = readStyleCard(home, b);

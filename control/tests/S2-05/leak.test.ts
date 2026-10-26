@@ -9,7 +9,7 @@ import {
 const TEXT_ALLOWED: Record<string, "id" | "enum" | "code"> = {
   object_id: "id", run_id: "id", scope_key: "id", instance_ref: "id",
   kind: "enum", runtime: "enum", outcome: "enum", approver_kind: "enum", decision: "enum", surface: "enum", scope_type: "enum",
-  code: "enum", error_code: "code", batch_hash: "code", digest: "code", inputs_digest: "code", stored_digest: "code",
+  code: "enum", error_code: "code", batch_hash: "code", digest: "code", inputs_digest: "code", scope_digest: "code", stored_digest: "code",
   fresh_digest: "code", month: "code",
 };
 
@@ -116,8 +116,8 @@ describe("LEAK only the closed set of fields is ever stored", () => {
     const [row] = await s.h.db.migrator`select * from run_outcomes where run_id = ${run.runId}`;
     const keys = Object.keys(row!).sort();
     expect(keys).toEqual([
-      "approver_kind", "batch_hash", "cost_cents", "created_at_ms", "device_id", "ended_at_ms", "error_code", "items_failed_before_send",
-      "items_pending", "items_sent", "items_total", "items_unknown", "object_id", "outcome", "overnight", "overnight_policy_id",
+      "approver_kind", "batch_hash", "cost_cents", "created_at_ms", "device_id", "ended_at_ms", "error_code",
+      "items_failed_before_send", "items_pending", "items_sent", "items_total", "items_unknown", "object_id", "outcome", "overnight", "overnight_policy_id",
       "person_id", "received_at", "run_id", "runtime", "seq", "started_at_ms", "tenant_id", "version", "workflow_id",
     ]);
   });

@@ -141,6 +141,9 @@ export interface SavingDTO {
   arithmetic: string;
   /** Plain-language assumptions behind the range. */
   assumptions: string[];
+  /** s20 (additive, only on a low-confidence estimate): why not to headline this saving. `capped` = items x minutes
+   * exceeded the task's own observed time and the estimate was cut to it (`observedWeeklyHours`). */
+  confidence?: { level: "low"; capped: boolean; observedWeeklyHours: number | null; reasons: string[] };
 }
 
 export interface ScoreDTO {
@@ -874,4 +877,60 @@ export interface ConnectionBuildDTO {
   connectionId: string;
   workflow: WorkflowDetailDTO;
   dryRun: { instances: number; commitTool: string | null; missing: string[]; sent: 0; warnings: string[] };
+}
+
+// ---------- s23: GET /time (where your time goes; brain/API.md "GET /time") ----------
+
+/** A number on the time screen: its value, its unit, its display (the one rounding rule) and the events behind it. */
+export interface TimeMetric {
+  value: number;
+  unit: "minutes" | "hours_per_week";
+  /** formatHours(value) for hours, formatHours(value / 60) for minutes: tenths, half up ("24.7 h"). */
+  display: string;
+  eventIds: string[];
+}
+
+/** One row of a breakdown dimension (a task, an app or a kind of work). */
+export interface TimeRow {
+  id: string;
+  name: string;
+  minutes: TimeMetric;
+  /** minutes / window total, 0..1. */
+  share: number;
+  spanIds: string[];
+}
+
+export type TimeFixKind = "workflow" | "tool" | "setup" | "remove_step" | "leave_alone";
+
+/** What could be faster, from one insight: the task's time, the hours it frees (capped by the time observed). */
+export interface TimeFinding {
+  id: string;
+  taskId: string;
+  insightId: string;
+  name: string;
+  /** The task's minutes in the window: the same value and display as its byTask row. */
+  taskMinutes: TimeMetric;
+  /** taskMinutes / 60 x 7 / window days. */
+  observedHoursPerWeek: TimeMetric;
+  /** min(observedHoursPerWeek, the fix's estimate); never above observedHoursPerWeek. */
+  hoursFreed: TimeMetric;
+  /** The inputs and the result, ending with hoursFreed.display. */
+  arithmetic: string;
+  /** The s22 top option's kind, or null when s22 is absent or answered something else (never guessed). */
+  fixKind: TimeFixKind | null;
+  /** insightId when fixKind is null or "workflow"; else null. */
+  workflowInsightId: string | null;
+}
+
+export interface TimeBreakdownResponse {
+  version: 1;
+  window: { kind: "week" | "day"; days: string[] };
+  /** Minutes. */
+  total: TimeMetric;
+  byTask: TimeRow[];
+  byApp: TimeRow[];
+  byKind: TimeRow[];
+  findings: TimeFinding[];
+  fixKinds: "s22" | "absent";
+  rounding: "tenths-half-up";
 }

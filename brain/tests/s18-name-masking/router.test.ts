@@ -10,7 +10,7 @@ import { draftTextStep } from "../../src/plan/text-step.ts";
 import { NameMap } from "../../src/privacy/names.ts";
 import { readNamePolicy, signNames } from "../../src/privacy/policy.ts";
 import { draftInTone } from "../../src/tone/draft.ts";
-import { readableNames } from "./names.ts";
+import { readableNames, retag, untag } from "./names.ts";
 
 const homes: string[] = [];
 const tmp = () => {
@@ -80,15 +80,15 @@ describe("s18 router", () => {
     const names = new NameMap();
     await r.complete({ role: "step", model: "m", system: "", prompt: "Ticket from Rosa Silva", names });
     await r.complete({ role: "step", model: "m", system: "", prompt: "Hi Jonas, Rosa Silva again", names });
-    expect(b.calls.map((c) => c.prompt)).toEqual(["Ticket from <person:1>", "Hi <person:2>, <person:1> again"]);
+    expect(b.calls.map((c) => untag(c.prompt))).toEqual(["Ticket from <person:1>", "Hi <person:2>, <person:1> again"]);
   });
 
   test("ROUTER: a text step's source goes out masked and the draft comes back real; an invented name is reported", async () => {
-    const b = new CaptureBackend((req) => (req.prompt.includes("<person:1>") ? "Hi <person:1>,\nThanks. <person:9> will follow up.\nThe team" : "x"));
+    const b = new CaptureBackend((req) => (untag(req.prompt).includes("<person:1>") ? retag("Hi <person:1>,\nThanks. <person:9> will follow up.\nThe team", req.prompt) : "x"));
     const model = new RoutedModel(router(b));
     const d = await draftTextStep({ what: "reply", source: "Customer: Rosa Silva\nMy order has not arrived", pack: null, model, models: DEFAULT_MODELS });
     expect(b.calls[0]!.prompt).not.toMatch(/Rosa|Silva/);
-    expect(d.text).toBe("Hi Rosa Silva,\nThanks. <person:9> will follow up.\nThe team");
+    expect(untag(d.text)).toBe("Hi Rosa Silva,\nThanks. <person:9> will follow up.\nThe team");
     expect(d.warnings).toContain("a name Offload could not fill in: check the names before you approve");
   });
 
@@ -109,7 +109,7 @@ describe("s18 router", () => {
     writeFileSync(join(home, "workflows", "wf_abcd1234", "recipients.csv"), "email,first_name,last_name,org,notes\nx@quist.vc,Bartholomew,Quist,Quist VC,\n");
     const b = new CaptureBackend();
     await router(b, home).complete({ role: "label", model: "m", system: "", prompt: "profile: bartholomew quist deck review" });
-    expect(b.calls[0]!.prompt).toBe("profile: <person:1> deck review");
+    expect(untag(b.calls[0]!.prompt)).toBe("profile: <person:1> deck review");
   });
 });
 
@@ -119,7 +119,7 @@ describe("s18 the user's own name", () => {
     writeFileSync(join(home, "privacy.json"), JSON.stringify({ ownName: "Jo Park" }));
     const b = new CaptureBackend();
     const out = await router(b, home).complete({ role: "draft", model: "m", system: "", prompt: "Thanks,\nJo Park\nJo" });
-    expect(b.calls[0]!.prompt).toBe("Thanks,\n<person:me>\n<person:me.first>");
+    expect(untag(b.calls[0]!.prompt)).toBe("Thanks,\n<person:me>\n<person:me.first>");
     expect(out).toBe("Thanks,\nJo Park\nJo");
   });
 
@@ -128,7 +128,7 @@ describe("s18 the user's own name", () => {
     writeFileSync(join(home, "privacy.json"), JSON.stringify({ ownName: "Jo Park", ownNameToClaude: "keep" }));
     const b = new CaptureBackend();
     await router(b, home).complete({ role: "draft", model: "m", system: "", prompt: "Hi Keiko,\nThanks,\nJo Park" });
-    expect(b.calls[0]!.prompt).toBe("Hi <person:1>,\nThanks,\nJo Park");
+    expect(untag(b.calls[0]!.prompt)).toBe("Hi <person:1>,\nThanks,\nJo Park");
   });
 
   test("SELF: a broken privacy.json masks (the safe default)", () => {
@@ -140,6 +140,6 @@ describe("s18 the user's own name", () => {
   test("SELF: the facts.md sign line counts as the user's own name for that workflow's runs", () => {
     expect(signNames("company: Offload\nsign: Muhammad\n")).toEqual(["Muhammad"]);
     const m = new NameMap(readNamePolicy(tmp(), signNames("sign: Muhammad")));
-    expect(m.mask("I'm Muhammad, founder of Offload.")).toBe("I'm <person:me>, founder of Offload.");
+    expect(untag(m.mask("I'm Muhammad, founder of Offload."))).toBe("I'm <person:me>, founder of Offload.");
   });
 });

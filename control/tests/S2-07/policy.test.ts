@@ -1,7 +1,7 @@
 // S2-07 POLICY and LINKEDIN: role policies decide what may be proposed; a personal LinkedIn (or personal-forbidden)
 // binding is refused at propose and again at execute.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { approveHttp, client, email, items, propose, proposeOk, world, type World } from "./setup.ts";
+import { approveHttp, asRole, client, email, items, propose, proposeOk, world, type World } from "./setup.ts";
 
 let w: World;
 let n = 0;
@@ -78,7 +78,7 @@ describe("S2-07 role policies", () => {
   });
 
   test("POLICY: an item that the capability's schema cannot hold is refused (Instantly lead without a campaign)", async () => {
-    const r = await propose(w, [{ key: "y@fund.com", capability: "outreach.add_lead", fields: [["to", "y@fund.com"], ["subject", ""], ["body", ""], ["verb", "add_to_campaign"]] }], { connectionId: w.conns.org });
+    const r = await propose(w, [{ key: "y@fund.com", capability: "outreach.add_lead", fields: [["to", "y@fund.com"], ["subject", ""], ["body", ""], ["verb", "add_to_campaign"]] }], asRole(w.conns.roleOrg, w.conns.org));
     expect(r).toMatchObject({ ok: false, code: "forbidden" });
   });
 

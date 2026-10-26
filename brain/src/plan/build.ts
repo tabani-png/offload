@@ -119,7 +119,10 @@ export function legacySteps(v: PlanVariantDTO): WorkflowStep[] {
     const connector = s.capability !== null && s.capability.via === "catalog" ? s.capability.target : null;
     if (s.type === "commit") {
       if (commits === 0) out.push({ ...GATE_STEP });
-      out.push({ id: s.id, type: commits === 0 ? "send" : "log", title: s.title, detail: s.detail, connector, sideEffect: true });
+      // s20 review 5: a UI commit keeps its target and is marked computer: the gate lets only computer use do it and
+      // the chain routes it to computer use (never the app's connector send).
+      const ui = s.capability?.capability === "ui.commit";
+      out.push({ id: s.id, type: commits === 0 ? "send" : "log", title: s.title, detail: s.detail, connector: ui ? s.capability!.target : connector, sideEffect: true, ...(ui ? { method: "computer" as const } : {}) });
       commits += 1;
       continue;
     }
@@ -134,7 +137,7 @@ export function planConnectors(v: PlanVariantDTO): WorkflowJson["connectors"] {
   const req = new Map<string, boolean>();
   for (const s of v.steps) {
     if (s.capability === null || s.capability.via !== "catalog" || connectorById(s.capability.target) === undefined) continue;
-    req.set(s.capability.target, (req.get(s.capability.target) ?? false) || s.type === "commit");
+    req.set(s.capability.target, (req.get(s.capability.target) ?? false) || (s.type === "commit" && s.capability.capability !== "ui.commit"));
   }
   return [...req.entries()].sort((a, b) => Number(b[1]) - Number(a[1]) || (a[0] < b[0] ? -1 : 1)).map(([id, required]) => ({ id, required }));
 }

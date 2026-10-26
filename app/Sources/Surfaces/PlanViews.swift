@@ -196,7 +196,8 @@ private struct GeneralDryRunCard: View {
           Text(item.heading).textStyle(Tokens.TypeScale.label).monospacedDigit().foregroundStyle(p.ink1)
             .lineLimit(1).truncationMode(.tail)
           Spacer(minLength: Tokens.Space.s12)
-          Chip(text: item.saved, style: .positive)
+          // s10f (P3): green means done; a per-item saving is a neutral chip.
+          Chip(text: item.saved, style: .neutral)
         }
         Text(item.time).textStyle(Tokens.TypeScale.callout).monospacedDigit().foregroundStyle(p.ink3)
       }
@@ -246,9 +247,16 @@ private struct GeneralDryRunCard: View {
                 .italic(r.hidden)
                 .foregroundStyle(r.hidden ? p.ink3 : p.ink1)
                 .fixedSize(horizontal: false, vertical: true)
-              if r.differs {
+              // s10f (M6): amber on both sides where the values differ; grey where one side was not readable.
+              switch r.state {
+              case .differs:
                 Circle().fill(p.status(.needsYou)).frame(width: Tokens.Size.dotSmall, height: Tokens.Size.dotSmall)
-                  .accessibilityLabel("Differs from Offload's")
+                  .accessibilityLabel("Differs from the other side")
+              case .unknown:
+                Circle().fill(p.status(.neutral)).frame(width: Tokens.Size.dotSmall, height: Tokens.Size.dotSmall)
+                  .accessibilityLabel("Not readable, left out of the count")
+              case .match:
+                EmptyView()
               }
               Spacer(minLength: 0)
             }
@@ -280,8 +288,8 @@ private struct GeneralDryRunCard: View {
 
 // MARK: tool suggestions
 
-/// Under a step: the suggestion in one sentence, then its 1 to 3 tools side by side. T focuses the row (a blue ring
-/// on the option under the focus), ← → move, ↩ keeps it; a click keeps it at once.
+/// Under a step: the recommendation's reason, then its 1 to 3 tools side by side. T focuses the row (the white focus
+/// ring on the option under the focus), ← → move, ↩ keeps it; a click keeps it at once.
 struct ToolSuggestionView: View {
   @ObservedObject var model: ReviewModel
   var copy: ToolsCopy
@@ -294,7 +302,8 @@ struct ToolSuggestionView: View {
     VStack(alignment: .leading, spacing: Tokens.Space.s8) {
       HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s8) {
         Image(systemName: "sparkles").symbolStyle(Tokens.TypeScale.Symbol.small).foregroundStyle(p.ink2)
-        Text(copy.suggestion).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink1)
+        // s10f (M2): the reason only; the card below carries the rest.
+        Text(copy.recommended).paragraphStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink1)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
         if focusIndex == nil { Keycap(label: "T") }
@@ -332,12 +341,20 @@ struct ToolSuggestionView: View {
           Text(o.name).textStyle(Tokens.TypeScale.calloutEmphasis).foregroundStyle(p.ink1)
           if o.connected { Chip(text: ToolsCopy.connectedChip, style: .positive) }
           Spacer(minLength: 0)
-          if o.chosen {
+          if o.mark == .inUse {
             HStack(spacing: Tokens.Space.nudge) {
               Image(systemName: "checkmark").symbolStyle(Tokens.TypeScale.Symbol.small, weight: .semibold)
               Text(ToolsCopy.inUse).textStyle(Tokens.TypeScale.footnote)
             }
             .foregroundStyle(p.ink1)
+            .fixedSize()
+          }
+        }
+        // s10f (M2): a chosen tool that is not connected says so in amber, on its own line so the name never wraps.
+        if o.mark == .chosenNeedsConnect {
+          HStack(spacing: Tokens.Space.s4) {
+            Circle().fill(p.status(.needsYou)).frame(width: Tokens.Size.dotSmall, height: Tokens.Size.dotSmall)
+            Text(ToolsCopy.chosenNeedsConnect).textStyle(Tokens.TypeScale.footnote).foregroundStyle(p.statusInk(.needsYou))
           }
         }
         Text(o.why).paragraphStyle(Tokens.TypeScale.footnote).foregroundStyle(p.ink2)
@@ -348,12 +365,18 @@ struct ToolSuggestionView: View {
       .padding(Tokens.Space.s12)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .background(shape.fill(o.chosen ? p.fillStrong : p.fill))
-      .overlay(shape.strokeBorder(focused ? p.status(.working) : (o.chosen ? p.ringStrong : p.ring),
-                                  lineWidth: Tokens.Layout.hairline))
+      .overlay(shape.strokeBorder(o.chosen ? p.ringStrong : p.ring, lineWidth: Tokens.Layout.hairline))
+      // s10f (M2): keyboard focus is the getone focus ring (white 40%, 2 pt), never the blue "working" colour.
+      .overlay {
+        if focused {
+          shape.inset(by: -CGFloat(FocusRing.width) - Tokens.Layout.hairline)
+            .strokeBorder(p.focusRing, lineWidth: CGFloat(FocusRing.width))
+        }
+      }
       .contentShape(shape)
     }
     .buttonStyle(PressStyle())
     .disabled(model.choosingTool)
-    .accessibilityLabel("\(o.name)\(o.chosen ? ", in use" : "")\(o.connected ? ", connected" : ""). \(o.why) \(o.detail)")
+    .accessibilityLabel("\(o.name)\(o.mark == .inUse ? ", in use" : o.mark == .chosenNeedsConnect ? ", chosen, connect to use" : "")\(o.connected ? ", connected" : ""). \(o.why) \(o.detail)")
   }
 }

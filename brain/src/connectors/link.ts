@@ -14,6 +14,7 @@ import type { ConnectLinkDTO, ModelLabel } from "../api/types.ts";
 import { executorEnv } from "../workflows/executor.ts";
 import { CONNECTORS, connectorById, type Connector } from "./catalog.ts";
 import { isAppTargetId, isUniverseId } from "./targets.ts";
+import { knownSurfaceForTargetId } from "../understanding/surfaces.ts";
 import { catalogStatus, loadConnectorsConfig, type ConnectorStatus, type ConnectorsConfig, type Env } from "./config.ts";
 
 // ---------- simulated connections (stub model only) ----------
@@ -153,6 +154,8 @@ export const isMethod = (x: unknown): x is Method => typeof x === "string" && (M
 export function resolutionMethods(connectorId: string, cfg: ConnectorsConfig | null): Method[] {
   const c = connectorById(connectorId);
   // s13: an app the catalog does not know (app-…, web-…): no connector server lists it.
+  // s20: an app target of a known product (a caption named Granola, Linear, ...) tries a connector on this Mac first.
+  if (c === undefined && isAppTargetId(connectorId) && knownSurfaceForTargetId(connectorId) !== null) return ["mcp", "composio", "api", "computer"];
   if (c === undefined) return isAppTargetId(connectorId) || isUniverseId(connectorId) ? ["composio", "api", "computer"] : [];
   const servers = Object.values(cfg?.servers ?? {}).filter((s) => s.catalog.includes(c.id));
   const stdio = servers.some((s) => s.type === "stdio");

@@ -348,15 +348,15 @@ export function dispatchAuto(ctx: WorkflowContext, id: string, batch: Batch, now
   // Auto-run on with nothing pinned (set by hand in workflow.json): every recipient is new to it.
   if (wf.autoRunPin == null) return { sending: null, held: holdBatch(ctx.home, batch, { newRecipients: batch.items.length, changedRecipients: 0, changedFiles: [] }) };
   if (p.stale) return { sending: null, held: batch };
-  const review = { newRecipients: p.newItems.length, changedRecipients: p.changedItems.length, changedFiles: p.changedFiles };
+  const review = { newRecipients: p.newItems.length, changedRecipients: p.changedItems.length, changedFiles: p.changedFiles, ...(p.unfilledItems.length === 0 ? {} : { unfilledNames: p.unfilledItems.length }) };
   if (p.changedFiles.length > 0) return { sending: null, held: holdBatch(ctx.home, batch, review) };
   let sendable: Batch | null = batch;
   let held: Batch | null = null;
-  if (p.newItems.length + p.changedItems.length > 0) {
+  if (p.newItems.length + p.changedItems.length + p.unfilledItems.length > 0) {
     const split = splitBatch(ctx.home, batch, new Set(p.eligible.map((i) => i.key)), review, now);
     sendable = split.kept;
     held = split.held;
-    log(`brain: ${id}: auto-run held ${review.newRecipients} new and ${review.changedRecipients} changed recipient(s) for review`);
+    log(`brain: ${id}: auto-run held ${review.newRecipients} new and ${review.changedRecipients} changed recipient(s)${p.unfilledItems.length === 0 ? "" : ` and ${p.unfilledItems.length} draft(s) with an unfilled name`} for review`);
   }
   if (sendable === null) return { sending: null, held };
   const { workflow, token } = approveBatch(ctx.home, id, sendable.hash, now, { auto: true });

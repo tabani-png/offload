@@ -99,7 +99,7 @@ describe("s18 egress: no fixture name in any model request", () => {
     await dryRun({ home, analysis: a, workflowId: workflow.id, model, limit: 3, now: () => NOW });
     const steps = backend.calls.filter((c) => c.role === "step");
     expect(steps.length).toBeGreaterThan(0);
-    for (const s of steps) expect(s.prompt).toMatch(/<person:\d+>/);
+    for (const s of steps) expect(s.prompt).toMatch(/<person:[a-z]{4}\.\d+>/);
     expect(leaks(steps)).toEqual([]);
   }, 120_000);
 

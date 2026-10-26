@@ -393,14 +393,19 @@ extension Format {
 
 // MARK: s10d sections
 
-/// The dashboard's sidebar: four places, the way a first-party Mac app splits an overview from its detail.
+/// The dashboard's sidebar: five places, your time first, the way a first-party Mac app splits an overview from its detail.
 enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
-  case overview, automations, week, observing
+  /// s23: "Your time" leads: where the time goes comes before automations.
+  case time, overview, automations, week, observing
+
+  /// The page the dashboard opens on.
+  static let home: DashboardSection = .time
 
   var id: String { rawValue }
 
   var title: String {
     switch self {
+    case .time: return "Your time"
     case .overview: return "Overview"
     case .automations: return "Automations"
     case .week: return "This week"
@@ -410,6 +415,7 @@ enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
 
   var symbol: String {
     switch self {
+    case .time: return "clock"
     case .overview: return "square.grid.2x2"
     case .automations: return "arrow.triangle.2.circlepath"
     case .week: return "calendar"
@@ -417,11 +423,27 @@ enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
     }
   }
 
-  /// ⌘1…⌘4
+  /// ⌘1…⌘5
   var shortcut: String { "⌘\((Self.allCases.firstIndex(of: self) ?? 0) + 1)" }
 
   static func forShortcut(_ digit: Int) -> DashboardSection? {
     allCases.indices.contains(digit - 1) ? allCases[digit - 1] : nil
+  }
+}
+
+/// s10f (DESIGN-REVIEW-4 M4): a link under the sidebar's places. Connections is its own window; the sidebar reaches it.
+enum DashboardSidebarLink: String, CaseIterable, Identifiable, Sendable {
+  case connections
+
+  var id: String { rawValue }
+  var title: String { "Connections" }
+  var symbol: String { "link" }
+  /// The same chord as the menu's "Connections…".
+  var shortcut: String { "⌘K" }
+
+  /// The dashboard window's key handler asks this: ⌘K is Connections; anything else is not a sidebar link.
+  static func forShortcut(character: String, command: Bool) -> DashboardSidebarLink? {
+    command && character.lowercased() == "k" ? .connections : nil
   }
 }
 

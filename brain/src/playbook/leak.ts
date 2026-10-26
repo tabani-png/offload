@@ -1,7 +1,7 @@
 // De-personalisation check, fail closed: a playbook (or a notes edit, or a model's wording) that still holds a
 // person's name, an address, a phone, a link, a figure that is not one of the playbook's own counts, or the author's
 // name or company is refused. Findings carry the kind and the field path, never the value.
-import { EMAIL_RE, GENERIC, HOST_RE, identityBase, isCap, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
+import { EMAIL_RE, handleLeaks, HOST_RE, identityBase, identityHit, isCap, isPlaceholder, PHONE_RE, TOKEN_RE, URL_RE, WWW_RE, type Identity } from "./mask.ts";
 import type { Playbook } from "./types.ts";
 
 export type LeakKind = "author" | "company" | "name" | "email" | "phone" | "link" | "number";
@@ -13,30 +13,56 @@ export interface Leak {
 }
 
 export class PlaybookLeakError extends Error {
-  constructor(readonly leaks: Leak[]) {
-    super(`the playbook kept a personal detail (${leaks.slice(0, 5).map((l) => `${l.kind} in ${l.path}`).join(", ")}${leaks.length > 5 ? ", ..." : ""}); nothing was written`);
+  /** `words`: the offending words of text the user just typed (notes); the message names them and says to reword.
+   * Never passed for text that came from mail or a model. */
+  constructor(readonly leaks: Leak[], words: readonly string[] = []) {
+    super(
+      words.length > 0
+        ? `the playbook kept a personal detail in notes: ${[...new Set(words)].slice(0, 5).map((w) => `"${w}"`).join(", ")}. Reword the note without it (write [name], {company} or {their_org} for a person or company); nothing was written`
+        : `the playbook kept a personal detail (${leaks.slice(0, 5).map((l) => `${l.kind} in ${l.path}`).join(", ")}${leaks.length > 5 ? ", ..." : ""}); nothing was written`,
+    );
   }
 }
 
 const NUM_RE = /\d+(?:\.\d+)?/g;
 const LOCAL = new Set(["playbook.json", "playbook.md", "facts.md", "skill.md"]);
 
-/** Leaks in one text field. */
-export function findTextLeaks(text: string, id: Identity, allowedNumbers: ReadonlySet<string>, path: string): Leak[] {
+/** Every word written in lower case in these texts: the vocabulary a capitalised word may come from. */
+export function lowerWords(texts: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const t of texts) for (const w of t.match(TOKEN_RE) ?? []) if (!isPlaceholder(w) && !isCap(w)) out.add(identityBase(w));
+  return out;
+}
+
+/** Leaks in one text field: contact patterns, figures that are not counts, and every word mask.ts identityHit names
+ * (the author, the company, a known contact in any case, or a capitalised word mid-sentence or never written in lower
+ * case in `vocab`): a name the identity set never saw (one a model added, or one from mail no longer here) is caught. */
+export function findTextLeaks(text: string, id: Identity, allowedNumbers: ReadonlySet<string>, path: string, vocab: ReadonlySet<string> = lowerWords([text]), words?: string[]): Leak[] {
   const out: Leak[] = [];
-  const add = (kind: LeakKind) => {
+  /** One leak per kind; every offending word goes to `words` when the caller asks (the user's own notes only). */
+  const add = (kind: LeakKind, word: string) => {
+    words?.push(word);
     if (!out.some((l) => l.kind === kind)) out.push({ kind, path });
   };
-  if ((text.match(EMAIL_RE) ?? []).length > 0) add("email");
-  if ((text.match(URL_RE) ?? []).length > 0 || (text.match(WWW_RE) ?? []).length > 0 || (text.match(HOST_RE) ?? []).some((h) => !LOCAL.has(h.toLowerCase()) && !/^\d+(?:\.\d+)+$/.test(h))) add("link");
-  if ((text.match(PHONE_RE) ?? []).some((p) => p.replace(/\D/g, "").length >= 9)) add("phone");
-  for (const n of text.match(NUM_RE) ?? []) if (!allowedNumbers.has(n)) add("number");
-  for (const w of text.match(TOKEN_RE) ?? []) {
-    if (w.startsWith("[") || w.startsWith("{")) continue;
-    const b = identityBase(w);
-    if (id.author.has(b)) add("author");
-    else if (id.company.has(b)) add("company");
-    else if (isCap(w) && !GENERIC.has(b) && (id.people.has(b) || id.orgs.has(b) || id.words.has(b))) add("name");
+  for (const e of text.match(EMAIL_RE) ?? []) add("email", e);
+  for (const u of [...(text.match(URL_RE) ?? []), ...(text.match(WWW_RE) ?? []), ...(text.match(HOST_RE) ?? []).filter((h) => !LOCAL.has(h.toLowerCase()) && !/^\d+(?:\.\d+)+$/.test(h))]) add("link", u);
+  for (const p of (text.match(PHONE_RE) ?? []).filter((x) => x.replace(/\D/g, "").length >= 9)) add("phone", p);
+  for (const m of text.matchAll(NUM_RE)) {
+    const n = m[0];
+    if (allowedNumbers.has(n)) continue;
+    // Notes may say a small plain number ("under 100 words"); an id-shaped one ("#4821", "A-123", "12a") is refused.
+    const before = text.slice(Math.max(0, (m.index ?? 0) - 1), m.index ?? 0);
+    const after = text.slice((m.index ?? 0) + n.length, (m.index ?? 0) + n.length + 1);
+    if (path === "notes" && /^\d{1,3}$/.test(n) && !/[#\p{L}\d_+-]/u.test(before) && !/[\p{L}\d_-]/u.test(after)) continue;
+    add("number", n);
+  }
+  // Handles, snake_case names and paths: the same patterns maskContacts masks.
+  for (const h of handleLeaks(text)) add("name", h);
+  // One decision with maskText (identityHit): a word maskText would mask is a leak, and no other word is.
+  for (const mm of text.matchAll(TOKEN_RE)) {
+    const hit = identityHit(text, mm[0], mm.index ?? 0, id, vocab);
+    if (hit === "author" || hit === "company") add(hit, mm[0]);
+    else if (hit !== null) add("name", mm[0]);
   }
   return out;
 }
@@ -72,7 +98,9 @@ export function textFields(pb: Pick<Playbook, "message" | "rules" | "templates" 
 /** All leaks of a playbook against an identity set. Empty = clean. */
 export function checkDepersonalised(pb: Playbook, id: Identity): Leak[] {
   const nums = allowedNumbers(pb);
-  return textFields(pb).flatMap(([path, text]) => findTextLeaks(text, id, nums, path));
+  const fields = textFields(pb);
+  const vocab = lowerWords(fields.map(([, t]) => t));
+  return fields.flatMap(([path, text]) => findTextLeaks(text, id, nums, path, vocab));
 }
 
 /** Throws PlaybookLeakError on any leak (fail closed). */

@@ -10,17 +10,17 @@ import type { Tx } from "../../db/pool.ts";
 import { msNN, ms as pgMs } from "../../db/pool.ts";
 import { personById } from "../../db/people.ts";
 import { auditDto, type AuditEvent } from "../../audit/audit.ts";
-import { jcs, sha256Hex } from "../../schema/encoding.ts";
 import { HttpError, invalid, page, pageParams } from "../../schema/http.ts";
 import { DAY_MS, addDays, dayIn, personRow } from "./common.ts";
 import { isEnabled } from "./features.ts";
+import { myHoursSaved, runOutcomeOf } from "./hours.ts";
 import { ackDto } from "./notices.ts";
 import { P, bodyOf, replyLocal } from "./schemas.ts";
 
 const SELF_VIEW = "offload/stage2/self-view.schema.json";
 const EXPORTS_PER_DAY = 5;
 
-type Section = "person" | "acks" | "devices" | "accessLog";
+type Section = "person" | "acks" | "devices" | "accessLog" | "runs" | "dailyAggregates" | "workingTime";
 
 export interface PersonColumn {
   table: string;
@@ -28,6 +28,8 @@ export interface PersonColumn {
   /** The self-view field that shows these rows, or null with the reason they are not part of it. */
   shownIn: Section | null;
   reason?: string;
+  /** Set for another wave-B slice's table, which a tree without that slice does not have yet. */
+  slice?: "S2-05" | "S2-06" | "S2-07";
 }
 
 export const PERSON_COLUMNS: readonly PersonColumn[] = [
@@ -68,6 +70,61 @@ export const PERSON_COLUMNS: readonly PersonColumn[] = [
     table: "correction_requests", column: "person_id", shownIn: null,
     reason: "my own requests; each one is in my access log as correction.request (the self-view schema has no field for them)",
   },
+  // S2-05 ingest (migration 0501): what my devices synced.
+  { table: "run_outcomes", column: "person_id", shownIn: "runs", slice: "S2-05" },
+  {
+    table: "run_owners", column: "person_id", shownIn: null, slice: "S2-05",
+    reason: "which device's copy of a run counts (migration 0505); the run itself is listed under runs",
+  },
+  { table: "daily_aggregates", column: "person_id", shownIn: "dailyAggregates", slice: "S2-05" },
+  { table: "daily_aggregate_workflows", column: "person_id", shownIn: "dailyAggregates", slice: "S2-05" },
+  { table: "working_time_aggregates", column: "person_id", shownIn: "workingTime", slice: "S2-05" },
+  {
+    table: "review_events", column: "person_id", shownIn: null, slice: "S2-05",
+    reason: "review and edit seconds per run, an input of the hs-1 metric (S2-05); the self-view schema has no field for them",
+  },
+  {
+    table: "baseline_samples", column: "person_id", shownIn: null, slice: "S2-05",
+    reason: "the manual-time baseline windows my device measured, an input of the hs-1 metric; the self-view schema has no field for them",
+  },
+  {
+    table: "baseline_sample_instances", column: "person_id", shownIn: null, slice: "S2-05",
+    reason: "the per-instance seconds inside a baseline sample (hashed instance refs only), part of the baseline sample above",
+  },
+  // S2-06 registry (migration 0600): acts on shared workflows, not data about the person as an employee.
+  {
+    table: "workflows", column: "proposed_by", shownIn: null, slice: "S2-06",
+    reason: "my own proposals are listed to me by GET /v1/workflows (self scope); the self-view schema has no field for them",
+  },
+  {
+    table: "workflows", column: "promoted_by", shownIn: null, slice: "S2-06",
+    reason: "a reviewer's act of promoting a workflow, recorded in the audit log as workflow.promote",
+  },
+  {
+    table: "workflow_versions", column: "created_by", shownIn: null, slice: "S2-06",
+    reason: "who saved a workflow version, an editor's act on shared content; the save is in the audit log",
+  },
+  {
+    table: "proposals_declined", column: "declined_by", shownIn: null, slice: "S2-06",
+    reason: "a reviewer's act of declining a proposal, recorded in the audit log as workflow.decline",
+  },
+  // S2-07 policies and broker (migration 0700).
+  {
+    table: "batches", column: "runner_person_id", shownIn: null, slice: "S2-07",
+    reason: "send batches I ran are listed to me by GET /v1/batches; their outcomes are in runs above",
+  },
+  {
+    table: "overnight_policies", column: "owner_person_id", shownIn: null, slice: "S2-07",
+    reason: "overnight policies I own are listed to me by GET /v1/overnight-policies and every change is audited",
+  },
+  {
+    table: "kill_switches", column: "set_by", shownIn: null, slice: "S2-07",
+    reason: "an admin's act of setting a kill switch, recorded in the audit log",
+  },
+  {
+    table: "role_policies", column: "updated_by", shownIn: null, slice: "S2-07",
+    reason: "an editor's act on a job role's policy, recorded in the audit log",
+  },
 ];
 
 /** Columns of this schema named `person_id` / `*_person_id`, or with a foreign key to `people`, plus `people.id`. */
@@ -95,7 +152,10 @@ export function uncovered(found: ReadonlyArray<{ table: string; column: string }
   return found.filter((f) => !known.has(`${f.table}.${f.column}`));
 }
 
-/** "Who looked": events about me, and person lists that included me (one `person.list` event names every id read). */
+/**
+ * "Who looked": events about me, and list reads that included me. A list read writes one event whose `detail.ids`
+ * names every person read in that call; I see it with `ids` cut down to my own id, never the others'.
+ */
 async function accessLog(
   tx: Tx,
   personId: string,
@@ -103,41 +163,78 @@ async function accessLog(
 ): Promise<{ events: AuditEvent[]; seqs: number[] }> {
   const rows = (await tx`select * from audit_events
     where (subject_person_id = ${personId}
-        or (action in ('person.list', 'notice.acks_read') and detail -> 'ids' @> ${[personId]}::jsonb))
+        or detail -> 'ids' @> ${[personId]}::jsonb)
       and (${q.action ?? null}::text is null or action = ${q.action ?? null})
       and (${q.from ?? null}::bigint is null or at_ms >= ${q.from ?? null}::bigint)
       and (${q.to ?? null}::bigint is null or at_ms < ${q.to ?? null}::bigint)
       and seq > ${q.afterSeq ?? 0}
     order by seq ${q.newestFirst ? tx`desc` : tx`asc`} limit ${q.limit}`) as Array<Parameters<typeof auditDto>[0] & { seq: string }>;
-  return { events: rows.map(auditDto), seqs: rows.map((r) => Number(r.seq)) };
+  return { events: rows.map((r) => onlyMe(auditDto(r), personId)), seqs: rows.map((r) => Number(r.seq)) };
 }
 
-/** hs-1 for me with no inputs: the control plane holds no runs for me until the ingest slice stores them. */
-function hoursSavedReport(personId: string, timezone: string, perPersonDays: number, now: number) {
+function onlyMe(e: AuditEvent, personId: string): AuditEvent {
+  const ids = e.detail.ids;
+  if (!Array.isArray(ids)) return e;
+  return { ...e, detail: { ...e.detail, ids: ids.filter((id) => id === personId) } };
+}
+
+/** Whether this tree has `table` (S2-05's tables come with that slice; without them there is nothing to show). */
+async function hasTable(tx: Tx, table: string): Promise<boolean> {
+  const [r] = await tx`select to_regclass(quote_ident(${table})) is not null as ok`;
+  return Boolean(r!.ok);
+}
+
+/** My run outcomes, newest first (run-outcome.schema.json). */
+async function myRuns(tx: Tx, personId: string) {
+  if (!(await hasTable(tx, "run_outcomes"))) return [];
+  const rows = (await tx`select * from run_outcomes where person_id = ${personId}
+    order by ended_at_ms desc, object_id limit 1000`) as Array<Record<string, unknown>>;
+  return rows.map(runOutcomeOf);
+}
+
+/** My daily aggregates with their per-workflow rows, newest day first (daily-aggregate.schema.json). */
+async function myDailyAggregates(tx: Tx, personId: string) {
+  if (!(await hasTable(tx, "daily_aggregates"))) return [];
+  const rows = (await tx`select d.object_id, d.created_at_ms, to_char(d.day, 'YYYY-MM-DD') as day, d.active_workflows,
+      coalesce((select jsonb_agg(jsonb_build_object('workflowId', w.workflow_id, 'version', w.version, 'runs', w.runs,
+          'successes', w.successes, 'savedSecondsDevice', w.saved_seconds_device) order by w.idx)
+        from daily_aggregate_workflows w
+        where w.tenant_id = d.tenant_id and w.device_id = d.device_id and w.object_id = d.object_id), '[]'::jsonb) as workflows
+    from daily_aggregates d where d.person_id = ${personId}
+    order by d.day desc, d.object_id limit 400`) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    id: r.object_id as string,
+    kind: "daily_aggregate" as const,
+    createdAt: Number(r.created_at_ms),
+    day: r.day as string,
+    activeWorkflows: Number(r.active_workflows),
+    workflows: r.workflows as unknown[],
+  }));
+}
+
+/** My working-time days, newest first (working-time-aggregate.schema.json). */
+async function myWorkingTime(tx: Tx, personId: string) {
+  if (!(await hasTable(tx, "working_time_aggregates"))) return [];
+  const rows = (await tx`select object_id, created_at_ms, to_char(day, 'YYYY-MM-DD') as day, active_minutes,
+      first_active_quarter, last_active_quarter, notice_version_id
+    from working_time_aggregates where person_id = ${personId}
+    order by day desc, object_id limit 400`) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    id: r.object_id as string,
+    kind: "working_time_aggregate" as const,
+    createdAt: Number(r.created_at_ms),
+    day: r.day as string,
+    activeMinutes: Number(r.active_minutes),
+    firstActiveQuarter: Number(r.first_active_quarter),
+    lastActiveQuarter: Number(r.last_active_quarter),
+    noticeVersionId: r.notice_version_id as string,
+  }));
+}
+
+/** The days my per-person rows are kept for, ending today (local days in the tenant timezone, `toExclusive` tomorrow). */
+function retentionWindow(timezone: string, perPersonDays: number, now: number) {
   const today = dayIn(timezone, now);
-  const scope = { type: "person", id: personId };
-  const period = { from: addDays(today, -perPersonDays + 1), toExclusive: addDays(today, 1), timezone };
-  const zero = { A: 0, B: 0, C: 0 };
-  return {
-    computation: "hs-1",
-    inputsDigest: sha256Hex(jcs({ computation: "hs-1", scope, period, runs: [], baselines: [] })),
-    scope,
-    period,
-    total: {
-      seconds: 0,
-      hours: 0,
-      byGrade: zero,
-      bySource: { observed: 0, user_estimate: 0 },
-      byRuntime: { mac: 0, cloud: 0 },
-      overnightSeconds: 0,
-      runs: { success: 0, failed: 0, cancelled: 0, rejected: 0, capped: 0 },
-      people: 0,
-    },
-    children: [],
-    topWorkflows: [],
-    anomalies: [],
-    final: false,
-  };
+  return { from: addDays(today, -perPersonDays + 1), toExclusive: addDays(today, 1) };
 }
 
 /** Everything the control plane holds about `personId` (self-view schema). */
@@ -171,11 +268,10 @@ export async function assembleSelfView(tx: Tx, personId: string, now: number) {
       lastSyncAt: pgMs(d.last_sync_at),
       state: d.state,
     })),
-    hoursSaved: hoursSavedReport(personId, tz, perPersonDays, now),
-    // Per-person rows of the ingest slice (daily aggregates, working time, run outcomes) are not stored here yet.
-    dailyAggregates: [],
-    workingTime: [],
-    runs: [],
+    hoursSaved: await myHoursSaved(tx, personId, retentionWindow(tz, perPersonDays, now), tz),
+    dailyAggregates: await myDailyAggregates(tx, personId),
+    workingTime: await myWorkingTime(tx, personId),
+    runs: await myRuns(tx, personId),
     accessLog: log.events.reverse(),
     retention: { perPersonDays, workingTimeDays: Number(t!.retention_working_time_days) },
   };
@@ -198,6 +294,8 @@ export function selfRoutes(app: App, deps: Deps): void {
   app.get("/v1/me/export", async (c) => {
     const now = deps.clock.now();
     const out = await tenantTx(c, deps, async (tx, p) => {
+      // Count and record under one per-person lock, so concurrent exports cannot all pass the check.
+      await tx`select pg_advisory_xact_lock(hashtextextended('self.export:' || current_setting('app.tenant_id') || ':' || ${p.personId}, 0))`;
       const recent = (await tx`select at_ms from audit_events where action = 'self.export' and actor_id = ${p.personId}
         and at_ms > ${now - DAY_MS} order by at_ms`) as Array<{ at_ms: string }>;
       if (recent.length >= EXPORTS_PER_DAY) {

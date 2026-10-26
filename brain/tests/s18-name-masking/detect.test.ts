@@ -4,9 +4,10 @@ import { maskText } from "../../src/grouping/normalize.ts";
 import { collapsePlaceholders, maskNamesForStorage, NameMap, PERSON_PLACEHOLDER_RE, unrestoredPlaceholders } from "../../src/privacy/names.ts";
 import { NAME_CASES, NON_NAMES, type NameCase } from "./corpus.ts";
 import { measure } from "./rates.ts";
+import { tagOf, untag } from "./names.ts";
 
 const word = (s: string) => new RegExp(`(?<![\\p{L}\\p{N}_])${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "u");
-const masked = (text: string, o?: ConstructorParameters<typeof NameMap>[0]) => new NameMap(o).mask(text);
+const masked = (text: string, o?: ConstructorParameters<typeof NameMap>[0]) => untag(new NameMap(o).mask(text));
 
 describe("s18 masker: rule kinds", () => {
   test("DETECT: a given + family pair becomes one placeholder", () => {
@@ -57,17 +58,17 @@ describe("s18 masker: rule kinds", () => {
 
   test("DETECT: a name learned once is masked everywhere in the run, and its first and family names alone too", () => {
     const m = new NameMap();
-    expect(m.mask("Amara Okafor - Product Designer - Greenhouse")).toBe("<person:1> - Product Designer - Greenhouse");
-    expect(m.mask("Okafor's portfolio; Amara replied")).toBe("<person:1.last>'s portfolio; <person:1.first> replied");
-    expect(m.mask("cv - amara okafor.pdf")).toBe("cv - <person:1.full>.pdf");
+    expect(untag(m.mask("Amara Okafor - Product Designer - Greenhouse"))).toBe("<person:1> - Product Designer - Greenhouse");
+    expect(untag(m.mask("Okafor's portfolio; Amara replied"))).toBe("<person:1.last>'s portfolio; <person:1.first> replied");
+    expect(untag(m.mask("cv - amara okafor.pdf"))).toBe("cv - <person:1.full>.pdf");
   });
 
   test("DETECT: placeholders are stable per run: the same person keeps the same number across calls", () => {
     const m = new NameMap();
     const a = m.mask("Hi Keiko, Ivan Petrov is in copy.");
     const b = m.mask("Ivan Petrov and Keiko again; now Rosa Silva.");
-    expect(a).toBe("Hi <person:1>, <person:2> is in copy.");
-    expect(b).toBe("<person:2> and <person:1> again; now <person:3>.");
+    expect(untag(a)).toBe("Hi <person:1>, <person:2> is in copy.");
+    expect(untag(b)).toBe("<person:2> and <person:1> again; now <person:3>.");
     expect(m.size).toBe(3);
   });
 
@@ -82,7 +83,7 @@ describe("s18 masker: rule kinds", () => {
   });
 
   test("DETECT: maskText keeps person placeholders whole (their numbers are not <n>)", () => {
-    expect(maskText("<person:12> paid 40.00 to <person:me.first> on 2026-10-01")).toBe("<person:12> paid <n> to <person:me.first> on <date>");
+    expect(maskText("<person:qzkt.12> paid 40.00 to <person:qzkt.me.first> on 2026-10-01")).toBe("<person:qzkt.12> paid <n> to <person:qzkt.me.first> on <date>");
     expect(maskText("order 42 <person:x>")).toBe("order <n> <person:x>");
   });
 
@@ -158,9 +159,9 @@ describe("s18 masker: round trip", () => {
 
   test("ROUNDTRIP: a placeholder the map never wrote is left visible and reported", () => {
     const m = new NameMap();
-    m.mask("Hi Keiko");
-    const back = m.unmask("Hi <person:1>, cc <person:7>");
-    expect(back).toBe("Hi Keiko, cc <person:7>");
-    expect(unrestoredPlaceholders(back)).toEqual(["<person:7>"]);
+    const t = tagOf(m.mask("Hi Keiko"));
+    const back = m.unmask(`Hi <person:${t}.1>, cc <person:${t}.7>`);
+    expect(back).toBe(`Hi Keiko, cc <person:${t}.7>`);
+    expect(unrestoredPlaceholders(back)).toEqual([`<person:${t}.7>`]);
   });
 });

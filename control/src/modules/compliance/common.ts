@@ -58,12 +58,22 @@ export async function listNotices(tx: Tx, publishedOnly: boolean, offset: number
     order by n.version desc offset ${offset} limit ${limit}`) as NoticeRow[];
 }
 
-/** The notice a person in `jurisdiction` must have acknowledged at `at`: the latest published one that applies. */
+/** Whether notice `n` is live at `at`: published by then and not yet replaced. The one rule every endpoint uses. */
+export function liveAt(n: Pick<NoticeRow, "published_at_ms" | "replaced_at_ms">, at: number): boolean {
+  return n.published_at_ms !== null && Number(n.published_at_ms) <= at && (n.replaced_at_ms === null || Number(n.replaced_at_ms) > at);
+}
+
+/**
+ * The notice a person in `jurisdiction` must have acknowledged at `at`: of the notices live then that apply to them,
+ * the one published last. Publish order is `publish_seq` (stamped under the publish lock): publish times can tie and
+ * versions follow creation, so neither may pick it. Same rule as `liveAt`, in SQL.
+ */
 export async function currentNotice(tx: Tx, jurisdiction: string, at: number): Promise<NoticeRow | null> {
   const [n] = await tx`select ${NOTICE_COLS(tx)} from notices n
     where n.published_at_ms is not null and n.published_at_ms <= ${at}
+      and (n.replaced_at_ms is null or n.replaced_at_ms > ${at})
       and (jsonb_array_length(n.jurisdictions) = 0 or n.jurisdictions @> ${[jurisdiction]}::jsonb)
-    order by n.published_at_ms desc, n.version desc limit 1`;
+    order by n.publish_seq desc limit 1`;
   return (n as NoticeRow | undefined) ?? null;
 }
 
