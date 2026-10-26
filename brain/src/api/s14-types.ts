@@ -224,6 +224,8 @@ export interface ReadPreviewDTO {
   rows: Array<Array<[string, string]>>;
   /** Every row the source returned (rows shows at most 20). */
   rowsTotal: number;
+  /** Rows the source returned without every value: skipped, with the fields they lacked. */
+  skipped?: Array<{ missing: string[] }>;
   message: string;
 }
 
@@ -234,4 +236,6 @@ export interface RunSourceDTO {
   name: string;
   via: string | null;
   message: string;
+  /** Rows read without every value: skipped (not entered, not done), with the fields they lacked. */
+  skipped?: Array<{ missing: string[] }>;
 }

@@ -85,7 +85,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
       if (!r.ok && r.status === "cancelled") throw new DryRunStopped(r.message);
       recordRead(o.home, wf.id, r, now);
       read = r.ok
-        ? { status: "fetched", name: src.targetName, via: r.via, query: queryOf(src), rows: r.rows.slice(0, 20), rowsTotal: r.rows.length, message: r.message }
+        ? { status: "fetched", name: src.targetName, via: r.via, query: queryOf(src), rows: r.rows.slice(0, 20), rowsTotal: r.rows.length, skipped: r.skipped ?? [], message: r.message }
         : { status: r.status === "cancelled" ? "not_read" : r.status, name: src.targetName, via: null, query: queryOf(src), rows: [], rowsTotal: 0, message: `Could not read ${src.targetName}: ${r.message} Live runs use your list ${wf.inputs.list} until it can be read.` };
     }
   }

@@ -534,6 +534,9 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   - Round 3: direct reads fill `{path}` arguments from the learned query (the rest go in the query string; a missing
     one refuses that way). Answers are read through nested envelopes and `columns` + `rows` tables; an answer with
     more pages is flagged on the items and in "nothing new".
+  - Round 4: a screen read accepts values only when the learned report and filters are on screen (else that way is
+    refused with the reason); a connector answer naming another report or period is refused. Incomplete rows are
+    skipped and reported (`read.skipped`, `source.skipped`, item warnings, "nothing new"), never counted done.
 
 ## s19: messaging playbook (additive, ADR 0011)
 A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,

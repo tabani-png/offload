@@ -17,7 +17,7 @@ import { loadConnectorsConfig, toMcpServers, type Env } from "../connectors/conf
 import type { LinkRunner, Method } from "../connectors/link.ts";
 import type { SecretReader } from "../connectors/secrets.ts";
 import type { ChainTarget } from "../connectors/targets.ts";
-import { queryArgs, queryOf, readValues, sourceTarget } from "../plan/read-source.ts";
+import { confirmOnScreen, contextWords, contradicts, mentionsContext, queryArgs, queryOf, readValues, sourceTarget, type SkippedRow } from "../plan/read-source.ts";
 import type { ToolPolicy } from "./allowlist.ts";
 import { makeBatch } from "./batch.ts";
 import { createGate, READ_ONLY_WORDS, splitMcpName } from "./gate.ts";
@@ -47,7 +47,7 @@ export class ReadRefused extends Error {}
 export class ReadCancelled extends Error {}
 
 export type FetchResult =
-  | { ok: true; via: Method; rows: Array<Array<[string, string]>>; message: string; /** The answer says it has more pages; only the first was read. */ more?: true }
+  | { ok: true; via: Method; rows: Array<Array<[string, string]>>; message: string; /** The answer says it has more pages; only the first was read. */ more?: true; /** Rows not complete: skipped, never done. */ skipped?: SkippedRow[] }
   | { ok: false; status: "refused" | "not_read" | "cancelled"; via: null; message: string };
 
 export interface FetchOptions {
@@ -191,13 +191,22 @@ export class ChainSourceFetcher implements SourceFetcher {
         why.push(`${VIA_WORDS[state.method]}: ${src.targetName} answered with more than Offload reads at once`);
         continue;
       }
-      const { rows, missing, more } = readValues(text, src.fields);
+      // Only what can be confirmed: the screen must show the learned report and filters (no navigation, no filter
+      // change); a connector answer that names another report or filter is not the approved data.
+      const query = queryOf(src);
+      const unsure = state.method === "computer" ? confirmOnScreen(text, query) : contradicts(text, query);
+      if (unsure !== null) {
+        if (state.method !== "computer") this.o.resolver.markFailed(target.id, state.method, new Error(unsure));
+        why.push(`${VIA_WORDS[state.method]}: ${unsure}`);
+        continue;
+      }
+      const { rows, missing, more, skipped } = readValues(text, src.fields);
       if (rows.length === 0) {
         why.push(`${VIA_WORDS[state.method]}: ${src.targetName} did not show ${missing.join(", ")}`);
         continue;
       }
       // Done rows are dropped first; the batch size is applied later, to what is left (never the other way round).
-      return { ok: true, via: state.method, rows: f.keep === undefined ? rows : rows.filter(f.keep), message: `Read from ${src.targetName} ${VIA_WORDS[state.method]}.`, ...(more === true ? { more } : {}) };
+      return { ok: true, via: state.method, rows: f.keep === undefined ? rows : rows.filter(f.keep), message: `Read from ${src.targetName} ${VIA_WORDS[state.method]}.${state.method === "computer" || mentionsContext(text, query) ? "" : ` It did not say which report or period it answered for; Offload asked for ${contextWords(query)}.`}`, ...(more === true ? { more } : {}), ...(skipped === undefined ? {} : { skipped }) };
     }
     return { ok: false, status: "not_read", via: null, message: why.length === 0 ? `no way to read ${src.targetName} is set up on this Mac yet.` : `${why.join("; ")}.` };
   }

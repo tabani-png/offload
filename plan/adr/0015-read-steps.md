@@ -23,6 +23,10 @@ questions came up in review of PR #35: what the read asks the source for, and wh
 4. **Done rows are dropped before any limit.** A source with more rows than a batch is worked through to the end;
    an answer too large to read at once is refused, never cut.
 
+5. **A read claims only what it can confirm** (PR #35 round 4). The screen read must see the learned report and
+   filters before it accepts values; a connector answer that names another report or filter is refused. Rows without
+   every value are skipped and reported, never counted done.
+
 ## Consequences
 - The learned query may not match a given tool's argument names; a tool that refuses it fails that method and the
   chain moves on (to the screen, last). Mapping the query to each tool's schema is follow-up work.

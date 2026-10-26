@@ -79,7 +79,15 @@ only saving was the typing.
    most fields wins (ties: shallower, then key order); camelCase keys match; a null is missing, never a value. An
    answer that says it has more pages (`next`, `next_cursor`, `has_more`, `links.next`, ...) is flagged: live items
    carry a warning and "nothing new" says only the first page was read. Following later pages is not built.
-10. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
+10. **Round 4 (PR #35 review): a read claims only what it can confirm.** The screen read accepts values only when the
+   learned report and every learned filter (period) are visible on screen; otherwise that way is refused ("could not
+   confirm the 'Weekly metrics' report for last 7 days on screen") and the chain falls back. It never navigates or
+   changes a filter. A connector answer that names another report or filter value is refused (the method is marked
+   failed); one that does not say is accepted with a plain note that it did not confirm the report or period. Rows
+   with a missing, null or unreadable value are SKIPPED: named in the dry run (`read.skipped`) and the run
+   (`source.skipped`, message, a warning on every item), never entered and never in the done log; "nothing new" says
+   how many were skipped and why.
+11. **Models.** No new model call: understanding, parsing and values are code. Computer-use reads use no planner. The
    router and the person's own key (Keychain, BYOK) stay as they are; there is no cloud path; the builder stays off.
 
 ## Tests (tag = test name prefix in `brain/tests/s27-workflow-reads/`)

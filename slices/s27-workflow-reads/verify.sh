@@ -7,7 +7,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BRAIN="$ROOT/brain"
 BASE=0abc4e0   # origin/main when this slice started
-MIN_TESTS=34
+MIN_TESTS=40
 TAGS="SOURCE STEP GATE FETCH DRYRUN LIVE EXECUTE METRIC"
 fails=0
 fail() { echo "FAIL $*"; fails=$((fails + 1)); }

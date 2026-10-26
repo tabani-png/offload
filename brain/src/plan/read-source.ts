@@ -398,7 +398,12 @@ function objectsOf(v: unknown, fields: readonly Pick<ReadFieldDTO, "label" | "so
  * the commit label), or screen text ("Signups 352" lines; accessibility outlines too). A row missing a field is not a
  * row: the missing labels are returned, never guessed. Values are copied by code (ADR 0005).
  */
-export function readValues(text: string, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): { rows: Array<Array<[string, string]>>; missing: string[]; more?: true } {
+/** A row the source returned that is not complete: SKIPPED (never done, never guessed), with the fields it lacked. */
+export interface SkippedRow {
+  missing: string[];
+}
+
+export function readValues(text: string, fields: readonly Pick<ReadFieldDTO, "label" | "sourceLabel">[]): { rows: Array<Array<[string, string]>>; missing: string[]; more?: true; skipped?: SkippedRow[] } {
   const missing = new Set<string>();
   const rows: Array<Array<[string, string]>> = [];
   let json: unknown;
@@ -411,17 +416,22 @@ export function readValues(text: string, fields: readonly Pick<ReadFieldDTO, "la
   }
   if (isJson) {
     const found = objectsOf(json, fields);
+    const skipped: SkippedRow[] = [];
     for (const o of found.objects) {
       const f = flat(o);
       const row: Array<[string, string]> = [];
+      const lacks: string[] = [];
       for (const fd of fields) {
+        // Missing, null, empty or oversized: the value is not known, so the row is skipped, never guessed.
         const v = cleanValue(f.get(normKey(fd.sourceLabel)) ?? f.get(normKey(fd.label)));
-        if (v === null) missing.add(fd.label);
+        if (v === null) lacks.push(fd.label);
         else row.push([fd.label, v]);
       }
-      if (row.length === fields.length) rows.push(row);
+      for (const l of lacks) missing.add(l);
+      if (lacks.length === 0) rows.push(row);
+      else skipped.push({ missing: lacks });
     }
-    return { rows, missing: rows.length > 0 ? [] : [...missing], ...(found.more ? { more: true as const } : {}) };
+    return { rows, missing: rows.length > 0 ? [] : [...missing], ...(found.more ? { more: true as const } : {}), ...(rows.length > 0 && skipped.length > 0 ? { skipped } : {}) };
   }
   const lines = text
     .split("\n")
@@ -474,4 +484,59 @@ export function fillFromSource(src: ReadSourceDTO, sourceText: string, commitOcr
     commit: filled.length === 0 ? null : { verb, fields: filled.map((f) => [f.label, f.value!] as [string, string]) },
     warnings,
   };
+}
+
+// ---------- what a read can confirm ----------
+
+const phrase = (text: string, p: string) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(p)}(?![\\p{L}\\p{N}])`, "iu").test(text);
+
+/** Plain words for the learned context: "the 'Weekly metrics' report for last 7 days". */
+export function contextWords(q: ReadQueryDTO): string {
+  const filters = q.filters.map(([, v]) => v).join(", ");
+  return `${q.report === null ? "the values" : `the '${q.report}' report`}${filters === "" ? "" : ` for ${filters}`}`;
+}
+
+/**
+ * A screen read accepts values only when the learned report and every learned filter are visible on screen (it never
+ * navigates or changes a filter to get there). null = confirmed; else the plain reason.
+ */
+export function confirmOnScreen(text: string, q: ReadQueryDTO): string | null {
+  const ok = (q.report === null || phrase(text, q.report)) && q.filters.every(([, v]) => phrase(text, v));
+  return ok ? null : `could not confirm ${contextWords(q)} on screen`;
+}
+
+const REPORT_KEYS = new Set(["report", "report name", "insight", "insight name", "dashboard", "dashboard name"]);
+const FILTER_ALIASES: Record<string, string[]> = { period: ["period", "date range", "time range", "range", "timeframe"] };
+
+/**
+ * A connector answer that itself names a different report or filter value than the learned query is not the data the
+ * person approved: the reason, or null. Answers that do not say are accepted (they were asked with the query).
+ */
+export function contradicts(text: string, q: ReadQueryDTO): string | null {
+  let json: unknown;
+  try {
+    json = JSON.parse(text.trim());
+  } catch {
+    return null;
+  }
+  const seen: Array<[string, string]> = [];
+  const walk = (x: unknown, depth: number) => {
+    if (depth > 2 || x === null || typeof x !== "object" || Array.isArray(x)) return;
+    for (const [k, v] of Object.entries(x as Record<string, unknown>)) {
+      if (typeof v === "string") seen.push([normKey(k), v.trim()]);
+      else walk(v, depth + 1);
+    }
+  };
+  walk(json, 0);
+  const same = (a: string, b: string) => a.toLowerCase().replace(/\s+/g, " ") === b.toLowerCase().replace(/\s+/g, " ");
+  for (const [k, v] of seen) {
+    if (q.report !== null && REPORT_KEYS.has(k) && !same(v, q.report)) return `the answer is for the '${v}' report, not ${contextWords(q)}`;
+    for (const [fk, fv] of q.filters) if ((FILTER_ALIASES[fk] ?? [normKey(fk)]).includes(k) && !same(v, fv)) return `the answer is for ${v}, not ${contextWords(q)}`;
+  }
+  return null;
+}
+
+/** True when an answer names the learned report and every learned filter value somewhere (a connector that confirms). */
+export function mentionsContext(text: string, q: ReadQueryDTO): boolean {
+  return (q.report === null || phrase(text, q.report)) && q.filters.every(([, v]) => phrase(text, v));
 }

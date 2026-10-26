@@ -26,7 +26,13 @@ import { makeBatch, type Batch, type BatchItem, type ItemState } from "./batch.t
 import { crmLines, contactedFrom, type CrmEntry } from "./scripts/crm-log.ts";
 import { pickNext, readRecipients } from "./scripts/recipients.ts";
 import { isPlanWorkflow, planLiveItems, PlanLiveError, rowKey, type ItemRow } from "./plan-live.ts";
-import { queryText } from "../plan/read-source.ts";
+import { queryText, type SkippedRow } from "../plan/read-source.ts";
+
+/** s27: rows a source returned without every value: skipped (never done), said plainly with the fields. */
+export function skippedWords(name: string, sk: readonly SkippedRow[]): string {
+  const fields = [...new Set(sk.flatMap((x) => x.missing))].join(", ");
+  return `${sk.length} row${sk.length === 1 ? "" : "s"} at ${name} ${sk.length === 1 ? "was" : "were"} skipped: ${fields} missing or unreadable (not entered, not counted as done).`;
+}
 import { recordRead, type SourceFetcher } from "./read-fetch.ts";
 import type { RunSourceDTO } from "../api/s14-types.ts";
 import type { Executor, ToolCallRecord } from "./executor.ts";
@@ -260,7 +266,7 @@ export async function prepareLiveBatch(o: PrepareOptions): Promise<Batch> {
     if (isPlanWorkflow(wf)) {
       const list = wf.inputs.list;
       let source: RunSourceDTO = { kind: "list", name: list, via: null, message: NO_SOURCE_WORDS(list) };
-      let read: { rows: ItemRow[]; name: string; line: string; more?: boolean } | undefined;
+      let read: { rows: ItemRow[]; name: string; line: string; more?: boolean; skipped?: string } | undefined;
       if (wf.read !== undefined) {
         const name = wf.read.targetName;
         if (o.read === undefined) {
@@ -284,8 +290,9 @@ export async function prepareLiveBatch(o: PrepareOptions): Promise<Batch> {
           if (!r.ok && r.status === "cancelled") throw new RunError(r.message, "conflict");
           recordRead(o.home, wf.id, r, now);
           if (r.ok) {
-            source = { kind: "read", name, via: r.via, message: r.message };
-            read = { rows: r.rows.map((fields, i) => ({ line: i + 1, fields })), name, line: `${r.message.replace(/\.$/, "")}: ${queryText(wf.read)}.`, ...(r.more === true ? { more: true } : {}) };
+            const sk = r.skipped ?? [];
+            source = { kind: "read", name, via: r.via, message: sk.length === 0 ? r.message : `${r.message} ${skippedWords(name, sk)}`, ...(sk.length === 0 ? {} : { skipped: sk }) };
+            read = { rows: r.rows.map((fields, i) => ({ line: i + 1, fields })), name, line: `${r.message.replace(/\.$/, "")}: ${queryText(wf.read)}.`, ...(r.more === true ? { more: true } : {}), ...(sk.length === 0 ? {} : { skipped: skippedWords(name, sk) }) };
           } else {
             source = { kind: "list", name: list, via: null, message: `Could not read ${name}: ${r.message} These values are from your list ${list}.` };
           }
