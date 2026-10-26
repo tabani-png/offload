@@ -18,7 +18,7 @@
 | `job_role_holders` | `person_id` | which job roles the person holds | `person.jobRoleIds` | while held |
 | `devices` | `person_id` | enrolled Macs: name, app version, public key, dates, state | `devices` | until revoked + tenant policy |
 | `audit_events` | `subject_person_id` (and ids in list reads) | who did or read what about the person, hash chained | `accessLog` ("who looked") | 6 years |
-| `notice_acks` | `person_id` | which notice version was acknowledged, when, how, in which jurisdiction | `acks` | kept as a legal record |
+| `notice_acks` | `person_id` | which notice version was acknowledged, when (server receipt; a device-reported time is kept alongside), how, in which jurisdiction | `acks` | kept as a legal record |
 | `sessions` | `person_id` | web sign-in sessions (token hashes, times) | not shown: credentials | 12 hours, revoked on freeze |
 | `enrollment_codes` | `person_id` | one-time device enrollment codes (hashed) | not shown: credentials | 10 minutes, single use |
 | `connections` | `owner_person_id` | references to the person's own connected accounts (never secrets) | listed by `GET /v1/connections` | until deleted |

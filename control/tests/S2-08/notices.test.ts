@@ -6,6 +6,7 @@ import { ulid } from "../../src/schema/encoding.ts";
 import compliance from "../../src/modules/compliance/index.ts";
 import { allowsAt } from "../../src/modules/compliance/consent.ts";
 import { listTemplates, templateById } from "../../src/modules/compliance/templates.ts";
+import { consentSince } from "../../src/modules/compliance/consent.ts";
 import { filledMarkdown, noticeBody, publishNotice, signIn, sys, type Who } from "./fixtures.ts";
 
 let h: Harness;
@@ -253,6 +254,21 @@ describe("NOTICE", () => {
       expect(rows.length).toBe(1);
       expect(web.json.id).toBe(rows[0].id);
     }
+  });
+
+  test("NOTICE: a device cannot back-date an ack: it is recorded at server receipt, the device's time kept alongside", async () => {
+    const n = await publishNotice(who.owner, { features: ["workflow_metrics", "per_person_views", "working_time"] });
+    const deviceTime = n.publishedAt + 1;
+    h.clock.advance(6 * 60 * 60_000);
+    const received = h.clock.now();
+    const obj = ackObject(n, { acknowledgedAt: deviceTime });
+    await syncAck(h.a.people.member2.id, obj);
+    const [row] = await h.db.migrator`select acknowledged_at_ms, device_acknowledged_at_ms from notice_acks where id = ${obj.id}`;
+    expect(row).toEqual({ acknowledged_at_ms: String(received), device_acknowledged_at_ms: String(deviceTime) });
+    expect(await sys(h, (tx) => consentSince(tx, h.a.people.member2.id, received))).toBe(received);
+    expect(await sys(h, (tx) => consentSince(tx, h.a.people.member2.id, received - 1))).toBeNull();
+    const ack = (await who.member2.get("/v1/me/data")).json.acks.find((a: { id: string }) => a.id === obj.id);
+    expect(ack.acknowledgedAt).toBe(received);
   });
 
   test("NOTICE: a template notice with a {{field}} left or a required field emptied is not published (422)", async () => {

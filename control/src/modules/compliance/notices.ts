@@ -75,14 +75,14 @@ async function recordAck(
   deps: Deps,
   principal: Principal,
   n: NoticeRow,
-  ack: { id: string; acknowledgedAt: number; jurisdiction: string; channel: "mac_app" | "web" },
+  ack: { id: string; acknowledgedAt: number; deviceAcknowledgedAt: number | null; jurisdiction: string; channel: "mac_app" | "web" },
 ): Promise<{ row: AckRow; created: boolean }> {
   const now = deps.clock.now();
   const deviceId = principal.kind === "device" ? principal.deviceId : null;
   const [row] = await tx`insert into notice_acks (tenant_id, id, person_id, notice_id, acknowledged_at_ms, created_at_ms,
-      jurisdiction, features, channel, device_id)
+      jurisdiction, features, channel, device_id, device_acknowledged_at_ms)
     values (current_setting('app.tenant_id')::uuid, ${ack.id}, ${principal.personId}, ${n.id}, ${ack.acknowledgedAt}, ${now},
-      ${ack.jurisdiction}, ${n.features}::jsonb, ${ack.channel}, ${deviceId})
+      ${ack.jurisdiction}, ${n.features}::jsonb, ${ack.channel}, ${deviceId}, ${ack.deviceAcknowledgedAt})
     on conflict do nothing
     returning *`;
   if (!row) {
@@ -96,12 +96,19 @@ async function recordAck(
     action: "notice.ack",
     subjectPersonId: principal.personId,
     resource: { type: "notice", id: n.id },
-    detail: { version: n.version, channel: ack.channel, features: n.features, jurisdiction: ack.jurisdiction },
+    detail: {
+      version: n.version, channel: ack.channel, features: n.features, jurisdiction: ack.jurisdiction,
+      ...(ack.deviceAcknowledgedAt === null ? {} : { deviceAcknowledgedAt: ack.deviceAcknowledgedAt }),
+    },
   });
   return { row: row as AckRow, created: true };
 }
 
-/** `syncHandlers.notice_ack`: an acknowledgement made in the Mac app. Idempotent on the object id and on (person, notice). */
+/**
+ * `syncHandlers.notice_ack`: an acknowledgement made in the Mac app. Idempotent on the object id and on (person, notice).
+ * The device's acknowledgedAt is checked and kept as `device_acknowledged_at_ms`, but the ack counts from when the server
+ * received it: a device clock cannot move consent earlier than the server knew of it.
+ */
 export const syncNoticeAck: SyncHandler = async (tx, object, { principal, deps }) => {
   const v = deps.validator.validate(ACK, object);
   if (!v.ok) throw invalid("notice_ack does not match its schema", v.errors);
@@ -123,7 +130,9 @@ export const syncNoticeAck: SyncHandler = async (tx, object, { principal, deps }
   const replaced = ms(n.replaced_at_ms);
   if (replaced !== null && o.acknowledgedAt >= replaced) throw conflict("a newer notice replaced this one");
   if (await ackOf(tx, principal.personId, n.id)) return;
-  await recordAck(tx, deps, principal, n, { id: o.id, acknowledgedAt: o.acknowledgedAt, jurisdiction: p.jurisdiction, channel: "mac_app" });
+  await recordAck(tx, deps, principal, n, {
+    id: o.id, acknowledgedAt: deps.clock.now(), deviceAcknowledgedAt: o.acknowledgedAt, jurisdiction: p.jurisdiction, channel: "mac_app",
+  });
 };
 
 export function noticeRoutes(app: App, deps: Deps): void {
@@ -235,7 +244,7 @@ export function noticeRoutes(app: App, deps: Deps): void {
       if (!applies(n, p.jurisdiction)) throw conflict("this notice does not apply to your jurisdiction");
       if (n.replaced_at_ms !== null) throw new HttpError(409, "conflict", "a newer notice replaced this one; acknowledge the current notice");
       const { row, created } = await recordAck(tx, deps, principal, n, {
-        id: ulid(now), acknowledgedAt: now, jurisdiction: p.jurisdiction, channel: "web",
+        id: ulid(now), acknowledgedAt: now, deviceAcknowledgedAt: null, jurisdiction: p.jurisdiction, channel: "web",
       });
       return { status: created ? (201 as const) : (200 as const), ack: ackDto(row) };
     });
