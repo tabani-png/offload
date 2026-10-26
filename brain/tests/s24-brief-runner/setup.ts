@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeChecks } from "../../src/builder/checks.ts";
 import * as sandbox from "../../src/builder/sandbox.ts";
+import { oflPrefix } from "../../src/builder/supervisor.ts";
 import type { BuilderQuery } from "../../src/builder/runner.ts";
 import { DEFAULT_MODELS } from "../../src/models/model.ts";
 import { ModelRouter, RoutedModel, type Backend, type BackendRequest } from "../../src/models/router.ts";
@@ -50,8 +51,11 @@ export const CHECK_REPLY = readFileSync(join(REC, "check-writer.json"), "utf8");
  * afterAll) and fails if any is still there, so repeated runs do not fill the disk. */
 const createdTemps: string[] = [];
 const RUN_START = Date.now() - 1000;
+// s30: every folder carries this process's pid, so the stray check below sees only this process's folders, never those
+// of another test run on the same Mac (another agent, another worktree) that happens to be alive at the same time.
+const MINE = `p${process.pid}-`;
 export const tmp = (prefix = "offload-s24-") => {
-  const d = mkdtempSync(join(tmpdir(), prefix));
+  const d = mkdtempSync(join(tmpdir(), `${prefix}${MINE}`));
   createdTemps.push(d);
   return d;
 };
@@ -69,7 +73,7 @@ export function releaseTemps(): void {
   }
   // And nothing this run created outside tmp(): an offload-s24-* folder born after this process started is a leak.
   const strays = readdirSync(tmpdir())
-    .filter((n) => n.startsWith("offload-s24-"))
+    .filter((n) => n.startsWith("offload-s24-") && n.includes(MINE))
     .map((n) => join(tmpdir(), n))
     .filter((d) => {
       try {
@@ -79,6 +83,18 @@ export function releaseTemps(): void {
       }
     });
   if (strays.length > 0) throw new Error(`temp folders created by this run were left behind: ${strays.slice(0, 5).join(", ")}`);
+}
+
+/** /tmp/ofl-* socket folders made by process `pid` (this test process by default; a spawned CLI's pid for the CLI).
+ * Only that process's folders: another test run alive at the same time has its own. */
+export const oflDirs = (pid: number = process.pid) => new Set(readdirSync("/tmp").filter((n) => n.startsWith(oflPrefix(pid))));
+
+/** The /tmp/ofl-* folder a run's sandbox profile names (builds/<run>/sandbox.sb), or null when there is no profile. */
+export function runSocketDir(runDir: string): string | null {
+  const p = join(runDir, "sandbox.sb");
+  if (!existsSync(p)) return null;
+  const m = /\/(ofl-[^/"]+)\//.exec(readFileSync(p, "utf8"));
+  return m?.[1] ?? null;
 }
 
 export function briefHome(prefix?: string): { home: string; briefId: string; briefHash: string } {

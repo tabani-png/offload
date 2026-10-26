@@ -6,18 +6,18 @@
 // folder may outlive a run.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approveBuild } from "../../src/builder/approval.ts";
 import { verifyArtifact } from "../../src/builder/record.ts";
 import { runBuild } from "../../src/builder/runner.ts";
-import { fakeQuery, NOW, prepared, writeSlug, releaseTemps } from "./setup.ts";
+import { oflPrefix } from "../../src/builder/supervisor.ts";
+import { fakeQuery, NOW, oflDirs, prepared, runSocketDir, writeSlug, releaseTemps } from "./setup.ts";
 
 // Remove every temp folder this file created (and fail if one is left).
 afterAll(releaseTemps);
 
 const ALLOW = { mode: "allowlist" as const, containerSandbox: false };
-const oflDirs = () => new Set(readdirSync("/tmp").filter((n) => n.startsWith("ofl-")));
 
 // The reviewer's attack, as a builder command: stop the parent (the supervisor), find a socket path in any argv it
 // can read, replace the socket with a fake "clean" listener, and leave a daemon that writes after the verdict.
@@ -147,10 +147,15 @@ print("ARGV " + "|".join(p.decode("utf8", "replace") for p in buf.raw[4:].split(
   }, 30_000);
 
   test("SAFETY: no /tmp/ofl-* folder outlives a run (pass, or setup failure)", async () => {
+    // s30: only this process's folders (/tmp/ofl-<pid>-*); another test run alive at the same time has its own.
     const before = oflDirs();
     const p = await prepared();
     const { token } = approveBuild(p.home, p.briefId, p.briefHash, p.checkHash, NOW);
-    await runBuild({ home: p.home, briefId: p.briefId, token, query: fakeQuery([{ act: writeSlug("good") }]).query, profile: ALLOW });
+    const rec = await runBuild({ home: p.home, briefId: p.briefId, token, query: fakeQuery([{ act: writeSlug("good") }]).query, profile: ALLOW });
+    // Not vacuous: the run made its socket folder under this process's prefix, and that exact folder is gone.
+    const own = runSocketDir(join(rec.artifactPath, ".."));
+    expect(own?.startsWith(oflPrefix())).toBe(true);
+    expect(existsSync(join("/tmp", own!))).toBe(false);
     const q = await prepared();
     const t2 = approveBuild(q.home, q.briefId, q.briefHash, q.checkHash, NOW).token;
     writeFileSync(join(q.home, "builds"), "not a folder");
