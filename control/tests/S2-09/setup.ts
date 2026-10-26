@@ -38,7 +38,7 @@ export interface World {
   workers: Workers;
   broker: Broker;
   composio: FakeComposio;
-  conns: { readMail: string; readPlain: string; sendMail: string; web: string; roleIdentity: string };
+  conns: { readMail: string; readPlain: string; sendMail: string; web: string; memberSend: string; roleIdentity: string };
   wf: { id: string; version: number };
   /** A second role workflow (web research) in the same job role. */
   wfWeb: { id: string; version: number };
@@ -124,6 +124,9 @@ export async function world(): Promise<World> {
   const readPlain = await conn("gmail", "acct_not_a_url", "Old inbox");
   const sendMail = await conn("google_workspace_shared", "acct_sales_inbox", "Sales inbox (send)");
   const web = await conn("other", "docs.northzone.example, https://news.example.org/feed", "Web");
+  // A worker running as the member sends only through the member's own personal-allowed connection (broker rule).
+  const memberSend = (await db`insert into connections (tenant_id, kind, ownership, label, owner_person_id, provider, external_ref)
+    values (${t.id}, 'gmail', 'personal-allowed', 'Member Gmail', ${t.people.member.id}, 'composio', 'acct_member_gmail') returning id`)[0]!.id as string;
   const [ri] = await db`insert into role_identities (tenant_id, job_role_id, label, address, connection_id)
     values (${t.id}, ${t.jobRoles.sdr}, 'Sales inbox', 'sales@acme.example.com', ${sendMail}) returning id`;
   await db`insert into job_role_holders (tenant_id, job_role_id, person_id) values (${t.id}, ${t.jobRoles.sdr}, ${t.people.member.id})`;
@@ -148,7 +151,7 @@ export async function world(): Promise<World> {
     workers,
     broker,
     composio,
-    conns: { readMail, readPlain, sendMail, web, roleIdentity: ri!.id as string },
+    conns: { readMail, readPlain, sendMail, web, memberSend, roleIdentity: ri!.id as string },
     wf: { id: wfId, version: 1 },
     wfWeb: { id: wfWebId, version: 1 },
     as: (who, tt = t) => asPrincipal(h, who, tt),
@@ -212,9 +215,10 @@ export async function manualRun(w: World, workerId: string, inputs: Record<strin
 }
 
 export async function overnightPolicy(w: World, over: Record<string, unknown> = {}): Promise<string> {
-  const member = await w.as("member");
+  // An admin makes it: only an owner or admin sets fewer than 3 dry-run nights (S2-07, policies/index.ts).
+  const admin = await w.as("admin");
   const id = crypto.randomUUID();
-  const r = await member.post("/v1/overnight-policies", {
+  const r = await admin.post("/v1/overnight-policies", {
     id,
     workflowId: w.wf.id,
     version: 1,

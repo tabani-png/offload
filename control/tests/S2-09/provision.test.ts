@@ -146,6 +146,15 @@ describe("PROVISION", () => {
     expect((await admin.post("/v1/workers", { workflowId: w.wf.id, version: 1, identityId: w.conns.roleIdentity, sessionBudgetCents: 100, extra: 1 })).status).toBe(400);
   });
 
+  test("PROVISION: a worker running as a person commits through that person's own personal-allowed connection, never the company binding", async () => {
+    const admin = await w.as("admin");
+    const mine = await createWorker(w, { identityId: w.t.people.member.id });
+    const [row] = await w.h.db.migrator`select commit_connection_id from workers where id = ${mine.id}`;
+    expect(row!.commit_connection_id).toBe(w.conns.memberSend);
+    expect((await admin.post("/v1/workers", { workflowId: w.wf.id, version: 1, identityId: w.t.people.member.id, commitConnectionId: w.conns.sendMail, sessionBudgetCents: 100 })).status).toBe(409);
+    expect((await admin.post("/v1/workers", { workflowId: w.wf.id, version: 1, identityId: w.conns.roleIdentity, commitConnectionId: w.conns.memberSend, sessionBudgetCents: 100 })).status).toBe(400);
+  });
+
   test("PROVISION: RBAC: a dept lead creates in their department only; member and auditor cannot create; auditor can list", async () => {
     const lead = await w.as("lead");
     expect((await lead.post("/v1/workers", { workflowId: w.wf.id, version: 1, identityId: w.conns.roleIdentity, sessionBudgetCents: 100 })).status).toBe(201);

@@ -41,6 +41,9 @@
 | `overnight_policies` | `owner_person_id` | overnight policies the person owns (S2-07) | listed by `GET /v1/overnight-policies` | until deleted |
 | `kill_switches` | `set_by` | who set a kill switch (S2-07) | in the audit log | kept as a record |
 | `role_policies` | `updated_by` | who last changed a job role's policy (S2-07) | in the audit log | while the role exists |
+| `worker_runs` | `runner_person_id` | cloud runs the person ran: trigger, state, cost, times, session reference (S2-09) | outcomes in `runs`; listed in `GET /v1/me/digest` | sessions deleted 30 days after the run; rows per tenant policy |
+| `workers` | `owner_person_id`, `created_by` | cloud workers the person owns or created (S2-09) | listed by `GET /v1/workers`; creation in the audit log | until retired |
+| `worker_cloud_devices` | `person_id` | the revoked, keyless device the person's cloud run outcomes are recorded under (S2-09) | listed under `devices` | while the person exists |
 
 The retention job (nightly, every tenant) deletes the S2-05 rows above once they are older than the tenant's retention
 (child rows with their parent); a missing table fails the job rather than being skipped. Group totals are kept 24

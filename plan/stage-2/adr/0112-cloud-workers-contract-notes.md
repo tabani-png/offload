@@ -60,3 +60,15 @@ deployment. Queued batches are left as they are (the broker revokes their tokens
 person is the runner. `waiting` lists every batch of the person's cloud runs that is still `pending`, whatever its
 age. `trips` are the breaker trips the orchestrator observed in that window. `suggestions` is empty until the Mac
 sends them. Sending the digest email is out of scope; `digestText()` renders the template.
+
+## 10. A person worker sends through the person's own connection
+The broker sends as a person only through that person's own personal-allowed connection, and a role workflow binds
+company connections only, so a worker whose identity is a person never commits through the workflow's commit binding.
+`POST /v1/workers` takes an optional `commitConnectionId` for a person identity: one of the person's own
+personal-allowed sending connections (not `linkedin_personal`). Omitted, the person's only such connection is used;
+none or several is `409`. A role identity sends through its own connection, so naming one there is `400`.
+
+## 11. Lock order
+Worker rows are step 9 of the broker's lock order (broker.ts header). Within it: the runner's cloud-device advisory
+lock, then `worker_runs`, then `workers`, then `deployments`, rows of one table in id order; audit events after the
+last row lock. Broker calls made inside worker transactions only read and queue no audit event.

@@ -8,6 +8,12 @@
  * a replayed or re-listed event that is already recorded is skipped. The stream is opened before the first event is
  * sent; after a drop the stream is reopened first and the missed events are listed from the cursor, so nothing is
  * lost between the two.
+ *
+ * LOCK ORDER. Worker rows are step 9 of the broker's lock order (broker.ts header): every broker lock comes before
+ * them, the tenant's audit-chain lock after them. Within step 9 every transaction here takes, in this order and
+ * never back up it: the runner's `offload_cloud_device:<person>` advisory lock, then worker_runs rows, then workers
+ * rows, then deployments rows; two rows of one table in id order. Audit events are written after the last row lock.
+ * Broker calls made inside these transactions (loadBatch, dto, killSwitchActive) only read and queue no audit.
  */
 import type { Deps, Principal } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
@@ -78,6 +84,9 @@ const DAY_MS = 86_400_000;
 
 /** Pauses a person's workers and their deployments, in the caller's transaction (ADR 0106 §4, ADR 0107). */
 export async function pauseWorkersOf(tx: Tx, personId: string, now: number, reason: string): Promise<string[]> {
+  // Lock order: the rows in id order before the update (two of these can run at once for overlapping workers).
+  await tx`select id from workers where state in ('ready', 'provisioning')
+    and (owner_person_id = ${personId} or (identity_type = 'person' and identity_id = ${personId})) order by id for update`;
   const rows = await tx`update workers set state = 'paused', paused_reason = ${reason}, updated_at = ${new Date(now)}
     where state in ('ready', 'provisioning') and (owner_person_id = ${personId} or (identity_type = 'person' and identity_id = ${personId}))
     returning id`;
@@ -891,12 +900,17 @@ export function createWorkers(deps: Deps): Workers {
       for (const dr of runs) {
         const started = await service(tenantId, async (tx) => {
           const [dup] = await tx`select id from worker_runs where deployment_run_ref = ${dr.id}`;
+          const failed = Boolean(dr.error) || !dr.session_id;
+          const w0 = await loadWorker(tx, d.worker_id);
+          // Lock order (step 9): the runner's cloud-device lock (emitOutcome takes it), the worker row, then its
+          // deployment; audit last.
+          if (w0 && !dup && failed) {
+            await tx`select pg_advisory_xact_lock(hashtext(${"offload_cloud_device:" + (w0.identityType === "person" ? w0.identityId : w0.ownerPersonId)}))`;
+          }
+          const w = w0 ? await loadWorker(tx, d.worker_id, true) : null;
           await tx`update deployments set last_run_seen_at = greatest(coalesce(last_run_seen_at, ''), ${dr.created_at}) where worker_id = ${d.worker_id}`;
-          if (dup) return null;
-          const w = await loadWorker(tx, d.worker_id);
-          if (!w) return null;
+          if (dup || !w) return null;
           if (dr.error || !dr.session_id) {
-            await tx`select pg_advisory_xact_lock(hashtext(${"offload_cloud_device:" + (w.identityType === "person" ? w.identityId : w.ownerPersonId)}))`;
             const run = await insertRun(tx, w, { trigger: "schedule", runnerPersonId: w.ownerPersonId, inputs: null, deploymentRunRef: dr.id, state: "failed", errorCode: safeCode(dr.error?.type ?? "no_session") });
             const paused = await countResult(tx, w, false);
             await emitOutcome(tx, run, w);
@@ -934,7 +948,9 @@ export function createWorkers(deps: Deps): Workers {
   async function interruptRuns(tenantId: string, pick: (tx: Tx, r: RunRow, w: WorkerRow) => Promise<boolean>): Promise<number> {
     const targets = await service(tenantId, async (tx) => {
       const out: RunRow[] = [];
-      for (const row of await tx`select * from worker_runs where state = 'running' and ended_at is null and interrupt_sent_at is null and session_ref <> ''`) {
+      // Lock order: the runs in id order, before any other row (finish locks its run before its worker).
+      for (const row of await tx`select * from worker_runs where state = 'running' and ended_at is null and interrupt_sent_at is null and session_ref <> ''
+          order by id for update`) {
         const r = runRow(row);
         const w = (await loadWorker(tx, r.workerId))!;
         if (await pick(tx, r, w)) out.push(r);
@@ -957,8 +973,9 @@ export function createWorkers(deps: Deps): Workers {
   async function pauseDeploymentsWhere(tenantId: string, pick: (tx: Tx, w: WorkerRow) => Promise<boolean>, reason: string): Promise<void> {
     const ids = await service(tenantId, async (tx) => {
       const out: string[] = [];
-      // Every row lock before the first audit write (which takes the tenant's audit-chain lock): one lock order with
-      // `finish`, which also locks its worker before auditing.
+      const paused: string[] = [];
+      // Every row lock (workers, then deployments) before the first audit write, which takes the tenant's audit-chain
+      // lock: one lock order with `finish`, which also locks its worker and deployment before auditing.
       const rows = await tx`select w.* from workers w join deployments d on d.tenant_id = w.tenant_id and d.worker_id = w.id
           where d.desired_status = 'active' or d.remote_status = 'active' order by w.id for update of w`;
       for (const row of rows) {
@@ -967,10 +984,11 @@ export function createWorkers(deps: Deps): Workers {
         await tx`update deployments set desired_status = case when desired_status = 'archived' then desired_status else 'paused' end, updated_at = ${new Date(now())} where worker_id = ${w.id}`;
         if (w.state === "ready") {
           await tx`update workers set state = 'paused', paused_reason = ${reason}, updated_at = ${new Date(now())} where id = ${w.id}`;
-          await audit(tx, { actor: SERVICE, action: "worker.pause", resource: { type: "worker", id: w.id }, detail: { reason } });
+          paused.push(w.id);
         }
         out.push(w.id);
       }
+      for (const id of paused) await audit(tx, { actor: SERVICE, action: "worker.pause", resource: { type: "worker", id }, detail: { reason } });
       return out;
     });
     for (const id of ids) await syncDeployment(tenantId, id);

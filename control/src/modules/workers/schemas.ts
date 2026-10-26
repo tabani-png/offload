@@ -45,6 +45,7 @@ const LOCAL = [
         workflowId: { $ref: `${C}/uuid` },
         version: { type: "integer", minimum: 1 },
         identityId: { $ref: `${C}/uuid` },
+        commitConnectionId: { $ref: `${C}/uuid` },
         schedule,
         sessionBudgetCents: { type: "integer", minimum: 1, maximum: 100000 },
       },

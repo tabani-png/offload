@@ -42,6 +42,24 @@ async function budgetCheck(tx: Tx, jobRoleId: string, cents: number): Promise<vo
   if (cents > policy.sessionBudgetCents) throw invalid(`the session budget is above the role policy's ${policy.sessionBudgetCents} cents`);
 }
 
+/**
+ * A person sends only through their own personal-allowed connection (the broker's run binding rule): the commit step's
+ * company binding is never theirs. The person's own sendable personal-allowed connection is used: the one named, or
+ * their only one. A workflow with no enabled commit step has none.
+ */
+async function personCommitConnection(tx: Tx, personId: string, named: string | undefined): Promise<string> {
+  const own = (await tx`select id from connections where owner_person_id = ${personId} and ownership = 'personal-allowed'
+      and kind <> 'linkedin_personal' and provider in ('composio', 'mcp', 'api') order by id`).map((r: { id: string }) => r.id as string);
+  if (named !== undefined) {
+    if (!own.includes(named)) throw conflict("commitConnectionId is not a sending personal-allowed connection of this person");
+    return named;
+  }
+  if (own.length === 1) return own[0]!;
+  throw conflict(own.length === 0
+    ? "this person has no personal-allowed sending connection, so a worker running as them cannot commit"
+    : "this person has several personal-allowed sending connections: name one in commitConnectionId");
+}
+
 export function workerRoutes(app: App, deps: Deps, workers: () => Workers): void {
   const registry = () => deps.ports.registry as RegistryApi;
   const dto = async (tx: Tx, id: string) => workerDto((await loadWorker(tx, id))!, await loadDeployment(tx, id), deps.clock.now());
@@ -63,7 +81,7 @@ export function workerRoutes(app: App, deps: Deps, workers: () => Workers): void
   });
 
   app.post("/v1/workers", async (c) => {
-    const req = await readLocal<{ workflowId: string; version: number; identityId: string; schedule?: Schedule | null; sessionBudgetCents: number }>(c, WORKER_CREATE);
+    const req = await readLocal<{ workflowId: string; version: number; identityId: string; commitConnectionId?: string; schedule?: Schedule | null; sessionBudgetCents: number }>(c, WORKER_CREATE);
     scheduleOrThrow(req.schedule);
     const { out, tenantId } = await tenantTx(c, deps, async (tx, p) => {
       const v = await registry().getVersion(tx, req.workflowId, req.version);
@@ -75,12 +93,14 @@ export function workerRoutes(app: App, deps: Deps, workers: () => Workers): void
       let identityType: "person" | "role_identity";
       let commit: string | null;
       if (ri) {
+        if (req.commitConnectionId !== undefined) throw invalid("a role identity sends through its own connection: commitConnectionId is for a person identity");
         identityType = "role_identity";
         commit = ri.connection_id as string;
       } else if (await registry().isRunnableBy(tx, req.workflowId, req.version, { personId: req.identityId })) {
         identityType = "person";
-        const b = (await registry().bindingsFor(tx, req.workflowId, req.version)).find((x) => x.stepClass === "commit" && !x.disabled && x.connectionId);
-        commit = b?.connectionId ?? null;
+        const hasCommit = (await registry().bindingsFor(tx, req.workflowId, req.version)).some((x) => x.stepClass === "commit" && !x.disabled);
+        commit = hasCommit ? await personCommitConnection(tx, req.identityId, req.commitConnectionId) : null;
+        if (!hasCommit && req.commitConnectionId !== undefined) throw invalid("this workflow has no commit step");
       } else {
         throw conflict("the identity is neither a role identity of this job role nor an active holder of it");
       }
