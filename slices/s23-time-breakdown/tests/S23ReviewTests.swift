@@ -57,3 +57,47 @@ struct S23TimeLoadsTests {
     #expect(l.time == week && l.problem == nil)
   }
 }
+
+// PR #29 delta review: a day that cannot be read (left the stored week, brain 404) never traps the page.
+@Suite("S23 review: a failed day falls back to the week")
+struct S23DayFallbackTests {
+  @Test("a failed day load returns to Week, asks for one retry of the week, and keeps the picker")
+  func failedDay() {
+    var l = TimeLoads()
+    let w = l.start(day: nil)
+    let r1 = l.finish(w, breakdown: NeutralWeek.breakdown, problem: nil)
+    #expect(r1)
+    let d = l.start(day: "2026-10-01")
+    let r2 = l.finish(d, breakdown: nil, problem: "No stored day 2026-10-01.")
+    #expect(r2)
+    #expect(l.day == nil)
+    #expect(l.reloadDay == nil)
+    #expect(l.retryWeek)
+    #expect(l.showsPicker)
+    // The retry is the week; once it answers there is nothing more to retry.
+    let again = l.start(day: nil)
+    let r3 = l.finish(again, breakdown: NeutralWeek.breakdown, problem: nil)
+    #expect(r3)
+    #expect(!l.retryWeek && l.time == NeutralWeek.breakdown)
+  }
+
+  @Test("a failed week load does not ask to retry (no loop), and the picker stays while the days are known")
+  func failedWeek() {
+    var l = TimeLoads()
+    let w = l.start(day: nil)
+    _ = l.finish(w, breakdown: NeutralWeek.breakdown, problem: nil)
+    let w2 = l.start(day: nil)
+    _ = l.finish(w2, breakdown: nil, problem: "The brain is not running.")
+    #expect(!l.retryWeek)
+    #expect(l.time == nil && l.showsPicker)
+  }
+
+  @Test("a Draft workflow notice clears when the person changes day or week")
+  func noticeClears() {
+    var l = TimeLoads()
+    l.note("Could not draft the workflow.")
+    #expect(l.notice == "Could not draft the workflow.")
+    _ = l.start(day: "2026-10-14")
+    #expect(l.notice == nil)
+  }
+}
