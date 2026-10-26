@@ -160,6 +160,11 @@ struct DashboardDetail: View {
         EmptyState(title: "No automations yet.", message: "When you approve a workflow it shows up here\nwith the hours it saves.")
           .padding(.top, Tokens.Space.s48)
       }
+      // s29 review round 2: the key needs no brain, and a bad or missing key may be why the brain is down.
+      if model.data == nil, DashboardKeyPlacement.showsKeySettings(section: model.section, dataLoaded: false),
+         let k = model.claudeKey {
+        OfflineSettingsSection(model: model, key: k)
+      }
     }
     .frame(maxWidth: ReviewView.contentWidth, alignment: .leading)
     .padding(.horizontal, Tokens.Space.s32)

@@ -358,6 +358,23 @@ final class ClaudeKeyController {
   }
 }
 
+/// s29 review round 2: where the dashboard shows the key settings. They need no brain, so they never wait for the
+/// dashboard's data: with data they sit on the Observing page; without it (the brain is down, the first load failed,
+/// nothing yet) every page shows them, with the other controls that need no brain.
+enum DashboardKeyPlacement {
+  enum Control: Equatable, Sendable { case claudeKey, claudeVision, showLogs }
+
+  static func showsKeySettings(section: DashboardSection, dataLoaded: Bool) -> Bool {
+    !dataLoaded || section == .observing
+  }
+
+  /// What the no-data dashboard offers: the key (add, or replace and remove), the Claude screen-reading opt-in and
+  /// Show logs; plus the no-key notice when there is no key (the needs-you list is not drawn without data).
+  static func offline(status: ClaudeKeyStatus) -> (controls: [Control], notice: String?) {
+    ([.claudeKey, .claudeVision, .showLogs], status.notice)
+  }
+}
+
 /// The first-run window's key screen, shown before the four steps when no key is stored.
 enum ClaudeKeyStep {
   static let title = "Your Claude API key"

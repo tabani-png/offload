@@ -114,3 +114,39 @@ struct ClaudeKeySettingsSection: View {
     }
   }
 }
+
+/// s29 review round 2: the dashboard without data (brain down, first load failed): the controls that need no brain.
+struct OfflineSettingsSection: View {
+  @ObservedObject var model: DashboardModel
+  @ObservedObject var key: ClaudeKeyModel
+  @Environment(\.colorScheme) private var scheme
+
+  static var logsFolder: String { NSHomeDirectory() + "/Library/Logs/Offload" }
+
+  var body: some View {
+    let p = Palette(scheme: scheme)
+    let offline = DashboardKeyPlacement.offline(status: key.status)
+    VStack(alignment: .leading, spacing: Tokens.Space.s16) {
+      if let n = offline.notice {
+        Text(n).paragraphStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      ForEach(offline.controls, id: \.self) { c in
+        switch c {
+        case .claudeKey:
+          ClaudeKeySettingsSection(model: key)
+        case .claudeVision:
+          OptInRow(title: ClaudeVisionSetting.label, isOn: model.claudeVision, note: model.claudeVisionNote) {
+            model.toggleClaudeVision()
+          }
+        case .showLogs:
+          HStack {
+            Text("Offload's logs, if the brain will not start").textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+            Spacer()
+            SecondaryButton(title: "Show logs") { model.onReveal?(Self.logsFolder) }
+          }
+        }
+      }
+    }
+  }
+}
