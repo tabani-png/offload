@@ -7,13 +7,14 @@
 //   any other app: its app target's chain (Composio, API, computer use).
 // Before s20 every step of a stand-in app resolved to computer use. The chain decides HOW, never WHETHER: every commit
 // still passes the approval gate (ADR 0006).
+import type { Analysis } from "../analyze.ts";
 import type { CapabilityNeedDTO, CapabilityResolutionDTO } from "../api/s14-types.ts";
-import type { ChainResolver, MethodState } from "../connectors/chain.ts";
+import { knownTarget, type ChainResolver, type MethodState } from "../connectors/chain.ts";
 import type { Method } from "../connectors/link.ts";
 import { catalogTarget, GENERIC_COMMIT, GENERIC_READ, SCREEN_READ, toolkitGuess, UI_COMMIT, universeTarget, type ChainTarget } from "../connectors/targets.ts";
 import { readUniverse } from "../connectors/universe.ts";
 import { knownSurfaceForTargetId } from "../understanding/surfaces.ts";
-import type { CapabilityResolver } from "./capabilities.ts";
+import { appTargetId, targetOf, type CapabilityResolver } from "./capabilities.ts";
 
 /** Plain words per method (the app's lint refuses internal words). */
 const METHOD_WORDS: Record<Method, string> = {
@@ -30,7 +31,50 @@ interface Attempt {
   capability: string;
 }
 
-/** The app target of a need the catalog does not know (same shape as connectors/targets.ts targetForProfile). */
+/** Where an app was observed: the bundle ids and hosts the observer saw for a target id. */
+export interface ObservedIdentity {
+  bundleIds: string[];
+  hosts: string[];
+}
+export type ObservedTargets = Map<string, ObservedIdentity>;
+
+const uniq = (xs: readonly string[]) => [...new Set(xs.filter((x) => x !== ""))];
+
+/**
+ * s20 review 2 (Codex on 9f12355): the observed identity of every target the analysis' steps use, keyed by the plan's
+ * target ids (capabilities.ts targetOf): a site's host (never the browser's bundle id), else the app's bundle id.
+ * Observed data wins over the product table, which only supplements what was not observed.
+ */
+export function observedTargets(a: Pick<Analysis, "insights">): ObservedTargets {
+  const out: ObservedTargets = new Map();
+  const add = (s: { app: string; appName: string; host: string; surfaceKey: string }) => {
+    if (s.app === "" && s.host === "") return;
+    const id = targetOf(s).target;
+    const web = appTargetId(s.app, s.appName, s.host).startsWith("web-");
+    const cur = out.get(id) ?? { bundleIds: [], hosts: [] };
+    if (web) cur.hosts = uniq([...cur.hosts, s.host.replace(/^www\./, "")]);
+    else if (s.app !== "") cur.bundleIds = uniq([...cur.bundleIds, s.app]);
+    out.set(id, cur);
+  };
+  for (const i of a.insights) {
+    const p = i.profile;
+    add({ app: p.app, appName: p.appName, host: p.host, surfaceKey: `${p.app}|${p.host}|${p.urlPattern ?? ""}` });
+    for (const s of p.understanding?.steps ?? []) add(s);
+  }
+  return out;
+}
+
+/** `base` with the observed identity first, then a stored app target's (GET /connectors), then the table's own. */
+function withIdentity(base: ChainTarget, observed: ObservedIdentity | undefined, stored: ChainTarget | null): ChainTarget {
+  return {
+    ...base,
+    bundleIds: uniq([...(observed?.bundleIds ?? []), ...(stored?.bundleIds ?? []), ...base.bundleIds]),
+    hosts: uniq([...(observed?.hosts ?? []), ...(stored?.hosts ?? []), ...base.hosts]),
+  };
+}
+
+/** The app target of a need the catalog does not know (same shape as connectors/targets.ts targetForProfile). The
+ * product table gives name and toolkit; bundle ids and hosts come from observation first (see withIdentity). */
 function appTarget(n: CapabilityNeedDTO): ChainTarget {
   const s = knownSurfaceForTargetId(n.target);
   return {
@@ -77,13 +121,24 @@ export class ChainCapabilityResolver implements CapabilityResolver {
   constructor(
     private readonly chain: ChainResolver,
     private readonly home: string = chain.deps.home,
+    /** s20 review 2: where the current analysis saw each target (server: observedTargets of the analysis). */
+    private readonly opts: { observed?: () => ObservedTargets | Promise<ObservedTargets> } = {},
   ) {}
 
+  /** The target with its observed identity: catalog targets keep their catalog hosts after the observed ones. */
+  private identify(base: ChainTarget, observed: ObservedTargets | null): ChainTarget {
+    const stored = base.catalog ? null : knownTarget(this.home, base.id, this.chain.deps.now());
+    const t = withIdentity(base, observed?.get(base.id), stored !== null && !stored.catalog ? stored : null);
+    // A product the table does not know keeps the toolkit stored with its observed target.
+    return !base.catalog && knownSurfaceForTargetId(base.id) === null && stored !== null && !stored.catalog ? { ...t, toolkit: stored.toolkit } : t;
+  }
+
   /** The methods tried for one need, in order, with the capability each is asked for. */
-  async attempts(n: CapabilityNeedDTO): Promise<Attempt[]> {
-    const ct = catalogTarget(n.target);
+  async attempts(n: CapabilityNeedDTO, observed: ObservedTargets | null = null): Promise<Attempt[]> {
+    const cat = catalogTarget(n.target);
+    const ct = cat === null ? null : this.identify(cat, observed);
     if (ct !== null) return (await this.chain.resolve(ct)).methods.map((state) => ({ method: state.method, state, capability: n.capability }));
-    const app = appTarget(n);
+    const app = this.identify(appTarget(n), observed);
     const own = (await this.chain.resolve(app)).methods.map((state) => ({ method: state.method, state, capability: n.capability }));
     const surface = knownSurfaceForTargetId(n.target);
     const toolkit = surface?.toolkit;
@@ -99,6 +154,8 @@ export class ChainCapabilityResolver implements CapabilityResolver {
   }
 
   async resolve(needs: readonly CapabilityNeedDTO[]): Promise<CapabilityResolutionDTO[]> {
+    // Read once per call (no shared state: the server's one resolver can serve calls at the same time).
+    const observed = this.opts.observed === undefined ? null : await Promise.resolve().then(this.opts.observed).catch(() => null);
     const seen = new Set<string>();
     const out: CapabilityResolutionDTO[] = [];
     for (const n of needs) {
@@ -110,7 +167,7 @@ export class ChainCapabilityResolver implements CapabilityResolver {
         out.push({ target: n.target, capability: n.capability, status: "resolved", method: "local", reason: `${n.targetName}: by ${LOCAL_WORDS}.` });
         continue;
       }
-      const tried = await this.attempts(n);
+      const tried = await this.attempts(n, observed);
       const pick = tried.find((a) => serves(a.method, a.state, n, a.capability));
       const before = pick === undefined ? tried : tried.slice(0, tried.indexOf(pick));
       const why = before.map((a) => `${METHOD_WORDS[a.method]}: ${a.state.reason ?? "it cannot do this"}`).join(" ");
