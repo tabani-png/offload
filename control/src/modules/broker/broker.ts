@@ -355,6 +355,52 @@ function bindingRefusal(conn: ConnRow): string | null {
   return null;
 }
 
+const LIVE_STATES = ["active", "leaving"];
+
+interface RunBinding {
+  workflowId: string;
+  version: number;
+  jobRoleId: string;
+  identityType: "person" | "role_identity";
+  identityId: string;
+  runnerPersonId: string;
+}
+
+/**
+ * Who a run sends as, through what and for which job role (Codex round 3). Holds at propose, at approval and again
+ * before every call, read from the tables as they are now:
+ *   - the job role owns the workflow, which is a live role workflow with this version (no borrowing a laxer policy);
+ *   - the runner is active or leaving (not frozen, not departed) and holds the job role or leads its department;
+ *   - a person identity is the runner and sends only through their own personal-allowed connection;
+ *   - a company connection sends only as a role identity of the run's job role that names this connection, and the
+ *     connection is not bound to another job role.
+ */
+async function runRefusal(tx: Tx, r: RunBinding, conn: ConnRow): Promise<string | null> {
+  const [wf] = await tx`select w.job_role_id, w.state from workflows w where w.id = ${r.workflowId}
+    and exists (select 1 from workflow_versions v where v.tenant_id = w.tenant_id and v.workflow_id = w.id and v.version = ${r.version})`;
+  if (!wf || wf.state !== "role" || wf.job_role_id !== r.jobRoleId) return "the run's job role does not own a live version of this workflow";
+  const [runner] = await tx`select p.state, p.access_role, p.dept_lead_of, j.department_id from people p
+    left join job_roles j on j.tenant_id = p.tenant_id and j.id = ${r.jobRoleId} where p.id = ${r.runnerPersonId}`;
+  if (!runner || !LIVE_STATES.includes(runner.state as string)) return "the runner is not active (frozen or offboarded)";
+  const [holder] = await tx`select 1 from job_role_holders where job_role_id = ${r.jobRoleId} and person_id = ${r.runnerPersonId}`;
+  const leads = runner.access_role === "dept_lead" && runner.department_id !== null && (runner.dept_lead_of as string[]).includes(runner.department_id as string);
+  if (!holder && !leads) return "the runner does not hold this job role";
+  if (r.identityType === "person") {
+    if (r.identityId !== r.runnerPersonId) return "a run sends only as its own runner";
+    if (conn.ownership !== "personal-allowed" || conn.ownerPersonId !== r.identityId) {
+      return "a person sends only through their own personal-allowed connection";
+    }
+    return null;
+  }
+  const [ri] = await tx`select job_role_id, connection_id from role_identities where id = ${r.identityId}`;
+  if (!ri || ri.job_role_id !== r.jobRoleId || ri.connection_id !== conn.id || conn.ownership !== "company" || (conn.jobRoleId !== null && conn.jobRoleId !== r.jobRoleId)) {
+    return "a role identity sends only through its own company connection";
+  }
+  return null;
+}
+
+const fingerprintOf = (c: ConnRow) => `${c.id}:${c.externalRef}:${c.ownership}:${c.kind}`;
+
 export function createBroker(deps: Deps): Broker {
   const now = () => deps.clock.now();
   const audit = (tx: Tx, e: AuditInput) => deps.ports.audit.write(tx, e);
@@ -459,7 +505,7 @@ export function createBroker(deps: Deps): Broker {
 
   async function validate(
     tx: Tx,
-    run: Pick<ProposeRun, "workflowId" | "jobRoleId" | "identity" | "runnerPersonId" | "connectionId" | "crmSheet">,
+    run: Pick<ProposeRun, "workflowId" | "version" | "jobRoleId" | "identity" | "runnerPersonId" | "connectionId" | "crmSheet">,
     input: Stage2Item[],
   ): Promise<{ ok: true; v: Validated } | { ok: false; r: ProposeResult }> {
     const policy = await rolePolicyOf(tx, run.jobRoleId);
@@ -472,22 +518,9 @@ export function createBroker(deps: Deps): Broker {
     if (!conn) return { ok: false, r: reject("validation_failed", "unknown connection") };
     const refusal = bindingRefusal(conn);
     if (refusal) return { ok: false, r: reject("forbidden_binding", refusal) };
-    // Identity: never send as anyone else (ADR 0106 §6, ADR 0107).
-    if (run.identity.type === "person") {
-      if (run.identity.id !== run.runnerPersonId) return { ok: false, r: reject("forbidden_binding", "a run sends only as its own runner") };
-      const [person] = await tx`select state from people where id = ${run.identity.id}`;
-      if (!person || !["active", "leaving"].includes(person.state as string)) {
-        return { ok: false, r: reject("forbidden_binding", "the sending person is not active") };
-      }
-      if (conn.ownership === "personal-allowed" && conn.ownerPersonId !== run.identity.id) {
-        return { ok: false, r: reject("forbidden_binding", "a personal connection sends only as its owner") };
-      }
-    } else {
-      const [ri] = await tx`select job_role_id, connection_id from role_identities where id = ${run.identity.id}`;
-      if (!ri || ri.job_role_id !== run.jobRoleId || ri.connection_id !== conn.id || conn.ownership !== "company") {
-        return { ok: false, r: reject("forbidden_binding", "a role identity sends only through its own company connection") };
-      }
-    }
+    // Identity, runner, job role and workflow: never send as anyone else (ADR 0106 §6, ADR 0107).
+    const who = await runRefusal(tx, { ...run, identityType: run.identity.type, identityId: run.identity.id }, conn);
+    if (who) return { ok: false, r: reject("forbidden_binding", who) };
     const items: BatchItem[] = [];
     const keys = new Set<string>();
     const ref = (key: string) => itemRef(run.workflowId, key);
@@ -678,7 +711,7 @@ export function createBroker(deps: Deps): Broker {
     const ownerTz = await tenantTimezone(tx);
     const night = nightOf(t, ownerTz);
     // A changed commit connection (re-linked account, new owner) trips the breaker (ADR 0106 §3).
-    const fp = `${v.conn.id}:${v.conn.externalRef}:${v.conn.ownership}:${v.conn.kind}`;
+    const fp = fingerprintOf(v.conn);
     const [pf] = await tx`select connection_fingerprint from overnight_policies where id = ${policy.id}`;
     const prior = (pf?.connection_fingerprint as string | null) ?? null;
     if (prior !== null && prior !== fp && policy.state === "active") {
@@ -835,6 +868,11 @@ export function createBroker(deps: Deps): Broker {
     if (!b) throw notFound();
     await mustApprove(tx, p, b);
     if (await batchKilled(tx, b)) throw new HttpError(409, "kill_switch_active", "a kill switch stops this batch");
+    // The runner and the sending identity as they are now (Codex round 3): a freeze after propose revoked the tokens,
+    // and a new approval must not mint one for a frozen or offboarded runner.
+    const bconn = await connectionOf(tx, b.connectionId);
+    const refused = bconn ? await runRefusal(tx, b, bconn) : "the connection is gone";
+    if (refused) throw new HttpError(409, "forbidden_binding", refused);
     b.state = await recompute(tx, hash);
     if (b.state === "rejected") throw conflict(b.rejectedReason === "edited" ? "this batch was edited: approve the new one" : "this batch was rejected");
     if (b.state === "expired") throw conflict("this batch expired");
@@ -1043,9 +1081,9 @@ export function createBroker(deps: Deps): Broker {
   }
 
   /** Does the job role's current policy still allow the capability and, for a person's approval, name its approver? */
-  async function roleStillAllows(tx: Tx, b: BatchRow, capability: string, approvedBy: string | null): Promise<boolean> {
+  async function roleStillAllows(tx: Tx, b: BatchRow, capability: string, approvedBy: string | null, batchSize: number): Promise<boolean> {
     const rp = await rolePolicyOf(tx, b.jobRoleId);
-    if (!rp || !rp.allowedCapabilities.includes(capability)) return false;
+    if (!rp || !rp.allowedCapabilities.includes(capability) || batchSize > rp.maxItemsPerBatch) return false;
     if (approvedBy === null) return true;
     if (approvedBy === b.runnerPersonId && (rp.approvers === "runner" || rp.approvers === "runner_or_dept_lead")) return true;
     if (rp.approvers === "runner") return false;
@@ -1085,8 +1123,21 @@ export function createBroker(deps: Deps): Broker {
       const row = itemRow(raw);
       named = [key, row.recipient];
       if (row.state !== "pending" || row.tokenId === null) return { done: "waiting" as const };
-      const [tk] = await tx`select used_at, revoked_at, approver_kind, approved_by, policy_id, binding_hash from approval_tokens where id = ${row.tokenId}`;
+      const [tk] = await tx`select batch_hash, item_keys, used_at, revoked_at, expires_at, approver_kind, approved_by, policy_id, binding_hash from approval_tokens where id = ${row.tokenId}`;
       if (!tk || tk.used_at === null || tk.revoked_at !== null) return { done: "waiting" as const };
+      /** This item (only) goes back to a person: no token, not scheduled. */
+      const takeBack = async (reason: string) => {
+        await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${new Date(now())}
+          where batch_hash = ${hash} and key = ${key} and state = 'pending'`;
+        await recompute(tx, hash);
+        await audit(tx, { actor: SERVICE, action: "batch.item_taken_back", subjectPersonId: b.runnerPersonId, resource: { type: "batch", id: hash }, detail: { item: itemRef(b.workflowId, key), reason } });
+        return { done: "waiting" as const };
+      };
+      // An approval authorises its items until it expires, also while they wait for a window (audit, round 3).
+      if (msNN(tk.expires_at as Date) <= now()) return takeBack("approval expired");
+      // The token authorises the keys it was minted for, in its own batch, and nothing an item row points at later.
+      if (tk.batch_hash !== hash || !(tk.item_keys as string[]).includes(key)) return takeBack("the approval does not name this item");
+      const conn0 = await connectionOf(tx, b.connectionId);
       // A policy approval holds only while its policy is active (ADR 0112 §1): paused, tripped or gone fails closed and
       // the policy's unsent items go back to a person.
       if (tk.policy_id !== null) {
@@ -1095,6 +1146,11 @@ export function createBroker(deps: Deps): Broker {
         const pol = await overnightById(tx, tk.policy_id as string);
         if (pol?.state !== "active") {
           await unlinkPolicy(tx, tk.policy_id as string, `policy ${pol?.state ?? "gone"}`);
+          return { done: "waiting" as const };
+        }
+        // The policy approves in its owner's place only for the owner's own runs (N1), as it is now.
+        if (pol.ownerPersonId !== b.runnerPersonId || pol.workflowId !== b.workflowId || pol.version !== b.version) {
+          await unlinkPolicy(tx, pol.id, "policy does not cover this run");
           return { done: "waiting" as const };
         }
         // Nothing a policy approved goes out while it is in its dry-run nights, or on a night (tonight's or the one it
@@ -1107,11 +1163,40 @@ export function createBroker(deps: Deps): Broker {
           await unlinkPolicy(tx, pol.id, "dry-run night");
           return { done: "waiting" as const };
         }
+        // A changed commit connection trips the breaker here too, not only at evaluation (ADR 0106 §3).
+        const [pf] = await tx`select connection_fingerprint from overnight_policies where id = ${pol.id}`;
+        const prior = (pf?.connection_fingerprint as string | null) ?? null;
+        if (conn0 !== null && prior !== null && prior !== fingerprintOf(conn0)) {
+          await tripPolicy(tx, pol.id, "connection_auth_change", hash, {});
+          return { done: "waiting" as const };
+        }
+        // The night cap on the night it actually goes out (an approval of last night may send after tonight began, next
+        // to tonight's own approvals): what the policy journaled since tonight began, one step per policy.
+        await tx`select pg_advisory_xact_lock(hashtextextended(${`s207p:${pol.id}`}, 0))`;
+        const ownerTz = await tenantTimezone(tx);
+        const [journaled] = await tx`select count(*)::int as n from contacted_ledger where policy_id = ${pol.id}
+          and at >= ((${night}::date + time '12:00') at time zone ${ownerTz})`;
+        if (Number(journaled!.n) >= pol.maxCommitsPerNight) return takeBack("night cap reached");
+        // The night's budget (capped by the role policy's daily budget) as spent now.
+        const rp = await rolePolicyOf(tx, b.jobRoleId);
+        const [spent] = await tx`select budget_cents from overnight_counters where policy_id = ${pol.id} and night = ${night}::date`;
+        const cap = Math.min(pol.budgetCentsPerNight, rp?.dailyBudgetCents ?? 0);
+        if (Number(spent?.budget_cents ?? 0) >= cap) return takeBack("night budget spent");
       }
       if (row.scheduledFor !== null && row.scheduledFor > now()) return { done: "waiting" as const };
       if (await batchKilled(tx, b)) {
         await revokeBatch(tx, hash, "kill switch");
         return { done: "waiting" as const };
+      }
+      // Runner lifecycle, identity ownership, job role and workflow as they are now (Codex round 3): a freeze, an
+      // offboarding, a re-pointed role identity or a retired workflow takes the approval back.
+      if (conn0 !== null) {
+        const refused = await runRefusal(tx, b, conn0);
+        if (refused) {
+          await revokeBatch(tx, hash, "run binding: " + refused.slice(0, 120));
+          await audit(tx, { actor: SERVICE, action: "batch.run_refused", subjectPersonId: b.runnerPersonId, resource: { type: "batch", id: hash }, detail: { item: itemRef(b.workflowId, key), reason: refused } });
+          return { done: "waiting" as const };
+        }
       }
       const rows = await itemsOf(tx, hash);
       if (!intact(b, rows)) {
@@ -1120,7 +1205,7 @@ export function createBroker(deps: Deps): Broker {
         return { done: "waiting" as const };
       }
       // The role policy as it is now (N4): a capability taken away, or an approver no longer named, takes the approval back.
-      if (!(await roleStillAllows(tx, b, row.capability, tk.approver_kind === "person" ? (tk.approved_by as string) : null))) {
+      if (!(await roleStillAllows(tx, b, row.capability, tk.approver_kind === "person" ? (tk.approved_by as string) : null, rows.length))) {
         await revokeBatch(tx, hash, "role policy changed");
         return { done: "waiting" as const };
       }
