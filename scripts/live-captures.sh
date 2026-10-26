@@ -7,13 +7,29 @@
 # Glass is the same demo card over our own white or near-black backdrop. Onboarding reads the real permissions.
 # Captures OUR windows only (screencapture -o -l <window number>). Writes app/snapshots/live/*.png (live-set.txt).
 #
-#   scripts/live-captures.sh
+# s23: the time screen ("Your time", the dashboard's home) is captured on the NEUTRAL week (scripts/demo.sh --neutral,
+# scratch/demo-neutral) with the real brain: time-week.png, time-day.png and time-week.qa.txt (what the app showed,
+# plus the brain's own GET /time total read here).
+#
+#   scripts/live-captures.sh                every capture
+#   scripts/live-captures.sh --only time    the time screen only
 # Needs an unlocked screen: screencapture cannot read windows while the session is locked.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/app/.build/Offload.app"
 LIVE="$ROOT/app/snapshots/live"
 DEMO="$ROOT/scratch/demo"
+NEUTRAL="$ROOT/scratch/demo-neutral"
+BUN="$(command -v bun || echo "$HOME/.bun/bin/bun")"
+only=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --only) only="${2:-}"; shift ;;
+    *) echo "live-captures.sh: unknown argument $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+case "$only" in ""|time) ;; *) echo "live-captures.sh: --only takes: time" >&2; exit 2 ;; esac
 mkdir -p "$LIVE"
 WIN="$(mktemp -t offload-live-windows)"
 QA="$(mktemp -t offload-live-qa)"
@@ -61,8 +77,57 @@ shot() {  # shot NAME WINDOW
   echo "captured app/snapshots/live/$1.png"
 }
 
+# s23: the brain's own GET /time total on a home (in process: the brain's handler, stub model, raw demo key files).
+brain_total() {
+  (cd "$ROOT/brain" && OFFLOAD_KEYS=file OFFLOAD_TIME_HOME="$1" "$BUN" -e '
+    import { createBrain } from "./src/api/server.ts";
+    import { StubModel } from "./src/models/model.ts";
+    const token = "t".repeat(48);
+    const brain = createBrain({ home: process.env.OFFLOAD_TIME_HOME!, token, workflows: { model: new StubModel() } });
+    const res = await brain.handle(new Request("http://127.0.0.1:4545/time", { headers: { authorization: `Bearer ${token}` } }));
+    const body = await res.json();
+    console.log(body.total.display);
+    process.exit(0);')
+}
+
+# s23: "Your time" on the neutral week: the week, one day, and the QA lines (demo, sections, totals, findings).
+time_captures() {
+  echo "== time screen: seed the neutral week"
+  quit
+  "$ROOT/scripts/demo.sh" --neutral --no-open >/dev/null
+  local tqa n bt
+  tqa="$(mktemp -t offload-live-time)"
+  launch OFFLOAD_KEYS=file OFFLOAD_REPO="$ROOT" OFFLOAD_QA_TIME_FILE="$tqa" -- \
+    --home "$NEUTRAL" --demo --demo-week neutral --open-dashboard --qa-dashboard-section time
+  n="$(wait_for time-week 90)" || fail "the time page never opened on the neutral week"
+  pgrep -f "cli.ts serve --home $NEUTRAL" >/dev/null || fail "no real brain on the neutral home"
+  sleep 2.5
+  shot time-week "$n"
+  for _ in $(seq 1 40); do [ -s "$tqa" ] && break; sleep 0.25; done
+  [ -s "$tqa" ] || fail "the app wrote no time QA lines"
+  bt="$(brain_total "$NEUTRAL")" || fail "could not read GET /time from the brain"
+  { grep -v '^window=' "$tqa"; echo "brain-total=$bt"; } > "$LIVE/time-week.qa.txt"
+  echo "wrote app/snapshots/live/time-week.qa.txt"
+  launch OFFLOAD_KEYS=file OFFLOAD_REPO="$ROOT" OFFLOAD_QA_TIME_FILE="$tqa" -- \
+    --home "$NEUTRAL" --demo --demo-week neutral --open-dashboard --qa-dashboard-section time --qa-time-day 2
+  n="$(wait_for time-day 90)" || fail "the time page never showed a day"
+  sleep 2.5
+  shot time-day "$n"
+  rm -f "$tqa"
+}
+
 if ioreg -n Root -d1 | grep -q '"CGSSessionScreenIsLocked"=Yes'; then fail "the screen is locked; unlock it and run again"; fi
 "$ROOT/app/build.sh" >/dev/null
+
+if [ "$only" = time ]; then
+  time_captures
+  quit
+  sleep 2
+  if pgrep -f "cli.ts serve --home $NEUTRAL" >/dev/null; then fail "the brain outlived the app"; fi
+  for s in time-week time-day; do [ -s "$LIVE/$s.png" ] || fail "missing $s"; done
+  echo "PASS live captures (time screen, neutral week: $NEUTRAL)"
+  exit 0
+fi
 
 echo "== one dataset: seed the demo home"
 quit
@@ -115,7 +180,7 @@ for section in automations week observing; do
   sleep 3
   shot "dashboard-$section" "$n"
 done
-demo -- --open-dashboard --qa-appearance light
+demo -- --open-dashboard --qa-dashboard-section overview --qa-appearance light
 n="$(wait_for dashboard 60)" || fail "dashboard (light) never opened"
 sleep 3
 shot dashboard-light "$n"
@@ -156,7 +221,10 @@ for appearance in dark light; do
   [ "$a" != "$b" ] || fail "glass ($appearance) is identical over white and dark: the material shows no backdrop"
 done
 
-# 4. Onboarding, the permissions step, with the real permission reads (no data shown).
+# 4. s23: the time screen on the neutral week (its own dataset: the time screen's demo is not the outreach week).
+time_captures
+
+# 5. Onboarding, the permissions step, with the real permission reads (no data shown).
 launch -- --mock --onboarding --qa-onboarding-step 2
 n="$(wait_for onboarding 20)" || fail "onboarding never opened"
 sleep 1.2
@@ -164,6 +232,6 @@ shot onboarding-permissions-live "$n"
 
 quit
 sleep 2
-if pgrep -f "cli.ts serve --home $DEMO" >/dev/null; then fail "the brain outlived the app"; fi
+if pgrep -f "cli.ts serve --home $DEMO" >/dev/null || pgrep -f "cli.ts serve --home $NEUTRAL" >/dev/null; then fail "the brain outlived the app"; fi
 for s in $(cat "$ROOT/slices/s10e-ui-round4/live-set.txt"); do [ -s "$LIVE/$s.png" ] || fail "missing $s"; done
 echo "PASS live captures (one run, one dataset: $DEMO)"

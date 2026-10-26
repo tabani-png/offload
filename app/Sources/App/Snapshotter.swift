@@ -87,7 +87,35 @@ enum Snapshotter {
       ("card-undo", card(undo)),
       ("card-empty", card(empty)),
       ("scene", AnyView(Scene(state: base, now: now, rail: rail))),
-    ] + s08Surfaces() + s09aSurfaces() + s10eSurfaces() + s14Surfaces() + s17Surfaces()
+    ] + s08Surfaces() + s09aSurfaces() + s10eSurfaces() + s14Surfaces() + s17Surfaces() + s23Surfaces()
+  }
+
+  // MARK: s23 fixtures
+
+  /// s23: "Your time", the dashboard's home, on the NEUTRAL sample week (NeutralWeek, never the outreach week): the
+  /// week, one day, the week without the solution designer (no fix kinds) and an empty week. No automations are on,
+  /// so the sidebar carries no badge that belongs to another week.
+  static func s23Surfaces() -> [(String, AnyView)] {
+    func time(_ b: TimeBreakdown, weekDays: [String] = NeutralWeek.days) -> AnyView {
+      var calm = MockBrainClient.sampleDashboard
+      calm.automations = []
+      calm.hours = HoursSaved(estimated: 0, measured: nil)
+      let m = dashboardModel(section: .time, data: calm)
+      m.previewTime(b, weekDays: weekDays)
+      // A flat backdrop: the gradient wallpaper alone costs more than the 400 KB capture budget (F5) at this height.
+      return AnyView(WindowChrome(title: "Offload", subtitle: m.section.title, width: dashboardWidth,
+                                  sidebar: AnyView(DashboardSidebar(model: m))) {
+        DashboardDetail(model: m, frozenNow: reviewNow)
+      }
+      .padding(32)
+      .background(FlatBackdrop()))
+    }
+    return [
+      ("time-week", time(NeutralWeek.breakdown)),
+      ("time-day", time(NeutralWeek.day)),
+      ("time-nofix", time(NeutralWeek.noFix)),
+      ("time-empty", time(.empty, weekDays: [])),
+    ]
   }
 
   // MARK: s14 fixtures
@@ -470,6 +498,12 @@ struct Backdrop<Content: View>: View {
       .padding(padding)
       .background(BackdropFill())
   }
+}
+
+/// s23: one flat colour behind a window (no gradient), so a tall window still fits the snapshot size budget.
+struct FlatBackdrop: View {
+  @Environment(\.colorScheme) private var scheme
+  var body: some View { Color(hex: scheme == .dark ? 0x1E2130 : 0xE4E7EE) }
 }
 
 struct BackdropFill: View {
