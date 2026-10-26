@@ -19,8 +19,8 @@ final class DashboardModel: ObservableObject {
   var timeDay: String? { timeLoads.day }
   var timeProblem: String? { timeLoads.problem }
   var timeWeekDays: [String] { timeLoads.weekDays }
-  /// A Draft workflow that could not start, in plain words (the numbers on screen stay).
-  @Published private(set) var timeNotice: String?
+  /// A Draft workflow that could not start, in plain words (the numbers on screen stay; cleared on a day change).
+  var timeNotice: String? { timeLoads.notice }
   /// s23: the breakdown's dimension (task, app, kind of work).
   @Published var timeDimension: TimeDimension = .task
   @Published private(set) var keptFiles: [KeptFile] = []
@@ -105,6 +105,8 @@ final class DashboardModel: ObservableObject {
       timeLoads.finish(token, breakdown: b, problem: nil)
     } catch {
       timeLoads.finish(token, breakdown: nil, problem: BrainError.message(for: error))
+      // The day could not be read (e.g. it left the stored week): show the week instead, once.
+      if timeLoads.retryWeek && timeLoads.latest == token { await loadTime(day: nil) }
     }
   }
 
@@ -116,10 +118,10 @@ final class DashboardModel: ObservableObject {
     Task {
       do {
         let w = try await client.workflow(forInsight: insightId)
-        timeNotice = nil
+        timeLoads.note(nil)
         onOpenWorkflow?(w.id)
       } catch {
-        timeNotice = BrainError.message(for: error)
+        timeLoads.note(BrainError.message(for: error))
       }
     }
   }

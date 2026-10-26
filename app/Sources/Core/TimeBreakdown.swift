@@ -323,6 +323,16 @@ struct TimeLoads: Equatable {
   private(set) var weekDays: [String] = []
   private(set) var latest = 0
   private var requested: [Int: String?] = [:]
+  /// A specific day failed (e.g. it left the stored week): the page went back to Week; ask for the week once.
+  private(set) var retryWeek = false
+  /// A Draft workflow that could not start, in plain words (the numbers on screen stay). Cleared on the next request.
+  private(set) var notice: String?
+
+  /// The Week / day picker shows whenever the week's days are known, even when a load failed, so there is always a way
+  /// back to Week.
+  var showsPicker: Bool { weekDays.count > 1 }
+
+  mutating func note(_ text: String?) { notice = text }
 
   /// What a reload asks for: the day on screen.
   var reloadDay: String? { day }
@@ -331,6 +341,7 @@ struct TimeLoads: Equatable {
   mutating func start(day: String?) -> Int {
     latest += 1
     requested[latest] = .some(day)
+    notice = nil
     return latest
   }
 
@@ -340,6 +351,7 @@ struct TimeLoads: Equatable {
   mutating func finish(_ token: Int, breakdown: TimeBreakdown?, problem: String?) -> Bool {
     let asked = requested.removeValue(forKey: token) ?? nil
     guard token == latest else { return false }
+    retryWeek = false
     if let b = breakdown {
       time = b
       day = b.window.kind == .day ? (b.window.days.first ?? asked) : nil
@@ -348,6 +360,8 @@ struct TimeLoads: Equatable {
     } else {
       time = nil
       self.problem = problem ?? "Your time could not be read."
+      // A day that cannot be read never sticks: back to Week, and one retry of the week (a failed week never retries).
+      if asked != nil { day = nil; retryWeek = true } else { day = nil }
     }
     return true
   }

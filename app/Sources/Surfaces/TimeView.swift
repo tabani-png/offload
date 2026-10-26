@@ -13,9 +13,11 @@ struct TimeView: View {
   var body: some View {
     let p = Palette(scheme: scheme)
     VStack(alignment: .leading, spacing: Tokens.Space.s32) {
+      // The header (and its Week / day picker) shows whenever the week's days are known, so a failed load always
+      // has a way back to Week.
+      if model.time != nil || model.timeLoads.showsPicker { header(model.time.map(TimeScreen.init), p) }
       if let b = model.time {
         let screen = TimeScreen(b)
-        header(screen, p)
         // Drawn in TimeScreen.sections order: breakdown, findings, then workflows.
         ForEach(screen.sections, id: \.self) { section in
           switch section {
@@ -36,15 +38,15 @@ struct TimeView: View {
 
   // MARK: header: the window and its total
 
-  private func header(_ s: TimeScreen, _ p: Palette) -> some View {
+  private func header(_ s: TimeScreen?, _ p: Palette) -> some View {
     VStack(alignment: .leading, spacing: Tokens.Space.s12) {
       HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.s12) {
         Text(TimeScreen.title).textStyle(Tokens.TypeScale.largeTitle).foregroundStyle(p.ink1)
           .accessibilityAddTraits(.isHeader)
-        Text(s.windowLine).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3)
+        if let s { Text(s.windowLine).textStyle(Tokens.TypeScale.callout).foregroundStyle(p.ink3) }
         Spacer(minLength: Tokens.Space.s12)
       }
-      if model.timeWeekDays.count > 1 { dayPicker(p) }
+      if model.timeLoads.showsPicker { dayPicker(p) }
     }
   }
 
