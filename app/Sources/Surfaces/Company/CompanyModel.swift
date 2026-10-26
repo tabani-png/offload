@@ -27,6 +27,8 @@ final class CompanyModel: ObservableObject {
   @Published private(set) var pausing = false
   /// What the in-flight Pause/Resume asked for (true = pause), for the button's "Pausing…"/"Resuming…".
   @Published private(set) var pausingTo = true
+  /// Bumped when a pause/resume or ack starts and ends, so a background read that was in flight across one is ignored.
+  private var mutationEpoch = 0
   @Published private(set) var message: String?
   @Published private(set) var workflows: [Automation] = []
   /// The pending sign-in page, while waiting: "Open sign-in page again" reopens it only when the person asks.
@@ -56,9 +58,12 @@ final class CompanyModel: ObservableObject {
 
   /// The window's refresh (toolbar, on appear): a failure says so in one calm line.
   func refresh() {
+    let epoch = mutationEpoch
     Task {
       do {
-        status = try await service.refresh()
+        let s = try await service.refresh()
+        // Same rule as the background read: never replace the result of a pause/ack that ran meanwhile.
+        if !pausing, epoch == mutationEpoch { status = s }
         message = nil
         await reloadWorkflows()
       } catch {
@@ -71,8 +76,11 @@ final class CompanyModel: ObservableObject {
   /// company sync reads as not set up, so the rail shows nothing and the menu offers a calm "Connect your company…".
   func refreshQuietly() async {
     let wasChecking = syncState == .checkingNotice
-    let s = await service.statusQuietly()
-    if s != status { status = s }
+    let epoch = mutationEpoch
+    let r = await service.readQuietly()
+    // Only a fresh read, with no Pause in flight and no pause/ack finished meanwhile, may replace what is shown.
+    guard r.fresh, !pausing, epoch == mutationEpoch else { return }
+    if r.status != status { status = r.status }
     // The notice arrived after sign-in (the brain read the config late): bring it up once, as connect would have.
     if wasChecking, status.waitingForNotice, sheet == nil, connect == .idle { sheet = .notice }
   }
@@ -125,8 +133,9 @@ final class CompanyModel: ObservableObject {
   func acknowledge() {
     guard !busy else { return }
     busy = true
+    mutationEpoch += 1
     Task {
-      defer { busy = false }
+      defer { busy = false; mutationEpoch += 1 }
       do {
         status = try await service.acknowledgeNotice()
         sheet = nil
@@ -189,8 +198,9 @@ final class CompanyModel: ObservableObject {
     pausing = true
     let pause = !CompanyControls.isPaused(status)
     pausingTo = pause
+    mutationEpoch += 1
     Task {
-      defer { pausing = false }
+      defer { pausing = false; mutationEpoch += 1 }
       do { status = try await service.setPaused(pause) } catch { message = CompanyError.message(for: error) }
     }
   }
