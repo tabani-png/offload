@@ -11,6 +11,25 @@
  *   - kill switches (tenant, person, workflow) block approval and execution and revoke unspent tokens.
  *   - overnight policies (evaluateOvernight) mint the same token a person would, with approverKind "policy".
  * No model is in the loop anywhere below.
+ *
+ * LOCK ORDER (round 4). Every transaction in the broker, the policies module and the kill-switch routes takes row
+ * locks in this order and never goes back up it; a lock already held may be re-taken. Two rows of one table are
+ * locked in key order (policies by id, batches by hash). No share lock is ever upgraded: a path that may write a row
+ * locks it exclusively up front.
+ *   1. kill_switches   row FOR UPDATE / INSERT (routes only)
+ *   2. overnight_policies  FOR NO KEY UPDATE, by id (policy PATCH, propose, signals, executeItem, stopRunsFor; tripPolicy
+ *                      and reportRunResult UPDATE it first). Never FOR UPDATE, so the FK KEY SHARE an insert of a batch
+ *                      or token takes on its policy never waits on it.
+ *   3. batches         FOR UPDATE, by hash (loadBatch(lock), recompute, revokeBatch, unlinkPolicy, reconcile)
+ *   4. approval_tokens FOR UPDATE / UPDATE (only while 3 is held for the token's batch)
+ *   5. batch_items     FOR UPDATE / UPDATE (only while 3 is held for the item's batch)
+ *   6. overnight_counters FOR UPDATE / UPDATE / INSERT
+ *   7. advisory s207:<workflow>:<recipient> (executeItem, right before the journal)
+ *   8. contacted_ledger INSERT / UPDATE
+ * The night cap's per-policy step is the policy row lock (2), held by executeItem; there is no separate advisory lock.
+ * executeItem decides everything that unlinks or trips a policy before it locks its batch (unlinkPolicy and tripPolicy
+ * lock many batches, by hash, and must not start from one already held). A deadlock or serialization failure that still
+ * reaches a background transaction is retried once (`lockRetries` counts them); on an HTTP route it is a 409.
  */
 import type { Deps, Principal } from "../../app.ts";
 import { actorOf } from "../../app.ts";
@@ -159,6 +178,8 @@ export interface Broker extends BrokerPort {
   /** After a policy edit (policies module): a narrowing edit unlinks what the policy approved and has not sent; a
    * widening edit makes the rest of tonight a dry run (ADR 0112 §1-2). */
   policyChanged(tx: Tx, policyId: string, change: { narrowed: boolean; widened: boolean }): Promise<number>;
+  /** Broker transactions re-run after a deadlock or serialization failure (the lock order should keep this at 0). */
+  readonly lockRetries: number;
   /** Background commits started by approvals and policies; tests await it. */
   idle(): Promise<void>;
   dispatch(tenantId: string, hash: string, token: string): void;
@@ -401,13 +422,48 @@ async function runRefusal(tx: Tx, r: RunBinding, conn: ConnRow): Promise<string 
 
 const fingerprintOf = (c: ConnRow) => `${c.id}:${c.externalRef}:${c.ownership}:${c.kind}`;
 
+/** The SQLSTATE of a Postgres error ("" for anything else). */
+export function sqlStateOf(err: unknown): string {
+  const e = err as { errno?: unknown; code?: unknown } | null;
+  for (const v of [e?.errno, e?.code]) if (typeof v === "string" && /^[0-9A-Z]{5}$/.test(v)) return v;
+  return "";
+}
+/** Deadlock victim, serialization failure: the transaction rolled back whole and may run again. */
+export const RETRYABLE: readonly string[] = ["40P01", "40001"];
+
+/** A request's transaction lost a lock race (deadlock victim, serialization failure; `uniqueAs`: a concurrent insert of
+ * the same row): a clean 409 the client may retry, never a 500. Nothing of the transaction committed. */
+export async function cleanConflict<T>(p: Promise<T>, uniqueAs?: string): Promise<T> {
+  try {
+    return await p;
+  } catch (err) {
+    const code = sqlStateOf(err);
+    if (RETRYABLE.includes(code)) throw conflict("a concurrent change got there first: try again");
+    if (uniqueAs !== undefined && code === "23505") throw conflict(uniqueAs);
+    throw err;
+  }
+}
+
 export function createBroker(deps: Deps): Broker {
   const now = () => deps.clock.now();
   const audit = (tx: Tx, e: AuditInput) => deps.ports.audit.write(tx, e);
   let executors: Executors = {};
   const inflight = new Set<Promise<unknown>>();
-  const service = <T>(tenantId: string, fn: (tx: Tx) => Promise<T>) =>
-    withTenant(deps.db, { tenantId, principalId: null, principalPersonId: null, accessRole: "service" }, fn);
+  let lockRetries = 0;
+  /** A broker transaction. One that Postgres aborted as a deadlock victim or a serialization failure (nothing of it
+   * committed) runs once more: the lock order above should make that unreachable, so each retry is counted. */
+  const service = async <T>(tenantId: string, fn: (tx: Tx) => Promise<T>, retryOn: readonly string[] = []): Promise<T> => {
+    const run = () => withTenant(deps.db, { tenantId, principalId: null, principalPersonId: null, accessRole: "service" }, fn);
+    try {
+      return await run();
+    } catch (err) {
+      const code = sqlStateOf(err);
+      if (!RETRYABLE.includes(code) && !retryOn.includes(code)) throw err;
+      lockRetries++;
+      console.warn(`broker: transaction retried after ${code}`);
+      return run();
+    }
+  };
 
   // ---------- kill switches ----------
 
@@ -604,6 +660,8 @@ export function createBroker(deps: Deps): Broker {
 
   /** Revokes unspent tokens of a batch and un-schedules its approved, unsent items (they need a new approval). */
   async function revokeBatch(tx: Tx, hash: string, reason: string): Promise<number> {
+    // Lock order: the batch before its tokens and items (a caller may hold it already).
+    await tx`select 1 from batches where hash = ${hash} for update`;
     const t = new Date(now());
     const r = await tx`update approval_tokens set revoked_at = ${t}, revoked_reason = ${reason}
       where batch_hash = ${hash} and used_at is null and revoked_at is null`;
@@ -652,8 +710,11 @@ export function createBroker(deps: Deps): Broker {
     const t = new Date(now());
     const open = await tx`select distinct t.batch_hash from approval_tokens t where t.policy_id = ${policyId} and t.revoked_at is null
         and (t.used_at is null or exists (select 1 from batch_items i
-          where i.tenant_id = t.tenant_id and i.token_id = t.id and i.state = 'pending'))`;
+          where i.tenant_id = t.tenant_id and i.token_id = t.id and i.state = 'pending'))
+        order by t.batch_hash`;
+    // Lock order: the caller holds the policy; each batch (by hash) before its tokens and items.
     for (const o of open) {
+      await tx`select 1 from batches where hash = ${o.batch_hash} for update`;
       await tx`update approval_tokens set revoked_at = ${t}, revoked_reason = ${reason.slice(0, 200)}
         where batch_hash = ${o.batch_hash} and policy_id = ${policyId} and used_at is null and revoked_at is null`;
       await tx`update batch_items set token_id = null, scheduled_for = null, updated_at = ${t}
@@ -772,7 +833,9 @@ export function createBroker(deps: Deps): Broker {
       return reject("validation_failed", "run id must be a ULID and version a positive integer");
     }
     let policyToken: string | null = null;
+    // A unique violation is a concurrent propose of the same batch: run again, it finds that batch (idempotent or 409).
     const result = await service(tenantId, async (tx): Promise<ProposeResult> => {
+      policyToken = null;
       const named = input.flatMap((i) => [typeof i?.key === "string" ? i.key : "", ...(Array.isArray(i?.fields) ? i.fields.filter((f) => Array.isArray(f) && f[0] === "to").map((f) => String(f[1])) : [])]);
       const auditReject = async (r0: ProposeResult) => {
         if (r0.ok) return r0;
@@ -855,7 +918,7 @@ export function createBroker(deps: Deps): Broker {
         detail: { runId: run.runId, workflowId: run.workflowId, items: v.items.length, overnight: evaluation },
       });
       return { ok: true, batchHash: v.hash, state, overnightEvaluation: evaluation, autoApproved };
-    });
+    }, ["23505"]);
     if (result.ok && policyToken !== null) dispatch(tenantId, result.batchHash, policyToken);
     return result;
   }
@@ -1014,12 +1077,13 @@ export function createBroker(deps: Deps): Broker {
 
   async function commitApproved(tenantId: string, hash: string, token: string): Promise<CommitSummary> {
     const scheduled = await service(tenantId, async (tx): Promise<number | HttpError> => {
+      // Lock order: the batch, then its token (a rejection holds the batch and then revokes the token, Codex P2).
+      const b = await loadBatch(tx, hash, true);
       const [tk] = await tx`select * from approval_tokens where token_hash = ${sha256Hex(token)} for update`;
       if (!tk) throw forbidden("not an approval token");
       if (tk.batch_hash !== hash) throw new HttpError(409, "hash_mismatch", "this approval is for a different batch");
       if (tk.used_at !== null) throw new HttpError(409, "token_used", "this approval was already used");
       if (tk.revoked_at !== null) throw new HttpError(409, "token_used", "this approval was revoked");
-      const b = await loadBatch(tx, hash, true);
       if (!b) throw notFound();
       if (msNN(tk.expires_at as Date) <= now()) {
         await recompute(tx, hash);
@@ -1107,15 +1171,61 @@ export function createBroker(deps: Deps): Broker {
       | { done: "failed_before_send" | "waiting" }
       | { call: CommitCall; executor: Executor; target: CommitTarget; policy: ToolPolicy; b: BatchRow; policyId: string | null; recipient: string };
     const prepared = await service(tenantId, async (tx): Promise<Prepared> => {
-      // The policies this item depends on are read under FOR SHARE (N6), so an edit that pauses or narrows one either
-      // commits first and is seen, or waits for this send's journal. Taken before the batch and item locks: a policy
-      // edit locks its policy, then the batches it unlinks.
+      // Lock order (top of file): the policies this item depends on, exclusively and by id, before the batch. An edit
+      // that pauses or narrows one either commits first and is seen, or waits for this send's journal (N6). A trip below
+      // writes a row this transaction already holds exclusively: no share lock is upgraded (Codex P2, round 4).
       const pids = (await tx`select b.overnight_policy_id as id from batches b where b.hash = ${hash} and b.overnight_policy_id is not null
         union select t.policy_id from batch_items i join approval_tokens t on t.tenant_id = i.tenant_id and t.id = i.token_id
           where i.batch_hash = ${hash} and i.key = ${key} and t.policy_id is not null`).map((r: Record<string, unknown>) => r.id as string);
       if (pids.length > 0) {
-        await tx`select id from overnight_policies where id in (select jsonb_array_elements_text(${pids}::jsonb)::uuid) order by id for share`;
+        await tx`select id from overnight_policies where id in (select jsonb_array_elements_text(${pids}::jsonb)::uuid) order by id for no key update`;
       }
+      // Phase 1, under the policy locks only: everything that unlinks or trips a policy. unlinkPolicy and tripPolicy lock
+      // the policy's batches by hash, so they must not start from this batch's lock. A batch's binding is immutable
+      // (s207_batches_guard); the item and its token are read again under their locks in phase 2.
+      const b0 = await loadBatch(tx, hash);
+      if (!b0) return { done: "waiting" as const };
+      const [it0] = await tx`select state, token_id from batch_items where batch_hash = ${hash} and key = ${key}`;
+      if (!it0 || it0.state !== "pending" || it0.token_id === null) return { done: "waiting" as const };
+      const [tk0] = await tx`select batch_hash, item_keys, used_at, revoked_at, expires_at, policy_id from approval_tokens where id = ${it0.token_id}`;
+      if (!tk0 || tk0.used_at === null || tk0.revoked_at !== null) return { done: "waiting" as const };
+      // An expired approval, or one that does not name this item, is taken back in phase 2 (before any policy check).
+      const live0 = msNN(tk0.expires_at as Date) > now() && tk0.batch_hash === hash && (tk0.item_keys as string[]).includes(key);
+      // A policy approval holds only while its policy is active (ADR 0112 §1): paused, tripped or gone fails closed and
+      // the policy's unsent items go back to a person.
+      if (live0 && tk0.policy_id !== null) {
+        // A token re-minted since the lock above is read next time, under its lock.
+        if (!pids.includes(tk0.policy_id as string)) return { done: "waiting" as const };
+        const pol = await overnightById(tx, tk0.policy_id as string);
+        if (pol?.state !== "active") {
+          await unlinkPolicy(tx, tk0.policy_id as string, `policy ${pol?.state ?? "gone"}`);
+          return { done: "waiting" as const };
+        }
+        // The policy approves in its owner's place only for the owner's own runs (N1), as it is now.
+        if (pol.ownerPersonId !== b0.runnerPersonId || pol.workflowId !== b0.workflowId || pol.version !== b0.version) {
+          await unlinkPolicy(tx, pol.id, "policy does not cover this run");
+          return { done: "waiting" as const };
+        }
+        // Nothing a policy approved goes out while it is in its dry-run nights, or on a night (tonight's or the one it
+        // was approved on) that is a dry run: the evaluator's decision is not the only guard (Codex P1).
+        const night = nightOf(now(), await tenantTimezone(tx));
+        const [dry] = await tx`select 1 from overnight_counters c where c.policy_id = ${pol.id} and c.dry_run
+          and (c.night = ${night}::date or c.night = (select i.policy_night from batch_items i where i.batch_hash = ${hash} and i.key = ${key}))
+          limit 1`;
+        if (pol.dryRunNightsDone < pol.dryRunNights || dry) {
+          await unlinkPolicy(tx, pol.id, "dry-run night");
+          return { done: "waiting" as const };
+        }
+        // A changed commit connection trips the breaker here too, not only at evaluation (ADR 0106 §3).
+        const c0 = await connectionOf(tx, b0.connectionId);
+        const [pf] = await tx`select connection_fingerprint from overnight_policies where id = ${pol.id}`;
+        const prior = (pf?.connection_fingerprint as string | null) ?? null;
+        if (c0 !== null && prior !== null && prior !== fingerprintOf(c0)) {
+          await tripPolicy(tx, pol.id, "connection_auth_change", hash, {});
+          return { done: "waiting" as const };
+        }
+      }
+      // Phase 2: the batch, then the item.
       const b = await loadBatch(tx, hash, true);
       if (!b) return { done: "waiting" as const };
       const [raw] = await tx`select * from batch_items where batch_hash = ${hash} and key = ${key} for update`;
@@ -1123,6 +1233,8 @@ export function createBroker(deps: Deps): Broker {
       const row = itemRow(raw);
       named = [key, row.recipient];
       if (row.state !== "pending" || row.tokenId === null) return { done: "waiting" as const };
+      // Re-pointed since phase 1 (a new approval): its policy checks run next time.
+      if (row.tokenId !== it0.token_id) return { done: "waiting" as const };
       const [tk] = await tx`select batch_hash, item_keys, used_at, revoked_at, expires_at, approver_kind, approved_by, policy_id, binding_hash from approval_tokens where id = ${row.tokenId}`;
       if (!tk || tk.used_at === null || tk.revoked_at !== null) return { done: "waiting" as const };
       /** This item (only) goes back to a person: no token, not scheduled. */
@@ -1138,41 +1250,15 @@ export function createBroker(deps: Deps): Broker {
       // The token authorises the keys it was minted for, in its own batch, and nothing an item row points at later.
       if (tk.batch_hash !== hash || !(tk.item_keys as string[]).includes(key)) return takeBack("the approval does not name this item");
       const conn0 = await connectionOf(tx, b.connectionId);
-      // A policy approval holds only while its policy is active (ADR 0112 §1): paused, tripped or gone fails closed and
-      // the policy's unsent items go back to a person.
       if (tk.policy_id !== null) {
-        // A token re-minted since the lock above is read next time, under its lock.
+        // Phase 1 passed under the policy lock still held, so the policy is as it was there.
         if (!pids.includes(tk.policy_id as string)) return { done: "waiting" as const };
         const pol = await overnightById(tx, tk.policy_id as string);
-        if (pol?.state !== "active") {
-          await unlinkPolicy(tx, tk.policy_id as string, `policy ${pol?.state ?? "gone"}`);
-          return { done: "waiting" as const };
-        }
-        // The policy approves in its owner's place only for the owner's own runs (N1), as it is now.
-        if (pol.ownerPersonId !== b.runnerPersonId || pol.workflowId !== b.workflowId || pol.version !== b.version) {
-          await unlinkPolicy(tx, pol.id, "policy does not cover this run");
-          return { done: "waiting" as const };
-        }
-        // Nothing a policy approved goes out while it is in its dry-run nights, or on a night (tonight's or the one it
-        // was approved on) that is a dry run: the evaluator's decision is not the only guard (Codex P1).
+        if (pol?.state !== "active") return { done: "waiting" as const };
         const night = nightOf(now(), await tenantTimezone(tx));
-        const [dry] = await tx`select 1 from overnight_counters c where c.policy_id = ${pol.id} and c.dry_run
-          and (c.night = ${night}::date or c.night = (select i.policy_night from batch_items i where i.batch_hash = ${hash} and i.key = ${key}))
-          limit 1`;
-        if (pol.dryRunNightsDone < pol.dryRunNights || dry) {
-          await unlinkPolicy(tx, pol.id, "dry-run night");
-          return { done: "waiting" as const };
-        }
-        // A changed commit connection trips the breaker here too, not only at evaluation (ADR 0106 §3).
-        const [pf] = await tx`select connection_fingerprint from overnight_policies where id = ${pol.id}`;
-        const prior = (pf?.connection_fingerprint as string | null) ?? null;
-        if (conn0 !== null && prior !== null && prior !== fingerprintOf(conn0)) {
-          await tripPolicy(tx, pol.id, "connection_auth_change", hash, {});
-          return { done: "waiting" as const };
-        }
         // The night cap on the night it actually goes out (an approval of last night may send after tonight began, next
-        // to tonight's own approvals): what the policy journaled since tonight began, one step per policy.
-        await tx`select pg_advisory_xact_lock(hashtextextended(${`s207p:${pol.id}`}, 0))`;
+        // to tonight's own approvals): what the policy journaled since tonight began, one step per policy (the policy
+        // row lock above).
         const ownerTz = await tenantTimezone(tx);
         const [journaled] = await tx`select count(*)::int as n from contacted_ledger where policy_id = ${pol.id}
           and at >= ((${night}::date + time '12:00') at time zone ${ownerTz})`;
@@ -1276,6 +1362,8 @@ export function createBroker(deps: Deps): Broker {
     if (error !== null) error = scrubFor(error, [key, prepared.recipient]);
     const state = ok ? "sent" : "unknown";
     await service(tenantId, async (tx) => {
+      // Lock order: the batch before its item and the night's counters (tripPolicy holds batches, then counters).
+      await tx`select 1 from batches where hash = ${hash} for update`;
       const t = new Date(now());
       await tx`update batch_items set state = ${state}, error = ${error === null ? null : error.slice(0, 500)},
           sent_at = ${ok ? t : null}, updated_at = ${t}
@@ -1300,8 +1388,14 @@ export function createBroker(deps: Deps): Broker {
   async function reconcile(tenantId: string, staleMs = SENDING_STALE_MS): Promise<number> {
     return service(tenantId, async (tx) => {
       const t = new Date(now());
+      // Lock order: every batch touched (by hash) before its items.
+      const stale = await tx`select distinct batch_hash from batch_items where state = 'sending' and updated_at <= ${new Date(now() - staleMs)}
+        order by batch_hash`;
+      for (const s of stale) await tx`select 1 from batches where hash = ${s.batch_hash} for update`;
       const rows = await tx`update batch_items set state = 'unknown', error = 'no result: the broker stopped during the call', updated_at = ${t}
-        where state = 'sending' and updated_at <= ${new Date(now() - staleMs)} returning batch_hash, key`;
+        where state = 'sending' and updated_at <= ${new Date(now() - staleMs)}
+          and batch_hash in (select jsonb_array_elements_text(${stale.map((x: Record<string, unknown>) => x.batch_hash as string)}::jsonb))
+        returning batch_hash, key`;
       for (const r of rows) {
         await tx`update contacted_ledger set outcome = 'unknown' where batch_hash = ${r.batch_hash} and item_key = ${r.key}`;
         await recompute(tx, r.batch_hash as string);
@@ -1326,8 +1420,10 @@ export function createBroker(deps: Deps): Broker {
     const hashes = await tx`select distinct t.batch_hash from approval_tokens t join batches b on b.tenant_id = t.tenant_id and b.hash = t.batch_hash
       where (t.approved_by = ${personId} or b.runner_person_id = ${personId} or (b.identity_type = 'person' and b.identity_id = ${personId}))
         and t.revoked_at is null and (t.used_at is null or exists (select 1 from batch_items i
-          where i.tenant_id = t.tenant_id and i.batch_hash = t.batch_hash and i.state = 'pending' and i.token_id = t.id))`;
+          where i.tenant_id = t.tenant_id and i.batch_hash = t.batch_hash and i.state = 'pending' and i.token_id = t.id))
+      order by t.batch_hash`;
     let n = 0;
+    // Lock order: batches by hash (revokeBatch locks each before its tokens).
     for (const h of hashes) n += await revokeBatch(tx, h.batch_hash as string, "person");
     if (hashes.length > 0) {
       await audit(tx, { actor: SERVICE, action: "token.revoke", subjectPersonId: personId, resource: { type: "person", id: personId }, detail: { tokens: n, batches: hashes.length } });
@@ -1338,11 +1434,12 @@ export function createBroker(deps: Deps): Broker {
   async function revokeForKill(tx: Tx, scope: "tenant" | "person" | "workflow", targetId: string | null, reason: string): Promise<number> {
     const hashes =
       scope === "tenant"
-        ? await tx`select hash from batches where state in ('pending', 'approved', 'sending')`
+        ? await tx`select hash from batches where state in ('pending', 'approved', 'sending') order by hash`
         : scope === "person"
           ? await tx`select hash from batches where state in ('pending', 'approved', 'sending')
-              and (runner_person_id = ${targetId} or (identity_type = 'person' and identity_id = ${targetId}))`
-          : await tx`select hash from batches where state in ('pending', 'approved', 'sending') and workflow_id = ${targetId}`;
+              and (runner_person_id = ${targetId} or (identity_type = 'person' and identity_id = ${targetId})) order by hash`
+          : await tx`select hash from batches where state in ('pending', 'approved', 'sending') and workflow_id = ${targetId} order by hash`;
+    // Lock order: the kill switch row (the route), then batches by hash.
     let n = 0;
     for (const h of hashes) n += await revokeBatch(tx, h.hash as string, reason);
     return n;
@@ -1405,6 +1502,8 @@ export function createBroker(deps: Deps): Broker {
     revokeTokensOf: revokeTokensFor,
     revokeTokensFor,
     async stopRunsFor(tx, personId) {
+      // Lock order: the person's policies (by id) before any batch; pausing them below upgrades nothing.
+      await tx`select id from overnight_policies where owner_person_id = ${personId} and state = 'active' order by id for no key update`;
       const tokens = await revokeTokensFor(tx, personId);
       // A system pause (N3): no person paused it, so only an owner, admin or dept lead resumes it.
       const pol = await tx`update overnight_policies set state = 'paused', paused_by = null, updated_at = ${new Date(now())}
@@ -1413,6 +1512,9 @@ export function createBroker(deps: Deps): Broker {
       return { tokens, policies: pol.count, workers };
     },
     revokeForKill,
+    get lockRetries() {
+      return lockRetries;
+    },
     proposeBatch,
     approve,
     reject: rejectBatch,

@@ -6,7 +6,7 @@ import type { Tx } from "../../db/pool.ts";
 import { msNN } from "../../db/pool.ts";
 import { isUuid } from "../../db/tenant.ts";
 import { conflict, forbidden, invalid, notFound, page, pageParams } from "../../schema/http.ts";
-import type { ApprovalRequest, BatchDto, BatchState, Broker } from "./broker.ts";
+import { cleanConflict, type ApprovalRequest, type BatchDto, type BatchState, type Broker } from "./broker.ts";
 import { BATCH_LIST, KILL_CREATE, KILL_LIST, REJECT, RELEASE, readLocal, replyLocal } from "./schemas.ts";
 
 const BATCH = "offload/stage2/batch.schema.json";
@@ -81,7 +81,7 @@ export function batchRoutes(app: App, deps: Deps, broker: () => Broker): void {
     const hash = hashParam(c);
     const req = await body<ApprovalRequest>(c, deps, "offload/stage2/approval.schema.json#/$defs/request");
     const p0 = principalOf(c);
-    const r = await tenantTx(c, deps, (tx, p) => broker().approve(tx, p, hash, req));
+    const r = await cleanConflict(tenantTx(c, deps, (tx, p) => broker().approve(tx, p, hash, req)), "an identical batch already exists");
     // The token never leaves the broker: it is spent right after the approval is committed.
     broker().dispatch(p0.tenantId, r.response.batchHash, r.token);
     return reply(c, deps, 200, r.response, "offload/stage2/approval.schema.json#/$defs/response");
@@ -90,14 +90,14 @@ export function batchRoutes(app: App, deps: Deps, broker: () => Broker): void {
   app.post("/v1/batches/:hash/reject", async (c) => {
     const hash = hashParam(c);
     const { reason } = await readLocal<{ reason: string }>(c, REJECT);
-    const out = await tenantTx(c, deps, (tx, p) => broker().reject(tx, p, hash, reason));
+    const out = await cleanConflict(tenantTx(c, deps, (tx, p) => broker().reject(tx, p, hash, reason)));
     return reply(c, deps, 200, out, BATCH);
   });
 
   app.post("/v1/batches/:hash/release", async (c) => {
     const hash = hashParam(c);
     const { keys } = await readLocal<{ keys: string[] }>(c, RELEASE);
-    const out = await tenantTx(c, deps, (tx, p) => broker().release(tx, p, hash, keys));
+    const out = await cleanConflict(tenantTx(c, deps, (tx, p) => broker().release(tx, p, hash, keys)));
     return reply(c, deps, 200, out, BATCH);
   });
 }
@@ -205,7 +205,8 @@ export function killRoutes(app: App, deps: Deps, broker: () => Broker): void {
   app.post("/v1/kill-switches", async (c) => {
     const req = await readLocal<{ scope: KillScope; targetId: string | null; reason: string }>(c, KILL_CREATE);
     if ((req.scope === "tenant") !== (req.targetId === null)) throw invalid("a tenant switch has no targetId; the others need one");
-    const out = await tenantTx(c, deps, async (tx, p) => {
+    // A concurrent set of the same switch loses on the unique index: 409, like the duplicate check below.
+    const out = await cleanConflict(tenantTx(c, deps, async (tx, p) => {
       await killScopeCheck(tx, deps, p, req.scope, req.targetId);
       if (req.scope === "person") {
         const [r] = await tx`select 1 from people where id = ${req.targetId}`;
@@ -229,7 +230,7 @@ export function killRoutes(app: App, deps: Deps, broker: () => Broker): void {
         detail: { scope: req.scope, targetId: req.targetId, reason: req.reason, tokensRevoked: revoked, workersPaused: workers },
       });
       return killDto(killRow(row!));
-    });
+    }), "this kill switch is already on");
     return reply(c, deps, 201, out, "offload/stage2/kill-switch.schema.json");
   });
 
@@ -240,7 +241,7 @@ export function killRoutes(app: App, deps: Deps, broker: () => Broker): void {
     if (!["tenant", "person", "workflow"].includes(scope)) throw notFound();
     const targetId = scope === "tenant" ? (raw === "null" ? null : undefined) : isUuid(raw) ? raw : undefined;
     if (targetId === undefined) throw notFound();
-    const out = await tenantTx(c, deps, async (tx, p) => {
+    const out = await cleanConflict(tenantTx(c, deps, async (tx, p) => {
       const [r] = await tx`select * from kill_switches where active and scope = ${scope}
         and target_id is not distinct from ${targetId}::uuid for update`;
       if (!r) throw notFound();
@@ -264,7 +265,7 @@ export function killRoutes(app: App, deps: Deps, broker: () => Broker): void {
         detail: { scope: k.scope, targetId: k.targetId },
       });
       return killDto(killRow(row!));
-    });
+    }));
     return reply(c, deps, 200, out, "offload/stage2/kill-switch.schema.json");
   });
 }

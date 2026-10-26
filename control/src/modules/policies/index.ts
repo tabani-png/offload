@@ -8,7 +8,7 @@ import { actorOf, body, reply, tenantTx } from "../../app.ts";
 import type { Tx } from "../../db/pool.ts";
 import { isUuid } from "../../db/tenant.ts";
 import { conflict, forbidden, invalid, notFound, page, pageParams } from "../../schema/http.ts";
-import { brokerOf } from "../broker/broker.ts";
+import { brokerOf, cleanConflict } from "../broker/broker.ts";
 import { OVERNIGHT_LIST, OVERNIGHT_PATCH, readLocal, replyLocal } from "../broker/schemas.ts";
 import { itemRef } from "../broker/stage1.ts";
 import type { RegistryApi, RegistryVersion } from "../registry/port.ts";
@@ -179,7 +179,7 @@ function routes(app: App, deps: Deps): void {
     if (req.dryRunNightsDone !== 0 || req.state !== "active" || req.trippedReason !== null) {
       throw invalid("a new policy starts active with no dry-run nights done and no trip");
     }
-    const out = await tenantTx(c, deps, async (tx, p) => {
+    const out = await cleanConflict(tenantTx(c, deps, async (tx, p) => {
       await ownerAccess(tx, p, req.ownerPersonId, true);
       const wf = await workflowOf(tx, deps, req.workflowId, req.version);
       if (!(await ownerRuns(tx, wf, req.ownerPersonId))) throw invalid("the owner does not run this workflow");
@@ -201,14 +201,14 @@ function routes(app: App, deps: Deps): void {
         detail: { workflowId: saved.workflowId, version: saved.version, mode: saved.mode, templateHash: saved.templateHash },
       });
       return viewOf(p, saved);
-    });
+    }), "a policy with this id exists");
     return reply(c, deps, 201, out, OVERNIGHT_POLICY);
   });
 
   app.patch("/v1/overnight-policies/:id", async (c) => {
     const id = idParam(c);
     const patch = await readLocal<Partial<OvernightPolicy>>(c, OVERNIGHT_PATCH);
-    const out = await tenantTx(c, deps, async (tx, p) => {
+    const out = await cleanConflict(tenantTx(c, deps, async (tx, p) => {
       const cur = await overnightById(tx, id, true);
       if (!cur) throw notFound();
       await ownerAccess(tx, p, cur.ownerPersonId, true);
@@ -268,7 +268,7 @@ function routes(app: App, deps: Deps): void {
         detail: { changed: Object.keys(patch).sort(), state: saved.state, narrowed: change.narrowed, widened: change.widened, unlinkedBatches: unlinked },
       });
       return viewOf(p, saved);
-    });
+    }));
     return reply(c, deps, 200, out, OVERNIGHT_POLICY);
   });
 }
