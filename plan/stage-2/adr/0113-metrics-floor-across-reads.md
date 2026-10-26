@@ -68,10 +68,16 @@ pass the floor in the tree of the cell it is shown in.
 - Baseline samples are workflow reference data (ADR 0109 §7) and stay outside this rule.
 - Workflow-keyed figures (round 6): a department's or job role's top workflows and workflow anomalies depend only on
   its own subtree: floor people behind the figure in scope, and its listed children leave 0 or at least floor people
-  unaccounted for. The company applies the same over its departments, so it drops a workflow rather than let company
-  minus departments isolate a few people. Anomalies are filtered before the 100-entry cap.
-- Evidence lists raw baseline samples only when at least floor people sent samples for that version; the baseline the
-  formula uses (n, median, quartiles, grade) is always shown, since it is in every run's figures.
+  unaccounted for. The company applies the same over everything listed below it (listed departments and, under an
+  unlisted department, its listed job roles), so it drops a workflow rather than let any subtraction of listed figures
+  isolate a few people (round 7). Anomalies are filtered before the 100-entry cap.
+- Evidence for a version whose baseline samples come from 1 to floor-1 people is 422 group_floor (round 7): the median
+  is then someone's own timing, and every listed run carries it as baselineSeconds, so neither stats nor runs can be
+  shown and no number is made up. The only sender reading their own runs is the exception; a version with no samples
+  (default or estimate) is no one's timing. Raw samples need floor senders too. Why hours totals still use such a
+  baseline: hs-1 (ADR 0109) multiplies a workflow's baseline by items sent, minus each run's residual, and sums over
+  runs; a group figure shows that sum only over floor people, mixed with their residuals, never the baseline itself.
+  Flooring baselines by sender there would withhold hours saved for most workflows, whose baseline one owner records.
 - Adoption: when any field's contributor set fails (for example a residual median from fewer than floor people), the
   whole cell is suppressed. The frozen schema has no per-field marker, and a 0 would read as a measurement (ADR 0005).
   The proper future schema change is a nullable field (null = not shown), so the other fields can stay.

@@ -45,11 +45,12 @@ function hoursCells(input: ReportInput): { rows: RunRow[]; sel: (rs: readonly Ru
 
 /**
  * Whether a workflow-keyed figure (a top workflow's seconds, a workflow anomaly) may be shown in a visible group scope
- * (PR #9 rounds 4-6). `behind` picks the runs behind the figure. The scope needs at least `floor` people behind it, and
- * the figure depends only on the scope's own subtree: a department lists it when its listed children (job roles shown
- * in its report, each with floor people behind it) leave 0 or at least floor people unaccounted for; the company the
- * same over its departments. So department minus job roles, or company minus departments, never isolates 1 to floor-1
- * people, and a department's list never moves with data of another department (round 6).
+ * (PR #9 rounds 4-7). `behind` picks the runs behind the figure. The scope needs at least `floor` people behind it, and
+ * the figure depends only on the scope's own subtree: a department lists it when its listed job roles (shown in its
+ * report, each with floor people behind it) leave 0 or at least floor people unaccounted for. The company does the same
+ * over everything listed below it: listed departments and, under an unlisted department, its listed job roles. So no
+ * subtraction of listed figures isolates 1 to floor-1 people, and a department's list never moves with data of another
+ * department (round 6); only the company's does, and the company contains them.
  */
 function workflowLister(v: GroupView, floor: number): (scope: Scope, behind: (r: RunRow) => boolean) => boolean {
   const all = v.cells.over(v.cells.rows);
@@ -75,14 +76,23 @@ function workflowLister(v: GroupView, floor: number): (scope: Scope, behind: (r:
     const rows = v.cells.sel(v.cells.rows.filter(behind), scope);
     if (people(rows) < floor) return false;
     if (scope.type === "job_role" || scope.type === "person") return true;
-    const key = (r: RunRow) => (scope.type === "company" ? r.departmentId : r.jobRoleId);
-    const ok = new Set<string>();
-    for (const k of childrenIn(v.h, scope)) {
-      const id = k.scope.id!;
-      const shown = scope.type === "company" ? deptShown(id) : rolesShown(scope.id!).has(id);
-      if (shown && listed(k.scope, (r) => behind(r) && (scope.type === "company" || r.departmentId === scope.id))) ok.add(id);
+    // Everyone a reader can subtract from this node: its listed children and, under an unlisted department, that
+    // department's listed job roles (round 7: a role listed below an unlisted department is still subtractable).
+    const covered = new Set<string>();
+    const cover = (c: Scope) => {
+      for (const r of v.cells.sel(rows, c)) covered.add(r.personId);
+    };
+    const roleListed = (deptId: string, role: Scope) => rolesShown(deptId).has(role.id!) && listed(role, behind);
+    if (scope.type === "department") {
+      for (const k of childrenIn(v.h, scope)) if (roleListed(scope.id!, k.scope)) cover(k.scope);
+    } else {
+      for (const d of v.h.departments) {
+        if (!deptShown(d.scope.id!)) continue;
+        if (listed(d.scope, behind)) cover(d.scope);
+        else for (const k of childrenIn(v.h, d.scope)) if (roleListed(d.scope.id!, k.scope)) cover(k.scope);
+      }
     }
-    const left = people(rows.filter((r) => { const k = key(r); return k === null || !ok.has(k); }));
+    const left = people(rows.filter((r) => !covered.has(r.personId)));
     return left === 0 || left >= floor;
   };
   return listed;
@@ -204,7 +214,7 @@ async function hoursSaved(c: Context<AppEnv>, deps: Deps): Promise<HoursSavedRep
 }
 
 /**
- * Evidence for one workflow version: its baseline (every sample, from every device: counted; listed only from floor
+ * Evidence for one workflow version: its baseline (every sample, from every device: counted; shown only from floor
  * senders) and the runs in the caller's scope (listed). Runs of people outside the scope are never listed. Below the
  * group floor of people in scope the answer is 422 group_floor, except a member's own runs (S).
  */
@@ -227,15 +237,21 @@ async function hoursEvidence(c: Context<AppEnv>, deps: Deps) {
     if (cell !== "S" && new Set(runs.map((r) => r.personId)).size < floor) {
       throw new HttpError(422, "group_floor", `fewer than ${floor} people ran this workflow in your scope in the period`);
     }
+    // The baseline is the median of its samples, and every listed run carries it (baselineSeconds): with fewer than
+    // `floor` people behind the samples it is someone's own timing (round 7). Then nothing is shown (no stats can be
+    // dropped from the schema, and no number is made up), unless the reader is the only sender. A version with no
+    // samples uses a default or estimate, which is no one's timing.
+    const senders = (await withAggregateRead(tx, () => tx`select distinct person_id from baseline_samples
+      where workflow_id = ${workflowId} and version = ${version}`)) as Array<{ person_id: string }>;
+    const onlyMe = cell === "S" && senders.every((x) => x.person_id === p0.personId);
+    if (senders.length > 0 && senders.length < floor && !onlyMe) {
+      throw new HttpError(422, "group_floor", `fewer than ${floor} people sent baseline samples for this workflow version`);
+    }
     const reviews = await loadReviews(tx, runs);
     const samples = await withAggregateRead(tx, () => loadSamples(tx, [workflow]));
     const ev = evidence({ runs, reviews, samples, estimates: [], period, timezone, workflowId, version });
-    // The baseline the formula uses (n, median, quartiles, grade) is shown as is: it is in every run's figures. The raw
-    // samples (each instance's seconds and day) are listed only when at least `floor` people sent samples for this
-    // version, so one person's own timings never show (round 6). Otherwise the list is empty.
-    const [senders] = await withAggregateRead(tx, () => tx`select count(distinct person_id)::int as n from baseline_samples
-      where workflow_id = ${workflowId} and version = ${version}`);
-    const rawOk = (senders!.n as number) >= floor;
+    // Raw samples (each instance's seconds and day) only from floor senders; the reader's own, in member scope.
+    const rawOk = senders.length >= floor || onlyMe;
     const start = after === null ? 0 : ev.runs.findIndex((r) => r.endedAt > after.e || (r.endedAt === after.e && r.runId > after.r));
     const rest = start < 0 ? [] : ev.runs.slice(start, start + limit + 1);
     const pg = page(rest, limit, (l) => ({ e: l.endedAt, r: l.runId }));
