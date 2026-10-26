@@ -559,6 +559,103 @@ kind, the order, a figure or holds a digit is ignored (`designedBy: "rules"`).
   model unless `--model` is given, like `draft`); `solutions approve --brief sol_ID --hash H --home DIR`;
   `solutions handoff --brief sol_ID --token T --home DIR`. `analyze --json` carries the same additive fields.
 
+## Builds (s24): build a brief until its frozen checks pass (dry run, additive)
+A tool / setup / remove_step brief is built by the brief runner (`src/builder/`). Outcome-based: done means the
+check script exits 0, never "the model says done".
+- `POST /solutions/:id/checks` (no body) -> 201 `{set: CheckSet, content, buildMd}`. A separate model call (role
+  `build_checks`, router route `draft`, Sonnet) turns the brief's `acceptance` lines into ONE check script
+  (`accept.py` or `accept.test.ts`), stored at `solutions/<id>/checks/` with its sha256 and shown in
+  `solutions/<id>/BUILD.md`. `CheckSet = {version, briefId, briefHash, file, sha256, model, createdAt}`.
+- `POST /solutions/:id/build/approve {briefHash, checkHash}` -> `{briefHash, checkHash, token}` (token shown once,
+  single use). 409 when either hash is not the current one or a file changed; same rules as the s05 / s22 gates.
+- `POST /solutions/:id/build {token}` -> 201 `RunRecord` (403 no / wrong approval or bypass outside a container,
+  409 token used or check changed after approval). Fresh workspace `builds/<run_id>/workspace`; each try is one Agent
+  SDK `query()` (tools Read, Write, Edit, Glob, Grep, Bash with a command allowlist; no network tools; cwd locked;
+  `accept/` read-only); the runner checks the script's sha256 and runs it; a failure's exact output feeds the next
+  try. Caps: 3 tries, $1, 30 turns per try, 10 min. DRY RUN: files stay in the workspace (`artifactPath`);
+  installing them is a separate approval, not offered here.
+- `GET /builds/:runId` -> `RunRecord`: `{version, id, briefId, briefHash, checkHash, checkFile, dryRun: true,
+  models {checkWriter, builder, reported[]}, versions {sdk, claudeCode}, profile {mode, containerSandbox, sandbox, tools,
+  disallowedTools, bashAllow, limits}, tries[{n, result, turns, costUsd, tokens, checkExit, checkOutput (last 4k),
+  checkHashOk, ms}], totals {costUsd, tokens, turns}, startedAt, wallMs, outcome: PASS|FAIL|CAP|TAMPER, reason,
+  artifactPath, artifactSha256, denials[]}`. Records are written once (`builds/<run_id>.json`) plus a line in `builds/runs.jsonl`.
+- `GET /insights/:id/solutions`: each built brief option gains, additively, `build {runId, outcome, costUsd, tries,
+  totalCostUsd}` (hours saved vs cost).
+- CLI: `build --solution N|ins_ID|held:N --option n --home DIR [--model stub|real] [--json]` (brief + checks, prints both
+  hashes); `build approve --brief sol_ID --brief-hash H --check-hash C --home DIR`; `build run --brief sol_ID --token T
+  --home DIR [--max-tries N] [--max-usd X]` (exit 0 only on PASS); `build record --run run_ID --home DIR`.
+- Env: `OFFLOAD_BUILDER_SANDBOX=container` is refused for now ("container mode is not supported yet"; 403 / exit 2),
+  so bypass mode never runs either: macOS `sandbox-exec` is the only execution path and other platforms fail
+  closed. Design note for a future container mode: the runner, the harness (frozen/) and the credentials (cred/)
+  must stay OUTSIDE the container (separate filesystem and user), with only the workspace mounted in. Claude Code
+  subprocesses get `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`.
+- Isolation: builder Bash commands and the acceptance check run under an OS sandbox (macOS `sandbox-exec`,
+  deny-default: workspace read-write, `accept/` and the frozen master at `builds/<run>/frozen/` read-only,
+  toolchain read-only, no network) via `env -i` with only PATH, HOME=workspace, LANG, TMPDIR=workspace/.tmp. The
+  check executes as `workspace/accept/<file>` (so artifact imports resolve from the workspace) and is hashed against
+  the frozen master before and after every run; it gets only the remaining wall budget and a result after the
+  deadline is CAP, never PASS. PASS needs exit 0 AND a completion proof from the trusted harness
+  (`builds/<run>/frozen/harness.py`) carrying a per-run nonce (given on stdin, echoed in a final `OFFLOAD_PROOF` stdout
+  line that is cut from the stored output): the check never loads builder code into its own
+  process (it runs the built tool as a subprocess; workspace imports are refused), and when the check or any builder
+  command ends the harness stops every process left in that sandbox instance (fork + setsid daemons included).
+  `RunRecord.artifactSha256` is the workspace hash at the verdict; an install step must refuse when
+  `verifyArtifact(home, runId)` is false. The approval is verified first and claimed atomically (O_EXCL
+  `build-approval.claim`) after setup, so a failed setup keeps it.
+  Every builder Bash command runs through one per-run sandboxed supervisor (harness "serve"): the command is the
+  supervisor's child, so one sweep reaches every builder process ever started. Commands reach the runner over a unix
+  socket the unsandboxed runner owns (0700 /tmp folder; sandboxed processes may only connect; `run` only); the runner
+  talks to the supervisor ONLY over its private stdin/stdout pipes with a per-request nonce, so a sweep verdict cannot
+  be impersonated. No secret or socket path is in any argv. Per try: sweep, hash, check, sweep, hash; both hashes
+  must match (a check must not change the workspace) and the final double hash must match too. No /tmp/ofl-* folder
+  outlives a run.
+  Credentials: no key or token is in any process environment during a build. Claude Code gets the key through
+  `apiKeyHelper` (a script in `builds/<run>/cred/`, 0700, outside every sandbox read path, removed after the run;
+  it prints a 0600 key file from the run's env object, or reads the Keychain item named by
+  OFFLOAD_ANTHROPIC_KEYCHAIN). A brain whose ORIGINAL (launch) environment holds any secret-bearing variable
+  refuses to build (403 / exit 2; the message names the variables, never the values): a name like *_TOKEN,
+  *_SECRET*, *PASSWORD*, *PASSWD*, *_CREDENTIAL(S), *_API_KEY, *_ACCESS_KEY, *_KEY, *_AUTH_*, or a secret-shaped
+  value. Allowed look-alikes: TERM_SESSION_ID, SECURITYSESSIONID, SSH_AUTH_SOCK (a socket the sandbox cannot reach)
+  and OFFLOAD_TOKEN (the app's 127.0.0.1 bearer; no network in the sandbox, and a known value for the artifact scan).
+  The launch environment is read as other processes see it (`ps -E`), so unsetting a variable does not help. Start
+  Offload from the app (Finder) or keep secrets out of the shell that starts the brain. Before any PASS and in
+  `verifyArtifact`, every byte of every workspace file is scanned in overlapping chunks for exact known secret values
+  and secret-shaped strings (accept/, the approved check, for exact known values only); a hit is FAIL "artifact contains a secret", and a
+  file over 64 MB fails closed ("artifact file too large to scan").
+  Nothing in the retained artifact is exempt: disposable folders (__pycache__, .pytest_cache, .mypy_cache,
+  .ruff_cache, node_modules/.cache, the builder's .tmp) are scanned for secrets, then deleted after each sweep; every
+  hash covers everything that remains, and `verifyArtifact` fails if a disposable folder reappears.
+  The artifact is sized from metadata before any read: a sparse file, a file over 64 MB or a workspace over 256 MB
+  is FAIL "artifact rejected"; hashing and scanning then read asynchronously in chunks, bounded by the wall budget
+  plus 30 s.
+  Every exit path (PASS, FAIL, CAP, TAMPER, an error, an unreadable artifact, SIGTERM/SIGINT/SIGHUP to the brain)
+  releases the supervisor (it sweeps its sandbox instance first), the command socket and its /tmp/ofl-* folder, and
+  `cred/`; any error after setup is a recorded FAIL (an unreadable workspace file: "artifact unreadable"). A check's
+  report (JUnit / DONE marker) is read while the check runs, capped at 8 MB ("report too large" = not a pass).
+  OFF BY DEFAULT: a build runs only when the brain has OFFLOAD_BUILDER_ENABLED=1 (else 403 / exit 2 with the reason),
+  because of this residual (routed to S2-12):
+  - What: sandboxed builder code can read the full command line AND environment of every process of the same user
+    that is not an Apple platform binary (e.g. bun, node, python, Claude Code, editors, terminals' child tools), via
+    sysctl KERN_PROCARGS2 ({CTL_KERN, KERN_PROCARGS2, pid}).
+  - Why sandbox-exec cannot stop it: the sandbox does not mediate KERN_PROCARGS2 at all. Verified on this macOS:
+    readable with `sysctl-read` fully denied, with a sysctl-name allow-list, with `(deny sysctl-read (sysctl-name
+    "kern.procargs2"))`, and with `(deny process-info*)` variants (which only break python). Unsetting a variable
+    does not erase it (the original stays in process memory).
+  - What builds do about it: nothing secret in any argv or environment of the build's own processes (the key goes
+    through apiKeyHelper); a brain whose launch environment holds a secret refuses to build; the artifact scan fails
+    a build that copies a known secret. Not covered: a secret in ANOTHER same-user process's environment (for
+    example a terminal where the user exported a token) that the brain does not know.
+  - Real fix: run builder code as a different user, in a VM or a container with its own user and filesystem, with
+    the runner, harness and credentials outside it (see the container-mode design note).
+  The apiKeyHelper setting is a shell command: its path is single-quoted, and it is dry-run before the approval is
+  used.
+  Background Bash and timeouts above the run's wall cap are denied. Bun checks run the frozen copy with their module
+  resolution root outside the workspace; any module whose resolved path is in the workspace is refused, and checks
+  that import non-builtin bare specifiers are refused when written. No usable sandbox and no container profile = 403 / exit 2
+  before the approval is used (fail closed). Check output is secret-redacted before it is stored or re-prompted.
+  Limits must be finite and positive (whole numbers for tries); bad values are refused (400 / exit 2) before the
+  token is consumed.
+
 ## Company sync (S2-02, ADR 0103)
 The brain's sync client (`src/sync/`) connects this Mac to the company control plane (`OFFLOAD_CONTROL_URL`, https;
 http only on 127.0.0.1). It can emit only the seven sync objects of `schemas/stage2` (`notice_ack`, `run_outcome`,

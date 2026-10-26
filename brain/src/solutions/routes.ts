@@ -4,6 +4,7 @@
 //   GET  /solutions/:id                          the brief
 //   POST /solutions/:id/approve {briefHash}      approve the exact brief -> {brief, token} (token shown once)
 //   POST /solutions/:id/handoff {token}          consume the token once -> {brief, builderPrompt, briefMd}
+// s24: the build routes (builder/routes.ts) answer first; GET solutions carries each built option's latest cost.
 // `:id` of an insight is its `ins_…` id (insights and held-back tasks). Returns null for every other request.
 import type { Analysis } from "../analyze.ts";
 import { error, json } from "../api/http.ts";
@@ -12,6 +13,8 @@ import { readUserContext } from "../context/store.ts";
 import { DEFAULT_MODELS, loadModelConfig, type Model, type ModelConfig } from "../models/model.ts";
 import { NotFoundError } from "../workflows/drafter.ts";
 import { connectorStatus, detailOf } from "../workflows/service.ts";
+import { buildRoute, type BuildContext } from "../builder/routes.ts";
+import { withBuildCosts } from "../builder/record.ts";
 import { approveBrief, BRIEF_ID_RE, BriefError, handOffBrief, readBrief } from "./brief.ts";
 import { ChooseError, chooseSolution, designSolutions, parseKind } from "./service.ts";
 
@@ -23,6 +26,8 @@ export interface SolutionsContext {
   now: () => number;
   analysis: () => Promise<Analysis>;
   models?: ModelConfig;
+  /** s24: the builder's SDK (tests pass a fake); default the Agent SDK. */
+  buildQuery?: BuildContext["query"];
 }
 
 const MAX_BODY = 16 * 1024;
@@ -59,6 +64,8 @@ function briefError(err: unknown): Response {
 }
 
 export async function solutionsRoute(req: Request, path: string, ctx: SolutionsContext): Promise<Response | null> {
+  const built = await buildRoute(req, path, { home: ctx.home, env: ctx.env, model: ctx.model, modelLabel: ctx.modelLabel, models: modelsOf(ctx), now: ctx.now, ...(ctx.buildQuery === undefined ? {} : { query: ctx.buildQuery }) });
+  if (built !== null) return built;
   const ins = /^\/insights\/(ins_[A-Za-z0-9_-]{1,64})\/solutions(\/choose)?$/.exec(path);
   if (ins !== null) {
     const choose = ins[2] !== undefined;
@@ -74,7 +81,7 @@ export async function solutionsRoute(req: Request, path: string, ctx: SolutionsC
     try {
       const a = await ctx.analysis();
       const { set } = await designSolutions({ analysis: a, ref: ins[1]!, model: ctx.model, models: modelsOf(ctx), ...(user === undefined ? {} : { user }) });
-      if (kind === null) return json(200, set);
+      if (kind === null) return json(200, withBuildCosts(ctx.home, set));
       const r = await chooseSolution({ home: ctx.home, analysis: a, set, kind, model: ctx.model, models: modelsOf(ctx), now: ctx.now, ...(user === undefined ? {} : { user }) });
       if (r.kind === "workflow") return json(r.created ? 201 : 200, { kind: "workflow", workflow: detailOf(ctx.home, r.workflow, connectorStatus(ctx.home, ctx.env, ctx.modelLabel === "stub"), ctx.now()) });
       return json(r.created ? 201 : 200, { kind: r.kind, brief: r.brief });

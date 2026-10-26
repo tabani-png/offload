@@ -1,0 +1,4 @@
+{
+  "file": "accept.py",
+  "content": "import subprocess, sys\ncases = [(\"Hello World\", \"hello-world\"), (\"  Many   Spaces \", \"many-spaces\"), (\"Already-ok\", \"already-ok\")]\nbad = 0\nfor text, want in cases:\n    try:\n        got = subprocess.run([sys.executable, \"slug.py\", text], capture_output=True, text=True, timeout=10).stdout.strip()\n    except Exception as e:\n        got = \"error: \" + str(e)\n    ok = got == want\n    bad += 0 if ok else 1\n    print((\"PASS\" if ok else \"FAIL\") + \" slug(%r) = %r, want %r\" % (text, got, want))\nsys.exit(1 if bad else 0)\n"
+}

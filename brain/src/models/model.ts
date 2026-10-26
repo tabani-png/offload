@@ -10,8 +10,9 @@ import { join } from "node:path";
  * general workflow, e.g. a ticket reply (cheap model). Both see masked text only, never images (ADR 0007).
  * s19: playbook_label = one sent message labelled within the playbook vocabularies (Haiku); playbook = the messaging
  * playbook worded from its counts (Opus). Masked text only.
- * s22: solution_design = the solution designer wording each kind of fix and its builder brief (best model). */
-export type ModelRole = "draft" | "bucket" | "style_card" | "workflow_design" | "step" | "label" | "refine" | "explain" | "playbook_label" | "playbook" | "solution_design";
+ * s22: solution_design = the solution designer wording each kind of fix and its builder brief (best model).
+ * s24: build_checks = turning a brief's acceptance lines into an executable check script (code writing, cheap model). */
+export type ModelRole = "draft" | "bucket" | "style_card" | "workflow_design" | "step" | "label" | "refine" | "explain" | "playbook_label" | "playbook" | "solution_design" | "build_checks";
 
 export interface ModelRequest {
   role: ModelRole;
@@ -95,6 +96,8 @@ export class StubModel implements Model {
     // s14: the design model echoes the rules variants (so stub plans equal the rules plans); a step draft is built
     // from the source text and the facts only (plan/text-step.ts stubStepDraft).
     if (req.role === "workflow_design" || req.role === "solution_design") return tagged(req.prompt, "baseline") ?? "{}";
+    // s24: the deterministic fallback check script the prompt carries.
+    if (req.role === "build_checks") return tagged(req.prompt, "fallback") ?? "";
     if (req.role === "step") return stubStepDraft(req.prompt);
     // s19: the labeller echoes the rule read, the playbook model echoes the code baseline.
     if (req.role === "playbook_label") return tagged(req.prompt, "label_hint") ?? "{}";

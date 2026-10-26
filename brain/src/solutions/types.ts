@@ -50,6 +50,8 @@ export interface SolutionOption {
   evidence: { spanIds: string[]; instanceIds: string[]; parts: string[] };
   /** workflow: the drafter that takes it from here; tool/setup/remove_step: the brief spec; leave_alone: none. */
   handoff: { to: "workflow_drafter"; insightId: string } | { to: "brief"; spec: BriefSpec } | { to: "none" };
+  /** s24 (additive): the latest dry-run build of this option's brief, so hours saved can be shown against cost. */
+  build?: { runId: string; outcome: "PASS" | "FAIL" | "CAP" | "TAMPER"; costUsd: number; tries: number; totalCostUsd: number };
 }
 
 export interface SolutionSet {
