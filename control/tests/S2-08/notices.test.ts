@@ -224,6 +224,37 @@ describe("NOTICE", () => {
     for (const r of [bare, hello, tbd]) expect(r.json.error.message).toContain(r.json.error.details.fields.join(", "));
   });
 
+  test("NOTICE: concurrent web acks of one notice by one person record one ack and both get it back (no 500)", async () => {
+    for (let round = 0; round < 5; round++) {
+      const n = await publishNotice(who.owner);
+      const rs = await Promise.all([1, 2, 3].map(() => who.member.post(`/v1/me/notices/${n.id}/ack`)));
+      for (const r of rs) expect([200, 201]).toContain(r.status);
+      expect(rs.filter((r) => r.status === 201).length).toBe(1);
+      expect(new Set(rs.map((r) => r.json.id)).size).toBe(1);
+      for (const r of rs) expect(h.deps.validator.validate(ACK_SCHEMA, r.json)).toEqual({ ok: true });
+      const rows = await h.db.migrator`select id from notice_acks where person_id = ${h.a.people.member.id} and notice_id = ${n.id}`;
+      expect(rows.map((x: { id: string }) => x.id)).toEqual([rs[0]!.json.id]);
+      const audits = await h.db.migrator`select count(*)::int as n from audit_events
+        where action = 'notice.ack' and resource_id = ${n.id} and subject_person_id = ${h.a.people.member.id}`;
+      expect(audits[0].n).toBe(1);
+    }
+  });
+
+  test("NOTICE: a web ack racing a device sync ack of the same notice records one ack; neither side errors", async () => {
+    for (let round = 0; round < 5; round++) {
+      const n = await publishNotice(who.owner);
+      const [web, synced] = await Promise.all([
+        who.member2.post(`/v1/me/notices/${n.id}/ack`),
+        syncAck(h.a.people.member2.id, ackObject(n)).then(() => "ok", (e: unknown) => e),
+      ]);
+      expect([200, 201]).toContain(web.status);
+      expect(synced).toBe("ok");
+      const rows = await h.db.migrator`select id from notice_acks where person_id = ${h.a.people.member2.id} and notice_id = ${n.id}`;
+      expect(rows.length).toBe(1);
+      expect(web.json.id).toBe(rows[0].id);
+    }
+  });
+
   test("NOTICE: a template notice with a {{field}} left or a required field emptied is not published (422)", async () => {
     const t = listTemplates().find((x) => x.id === "ontario-esa-policy")!;
     const values: Record<string, string> = {

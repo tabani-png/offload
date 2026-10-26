@@ -65,21 +65,31 @@ async function ackOf(tx: Tx, personId: string, noticeId: string): Promise<AckRow
   return (a as AckRow | undefined) ?? null;
 }
 
-/** Inserts one acknowledgement, points the person at it and audits it, in the caller's transaction. */
+/**
+ * Inserts one acknowledgement, points the person at it and audits it, in the caller's transaction. Concurrent acks of
+ * one notice by one person (two web requests, or web and device sync) race to the (person, notice) unique key: the
+ * loser inserts nothing and gets the winner's ack back, with `created: false`.
+ */
 async function recordAck(
   tx: Tx,
   deps: Deps,
   principal: Principal,
   n: NoticeRow,
   ack: { id: string; acknowledgedAt: number; jurisdiction: string; channel: "mac_app" | "web" },
-): Promise<AckRow> {
+): Promise<{ row: AckRow; created: boolean }> {
   const now = deps.clock.now();
   const deviceId = principal.kind === "device" ? principal.deviceId : null;
   const [row] = await tx`insert into notice_acks (tenant_id, id, person_id, notice_id, acknowledged_at_ms, created_at_ms,
       jurisdiction, features, channel, device_id)
     values (current_setting('app.tenant_id')::uuid, ${ack.id}, ${principal.personId}, ${n.id}, ${ack.acknowledgedAt}, ${now},
       ${ack.jurisdiction}, ${n.features}::jsonb, ${ack.channel}, ${deviceId})
+    on conflict do nothing
     returning *`;
+  if (!row) {
+    const prior = await ackOf(tx, principal.personId, n.id);
+    if (!prior) throw conflict("this acknowledgement id is already taken");
+    return { row: prior, created: false };
+  }
   await tx`update people set notice_ack_version_id = ${n.id} where id = ${principal.personId}`;
   await deps.ports.audit.write(tx, {
     actor: actorOf(principal),
@@ -88,7 +98,7 @@ async function recordAck(
     resource: { type: "notice", id: n.id },
     detail: { version: n.version, channel: ack.channel, features: n.features, jurisdiction: ack.jurisdiction },
   });
-  return row as AckRow;
+  return { row: row as AckRow, created: true };
 }
 
 /** `syncHandlers.notice_ack`: an acknowledgement made in the Mac app. Idempotent on the object id and on (person, notice). */
@@ -224,8 +234,10 @@ export function noticeRoutes(app: App, deps: Deps): void {
       if (!p) throw notFound();
       if (!applies(n, p.jurisdiction)) throw conflict("this notice does not apply to your jurisdiction");
       if (n.replaced_at_ms !== null) throw new HttpError(409, "conflict", "a newer notice replaced this one; acknowledge the current notice");
-      const row = await recordAck(tx, deps, principal, n, { id: ulid(now), acknowledgedAt: now, jurisdiction: p.jurisdiction, channel: "web" });
-      return { status: 201 as const, ack: ackDto(row) };
+      const { row, created } = await recordAck(tx, deps, principal, n, {
+        id: ulid(now), acknowledgedAt: now, jurisdiction: p.jurisdiction, channel: "web",
+      });
+      return { status: created ? (201 as const) : (200 as const), ack: ackDto(row) };
     });
     return reply(c, deps, res.status, res.ack, ACK);
   });
