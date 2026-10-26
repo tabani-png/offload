@@ -15,7 +15,11 @@ import type { Method } from "../../src/connectors/link.ts";
 import { capabilityOf, catalogTarget, GENERIC_COMMIT, GENERIC_READ, SCREEN_READ, UI_COMMIT, type ChainTarget } from "../../src/connectors/targets.ts";
 import { estimateSaving } from "../../src/insights/saving.ts";
 import { commitCapability, readCapability, targetOf, type StepTarget } from "../../src/plan/capabilities.ts";
+import * as chainResolverModule from "../../src/plan/chain-resolver.ts";
 import { ChainCapabilityResolver } from "../../src/plan/chain-resolver.ts";
+import { DriverComputerProbe } from "../../src/connectors/computer/probe.ts";
+import type { ComputerDriver } from "../../src/connectors/computer/driver.ts";
+import { rememberTargets } from "../../src/connectors/chain.ts";
 import { stepClass } from "../../src/plan/steps.ts";
 import { brainKeyMode, brainKeyPath, clearBrainKeyCache, openText, sealText } from "../../src/store/vault.ts";
 import { clearSyncKeyCache, DEVICE_SIGNING, syncKey } from "../../src/sync/keys.ts";
@@ -67,6 +71,8 @@ function chainWith(only: Method | null, home: string, simulated = false): ChainR
   const probe = (method: Method): MethodProbe => ({
     method,
     async probe(t) {
+      // Computer use finds an app the way OsaDriver.appPresent does: a host to open, or a bundle id on this Mac.
+      if (method === "computer" && only === "computer" && t.hosts.length === 0 && t.bundleIds.length === 0) return result("skipped", "app_missing", `${t.name} is not on this Mac.`);
       const caps = method === only ? advertised(method, t) : null;
       return caps === null ? result("skipped", "no_server", `nothing for ${t.name}`) : result("ok", "ok", null, caps, 0);
     },
@@ -74,17 +80,25 @@ function chainWith(only: Method | null, home: string, simulated = false): ChainR
   return new ChainResolver(chainDeps({ home, env: {}, simulated }), new Map(CHAIN_METHODS.map((m) => [m, probe(m)])));
 }
 
+/** Observed steps (app, host as the observer saw them): known products, an unknown native app (bundle id only) and an
+ * unknown site (host only), and a local document. */
+const OBSERVED_STEPS = [
+  { app: "com.granola.app", appName: "Granola", host: "", surfaceKey: "com.granola.app|Granola|" },
+  { app: "com.google.Chrome", appName: "Google Chrome", host: "linear.app", surfaceKey: "com.google.Chrome|linear.app|/team" },
+  { app: "com.acme.tool", appName: "Acme Tool", host: "", surfaceKey: "com.acme.tool|Acme Tool|" },
+  { app: "com.google.Chrome", appName: "Google Chrome", host: "acme.example", surfaceKey: "com.google.Chrome|acme.example|/board" },
+  { app: "com.apple.Preview", appName: "Preview", host: "", surfaceKey: "com.apple.Preview|invoice.pdf|" },
+];
+/** The analysis those steps came from (only what observedTargets reads). */
+const OBSERVED_ANALYSIS = { insights: [{ profile: { app: "", appName: "", host: "", understanding: { steps: OBSERVED_STEPS } } }] } as unknown as Parameters<typeof chainResolverModule.observedTargets>[0];
+const observedOpt = () => ({ observed: () => chainResolverModule.observedTargets(OBSERVED_ANALYSIS) });
+
 const COMMIT_VERBS = ["send", "reply", "append", "log", "update", "create", "move"];
 
 /** Every need the planner can produce (plan/capabilities.ts), for every catalog connector and the app target kinds. */
 function plannerNeeds(): CapabilityNeedDTO[] {
   const targets: StepTarget[] = CONNECTORS.map((c) => ({ target: c.id, targetName: c.name, via: "catalog", connectorId: c.id }));
-  targets.push(
-    targetOf({ app: "com.granola.app", appName: "Granola", host: "", surfaceKey: "com.granola.app|Granola|" }),
-    targetOf({ app: "com.google.Chrome", appName: "Google Chrome", host: "linear.app", surfaceKey: "com.google.Chrome|linear.app|/team" }),
-    targetOf({ app: "com.acme.tool", appName: "Acme Tool", host: "", surfaceKey: "com.acme.tool|Acme Tool|" }),
-    targetOf({ app: "com.apple.Preview", appName: "Preview", host: "", surfaceKey: "com.apple.Preview|invoice.pdf|" }),
-  );
+  targets.push(...OBSERVED_STEPS.map(targetOf));
   const out = new Map<string, CapabilityNeedDTO>();
   for (const t of targets) {
     const read: CapabilityNeedDTO = { need: `read from ${t.targetName}`, target: t.target, targetName: t.targetName, capability: readCapability(t), role: "read", via: t.via };
@@ -107,7 +121,7 @@ async function table(): Promise<Row[]> {
     // A connector server on this Mac lists every catalog app, so MCP is in every catalog chain (link.ts order).
     const home = tmp();
     writeFileSync(join(home, "connectors.json"), JSON.stringify({ version: 1, servers: { all: { type: "stdio", command: "npx", args: ["-y", "x"], catalog: CONNECTORS.map((c) => c.id) } } }));
-    const r = new ChainCapabilityResolver(chainWith(m, home, true));
+    const r = new (ChainCapabilityResolver as unknown as new (...a: unknown[]) => ChainCapabilityResolver)(chainWith(m, home, true), home, observedOpt());
     const res = await r.resolve(needs);
     for (const row of rows) {
       const x = res.find((y) => y.target === row.need.target && y.capability === row.need.capability)!;
@@ -181,6 +195,12 @@ describe("s20 ROUTE review: needs are matched to what each method advertises", (
     expect(cell("app-preview", "file.read", "local")).toBe("Y");
     expect(cell("google-sheets", UI_COMMIT, "computer")).toBe("Y");
     expect(cell("app-granola", SCREEN_READ, "composio")).toBe("Y");
+    // Observed identity wins over the product table: an unknown native app (bundle id) and an unknown site (host) are
+    // found by computer use, and Granola (no bundle id or host in the table) through the bundle id it was seen with.
+    for (const t of ["app-acme-tool", "web-acme-example", "app-granola"]) {
+      expect(`${t} ${cell(t, SCREEN_READ, "computer")}`).toBe(`${t} Y`);
+      expect(`${t} ${cell(t, UI_COMMIT, "computer")}`).toBe(`${t} Y`);
+    }
     // Local reading is only for a local document, never for a commit or an app on screen.
     expect(rows.filter((r) => r.cells.local === "Y").map((r) => r.need.capability)).toEqual(["file.read"]);
   });
@@ -271,5 +291,75 @@ describe("s20 SAVING review: a read-and-approve task claims no saving", () => {
     // The write tasks are still offered.
     expect(a.insights.length).toBeGreaterThanOrEqual(3);
     for (const i of a.insights) expect(i.saving.arithmetic).not.toMatch(/\((8[7-9]|90)%\)/);
+  });
+});
+
+// ---------- (4) observed identity wins over the static product table (Codex on 9f12355) ----------
+
+describe("s20 ROUTE review 2: an app's observed bundle id and host reach the computer-use probe", () => {
+  function driver(seen: ChainTarget[]): ComputerDriver {
+    return {
+      real: true,
+      permissions: async () => ({ accessibility: true, screenRecording: true }),
+      // OsaDriver.appPresent: a host can be opened; a bundle id must be on this Mac (here: the installed set).
+      appPresent: async (t: ChainTarget) => {
+        seen.push(t);
+        return t.hosts.length > 0 || t.bundleIds.some((b) => ["com.acme.tool", "com.granola.app"].includes(b));
+      },
+    } as unknown as ComputerDriver;
+  }
+  function chainWithDriver(home: string, seen: ChainTarget[]): ChainResolver {
+    const skip = (method: Method): MethodProbe => ({ method, probe: async () => result("skipped", "no_server", "none") });
+    const probes = new Map<Method, MethodProbe>([...(["mcp", "composio", "api"] as const).map((m) => [m, skip(m)] as [Method, MethodProbe]), ["computer", { method: "computer", probe: (t, d) => new DriverComputerProbe(driver(seen)).probe(t, d) }]]);
+    return new ChainResolver(chainDeps({ home, env: {}, simulated: false }), probes);
+  }
+  const needs = (target: string, name: string): CapabilityNeedDTO[] => [
+    { need: `read from ${name}`, target, targetName: name, capability: SCREEN_READ, role: "read", via: "computer_use" },
+    { need: `change in ${name}`, target, targetName: name, capability: UI_COMMIT, role: "send", via: "computer_use" },
+  ];
+
+  test("ROUTE: observedTargets keeps every app's bundle id and every site's host from the analysis", () => {
+    const o = chainResolverModule.observedTargets(OBSERVED_ANALYSIS);
+    expect(o.get("app-acme-tool")).toEqual({ bundleIds: ["com.acme.tool"], hosts: [] });
+    expect(o.get("web-acme-example")).toEqual({ bundleIds: [], hosts: ["acme.example"] });
+    expect(o.get("app-granola")).toEqual({ bundleIds: ["com.granola.app"], hosts: [] });
+    // A browser is not the app of a site.
+    expect(o.get("web-linear-app")?.bundleIds).toEqual([]);
+  });
+
+  test("ROUTE: an unknown native app and an unknown site, observed, resolve through computer use", async () => {
+    const home = tmp();
+    const seen: ChainTarget[] = [];
+    const r = new (ChainCapabilityResolver as unknown as new (...a: unknown[]) => ChainCapabilityResolver)(chainWithDriver(home, seen), home, observedOpt());
+    const res = await r.resolve([...needs("app-acme-tool", "Acme Tool"), ...needs("web-acme-example", "acme.example"), ...needs("app-granola", "Granola")]);
+    expect(res.map((x) => `${x.target} ${x.capability} ${x.status} ${x.method}`)).toEqual([
+      `app-acme-tool ${SCREEN_READ} resolved computer`,
+      `app-acme-tool ${UI_COMMIT} resolved computer`,
+      `web-acme-example ${SCREEN_READ} resolved computer`,
+      `web-acme-example ${UI_COMMIT} resolved computer`,
+      `app-granola ${SCREEN_READ} resolved computer`,
+      `app-granola ${UI_COMMIT} resolved computer`,
+    ]);
+    // The product table still supplements: Granola keeps its Composio toolkit.
+    expect(seen.find((t) => t.id === "app-granola")?.toolkit).toBe("granola");
+  });
+
+  test("ROUTE: without an analysis, an app target stored from the insights (GET /connectors) supplies its identity", async () => {
+    const home = tmp();
+    rememberTargets(home, [{ id: "app-acme-tool", name: "Acme Tool", catalog: false, bundleIds: ["com.acme.tool"], hosts: [], toolkit: "acmetool", reads: [SCREEN_READ], sends: [UI_COMMIT], logs: [] }], Date.now());
+    const r = new ChainCapabilityResolver(chainWithDriver(home, []));
+    const res = await r.resolve(needs("app-acme-tool", "Acme Tool"));
+    expect(res.every((x) => x.status === "resolved" && x.method === "computer")).toBe(true);
+  });
+
+  test("ROUTE: an observed host of a catalog app is added to the catalog's own hosts", async () => {
+    const home = tmp();
+    const seen: ChainTarget[] = [];
+    const analysis = { insights: [{ profile: { app: "", appName: "", host: "", understanding: { steps: [{ app: "com.google.Chrome", appName: "Chrome", host: "acme.zendesk.com", surfaceKey: "com.google.Chrome|acme.zendesk.com|/agent" }] } } }] } as unknown as Parameters<typeof chainResolverModule.observedTargets>[0];
+    const target = targetOf({ app: "com.google.Chrome", appName: "Chrome", host: "acme.zendesk.com", surfaceKey: "com.google.Chrome|acme.zendesk.com|/agent" });
+    expect(target.target).toBe("zendesk");
+    const r = new (ChainCapabilityResolver as unknown as new (...a: unknown[]) => ChainCapabilityResolver)(chainWithDriver(home, seen), home, { observed: () => chainResolverModule.observedTargets(analysis) });
+    await r.resolve([{ need: "read ticket", target: target.target, targetName: target.targetName, capability: SCREEN_READ, role: "read", via: target.via }]);
+    expect(seen.find((t) => t.id === target.target)?.hosts).toContain("acme.zendesk.com");
   });
 });
