@@ -10,6 +10,9 @@ import { timeBreakdown } from "../../brain/src/time/breakdown.ts";
 import { brainOn, call, neutralHome, NOW } from "../../brain/tests/s23-time-breakdown/setup.ts";
 
 process.env.OFFLOAD_KEYS ??= "file"; // as brain/tests/preload.ts: raw fixture key files, never the Keychain
+// Fixture event times (and so their ids) come from local wall-clock days; pin the zone so --check is the same answer
+// in every timezone (the fixed clock NOW is in UTC).
+process.env.TZ = "UTC";
 const OUT = join(import.meta.dir, "tests", "fixtures");
 const check = process.argv.includes("--check");
 const fx = neutralHome();
