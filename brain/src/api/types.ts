@@ -141,6 +141,9 @@ export interface SavingDTO {
   arithmetic: string;
   /** Plain-language assumptions behind the range. */
   assumptions: string[];
+  /** s20 (additive, only on a low-confidence estimate): why not to headline this saving. `capped` = items x minutes
+   * exceeded the task's own observed time and the estimate was cut to it (`observedWeeklyHours`). */
+  confidence?: { level: "low"; capped: boolean; observedWeeklyHours: number | null; reasons: string[] };
 }
 
 export interface ScoreDTO {
