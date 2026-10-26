@@ -65,7 +65,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
   const items: BatchItem[] = [];
   const out: DryRunInstanceDTO[] = [];
   // s19: an email workflow with a messaging playbook drafts with it, and each draft says whether it follows it.
-  const playbook = emailWorkflow && general === null ? readPlaybook(o.home, wf.id) : null;
+  const playbook = emailWorkflow && general === null ? readPlaybook(o.home, wf.id, warnings) : null;
   for (const ob of observed) {
     let draft: string | null = null;
     let examplesUsed: string[] = [];

@@ -2,7 +2,7 @@
 // a re-check identity that outlives the tone pack, model errors that keep the code baseline, a corrupt playbook.json,
 // and the ADR number. Each test failed before its fix.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createBrain } from "../../src/api/server.ts";
 import { StubModel, type ModelRequest } from "../../src/models/model.ts";
@@ -167,8 +167,15 @@ describe("s19 fix: re-checks after the tone pack is gone, corrupt playbook.json"
   test("PLAYBOOK: the build keeps an identity digest beside the playbook: hashed words, no name in plain text", () => {
     const p = join(w.home, "workflows", w.outreach.id, IDENTITY_FILE);
     expect(existsSync(p)).toBe(true);
-    const text = readFileSync(p, "utf8");
-    for (const n of ["muhammad", "offload", "anna", "northzone", "spotify"]) expect(text.toLowerCase()).not.toContain(n);
+    expect(statSync(p).mode & 0o777).toBe(0o600);
+    const j = JSON.parse(readFileSync(p, "utf8")) as { salt: string; author: string[]; company: string[]; names: string[] };
+    const hashes = [...j.author, ...j.company, ...j.names];
+    expect(j.author.length).toBeGreaterThan(0);
+    expect(j.company.length).toBeGreaterThan(0);
+    expect(j.names.length).toBeGreaterThan(5);
+    for (const h of hashes) expect(h).toMatch(/^[0-9a-f]{64}$/);
+    const values = JSON.stringify({ ...j, schema: undefined }).toLowerCase();
+    for (const n of ["muhammad", "offload", "anna", "northzone", "spotify"]) expect(values).not.toContain(n);
   });
 
   test("PLAYBOOK: with the tone pack gone, notes naming the author or the company are still refused", async () => {

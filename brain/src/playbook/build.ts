@@ -10,7 +10,7 @@ import { buildIdentity, type Identity } from "./mask.ts";
 import { readMessages, threadMessages } from "./read.ts";
 import { computeCadence, computeOutcomes, computeStats } from "./stats.ts";
 import { baselinePlaybook, synthesise } from "./synth.ts";
-import { readPlaybook, writePlaybook } from "./store.ts";
+import { readIdentityDigest, readPlaybook, writeIdentityDigest, writePlaybook } from "./store.ts";
 import { MIN_MESSAGES, PLAYBOOK_SCHEMA, type Channel, type MessageRead, type Playbook, type PlaybookMessage } from "./types.ts";
 
 /** Not enough to learn from (no tone pack, too few messages): the API answers 409. */
@@ -90,11 +90,16 @@ export function workflowMessages(pack: TonePack, bucket: string): { messages: Pl
   return { messages: inThreads.map((t) => t.message), readIds };
 }
 
-/** The identity set of a workflow now: its tone pack threads (when the pack is still there) and facts.md. */
+/** The identity set a notes edit or a promotion is re-checked against: the tone pack threads (when the pack is still
+ * there), facts.md and the build's identity digest. With neither the pack nor a digest the names of the build are
+ * unknown, so nothing is reported re-checked: PlaybookInputError (409). */
 export function identityForWorkflow(home: string, wf: WorkflowJson, now: number): Identity {
   const pack = loadTonePack(home, now);
+  const digest = readIdentityDigest(home, wf.id);
+  if ((pack === null || pack.corpus.length === 0) && digest === null) throw new PlaybookInputError("the tone pack is gone and this playbook has no identity digest, so it cannot be re-checked: run `tone build`, then rebuild the playbook");
   const messages = pack === null ? [] : workflowMessages(pack, wf.bucket).messages;
-  return buildIdentity(messages, readText(home, wf.id, "facts.md") ?? "");
+  const id = buildIdentity(messages, readText(home, wf.id, "facts.md") ?? "");
+  return digest === null ? id : { ...id, hashed: digest };
 }
 
 /** POST /workflows/:id/playbook {action: "build"}: from the sealed tone pack, written to the workflow folder. */
@@ -102,7 +107,8 @@ export async function buildWorkflowPlaybook(home: string, wf: WorkflowJson, mode
   const pack = loadTonePack(home, now);
   if (pack === null || pack.corpus.length === 0) throw new PlaybookInputError("no tone pack yet: run `tone build` so Offload can read your sent messages");
   const { messages, readIds } = workflowMessages(pack, wf.bucket);
-  const { playbook } = await buildPlaybook({ workflowId: wf.id, channel: "email", messages, readIds, facts: readText(home, wf.id, "facts.md") ?? "", model, now, previous: readPlaybook(home, wf.id) });
+  const { playbook, identity } = await buildPlaybook({ workflowId: wf.id, channel: "email", messages, readIds, facts: readText(home, wf.id, "facts.md") ?? "", model, now, previous: readPlaybook(home, wf.id) });
   writePlaybook(home, playbook);
+  writeIdentityDigest(home, wf.id, identity);
   return playbook;
 }
