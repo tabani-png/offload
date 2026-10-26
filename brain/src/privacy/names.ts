@@ -70,6 +70,14 @@ function usablePart(s: string | undefined): s is string {
   return !COMMON.has(l) && !isBlocker(l) && !GREETING_CUES.has(l) && !HONORIFICS.has(l);
 }
 
+/** A name part the user gave (their own name, a contact) or a cue confirmed ("Dear Will,"): any word of two letters
+ * or more except a title or a greeting. The common-word filter is not applied again, so "Will" and "May" count. */
+function trustedPart(s: string | undefined): s is string {
+  if (s === undefined || s.length < 2 || !/^\p{L}[\p{L}\p{M}'’-]*$/u.test(s)) return false;
+  const l = s.toLowerCase();
+  return !GREETING_CUES.has(l) && !HONORIFICS.has(l);
+}
+
 /** The words of one line, with the punctuation around each. Words are letter runs (apostrophes and hyphens inside),
  * so a JSON row ("firstName":"Anna") or a slug splits into words as well as plain text does. */
 function tokenize(line: string, offset: number, isProtected: (start: number, end: number) => boolean): Tok[] {
@@ -172,20 +180,20 @@ export class NameMap {
   constructor(o: NameMapOptions = {}) {
     for (const k of o.known ?? []) {
       const t = k.replace(/\s+/g, " ").trim();
-      if (t.split(" ").filter(usablePart).length >= 1 && t.length >= 2) this.known.set(t.toLowerCase(), t);
+      if (t.split(" ").some(trustedPart)) this.known.set(t.toLowerCase(), t);
     }
     const self = (o.self ?? []).map((s) => s.replace(/\s+/g, " ").trim()).filter((s) => s.length >= 2);
     if (self.length > 0) {
       if (o.keepSelf === true) {
         for (const s of self) {
           this.kept.add(s.toLowerCase());
-          for (const p of s.split(" ")) if (usablePart(p)) this.kept.add(p.toLowerCase());
+          for (const p of s.split(" ")) if (trustedPart(p)) this.kept.add(p.toLowerCase());
         }
         this.keptRes = [...this.kept].sort((a, b) => b.length - a.length).map((k) => new RegExp(`${B_START}${escapeRe(k)}${B_END}`, "giu"));
       } else {
         const me: Person = { id: "me", bareUsed: false };
         this.people.push(me);
-        for (const s of self) this.attach(me, s.split(" "));
+        for (const s of self) this.attach(me, s.split(" "), true);
       }
     }
   }
@@ -200,7 +208,10 @@ export class NameMap {
     return { people: this.size };
   }
 
-  private attach(p: Person, tokens: readonly string[]): void {
+  /** `trusted`: the user gave the name or a cue confirmed it, so its parts skip the common-word filter. A name found in
+   * uncued prose keeps it: "Will Smith" there registers the full name, not "Will" alone. */
+  private attach(p: Person, tokens: readonly string[], trusted = false): void {
+    const ok = trusted ? trustedPart : usablePart;
     const words = tokens.filter((t) => t !== "" && !PARTICLES.has(t) && !/^\p{Lu}\.?$/u.test(t));
     if (tokens.length >= 2) {
       p.full ??= tokens.join(" ");
@@ -208,11 +219,11 @@ export class NameMap {
     }
     const first = words[0];
     const last = words.length >= 2 ? words[words.length - 1] : undefined;
-    if (usablePart(first)) {
+    if (ok(first)) {
       p.first ??= first;
       this.addSurface(first, p, "first");
     }
-    if (usablePart(last)) {
+    if (ok(last)) {
       p.last ??= last;
       this.addSurface(last, p, "last");
     }
@@ -222,7 +233,7 @@ export class NameMap {
     if (!this.surfaces.has(s) && !this.kept.has(s.toLowerCase())) this.surfaces.set(s, { person, part });
   }
 
-  private personFor(tokens: readonly string[]): Person {
+  private personFor(tokens: readonly string[], trusted = false): Person {
     const text = tokens.join(" ");
     const lower = text.toLowerCase();
     for (const p of this.people) if (p.full?.toLowerCase() === lower) return p;
@@ -234,13 +245,13 @@ export class NameMap {
       // "Amara" seen alone first, then "Amara Okafor": the same person.
       const lone = this.people.find((p) => p.full === undefined && p.last === undefined && p.first === words[0]);
       if (lone !== undefined) {
-        this.attach(lone, tokens);
+        this.attach(lone, tokens, trusted);
         return lone;
       }
     }
     const p: Person = { id: "", bareUsed: false };
     this.people.push(p);
-    this.attach(p, tokens);
+    this.attach(p, tokens, trusted);
     return p;
   }
 
@@ -269,7 +280,8 @@ export class NameMap {
   learn(text: string): void {
     const prot = protectedRanges(text, this.keptRes);
     const isProt = (s: number, e: number) => prot.some(([a, b]) => s < b && e > a);
-    const found: string[][] = [];
+    /** Names found, and whether a cue (greeting, role, honorific, signature) confirmed each one. */
+    const found: Array<{ name: string[]; cued: boolean }> = [];
     let offset = 0;
     let prevLine = "";
     for (const line of text.split("\n")) {
@@ -307,20 +319,22 @@ export class NameMap {
           j = k - 1;
         }
         while (seg.length > 0 && (INITIAL_RE.test(seg[seg.length - 1]!.text) || PARTICLES.has(seg[seg.length - 1]!.text))) seg.pop();
-        const name = ambiguous ? seg : decide(seg, contextBefore(toks, i, signature));
-        if (name !== null && !this.isKept(name.map((x) => x.text).join(" ")) && !(name.length === 1 && this.isKept(name[0]!.text))) found.push(name.map((x) => x.text));
+        const c = contextBefore(toks, i, signature);
+        const name = ambiguous ? seg : decide(seg, c);
+        const cued = c.greeting || c.role || c.honorific || c.signature;
+        if (name !== null && !this.isKept(name.map((x) => x.text).join(" ")) && !(name.length === 1 && this.isKept(name[0]!.text))) found.push({ name: name.map((x) => x.text), cued });
         i = j + 1;
       }
       offset += line.length + 1;
       if (line.trim() !== "") prevLine = line;
     }
     // Full names before lone names, so "Amara" after "Amara Okafor" is the same person.
-    for (const n of found.filter((f) => f.length > 1)) this.personFor(n);
-    for (const n of found.filter((f) => f.length === 1)) if (!this.surfaces.has(n[0]!)) this.personFor(n);
+    for (const f of found.filter((x) => x.name.length > 1)) this.personFor(f.name, f.cued);
+    for (const f of found.filter((x) => x.name.length === 1)) if (!this.surfaces.has(f.name[0]!)) this.personFor(f.name, f.cued);
     // Contacts and names already known that appear in this text, any case.
     for (const [lower, written] of this.known) {
       if ([...this.people].some((p) => p.full?.toLowerCase() === lower || (p.full === undefined && p.first?.toLowerCase() === lower))) continue;
-      if (surfaceRegex(written, written.includes(" ")).test(text)) this.personFor(written.split(" "));
+      if (surfaceRegex(written, written.includes(" ")).test(text)) this.personFor(written.split(" "), true);
     }
     for (const m of text.matchAll(EMAIL_RE)) this.learnEmail(m[0]);
   }
