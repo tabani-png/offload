@@ -24,10 +24,10 @@ describe("PROVISION", () => {
     const x = await createWorker(w, { schedule: { cron: "0 22 * * *", timezone: "UTC" } });
     // A schedule change leaves a deployment to replace: the sync archives one and creates one (several transactions).
     expect((await (await w.as("admin")).patch(`/v1/workers/${x.id}`, { schedule: { cron: "0 7 * * *", timezone: "UTC" } })).status).toBe(200);
-    // Nine of the pool's ten connections are taken by other work (other tenants' syncs, requests).
+    // All but one of the pool's connections (the test pool has 8) are taken by other work (other tenants' syncs, requests).
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const held = Array.from({ length: 9 }, () =>
+    const held = Array.from({ length: 7 }, () =>
       w.h.deps.db.begin(async (tx) => {
         await tx`select 1`;
         await gate;
