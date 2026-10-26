@@ -128,13 +128,18 @@ export async function loadRuns(tx: Tx, o: LoadOpts): Promise<RunInput[]> {
   return rows.map((r) => ({ run: runOf(r), personId: r.person_id, departmentId: r.department_id, jobRoleId: r.job_role_id }));
 }
 
-/** Review events of these runs. */
-export async function loadReviews(tx: Tx, runIds: readonly string[]): Promise<ReviewEvent[]> {
-  if (runIds.length === 0) return [];
-  const rows = await tx`select object_id, created_at_ms, run_id, review_seconds, edit_seconds, fix_seconds, items_edited,
-      decision, surface from review_events
-    where run_id in (select jsonb_array_elements_text(${[...new Set(runIds)]}::jsonb))
-    order by object_id, device_id`;
+/**
+ * Review events of these runs, from the person who ran each one. Review events carry only a run id, so another
+ * person's device could name any run it knows; those are never counted (they are kept as received, not deleted:
+ * a review may arrive before its run, so ingest cannot tell them apart yet).
+ */
+export async function loadReviews(tx: Tx, runs: readonly RunInput[]): Promise<ReviewEvent[]> {
+  if (runs.length === 0) return [];
+  const owners = Object.fromEntries(runs.map((r) => [r.run.runId, r.personId]));
+  const rows = await tx`select e.object_id, e.created_at_ms, e.run_id, e.review_seconds, e.edit_seconds, e.fix_seconds,
+      e.items_edited, e.decision, e.surface from review_events e
+    join jsonb_each_text(${owners}::jsonb) o(run_id, person_id) on o.run_id = e.run_id and o.person_id::uuid = e.person_id
+    order by e.object_id, e.device_id`;
   return rows.map((r: Record<string, unknown>) => ({
     id: r.object_id as string,
     kind: "review_event" as const,
@@ -177,7 +182,7 @@ export async function loadSamples(tx: Tx, keys: ReadonlyArray<{ workflowId: stri
 /** Runs, their reviews and the baselines of their workflow versions: the row inputs of report(). */
 export async function loadInputs(tx: Tx, o: LoadOpts): Promise<Pick<ReportInput, "runs" | "reviews" | "samples">> {
   const runs = await loadRuns(tx, o);
-  const reviews = await loadReviews(tx, runs.map((r) => r.run.runId));
+  const reviews = await loadReviews(tx, runs);
   const keys = o.workflow ? [o.workflow] : runs.map((r) => ({ workflowId: r.run.workflowId, version: r.run.version }));
   const samples = await withAggregateRead(tx, () => loadSamples(tx, keys));
   return { runs, reviews, samples };

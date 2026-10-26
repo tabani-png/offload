@@ -1,8 +1,8 @@
-// Review wave C, PR #9 item 1: the copy of a run id that counts is chosen across every copy before any period,
-// person or workflow filter.
+// Review wave C, PR #9 items 1-2: the copy of a run id that counts is chosen across every copy before any period,
+// person or workflow filter, and review events count only on runs of the person who sent them.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { asPrincipal, type Client } from "../helpers/harness.ts";
-import { WF2, addDevice, asPerson, at, populate, receipt, runOutcome, sendObjects, setup, type S205 } from "./helpers.ts";
+import { WF2, addDevice, asPerson, at, populate, receipt, reviewEvent, runOutcome, sendObjects, setup, type S205 } from "./helpers.ts";
 
 const OCT = "from=2026-10-01&to=2026-11-01";
 const SEP = "from=2026-09-01&to=2026-10-01";
@@ -57,5 +57,21 @@ describe("PERSON one run per run id, whatever the filters", () => {
     const r = await me.get(`/v1/metrics/hours-saved/evidence?workflowId=${WF2}&version=1&${OCT}`);
     expect(r.status).toBe(200);
     expect(r.json.runs).toEqual([]);
+  });
+});
+
+describe("HOURS review events count on the reviewer's own runs only", () => {
+  test("HOURS: a review event for another person's run id is ignored; the run owner's own review still counts", async () => {
+    const before = (await owner.get(`/v1/metrics/hours-saved?scope=company&${OCT}`)).json;
+    const run = runsOf(3)[0]!;
+    const foreign = reviewEvent(run.runId, { review: 3600, edit: 3600, fix: 3600, at: at("2026-10-21", 9) });
+    receipt(await sendObjects(s.h, people[4]!.dev, [foreign]));
+    const after = (await owner.get(`/v1/metrics/hours-saved?scope=company&${OCT}`)).json;
+    expect(after.total).toEqual(before.total);
+    expect(after.inputsDigest).toBe(before.inputsDigest);
+    // The same review from the run's owner does change the numbers (the check above is not vacuous).
+    receipt(await sendObjects(s.h, people[3]!.dev, [{ ...foreign }]));
+    const own = (await owner.get(`/v1/metrics/hours-saved?scope=company&${OCT}`)).json;
+    expect(own.total).not.toEqual(before.total);
   });
 });

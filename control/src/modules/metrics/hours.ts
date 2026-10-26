@@ -92,7 +92,7 @@ async function hoursEvidence(c: Context<AppEnv>, deps: Deps) {
     if (cell !== "S" && new Set(runs.map((r) => r.personId)).size < floor) {
       throw new HttpError(422, "group_floor", `fewer than ${floor} people ran this workflow in your scope in the period`);
     }
-    const reviews = await loadReviews(tx, runs.map((r) => r.run.runId));
+    const reviews = await loadReviews(tx, runs);
     const samples = await withAggregateRead(tx, () => loadSamples(tx, [workflow]));
     const ev = evidence({ runs, reviews, samples, estimates: [], period, timezone, workflowId, version });
     const start = after === null ? 0 : ev.runs.findIndex((r) => r.endedAt > after.e || (r.endedAt === after.e && r.runId > after.r));
