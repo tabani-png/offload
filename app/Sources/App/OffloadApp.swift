@@ -37,6 +37,26 @@ enum OffloadMain {
                           executableDir: Bundle.main.executableURL?.deletingLastPathComponent(),
                           options: checkOptions))
     }
+    // s31: `--observer-agent on|off --home DIR`: what the Settings switch does (install + load, or unload + delete),
+    // without the window. Used by slices/s31-local-jobs with OFFLOAD_LAUNCH_AGENTS_DIR (then launchd is not touched).
+    if let i = args.firstIndex(of: "--observer-agent") {
+      let env = ProcessInfo.processInfo.environment
+      guard args.indices.contains(i + 1), ["on", "off"].contains(args[i + 1]),
+            let bin = ObserverLocator.locate(environment: env, executableDir: Bundle.main.executableURL?.deletingLastPathComponent(),
+                                             repo: nil) else {
+        FileHandle.standardError.write(Data("usage: Offload --observer-agent on|off --home DIR (needs the bundled observer)\n".utf8))
+        exit(64)
+      }
+      let agent = ObserverAgent(binary: bin, home: LaunchOptions.parse(arguments: args, environment: env).home, environment: env)
+      do {
+        if args[i + 1] == "on" { try agent.install(); print("observer agent: on \(agent.plistURL.path)") }
+        else { try agent.remove(); print("observer agent: off") }
+        exit(0)
+      } catch {
+        print("observer agent: \(error)")
+        exit(1)
+      }
+    }
     MainActor.assumeIsolated {
       let app = NSApplication.shared
       let delegate = AppDelegate()
@@ -168,8 +188,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     startBrain()
     startRefreshing()
     if OnboardingGate.shouldShow(arguments: args, onboarded: UserDefaults.standard.bool(forKey: OnboardingGate.defaultsKey)) {
-      openOnboarding()
+      openOnboarding()  // s31: asks about the background observer when it finishes
+    } else {
+      askObserverAgentOnce()
     }
+    dashboardModel.observerAtLogin = observerAgent?.installed ?? false
+    dashboardModel.onObserverAtLogin = { [weak self] on in self?.setObserverAtLogin(on) }
     Task {
       await waitForBrain(timeout: 30)
       await model.load()
@@ -362,6 +386,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
+  // MARK: observer at login (s31, operator decision: only after the person's Yes)
+
+  /// The bundled observer's login agent, on the person's real folder. nil under mock or without an observer.
+  private var observerAgent: ObserverAgent? {
+    guard !isMock, let bin = observer.binary else { return nil }
+    return ObserverAgent(binary: bin, home: options.home)
+  }
+
+  /// First run of the installed app: ask once. Yes installs and loads the agent; Not now writes nothing. Remembered.
+  private func askObserverAgentOnce() {
+    guard ObserverAgentSetting.shouldAsk(answer: ObserverAgentSetting.answer(.standard), bundled: brain?.bundled == true,
+                                         observer: observer.binary, mock: isMock, demo: options.demo) else { return }
+    let alert = NSAlert()
+    alert.messageText = ObserverAgentSetting.question
+    alert.informativeText = ObserverAgentSetting.detail
+    alert.addButton(withTitle: "Yes")
+    alert.addButton(withTitle: "Not now")
+    NSApp.activate(ignoringOtherApps: true)
+    let yes = alert.runModal() == .alertFirstButtonReturn
+    ObserverAgentSetting.save(yes ? .yes : .notNow, .standard)
+    if yes { setObserverAtLogin(true) }
+  }
+
+  /// Settings switch (and the Yes above): on installs + loads, off unloads + deletes. The switch shows what is on disk.
+  private func setObserverAtLogin(_ on: Bool) {
+    guard let agent = observerAgent else { dashboardModel.observerAtLogin = false; return }
+    do {
+      if on { try agent.install() } else { try agent.remove() }
+      ObserverAgentSetting.save(on ? .yes : .notNow, .standard)
+    } catch {
+      NSLog("Offload: observer at login %@ failed: %@", on ? "on" : "off", String(describing: error))
+      let alert = NSAlert()
+      alert.messageText = on ? "Could not start watching in the background" : "Could not stop watching in the background"
+      alert.informativeText = (error as? ObserverAgentError)?.description ?? "Nothing was changed."
+      alert.runModal()
+    }
+    dashboardModel.observerAtLogin = agent.installed
+    Task { await refreshObserver() }
+  }
+
   // MARK: onboarding
 
   func openOnboarding() {
@@ -372,6 +436,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     m.onFinish = { [weak self] in
       UserDefaults.standard.set(true, forKey: OnboardingGate.defaultsKey)
       self?.onboarding?.window.close()
+      self?.askObserverAgentOnce()
     }
     m.onDemoWeek = { [weak self] in await self?.useDemoWeek() }
     // s14: "What do you do?": sent to the brain now, or as soon as it is up.

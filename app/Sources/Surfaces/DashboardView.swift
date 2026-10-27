@@ -759,6 +759,10 @@ private struct ObservingSection: View {
         }
         .padding(.horizontal, Tokens.Space.s16).frame(height: Tokens.Size.row + Tokens.Space.s4)
         RowDivider(inset: Tokens.Space.s16)
+        // s31: the background observer from login, only after the person's Yes (switch on or off here).
+        OptInRow(title: ObserverAgentSetting.label, isOn: model.observerAtLogin, note: nil) { model.toggleObserverAtLogin() }
+          .padding(.horizontal, Tokens.Space.s16).padding(.vertical, Tokens.Space.s12)
+        RowDivider(inset: Tokens.Space.s16)
         // s14: the Claude captioner opt-in, and what it read (the brain's numbers, formatted only).
         VStack(alignment: .leading, spacing: Tokens.Space.s8) {
           OptInRow(title: ClaudeVisionSetting.label, isOn: model.claudeVision, note: model.claudeVisionNote) {
