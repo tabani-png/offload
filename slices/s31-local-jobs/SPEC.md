@@ -3,9 +3,9 @@ id: s31-local-jobs
 title: Local background jobs run in the INSTALLED app (bundled brain, no repo, no bun on PATH) - proven job by job, repo paths fixed
 depends_on: [s25-standalone-install (bundled brain, --brain-check, PROOF recipe), s28-dmg, s09b (run loop), s11 (caption worker), REVIEW-2 (purge), ADR 0014]
 parallel_safe: true
-human_gated: false (observer start at login needs an operator decision; see "Operator decision")
+human_gated: false (observer start at login: operator decided 'ask once on first run'; see "Operator decision")
 verify: bash slices/s31-local-jobs/verify.sh
-paths_in_scope: [app/Sources/Core/BrainSupervisor.swift, app/Sources/Core/BrainCheck.swift, app/Sources/App/OffloadApp.swift, app/build.sh (test file list only), brain/src/store/observer.ts, brain/tests/s31-local-jobs/**, slices/s31-local-jobs/**]
+paths_in_scope: [app/Sources/Core/BrainSupervisor.swift, app/Sources/Core/BrainCheck.swift, app/Sources/Core/ObserverAgent.swift (new), app/Sources/Surfaces/DashboardModel.swift, app/Sources/Surfaces/DashboardView.swift (one switch), app/Sources/App/OffloadApp.swift, app/build.sh (test file list, missing-observer warning), brain/src/store/observer.ts, brain/tests/s31-local-jobs/**, slices/s31-local-jobs/**]
 paths_out_of_scope: [control/**, web/**, schemas/**, packages/**, engine/** (read only here), brain/src/builder/** (builder stays off)]
 ---
 
@@ -49,10 +49,11 @@ out of scope. No prod-only knobs: short intervals only through hooks that alread
    brain up, prints each state change (`brain state: ...`, `brain endpoint: URL`), writes the per-launch token to
    `HOME/.brain-check-token` (0600), restarts it on SIGUSR1 (the key-change path) and stops it on SIGTERM.
    `--captioner stub|off` (check mode only) adds the existing brain flag. Nothing changes for a normal launch.
-4. **The observer never starts in the installed app (NOT FIXED: operator decision).** Nothing in app/ installs or
-   loads the observer LaunchAgent or starts `offload-observer run`; only `scripts/run.sh --install-agent` (dev) does.
-   An installed app therefore records nothing. `install-agent` run from the bundle writes a plist whose program is
-   inside the bundle (proved). See "Operator decision".
+4. **The observer never started in the installed app (FIXED after the operator decision, with consent).** Nothing in
+   app/ installed or loaded the observer LaunchAgent; only `scripts/run.sh --install-agent` (dev) did, so an installed
+   app recorded nothing. Now the installed app asks once (see "Operator decision") and only a Yes writes and loads it.
+6. **A plain `app/build.sh` without engine/.build ships no observer.** It now prints a WARNING (dmg already builds
+   the engine first; verify builds it too).
 5. **The app is not a login item.** Brain jobs (09:00 cron slots, purge, captions) run only while Offload is open.
    A slot missed while closed is handled once at the next start (proved). Same consent question.
 
@@ -60,6 +61,11 @@ out of scope. No prod-only knobs: short intervals only through hooks that alread
 - PURGESPEC (Swift): the purge launch uses the bundled bun on the bundled cli.ts, cwd the bundle root, Helpers first
   on PATH, `OFFLOAD_OBSERVER_BIN` = the observer given, `OFFLOAD_HOME` = home; nil when the brain has no purge.
 - OBSLOC (Swift): with no env the app finds `Contents/MacOS/offload-observer` of its own bundle, never the repo path.
+- CONSENT (Swift, contract extension): asked only when there is no answer yet, only for the installed app with its
+  observer, never under mock or the demo week; "Not now" is remembered.
+- AGENTCMD (Swift, contract extension): Yes runs the bundled observer's `install-agent`, then `launchctl bootout` +
+  `bootstrap gui/UID PLIST`; off runs `bootout` + `uninstall-agent`; a failed write loads nothing; with
+  OFFLOAD_LAUNCH_AGENTS_DIR launchd is never touched.
 - CHECKOPTS (Swift): `--hold N`, `--captioner stub|off` parse; other captioners and bad holds are refused; the check
   spec carries the observer and the captioner flag; without them it equals the s25 check spec.
 - OBSBIN (brain): the fallback resolves inside the bundle when the module lives in an app bundle and the repo path
@@ -80,20 +86,22 @@ out of scope. No prod-only knobs: short intervals only through hooks that alread
     not duplicated.
   - KEYRESTART: SIGUSR1 (the s29 key-change path, `restart(home:spec:)`) replaces the brain process.
   - QUIT: the app process is killed (-9); the orphan guard stops the brain within 5 s.
-  - AGENT: `offload-observer install-agent` from the copy writes a lint-clean plist (RunAtLoad, KeepAlive on crash)
-    whose program is inside the copy; `offload-observer status --json` runs from the copy.
-  - CONSENT: app/Sources still has no observer auto-start (no install-agent, launchctl or SMAppService call).
+  - STUB: the check brain reports model stub and captioner stub (no Claude call even with a key in the Keychain).
+  - AGENT + CONSENT (contract extension after the operator decision; adds checks, removes none): no plist after a
+    full brain run (before consent); `Offload --observer-agent on` (the Settings switch's code path) writes a
+    lint-clean plist (RunAtLoad, KeepAlive on crash, no env overrides) whose program is inside the copy;
+    `--observer-agent off` deletes it; the bundled observer runs; login-agent commands exist only in
+    ObserverAgent.swift and install() has exactly two callers (the switch, reached by the first-run Yes, and the CLI).
 - `app/build.sh test`, the brain suite, s25 verify and s28 verify pass (run separately).
 
-## Operator decision
-Should the observer start at login after install? It should only with the person's consent, and today there is no
-consent step for it (onboarding step 1 "Offload watches how you work, on this Mac" explains, step 2 asks for the
-three permissions; neither starts anything). Proposed (not built here):
-- Onboarding step 1 becomes the consent: buttons "Start watching" and "Not now". "Start watching" registers the
-  observer as a login agent with `SMAppService.agent(plistName: "ai.offload.observer.plist")` (plist shipped in
-  `Contents/Library/LaunchAgents`, `BundleProgram Contents/MacOS/offload-observer`, so it follows the app when it
-  is moved, and it shows in System Settings > Login Items where the person can switch it off). "Not now" starts
-  nothing; the dashboard shows "Not watching" with the same button.
-- A dashboard switch "Open Offload at login" (`SMAppService.mainApp`, off by default) so cron workflows run at
-  09:00 without the person opening the app.
-- Uninstall notes gain "Login Items: remove Offload". The current `install-agent` path stays for dev only.
+## Operator decision (taken: option 1, ask once on first run)
+- First run of the installed app (bundled brain, observer present, not mock or demo), after onboarding when it shows:
+  one question, "Let Offload watch your work in the background, starting when you log in? You can turn this off in
+  Settings." Buttons Yes / Not now. The answer is stored (`ai.offload.observerAtLogin.v1`) and never asked again.
+- Yes: the bundled observer writes `~/Library/LaunchAgents/ai.offload.observer.plist` (program inside the bundle) and
+  the app loads it with `launchctl bootstrap gui/UID`. Not now: nothing is written.
+- Settings (dashboard, Observing): a switch "Watch my work in the background, starting when I log in". On installs and
+  loads; off runs `launchctl bootout` and deletes the plist. The switch shows what is on disk.
+- Still open: the app itself is not a login item, so cron slots run only while Offload is open (a missed slot runs
+  once at the next start). If the app is moved after Yes, the plist points at the old place until the switch is
+  turned off and on (an SMAppService agent would follow the bundle; that needs a signed app).

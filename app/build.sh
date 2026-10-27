@@ -54,6 +54,9 @@ build_app() {
   if [ -x "$ROOT/engine/.build/offload-observer" ]; then
     cp "$ROOT/engine/.build/offload-observer" "$APP/Contents/MacOS/offload-observer"
     [ -f "$ROOT/engine/.build/libOffloadCore.dylib" ] && cp "$ROOT/engine/.build/libOffloadCore.dylib" "$APP/Contents/MacOS/"
+  else
+    # s31: an app without its observer records nothing once installed. dmg builds the engine first; say it here.
+    echo "build.sh: WARNING no observer in this app (engine/.build/offload-observer missing): run engine/build.sh first, or app/build.sh dmg" >&2
   fi
   bundle_brain
   sign_app "$APP"

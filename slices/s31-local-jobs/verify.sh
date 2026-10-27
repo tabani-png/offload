@@ -3,7 +3,7 @@
 # 1. Swift tags   2. brain tags   3. build engine + app outside the repo, copy it, read-only
 # 4. seed a home (repo bun, OFFLOAD_KEYS=file: test state only)   5. start the brain THE WAY THE APP DOES from the copy
 #    (`Offload --brain-check --hold`, env -i, temp HOME, PATH without bun, no OFFLOAD_REPO)
-# 6. PURGE SCHED CAPTION OBSERVER TIME WAKE RESTART KEYRESTART QUIT   7. AGENT   8. CONSENT   9. scope
+# 6. PURGE SCHED CAPTION OBSERVER TIME WAKE RESTART KEYRESTART QUIT   7. AGENT + CONSENT (operator decision)   8. scope
 # One "FAIL ..." line per failing check. Bash 3.2 compatible. Never touches the real Keychain (OFFLOAD_KEYS=file), the
 # real LaunchAgents folder (OFFLOAD_LAUNCH_AGENTS_DIR) or launchd. Cleans its temp folder (the app is ~400 MB of clones).
 set -uo pipefail
@@ -29,7 +29,7 @@ echo "== Swift suite (app/build.sh test)"
 st="$(OFFLOAD_BUILD_DIR="$T/testbuild" "$ROOT/app/build.sh" test 2>&1)"; scode=$?
 echo "$st" | grep -E "Test run with [0-9]+ tests" | tail -1
 [ $scode -eq 0 ] || { echo "$st" | grep -E "failed|error:" | head -20; fail "app/build.sh test exited $scode"; }
-for tag in PURGESPEC OBSLOC CHECKOPTS; do
+for tag in PURGESPEC OBSLOC CHECKOPTS CONSENT AGENTCMD; do
   n="$(echo "$st" | grep -cE "Test \"$tag: .*\" passed")"
   [ "$n" -gt 0 ] && echo "$tag: $n passing" || fail "no passing Swift test named \"$tag: ...\""
 done
@@ -69,7 +69,7 @@ KEEP="$(echo "$seed" | sed -n 's/.*"keepDay":"\([^"]*\)".*/\1/p')"
 echo "== start the brain the way the app does (from the read-only copy)"
 OUT="$T/check.out"
 cd "$T" || exit 1
-env -i HOME="$T/home" PATH="$STRIPPED_PATH" TMPDIR="$T/tmp" OFFLOAD_KEYS=file \
+env -i HOME="$T/home" PATH="$STRIPPED_PATH" TMPDIR="$T/tmp" OFFLOAD_KEYS=file OFFLOAD_LAUNCH_AGENTS_DIR="$T/agents" \
   "$C/Contents/MacOS/Offload" --brain-check --home "$H" --hold 600 --captioner stub >"$OUT" 2>"$T/check.err" &
 CHECK=$!
 bunpids() { ps -axo pid=,comm= | awk -v b="$C/Contents/Helpers/bun" '$2 == b { print $1 }'; }
@@ -88,6 +88,9 @@ grep -q "sk-ant-" "$OUT" && fail "the check printed key material"
 P1="$(bunpids | head -1)"
 [ -n "$P1" ] && echo "brain pid $P1 (bundled bun)" || fail "no bundled bun process"
 py() { python3 -I -c "$1"; }
+# Stub only: no Claude call can happen even with a key in the login Keychain (model stub, captioner stub).
+api /status | py "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('model')=='stub' and d['captioner']['captioner']=='stub' else 1)" \
+  && echo "model stub, captioner stub" || fail "the check brain is not stub-only"
 
 echo "== PURGE (the app's launch purge, before serve)"
 grep -qE "^purge: exit 0 purged [1-9][0-9]* artefact" "$OUT" || fail "PURGE: the launch purge did not run or deleted nothing"
@@ -157,26 +160,31 @@ gone() { [ -z "$(bunpids)" ]; }
 wait_for 5 gone && echo "brain stopped with the app" || fail "QUIT: the brain outlived the app: $(bunpids)"
 curl -s -o /dev/null --max-time 3 "$U/status" && fail "QUIT: the brain still answers"
 
-echo "== AGENT (observer LaunchAgent written by the bundled observer; temp agents dir, never loaded)"
-a="$(env -i HOME="$T/home" PATH="$STRIPPED_PATH" OFFLOAD_LAUNCH_AGENTS_DIR="$T/agents" "$C/Contents/MacOS/offload-observer" install-agent --home "$H" 2>&1)" \
-  || fail "AGENT: install-agent exited non-zero: $a"
+echo "== AGENT + CONSENT (contract extension after the operator decision: login agent only after the person's Yes)"
+# Never the real LaunchAgents folder or launchd: OFFLOAD_LAUNCH_AGENTS_DIR is set on every run below and above.
 PL="$T/agents/ai.offload.observer.plist"
+[ -e "$PL" ] && fail "CONSENT: a LaunchAgent exists before consent (after a full brain run)" || echo "no plist before consent"
+agent() { env -i HOME="$T/home" PATH="$STRIPPED_PATH" TMPDIR="$T/tmp" OFFLOAD_LAUNCH_AGENTS_DIR="$T/agents" "$C/Contents/MacOS/Offload" --observer-agent "$1" --home "$H" 2>&1; }
+a="$(agent on)" || fail "AGENT: --observer-agent on failed: $a"
+echo "$a" | sed "s|$T|\$T|g"
 plutil -lint "$PL" >/dev/null 2>&1 && echo "plist lint ok" || fail "AGENT: the plist does not lint"
 prog="$(plutil -extract ProgramArguments.0 raw "$PL" 2>/dev/null)"
 creal="$(cd "$C" && pwd -P)"
 case "$prog" in "$C"/Contents/MacOS/offload-observer|"$creal"/Contents/MacOS/offload-observer) echo "program inside the copy" ;; *) fail "AGENT: the agent runs '$prog', not the bundle's observer" ;; esac
 [ "$(plutil -extract RunAtLoad raw "$PL" 2>/dev/null)" = true ] || fail "AGENT: RunAtLoad is not true"
 [ "$(plutil -extract KeepAlive.SuccessfulExit raw "$PL" 2>/dev/null)" = false ] || fail "AGENT: KeepAlive does not restart after a crash"
+plutil -extract EnvironmentVariables raw "$PL" >/dev/null 2>&1 && fail "AGENT: the plist carries environment overrides"
+a="$(agent off)" || fail "AGENT: --observer-agent off failed: $a"
+[ -e "$PL" ] && fail "AGENT: the plist is still there after the switch went off" || echo "gone after off"
 env -i HOME="$T/home" PATH="$STRIPPED_PATH" OFFLOAD_KEYS=file "$C/Contents/MacOS/offload-observer" status --json --home "$H" >/dev/null 2>&1 \
   && echo "bundled observer runs (status --json)" || fail "AGENT: the bundled observer does not run"
-
-echo "== CONSENT (no observer auto-start without the person's consent; see SPEC 'Operator decision')"
-if grep -rnE "install-agent|launchctl|SMAppService" "$ROOT/app/Sources" >/dev/null 2>&1; then
-  grep -rnE "install-agent|launchctl|SMAppService" "$ROOT/app/Sources" | head -5
-  fail "CONSENT: app/Sources starts the observer or a login item; that needs the onboarding consent step first"
-else
-  echo "observer start at login: not wired in the app (operator decision pending)"
-fi
+# The login-agent commands live in one file; only the consent paths (the Yes, the Settings switch, the CLI) reach them.
+others="$(grep -rlE "install-agent|launchctl|SMAppService" "$ROOT/app/Sources" | grep -v "/Core/ObserverAgent.swift$")"
+[ -z "$others" ] || fail "CONSENT: login-agent commands outside ObserverAgent.swift: $others"
+calls="$(grep -rnE "\.install\(\)" "$ROOT/app/Sources" | grep -v "/Core/ObserverAgent.swift:")"
+echo "$calls" | sed "s|$ROOT/||"
+[ "$(echo "$calls" | grep -c .)" -eq 2 ] || fail "CONSENT: expected exactly 2 install() callers (the switch and the CLI)"
+grep -q "if yes { setObserverAtLogin(true) }" "$ROOT/app/Sources/App/OffloadApp.swift" || fail "CONSENT: the first-run question does not gate the install"
 
 echo "== scope"
 . "$ROOT/scripts/lib/slice-changes.sh"
@@ -186,6 +194,7 @@ case $scope_rc in
        [ -n "$p" ] || continue
        case "$p" in
          app/Sources/Core/BrainSupervisor.swift|app/Sources/Core/BrainCheck.swift|app/Sources/App/OffloadApp.swift|app/build.sh) ;;
+         app/Sources/Core/ObserverAgent.swift|app/Sources/Surfaces/DashboardModel.swift|app/Sources/Surfaces/DashboardView.swift) ;;
          brain/src/store/observer.ts|brain/tests/s31-local-jobs/*|slices/s31-local-jobs/*) ;;
          *) fail "out-of-scope path changed: $p" ;;
        esac
