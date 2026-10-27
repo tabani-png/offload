@@ -243,7 +243,7 @@ extension MockBrainClient {
   static let dashboardHours = HoursSaved(estimated: 21.9, measured: 16.8)
 
   static let dashboardObserving = ObservingState(
-    state: .watching, daysStored: 7, keepDays: 7, nextPurgeDay: "2026-10-17", nextPurgeAt: local(24, 0, 0),
+    state: .watching, daysStored: 7, keepDays: LocalRetention.days, nextPurgeDay: "2026-10-17", nextPurgeAt: local(24, 0, 0),
     permissions: [
       PermissionState(.screenRecording, granted: true),
       PermissionState(.accessibility, granted: true),

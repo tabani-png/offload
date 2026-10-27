@@ -86,7 +86,7 @@ struct S09AEditsTests {
     let t = StubTransport(["GET /observer": (200, S09AFixture.data("observer.json"))])
     let c = HTTPBrainClient(endpoint: ep, transport: t, permissions: { PermissionState.unknownRows })
     let r = try #require(try await c.observer())
-    #expect(r.keepDays == 7)
+    #expect(r.keepDays == 30)
     #expect(await c.permissionRows().map(\.grant) == [.granted, .granted, .granted])
   }
 

@@ -2,13 +2,13 @@ import Foundation
 
 /// s10a: one consistent sample week for `--mock`, snapshots and the cross-screen copy test. The card, the review
 /// window, the dashboard and the rail all read it, so every figure that appears on two screens is the same brain
-/// number (21.9 h a week saved on outreach, 8 emails a batch, 7 of 7 days stored). The numbers are the brain's own
+/// number (21.9 h a week saved on outreach, 8 emails a batch, 7 of 30 days stored). The numbers are the brain's own
 /// example (brain/API.md, GET /insights): 492 emails, 64.4% of the week, saves 21.9 h a week. s10d: hours, tracked
 /// total and share are computed from MockWeek, the same minutes the timeline draws.
 ///
 /// `MockBrainClient.outreach` and friends stay as they were: the s07 tests pin their arithmetic.
 enum SampleWeek {
-  static let status = ObserverStatus(state: .watching, daysStored: 7, windowDays: 7,
+  static let status = ObserverStatus(state: .watching, daysStored: 7, windowDays: LocalRetention.days,
                                      nextPurge: MockBrainClient.local(24, 0, 0), insightsWaiting: 3)
 
   static let outreach = Insight(
@@ -74,7 +74,7 @@ extension DashboardAutomation {
 }
 
 extension RailModel {
-  /// s10a: what the hover label says, so the dots have names: "Watching · Day 7 of 7 · 1 running · 2 need you".
+  /// s10a: what the hover label says, so the dots have names: "Watching · Day 7 of 30 · 1 running · 2 need you".
   /// s10d: one line per dot, observer first: what the hover card lists so every dot has a name.
   var hoverLines: [(id: String, role: StatusRole, text: String)] {
     let marks = dots.map { d in (id: d.id, role: d.role, text: d.id == "observer" ? observerLabel : (dotNames[d.id] ?? d.id)) }

@@ -34,7 +34,7 @@ count and sum but cannot correlate refs across devices.
   readable per person by others only when `per_person_views` is enabled (ADR 0108); otherwise the server only uses it
   inside group-floor aggregates.
 - G4: `workflow_proposal` only after an explicit user action with a preview of the exact JSON to be sent.
-- G5: the user can pause sync; paused means the outbox holds objects locally (encrypted, 7-day purge like brain files).
+- G5: the user can pause sync; paused means the outbox holds objects locally (encrypted, 30-day purge like brain files (ADR 0016)).
 - The server re-checks G1-G2 from its own records and rejects with `consent_missing` / `feature_disabled`.
 
 ### 3. Envelope, signing, encryption
@@ -50,7 +50,7 @@ count and sum but cannot correlate refs across devices.
   so it adds keys to manage without a new boundary. Revisit if a proxy we do not control terminates TLS.
 
 ### 4. Cadence and delivery
-- Outbox flush every 15 min and on run completion; exponential backoff to 6 h; objects older than 7 days are dropped
+- Outbox flush every 15 min and on run completion; exponential backoff to 6 h; objects older than 30 days (ADR 0016) are dropped
   locally with a purge-log line (same rule as the brain store).
 - `SyncReceipt` lists accepted ids and rejected `{id, code}`; rejected objects are not retried unless the code is
   retryable (`rate_limited`, `server_error`).

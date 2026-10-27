@@ -113,7 +113,7 @@ describe("s05c H4: Keychain-wrapped brain keys", () => {
 
   test("H4c: migration leaves expired raw keys to the purge and reports a conflict without deleting the raw key", () => {
     fileMode();
-    sealText(home, join(home, "old.enc"), "old", NOW - 9 * DAY_MS);
+    sealText(home, join(home, "old.enc"), "old", NOW - 32 * DAY_MS);
     const f = join(home, "today.enc");
     sealText(home, f, "today", NOW);
     keychainMode();
@@ -125,7 +125,7 @@ describe("s05c H4: Keychain-wrapped brain keys", () => {
     expect(r.errors).toHaveLength(1);
     expect(r.errors[0]).toContain(DAY);
     expect(existsSync(brainKeyPath(home, DAY))).toBe(true);
-    expect(existsSync(brainKeyPath(home, "2026-10-10"))).toBe(true);
+    expect(existsSync(brainKeyPath(home, "2026-09-17"))).toBe(true);
     // The artefact sealed under the raw key still opens (the raw key is tried after the wrapped one).
     expect(openText(home, f, NOW)).toBe("today");
   });
@@ -145,10 +145,10 @@ describe("s05c H4: Keychain-wrapped brain keys", () => {
     keychainMode();
     const f = join(home, "a.enc");
     sealText(home, f, "x", NOW);
-    const res = purgeExpired(home, NOW + 8 * DAY_MS, { log: () => {} });
+    const res = purgeExpired(home, NOW + 31 * DAY_MS, { log: () => {} });
     expect(res.keys).toBe(1);
     expect(existsSync(wrappedBrainKeyPath(home, DAY))).toBe(false);
-    expect(openText(home, f, NOW + 8 * DAY_MS)).toBeNull();
+    expect(openText(home, f, NOW + 31 * DAY_MS)).toBeNull();
     expect(readFileSync(join(home, "purge-log.jsonl"), "utf8")).toContain(`"day":"${DAY}"`);
   });
 

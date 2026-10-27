@@ -46,14 +46,14 @@
     "2026-10-23"
   ],
   "home" : "/Users/tabani/builds/offload/scratch/demo-probe",
-  "keepDays" : 7,
+  "keepDays" : 30,
   "keyFiles" : {
     "raw" : 6,
     "wrapped" : 0
   },
   "keysMode" : "keychain",
   "nextExpiry" : {
-    "at" : 1792987200000,
+    "at" : 1794974400000,
     "day" : "2026-10-18"
   },
   "paused" : false,

@@ -2,7 +2,7 @@
 // Keychain mode (default): the observer is the only process that can unwrap day keys, so frames come through
 // `offload-observer list-frames DAY` and `export-frame ID` (observer child env only, REVIEW-2 N6).
 // OFFLOAD_KEYS=file (tests, fixtures): raw 32-byte day keys, decrypted in process with the same format.
-// A day older than 7 local days is never read (the observer exits 3 and purges it).
+// A day older than 30 local days is never read (the observer exits 3 and purges it).
 import { spawnSync } from "node:child_process";
 import { createDecipheriv } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -18,7 +18,7 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 export interface FrameListing {
   frames: FrameRef[];
-  /** The day is past the 7-day window (nothing is read). */
+  /** The day is past the 30-day window (nothing is read). */
   expired: boolean;
   /** Why the day could not be read (no text from the store). */
   error?: string;

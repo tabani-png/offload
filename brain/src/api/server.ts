@@ -183,7 +183,7 @@ export function createBrain(opts: BrainOptions): Brain {
   // Cache per store fingerprint and review time; a change to any day file invalidates it.
   const cache = new Map<string, Promise<Analysis>>();
   const analysis = (reviewSeconds: number | undefined): Promise<Analysis> => {
-    // The local day is part of the key: a day that ages past 7 days drops out even when no file changed (REVIEW-1 M4).
+    // The local day is part of the key: a day that ages past 30 days drops out even when no file changed (REVIEW-1 M4).
     // s14: the onboarding context is part of the key (it reaches label prompts); the fingerprint covers frame notes.
     const key = `${storeFingerprint(opts.home)}#${localDay(now())}#${reviewSeconds ?? "default"}#${contextStamp(opts.home)}`;
     let hit = cache.get(key);

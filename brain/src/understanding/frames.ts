@@ -2,7 +2,7 @@
 // schemas/frame-note.schema.json (required, additionalProperties:false, type/const/maxLength/maxItems/min/max), so the
 // schema and this code cannot drift. Notes come from store events of kind "frame" (s11) and, until s11 stores them,
 // from a fixture sidecar `frames/<day>.jsonl` or `frames/<day>.jsonl.enc` encrypted with that day's key: once the
-// observer purges the key the sidecar is unreadable, and days older than 7 local days are refused.
+// observer purges the key the sidecar is unreadable, and days older than 30 local days are refused.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import schema from "../../../schemas/frame-note.schema.json" with { type: "json" };
@@ -121,7 +121,7 @@ export function readFrameSidecars(home: string, days: readonly DayLabel[], opts:
   const out: FrameRead = { frames: [], invalid: 0, errors: [] };
   for (const day of days) {
     if (opts.now !== undefined && isExpired(day, opts.now)) {
-      out.errors.push(`refused frames for ${day}: older than 7 local days`);
+      out.errors.push(`refused frames for ${day}: older than 30 local days`);
       continue;
     }
     const plain = join(framesDir(home), `${day}.jsonl`);

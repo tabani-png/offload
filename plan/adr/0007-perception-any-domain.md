@@ -11,7 +11,7 @@ landed in "browse"/"other" and could not be named or automated.
 
 ## Decision
 1. Engine keeps a masked, downscaled keyframe on screen change (perceptual hash, existing OCR-on-change trigger),
-   encrypted in the day store, deleted with the 7-day purge. Exclusions and masking apply before anything is kept.
+   encrypted in the day store, deleted with the retention purge (7 days then; 30 days since ADR 0016). Exclusions and masking apply before anything is kept.
 2. A local vision model describes each keyframe (Ollama on the Mac; model chosen by s11 research, swappable).
    Output is a structured Frame note: activity, app surface, object, counterpart, step, inputs seen, outputs made,
    confidence. Images are masked by the engine before anything reads them. With the local captioner they stay on

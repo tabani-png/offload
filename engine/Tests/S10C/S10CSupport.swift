@@ -9,8 +9,8 @@ struct S10CResult {
 }
 
 let s10cUTC = DayCalendar(timeZone: TimeZone(identifier: "UTC")!)
-/// 2026-10-24 09:00 UTC: "2026-10-17" is 7 days old (kept), "2026-10-16" is 8 (expired).
-let s10cNow = ISO8601DateFormatter().date(from: "2026-10-24T09:00:00Z")!
+/// 2026-11-16 09:00 UTC: "2026-10-17" is 30 days old (kept), "2026-10-16" is 31 (expired).
+let s10cNow = ISO8601DateFormatter().date(from: "2026-11-16T09:00:00Z")!
 
 func s10cCLI(_ args: [String], home: URL, secrets: SecretStore, stdin: String = "", now: Date = s10cNow,
              env: [String: String] = [:]) throws -> S10CResult {

@@ -1,6 +1,6 @@
 // The local outbox (ADR 0103 §2 G5, §4): objects waiting to be sent, sealed with the brain day keys (`brain-YYYY-MM-DD`
 // of the day they were queued; store/vault.ts sealed-file format, so no plaintext JSON on disk), one file per day in
-// $OFFLOAD_HOME/sync/outbox/DAY.json.enc. Objects older than 7 days are dropped with a purge-log line (same rule as
+// $OFFLOAD_HOME/sync/outbox/DAY.json.enc. Objects older than 30 days are dropped with a purge-log line (same rule as
 // the brain store): the purge (store/retention.ts) deletes expired day files, and the reader refuses them before that.
 import { appendFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -43,7 +43,7 @@ export class Outbox {
       try {
         out.push(...(JSON.parse(text) as OutboxEntry[]));
       } catch {
-        // A damaged file is skipped; the purge removes it after 7 days.
+        // A damaged file is skipped; the purge removes it after 30 days.
       }
     }
     const rank = (e: OutboxEntry) => (e.kind === "notice_ack" ? 0 : 1);
@@ -89,7 +89,7 @@ export class Outbox {
   }
 }
 
-/** Retention: outbox day files past 7 days are deleted with a purge-log line {day, deletedAt, events: 0, files, by}. */
+/** Retention: outbox day files past 30 days are deleted with a purge-log line {day, deletedAt, events: 0, files, by}. */
 export function purgeOutbox(home: string, now: number): { files: number; days: string[] } {
   const dir = outboxDir(home);
   if (!existsSync(dir)) return { files: 0, days: [] };

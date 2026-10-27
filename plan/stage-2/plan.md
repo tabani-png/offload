@@ -22,7 +22,7 @@ notes, OCR text, keyframes, titles, URLs, recipients, subjects and bodies never 
 ```mermaid
 flowchart LR
   subgraph mac[Employee Mac: Stage 1, unchanged privacy]
-    OBS[observer: raw events, 7-day store] --> BR[brain]
+    OBS[observer: raw events, 30-day store] --> BR[brain]
     BR --> SC[sync client: projector + consent gate + outbox + ES256 signer]
     APP[app: sign-in, notice ack, self-view link] --> BR
   end

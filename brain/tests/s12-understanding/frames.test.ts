@@ -62,12 +62,12 @@ describe("FRAMES sources", () => {
     }
   });
 
-  test("sidecar days older than 7 local days are refused", () => {
+  test("sidecar days older than 30 local days are refused", () => {
     const { home, cleanup } = tempHome();
     try {
       mkdirSync(join(home, "frames"), { recursive: true });
       writeFileSync(join(home, "frames", "2026-10-01.jsonl"), JSON.stringify(note()) + "\n");
-      const r = readFrameSidecars(home, ["2026-10-01"], { now: new Date(2026, 9, 20, 12).getTime() });
+      const r = readFrameSidecars(home, ["2026-10-01"], { now: new Date(2026, 10, 1, 12).getTime() });
       expect(r.frames).toEqual([]);
       expect(r.errors[0]).toContain("refused");
     } finally {

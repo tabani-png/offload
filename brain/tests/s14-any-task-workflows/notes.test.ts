@@ -86,11 +86,11 @@ describe("s14 notes: s11 store -> v2", () => {
 });
 
 describe("s14 notes: retention", () => {
-  test("NOTES: a notes file goes when its name day or its seal day is past 7 days, or when they disagree", () => {
+  test("NOTES: a notes file goes when its name day or its seal day is past 30 days, or when they disagree", () => {
     const home = tmp();
     const now = Date.now();
     const today = localDay(now);
-    const old = localDay(now - 9 * DAY_MS);
+    const old = localDay(now - 32 * DAY_MS);
     const recent = localDay(now - 2 * DAY_MS);
     mkdirSync(join(home, "frame-notes"), { recursive: true });
     sealText(home, notesPath(home, today), "{}\n", today);
@@ -102,11 +102,11 @@ describe("s14 notes: retention", () => {
     expect(existsSync(notesPath(home, old))).toBe(false);
   });
 
-  test("NOTES: fixture sidecars of frame notes older than 7 days are deleted; fresh ones and the engine's day folders stay", () => {
+  test("NOTES: fixture sidecars of frame notes older than 30 days are deleted; fresh ones and the engine's day folders stay", () => {
     const home = tmp();
     const now = Date.now();
     const fresh = localDay(now - 1 * DAY_MS);
-    const old = localDay(now - 8 * DAY_MS);
+    const old = localDay(now - 31 * DAY_MS);
     mkdirSync(join(home, "frames", fresh), { recursive: true });
     for (const d of [fresh, old]) writeFileSync(join(home, "frames", `${d}.jsonl`), "{}\n");
     writeFileSync(join(home, "frames", `${old}.jsonl.enc`), "x\n");

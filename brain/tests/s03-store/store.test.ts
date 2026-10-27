@@ -141,7 +141,7 @@ describe("store reader", () => {
 
   test("readStore keeps only the newest N days and totals bad lines", () => {
     for (let d = 10; d <= 18; d++) writeFileSync(join(home, "days", `2026-10-${d}.jsonl`), `${good(`id${d}`, d)}\n{bad\n`);
-    const store = readStore(home, { windowDays: 7, now: new Date(2026, 9, 19, 12).getTime(), env: { OFFLOAD_OBSERVER_BIN: join(home, "no-observer") } });
+    const store = readStore(home, { windowDays: 7, now: new Date(2026, 10, 11, 12).getTime(), env: { OFFLOAD_OBSERVER_BIN: join(home, "no-observer") } });
     expect(store.refused).toEqual(["2026-10-10", "2026-10-11"]);
     expect(store.days.map((d) => d.day)).toEqual(["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18"]);
     expect(store.eventCount).toBe(7);

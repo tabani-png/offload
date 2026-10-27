@@ -31,7 +31,7 @@ export interface PurgeAllResult extends PurgeResult {
   labelsMoved: number;
   /** Addresses added to contacted ledgers from plain (pre-s10b) live batches. */
   ledgered: number;
-  /** S2-02: sync outbox day files (and evidence-ref maps) older than 7 days. */
+  /** S2-02: sync outbox day files (and evidence-ref maps) older than 30 days. */
   syncFiles: number;
 }
 
@@ -68,7 +68,7 @@ function ledgerLegacyBatches(home: string): number {
   return n;
 }
 
-/** Generated tone cards follow their corpus: when the build day is past 7 days, cards still equal to what the brain
+/** Generated tone cards follow their corpus: when the build day is past 30 days, cards still equal to what the brain
  * wrote are deleted. A card the user edited is the user's file and stays (listed in keptFiles). */
 function purgeToneCards(home: string, now: number): number {
   const p = join(toneDir(home), "index.json");
@@ -100,13 +100,13 @@ export function purgeAll(home: string, now: number, opts: PurgeOptions = {}): Pu
   const res = purgeExpired(home, now, { log });
   const toneCards = purgeToneCards(home, now);
   const labelsMoved = migrateLabels(home, now);
-  // s13: app targets of the connector chain (observed app names / hosts) older than 7 days, with their decisions.
+  // s13: app targets of the connector chain (observed app names / hosts) older than 30 days, with their decisions.
   if (existsSync(chainPath(home))) rememberTargets(home, [], now);
-  // S2-02: queued sync objects and the local evidence-ref maps follow the same 7-day rule (purge-log line per day).
+  // S2-02: queued sync objects and the local evidence-ref maps follow the same 30-day rule (purge-log line per day).
   const outbox = purgeOutbox(home, now);
   const refs = purgeRefs(home, now);
   const syncFiles = outbox.files + refs.length;
-  if (syncFiles > 0) log(`brain: purge removed ${outbox.files} sync outbox file(s) and ${refs.length} evidence-ref map(s) older than 7 days`);
+  if (syncFiles > 0) log(`brain: purge removed ${outbox.files} sync outbox file(s) and ${refs.length} evidence-ref map(s) older than 30 days`);
   rotateIfLarge(join(home, "purge-log.jsonl"));
   if (toneCards + labelsMoved + ledgered > 0) log(`brain: purge removed ${toneCards} generated tone card(s), moved ${labelsMoved} observed name(s) into the sealed store, journalled ${ledgered} contacted address(es)`);
   return { ...res, toneCards, labelsMoved, ledgered, syncFiles };

@@ -67,20 +67,20 @@ test("REF: a ref resolves to the instance only on the Mac that made it; elsewher
   expect(a.resolve("not-a-ref", NOW)).toBeNull();
 });
 
-test("REF: the local ref map is sealed (no instance id in plaintext) and follows the 7-day rule", () => {
+test("REF: the local ref map is sealed (no instance id in plaintext) and follows the 30-day rule", () => {
   const a = EvidenceKey.load(home, { create: true })!;
   const ref = a.remember([{ instanceId: "in_SECRET_INSTANCE", day: "2026-10-12" }], NOW).get("in_SECRET_INSTANCE")!;
   for (const f of readdirSync(refsDir(home))) expect(readFileSync(join(refsDir(home), f), "utf8")).not.toContain("in_SECRET_INSTANCE");
   expect(a.resolve(ref, NOW)).not.toBeNull();
-  // 2026-10-12 is 8 days old on 2026-10-20: it no longer resolves, and the purge deletes the map.
-  expect(a.resolve(ref, NOW + DAY_MS)).toBeNull();
-  expect(purgeRefs(home, NOW + DAY_MS)).toEqual(["2026-10-12"]);
+  // 2026-10-12 is 31 days old on 2026-11-12: it no longer resolves, and the purge deletes the map.
+  expect(a.resolve(ref, NOW + 24 * DAY_MS)).toBeNull();
+  expect(purgeRefs(home, NOW + 24 * DAY_MS)).toEqual(["2026-10-12"]);
   expect(existsSync(join(refsDir(home), "2026-10-12.json.enc"))).toBe(false);
 });
 
-test("REF: instances older than 7 days get no ref and no map entry", () => {
+test("REF: instances older than 30 days get no ref and no map entry", () => {
   const a = EvidenceKey.load(home, { create: true })!;
-  const refs = a.remember([{ instanceId: "in_OLD", day: "2026-10-01" }, { instanceId: "in_NEW", day: "2026-10-18" }], NOW);
+  const refs = a.remember([{ instanceId: "in_OLD", day: "2026-09-18" }, { instanceId: "in_NEW", day: "2026-10-18" }], NOW);
   expect([...refs.keys()]).toEqual(["in_NEW"]);
 });
 

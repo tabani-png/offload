@@ -1,6 +1,6 @@
 import Foundation
 
-// s08 dashboard: automations, honest hours saved, a 7-day timeline and the observer's state.
+// s08 dashboard: automations, honest hours saved, a 7-day timeline (the analysis week) and the observer's state.
 
 struct DashboardAutomation: Codable, Equatable, Identifiable, Sendable {
   var id: String

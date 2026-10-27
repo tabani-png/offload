@@ -44,12 +44,12 @@ describe("s10b N8: title-derived names are sealed and purged", () => {
     expect(summaryOf(w.home, workflow, {}, AT).name).toBe(ins.label.name);
   });
 
-  test("N8: 8 days after the oldest capture the name is gone and the summary falls back to the template name", () => {
+  test("N8: 31 days after the oldest capture the name is gone and the summary falls back to the template name", () => {
     const ins = sheet();
     const { workflow } = draftWorkflow({ home: w.home, analysis: w.analysis, insightId: ins.id, now: () => AT });
     const oldest = w.analysis.tasks.find((t) => t.id === ins.taskId)!.instances.map((i) => i.day).sort()[0]!;
     const [y, m, d] = oldest.split("-").map(Number) as [number, number, number];
-    const later = local(y, m, d + 8, 12);
+    const later = local(y, m, d + 31, 12);
     purgeAll(w.home, later, { log: () => {} });
     expect(existsSync(join(workflowDir(w.home, workflow.id), "labels.json.enc"))).toBe(false);
     expect(displayName(w.home, workflow, later)).toBe("Repeated task");

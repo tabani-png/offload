@@ -1,6 +1,6 @@
 // Tone pack on disk: $OFFLOAD_HOME/tone/<bucket>.md (editable style cards), index.json (hashes, so user edits are
 // kept on rebuild) and corpus.jsonl.enc (cleaned sent emails for retrieval, sealed with the day's brain key and
-// purged after 7 days like every other copy of mail text: store/vault.ts, REVIEW-1 H4). After the purge the pack has
+// purged after 30 days like every other copy of mail text: store/vault.ts, REVIEW-1 H4). After the purge the pack has
 // no corpus and drafting warns "no tone pack yet" until `tone build` runs again.
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";

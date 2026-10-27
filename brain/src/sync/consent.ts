@@ -4,7 +4,7 @@
 //       now >= workingTimeStartsAt (enabledAt + noticePeriodDays); disabled -> queued ones are DROPPED;
 //   G3  daily_aggregate is always sent once G1 passed (server-side use is gated by per_person_views);
 //   G4  workflow_proposal only after an explicit confirm on a preview of the exact JSON (POST /workflows/:id/share);
-//   G5  paused -> everything is held in the encrypted outbox (7-day purge).
+//   G5  paused -> everything is held in the encrypted outbox (30-day purge).
 // Unknown config (never fetched, or unreadable) = send nothing but notice_ack. A kill switch holds everything else too.
 // ADR 0111 §3: consent is forward-only. Nothing observed before the person acknowledged the required notice leaves this
 // Mac (consentStartsAt is the acknowledgement time, not its day), and a config with no required notice lets nothing but

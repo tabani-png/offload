@@ -10,7 +10,7 @@
 //   - s10b N1: auto-run sends on its own only what autorun.ts says is pinned and unchanged;
 //   - s10b N5: an auto run (auto path, or approved by the run loop) stops before its next item when auto-run goes off;
 //   - s10b privacy: every address the gate lets a send go to is written to contacted.ledger (sha256, no address)
-//     before the send, so "never write twice" holds after the sealed batch is purged at 7 days.
+//     before the send, so "never write twice" holds after the sealed batch is purged at 30 days.
 import { randomBytes } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { addressHash, autoSendable, pinFiles, rowHash } from "./autorun.ts";
@@ -322,7 +322,7 @@ export async function prepareLiveBatch(o: PrepareOptions): Promise<Batch> {
     const facts = parseFacts(factsText);
     const contacted = contactedKeys(o.home, wf.id, wf.inputs.crmLog, now);
     const rows = readRecipients(readText(o.home, wf.id, wf.inputs.list) ?? "");
-    // Sent or unknown in a batch that was already purged (7 days): still never written to again.
+    // Sent or unknown in a batch that was already purged (30 days): still never written to again.
     const ledger = ledgerContacted(o.home, wf.id);
     for (const r of rows) if (ledger.has(addressHash(wf.id, r.email))) contacted.add(r.email);
     const next = pickNext(rows, contacted, wf.batchSize);

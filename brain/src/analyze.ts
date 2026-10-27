@@ -31,7 +31,7 @@ export interface AnalyzeOptions {
   /** Insights whose estimated saving is below this (h/wk) are not offered: nothing to win. Default 0.25. */
   minWeeklyHoursSaved?: number;
   session?: SessionOptions;
-  /** Also the reader's clock: days older than 7 local days at now() are refused. */
+  /** Also the reader's clock: days older than 30 local days at now() are refused. */
   now?: () => number;
   /** Reader environment (OFFLOAD_OBSERVER_BIN, OFFLOAD_KEYS). Default process.env. */
   env?: ReaderEnv;

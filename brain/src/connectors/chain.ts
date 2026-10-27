@@ -20,6 +20,7 @@ import { McpProbe, SdkMcpLister, type McpLister } from "./mcp-probe.ts";
 import { DefaultSecretReader, redact, type SecretReader } from "./secrets.ts";
 import { allCapabilities, CATALOG_TARGETS, catalogTarget, isAppTargetId, SCREEN_READ, toolkitOfUniverseId, universeTarget, type ChainTarget } from "./targets.ts";
 import { readUniverse } from "./universe.ts";
+import { KEEP_DAYS } from "../store/vault.ts";
 
 export type Health = ChainHealthDTO;
 
@@ -191,9 +192,9 @@ export function chainDeps(o: Partial<ChainDeps> & Pick<ChainDeps, "home" | "env"
 
 // ---------- the cache file ----------
 
-/** App targets come from observed task profiles (app names, hosts): kept 7 days from when they were last seen, like
+/** App targets come from observed task profiles (app names, hosts): kept 30 days from when they were last seen, like
  * the observed data they come from (ADR 0003), then dropped with their decisions. */
-export const APP_TARGET_RETAIN_MS = 7 * 24 * 60 * 60_000;
+export const APP_TARGET_RETAIN_MS = KEEP_DAYS * 24 * 60 * 60_000;
 
 type StoredTarget = ChainTarget & { seenAt: number };
 
@@ -243,7 +244,7 @@ export function rememberTargets(home: string, targets: readonly ChainTarget[], n
   if (changed) writeChainFile(home, f);
 }
 
-/** The target for an id: a catalog connector, or an app target seen in the last 7 days; null otherwise. */
+/** The target for an id: a catalog connector, or an app target seen in the last 30 days; null otherwise. */
 export function knownTarget(home: string, id: string, now: number = Date.now()): ChainTarget | null {
   const c = catalogTarget(id);
   if (c !== null) return c;

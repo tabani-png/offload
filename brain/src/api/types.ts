@@ -34,7 +34,10 @@ export interface StatusResponse {
     badLines: number;
   };
   retention: {
-    keepDays: 7;
+    /** Days kept on this Mac (store/vault.ts KEEP_DAYS, 30). */
+    keepDays: number;
+    /** s32: every stored day inside keepDays, oldest first (store.days is the analysis week, at most 7). */
+    days: Day[];
     /** Oldest stored day, which is the next one the observer purges. */
     nextPurgeDay: Day | null;
     /** Local midnight after which nextPurgeDay is older than keepDays (ms), null when empty. */
@@ -712,8 +715,8 @@ export interface ObserverResponse {
   /** Same as status.permissions; null when unknown or unavailable. */
   permissions: ObserverPermissionsDTO | null;
   status: ObserverStatusDTO | null;
-  /** s10b: files with your content that are kept until you delete them (not purged at 7 days), for the app's
-   * "Observing" section. Everything else with observed or mail text is sealed and purged at 7 days. */
+  /** s10b: files with your content that are kept until you delete them (not purged at 30 days), for the app's
+   * "Observing" section. Everything else with observed or mail text is sealed and purged at 30 days. */
   keptFiles?: KeptFileDTO[];
 }
 

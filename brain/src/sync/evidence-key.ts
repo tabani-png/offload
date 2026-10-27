@@ -1,8 +1,8 @@
 // Evidence refs (ADR 0103 §1): instanceRef = hex(HMAC-SHA256(deviceEvidenceKey, localInstanceId))[0:32]. The key is
 // the brain key `device-evidence` (observer-wrapped; raw file under OFFLOAD_KEYS=file) and never leaves this Mac, so
 // the control plane can count and sum refs but cannot resolve or correlate them across devices. The local map
-// ref -> instance is sealed per capture day with the brain day key (`brain-YYYY-MM-DD`) and follows the 7-day rule:
-// a ref of an instance older than 7 days no longer resolves, like the instance itself.
+// ref -> instance is sealed per capture day with the brain day key (`brain-YYYY-MM-DD`) and follows the 30-day rule:
+// a ref of an instance older than 30 days no longer resolves, like the instance itself.
 import { appendFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { hmacHex, ulidFrom } from "./encoding.ts";
@@ -72,7 +72,7 @@ export class EvidenceKey {
     }
   }
 
-  /** The local instance behind a ref, or null (unknown here, from another device, or past 7 days). */
+  /** The local instance behind a ref, or null (unknown here, from another device, or past 30 days). */
   resolve(ref: string, now: number): RefTarget | null {
     if (!/^[0-9a-f]{32}$/.test(ref) || !existsSync(refsDir(this.home))) return null;
     for (const n of readdirSync(refsDir(this.home))) {

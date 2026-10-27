@@ -49,7 +49,7 @@ are set up. That is not a new automation. It is the kind of answer Offload is bu
 ## Privacy by design
 
 - **Stays on your Mac.** The observer has no network code, and a test enforces it.
-- **Encrypted and short-lived.** The local store is encrypted. Anything older than 7 days is deleted.
+- **Encrypted and short-lived.** The local store is encrypted. Anything older than 30 days is deleted.
 - **Masked before it is saved.** Card, account and ID numbers, one-time codes and keys are masked. Password,
   banking and private windows are skipped entirely.
 - **Counts, never keys.** Offload records how many keys and clicks happen, never which ones.
@@ -80,7 +80,7 @@ Three parts, all running on the Mac:
 ```mermaid
 flowchart LR
   subgraph engine[Observer · Swift, no network]
-    OBS[app, window, idle and input counts<br/>masked text on change] --> ST[(encrypted store<br/>7-day purge)]
+    OBS[app, window, idle and input counts<br/>masked text on change] --> ST[(encrypted store<br/>30-day purge)]
   end
   subgraph brain[Brain · Bun + TypeScript, localhost only]
     ST --> SES[sessions] --> GRP[tasks] --> RANK[insights + savings]

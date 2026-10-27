@@ -69,7 +69,7 @@ describe("s11 frame source", () => {
     copyFileSync(join(h, "frames", a.day, `${a.frameId}.enc`), join(h, "frames", a.day, `${fake.frameId}.enc`));
     const src = new ObserverFrameSource(h, FILE_ENV);
     expect(() => src.read(fake, NOW)).toThrow(FrameReadError);
-    const old = writeFrame(h, NOW - 9 * 86_400_000);
+    const old = writeFrame(h, NOW - 32 * 86_400_000);
     expect(src.list(old.day, NOW)).toEqual({ frames: [], expired: true });
     expect(src.read(old, NOW)).toBeNull();
   });
@@ -131,15 +131,15 @@ describe("s11 notes store", () => {
     const r = ref(h, NOW - 3 * 86_400_000);
     appendNotes(h, [buildNote(r, { activity: "Old", confidence: 0.5 }, "stub")], NOW, FILE_ENV, () => r.day);
     expect(existsSync(notesPath(h, r.day))).toBe(true);
-    const res = purgeExpired(h, NOW + 6 * 86_400_000, { log: () => {} });
+    const res = purgeExpired(h, NOW + 29 * 86_400_000, { log: () => {} });
     expect(res.files).toBeGreaterThanOrEqual(1);
     expect(existsSync(notesPath(h, r.day))).toBe(false);
-    expect(readFrameNotes(h, r.day, NOW + 6 * 86_400_000, FILE_ENV)).toEqual([]);
+    expect(readFrameNotes(h, r.day, NOW + 29 * 86_400_000, FILE_ENV)).toEqual([]);
   });
 
   test("C7: expired days are never written or read", () => {
     const h = home();
-    const old = NOW - 9 * 86_400_000;
+    const old = NOW - 32 * 86_400_000;
     const r: FrameRef = { frameId: "01JB000000000000000000000Q", ts: old, day: localDay(old), width: 1, height: 1, bytes: 1, maskedRegions: 0 };
     expect(appendNotes(h, [buildNote(r, { activity: "x", confidence: 0.5 }, "stub")], NOW, FILE_ENV, () => r.day)).toEqual([]);
     expect(readFrameNotesDetailed(h, r.day, NOW, FILE_ENV)).toEqual({ notes: [], bad: 0 });

@@ -254,12 +254,12 @@ describe("wave A review, LOW items", () => {
     try {
       const ev = EvidenceKey.fromBytes(t.home, new Uint8Array(32).fill(9));
       ev.remember([{ instanceId: "inst-a", day: "2026-10-12" }, { instanceId: "inst-b", day: "2026-10-18" }], NOW);
-      const gone = purgeRefs(t.home, NOW + 3 * DAY_MS);
+      const gone = purgeRefs(t.home, NOW + 26 * DAY_MS);
       expect(gone).toEqual(["2026-10-12"]);
       const p = join(t.home, "purge-log.jsonl");
       expect(existsSync(p)).toBe(true);
       const lines = readFileSync(p, "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
-      expect(lines).toEqual([{ day: "2026-10-12", deletedAt: NOW + 3 * DAY_MS, events: 0, files: 1, by: "sync-refs" }]);
+      expect(lines).toEqual([{ day: "2026-10-12", deletedAt: NOW + 26 * DAY_MS, events: 0, files: 1, by: "sync-refs" }]);
     } finally {
       t.cleanup();
     }

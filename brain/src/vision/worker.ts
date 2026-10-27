@@ -21,7 +21,7 @@ export interface WorkerOptions {
   maxQueue?: number;
   /** Attempts per frame before it is skipped for this process (default 3). */
   maxAttempts?: number;
-  /** Days looked back, today included (default 8 = the 7-day window). */
+  /** Days looked back, today included (default 8: the 7-day analysis window, not retention). */
   lookbackDays?: number;
   /** Health re-check interval while unhealthy or idle, ms (default 60 000). */
   healthEveryMs?: number;

@@ -3,6 +3,7 @@ import type { UnderstandingStatusDTO } from "./s14-types.ts";
 import type { Analysis, Insight } from "../analyze.ts";
 import type { Connector } from "../connectors/catalog.ts";
 import type { DayLabel, Figure, Span, TaskStats, TaskUnderstanding } from "../types.ts";
+import { KEEP_DAYS } from "../store/vault.ts";
 import {
   API_VERSION,
   CAPTIONER_OFF,
@@ -22,7 +23,6 @@ import {
 } from "./types.ts";
 
 const RECORDING_WINDOW_MS = 5 * 60_000;
-export const KEEP_DAYS = 7;
 
 const round = (x: number, dp: number) => Math.round(x * 10 ** dp) / 10 ** dp;
 
@@ -225,7 +225,9 @@ export function toStatus(a: Analysis, now: number, captioner: CaptionerStatusDTO
   for (const e of a.events) if (last === null || e.ts >= last.ts) last = { ts: e.ts, kind: e.kind };
   let state: ObserverState = "no_data";
   if (last !== null) state = last.kind === "pause" ? "paused" : now - last.ts <= RECORDING_WINDOW_MS ? "recording" : "stale";
-  const oldest = a.store.days[0]?.day ?? null;
+  // s32: retention is about every retained day, not the 7-day analysis week the store read covers.
+  const retained = a.store.retained ?? a.store.days.map((d) => d.day);
+  const oldest = retained[0] ?? null;
   return {
     version: API_VERSION,
     observer: { state, lastEventAt: last?.ts ?? null },
@@ -234,7 +236,7 @@ export function toStatus(a: Analysis, now: number, captioner: CaptionerStatusDTO
       events: a.store.eventCount,
       badLines: a.store.badLineCount,
     },
-    retention: { keepDays: KEEP_DAYS, nextPurgeDay: oldest, nextPurgeAt: oldest === null ? null : localMidnightAfter(oldest, KEEP_DAYS + 1) },
+    retention: { keepDays: KEEP_DAYS, days: [...retained], nextPurgeDay: oldest, nextPurgeAt: oldest === null ? null : localMidnightAfter(oldest, KEEP_DAYS + 1) },
     analysis: { generatedAt: a.generatedAt, windowDays: [...a.windowDays], tasks: a.tasks.length, insights: a.insights.length },
     captioner: { ...captioner },
     // s14 (additive): which task finder ran, so the app can say when the simpler one is in use.

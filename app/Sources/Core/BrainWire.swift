@@ -36,6 +36,8 @@ struct StatusResponse: Codable, Equatable {
   }
   struct Retention: Codable, Equatable {
     var keepDays: Int
+    /// s32 (optional): every retained day, oldest first; store.days is only the analysis week.
+    var days: [String]? = nil
     var nextPurgeDay: String?
     var nextPurgeAt: Double?
   }
@@ -57,7 +59,7 @@ struct StatusResponse: Codable, Equatable {
   var models: ModelsStatus? = nil
 
   func toObserverStatus() -> ObserverStatus {
-    ObserverStatus(state: ObserverState(wire: observer.state), daysStored: store.days.count,
+    ObserverStatus(state: ObserverState(wire: observer.state), daysStored: retention.days?.count ?? store.days.count,
                    windowDays: retention.keepDays, nextPurge: retention.nextPurgeAt.map(BrainWire.date(ms:)),
                    insightsWaiting: analysis.insights)
   }

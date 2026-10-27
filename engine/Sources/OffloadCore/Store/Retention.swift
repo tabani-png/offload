@@ -11,10 +11,10 @@ public struct PurgeRecord: Codable, Equatable, Sendable {
 }
 
 /// Deletes days older than `keepDays` local days: the day file(s), the day key AND the brain key of that day
-/// (`keys/brain-YYYY-MM-DD.key`; brain keys with other names are never touched). A day is older than 7 when its local
-/// age (whole days from that day to today) is greater than 7, so today and the 7 days before it are kept.
+/// (`keys/brain-YYYY-MM-DD.key`; brain keys with other names are never touched). A day is older than keepDays (30) when its
+/// local age (whole days from that day to today) is greater than 30, so today and the 30 days before it are kept.
 public struct Retention {
-    public static let defaultKeepDays = 7
+    public static let defaultKeepDays = 30
 
     public let layout: StoreLayout
     public let days: DayCalendar
@@ -71,7 +71,7 @@ public struct Retention {
         }.sorted()
     }
 
-    /// True when `name` is a real local calendar date (`YYYY-MM-DD`), so its brain key follows the 7-day window.
+    /// True when `name` is a real local calendar date (`YYYY-MM-DD`), so its brain key follows the retention window.
     public func isDayDate(_ name: String) -> Bool { days.date(ofDay: name) != nil }
 
     /// True when `name` is a date older than `keepDays` local days.

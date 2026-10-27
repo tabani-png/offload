@@ -1,6 +1,6 @@
 // Measured review time per run (the hs-1 residual, ADR 0109 §3): seconds and counts only, keyed by the local batch
 // hash. Written by the review surface (`recordReview`; the app's review sheet timer is wired in S2-13), read by the
-// collector. $OFFLOAD_HOME/sync/reviews.json (0600); rows older than 7 days are dropped on write.
+// collector. $OFFLOAD_HOME/sync/reviews.json (0600); rows older than 30 days are dropped on write.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { KEEP_DAYS } from "../store/vault.ts";

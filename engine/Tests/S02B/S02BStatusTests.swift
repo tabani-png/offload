@@ -52,14 +52,14 @@ import Testing
         #expect(keys == ["raw": 1, "wrapped": 0])
     }
 
-    @Test func nextExpiryIsWhenTheOldestDayLeavesTheSevenDayWindow() throws {
+    @Test func nextExpiryIsWhenTheOldestDayLeavesTheThirtyDayWindow() throws {
         let home = tempHome()
         let layout = StoreLayout(home: home)
         try seed(layout, day: "2026-10-20", events: 1)
         let report = try json(["status", "--json", "--home", home.path], now: try noon("2026-10-23"))
         let expiry = try #require(report["nextExpiry"] as? [String: Any])
         #expect(expiry["day"] as? String == "2026-10-20")
-        let at = try #require(local.date(ofDay: "2026-10-28"))  // age 8 starts on 10-28
+        let at = try #require(local.date(ofDay: "2026-11-20"))  // age 31 starts on 11-20
         #expect((expiry["at"] as? NSNumber)?.int64Value == epochMillis(at))
         #expect(report["nextPurgeAt"] is NSNull || report["nextPurgeAt"] == nil)  // nothing running
         #expect(report["keysMode"] as? String == "keychain")

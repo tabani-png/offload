@@ -74,7 +74,7 @@ out of scope. No prod-only knobs: short intervals only through hooks that alread
   HOME, PATH without bun, no OFFLOAD_REPO, OFFLOAD_KEYS=file (never the real Keychain), a seeded home
   (`seed.ts`, repo bun: test state only):
   - PURGE: the app's launch purge (check mode, before serve) deletes `frame-notes/` and `frames/` files older than
-    7 days and keeps a 6-day-old one.
+    30 days and keeps an 8-day-old one (s32 window).
   - SCHED: a weekday 09:00 slot missed while the app was closed drafts exactly one pending live batch on the first
     tick ("A new batch of 3 is ready for review."); nothing is sent.
   - CAPTION: the stub captioner captions both keyframes; a sealed `frame-notes/<today>.jsonl.enc` exists.
