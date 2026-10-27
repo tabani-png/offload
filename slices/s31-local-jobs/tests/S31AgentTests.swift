@@ -74,3 +74,39 @@ struct S31AgentTests {
     #expect(c.list.count == 1)
   }
 }
+
+// Codex review of PR #38 (P2 x2): a failed unload must not report "off"; the demo week chosen in onboarding is demo.
+private func scripted(_ statuses: [String: Int32], calls: Calls) -> ObserverAgent {
+  var a = ObserverAgent(binary: URL(fileURLWithPath: "/Applications/Offload.app/Contents/MacOS/offload-observer"),
+                        home: URL(fileURLWithPath: "/h"), environment: [:], uid: 501)
+  a.run = { exe, args, _ in
+    calls.list.append([exe.path] + args)
+    return (statuses[args.first ?? ""] ?? 0, "")
+  }
+  return a
+}
+
+struct S31ReviewTests {
+  @Test("AGENTCMD: bootout fails while the agent is still loaded -> error, the plist is kept")
+  func unloadFailureKeepsPlist() {
+    let c = Calls()
+    // bootout fails, print says it is still loaded (0).
+    #expect(throws: ObserverAgentError.self) { try scripted(["bootout": 5, "print": 0], calls: c).remove() }
+    #expect(!c.list.contains { $0.contains("uninstall-agent") })
+  }
+
+  @Test("AGENTCMD: bootout fails because it was not loaded -> fine, the plist is deleted")
+  func notLoadedIsFine() throws {
+    let c = Calls()
+    try scripted(["bootout": 113, "print": 113], calls: c).remove()
+    #expect(c.list.contains { $0.contains("uninstall-agent") })
+    #expect(c.list.contains(["/bin/launchctl", "print", "gui/501/ai.offload.observer"]))
+  }
+
+  @Test("CONSENT: the demo week chosen in onboarding counts as demo (no question)")
+  func demoChosenInOnboarding() {
+    let obs = URL(fileURLWithPath: "/Applications/Offload.app/Contents/MacOS/offload-observer")
+    #expect(!ObserverAgentSetting.shouldAsk(answer: nil, bundled: true, observer: obs, mock: false, demo: false, demoActive: true))
+    #expect(ObserverAgentSetting.shouldAsk(answer: nil, bundled: true, observer: obs, mock: false, demo: false, demoActive: false))
+  }
+}
