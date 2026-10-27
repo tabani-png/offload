@@ -35,6 +35,11 @@ final class DashboardModel: ObservableObject {
   @Published var claudeVision = false
   @Published var claudeVisionNote: String?
   var onClaudeVision: ((Bool) -> Void)?
+  /// s31: the observer's login agent (on only after the person said Yes), shown as it is on disk.
+  @Published var observerAtLogin = false
+  var onObserverAtLogin: ((Bool) -> Void)?
+
+  func toggleObserverAtLogin() { onObserverAtLogin?(!observerAtLogin) }
 
   /// s29: the Claude key in Settings (shared with the first-run window), and the one notice shown while there is none.
   var claudeKey: ClaudeKeyModel?

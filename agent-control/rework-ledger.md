@@ -34,6 +34,8 @@ Goal: builder → review → rework becomes **system patches** (skills, SPEC/HAN
 | 2026-10-25 | s19 PR #11 | orchestrator | spec_gap | round 3: bracketed identities exempt; playbook loader trusts shape (Codex P2 x2) | same class as s18 |
 | 2026-10-25 | S2-08 PR #10 | orchestrator | spec_gap | round 3: self-view hours saved always zero (Codex P2) | none |
 | 2026-10-26 | s22 PR #17, s24 PR #21, S2-13 PR #22 | orchestrator | verify_fp | verify.sh scope check false-failed after the branch merged origin/main: `git diff "$BASE"...HEAD` with a fixed BASE counts every file main changed since BASE; managers cleared it by hand each time (s24: 226 files counted, 31 its own) | scripts/lib/slice-changes.sh (net diff vs merge-base with origin/main; SLICE_GREP mode adds --remerge-diff) used by every slice verify.sh and S2-common; rule in docs/adam-rules.md and docs/adam-folder-contract.md |
+| 2026-10-26 | s31 PR #38 | orchestrator | success reported without checking the side effect | ObserverAgent.remove deleted the plist and reported off when `launchctl bootout` failed with the agent still loaded (Codex P2) | remove() checks `launchctl print` after a failed bootout; keeps the plist and throws (S31ReviewTests) |
+| 2026-10-26 | s31 PR #38 | orchestrator | derived state not used in a guard | consent question used options.demo only; the onboarding demo week (demoActive) still asked and Yes started the observer on the real home (Codex P2) | shouldAsk takes demoActive (S31ReviewTests) |
 
 ### stage values
 

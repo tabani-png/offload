@@ -175,6 +175,50 @@ enum BrainLaunch {
     return ["run", cli.path, "purge", "--home", home.path]
   }
 
+  /// True when this brain's cli.ts has the `purge` command (REVIEW-2).
+  static func cliHasPurge(_ cli: URL) -> Bool {
+    (try? String(contentsOf: cli, encoding: .utf8))?.contains("\"purge\"") ?? false
+  }
+
+  /// s31: the launch purge, built like the serve launch: the located bun on that brain's cli.ts (the bundle's in an
+  /// installed app), cwd the brain root, its folder first on PATH, OFFLOAD_HOME, and the observer the app found (in an
+  /// installed app the brain's own fallback is a repo path that does not exist). Never the per-launch token. nil when
+  /// this brain has no purge command.
+  static func purgeSpec(location: BrainLocation, home: URL, baseEnvironment: [String: String], observer: URL?,
+                        userHome: String = NSHomeDirectory(), hasPurge: (URL) -> Bool = cliHasPurge) -> BrainLaunchSpec? {
+    let cli = location.root.appendingPathComponent("brain/src/cli.ts")
+    guard hasPurge(cli) else { return nil }
+    var env = baseEnvironment
+    env.removeValue(forKey: "OFFLOAD_TOKEN")
+    env["OFFLOAD_HOME"] = home.path
+    env["PATH"] = path(base: baseEnvironment["PATH"], bun: location.bun, userHome: userHome)
+    if let observer { env["OFFLOAD_OBSERVER_BIN"] = observer.path }
+    if env["OFFLOAD_OBSERVER_BIN"]?.isEmpty == true { env.removeValue(forKey: "OFFLOAD_OBSERVER_BIN") }
+    return BrainLaunchSpec(executable: location.bun, arguments: ["run", cli.path, "purge", "--home", home.path],
+                           environment: env, workingDirectory: location.root, home: home)
+  }
+
+  /// Runs a purge launch and waits at most `timeout` seconds (a stuck purge must not hold the app's launch; serve
+  /// purges again on start and hourly). `status` nil = it did not start or was stopped; `output` = its last stdout line.
+  static func runPurge(_ spec: BrainLaunchSpec, timeout: TimeInterval = 10) -> (status: Int32?, output: String) {
+    let p = Process()
+    p.executableURL = spec.executable
+    p.arguments = spec.arguments
+    p.environment = spec.environment
+    p.currentDirectoryURL = spec.workingDirectory
+    p.standardInput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    let out = Pipe()
+    p.standardOutput = out
+    do { try p.run() } catch { return (nil, "did not run: \(error.localizedDescription)") }
+    let deadline = Date().addingTimeInterval(timeout)
+    while p.isRunning && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+    if p.isRunning { p.terminate(); return (nil, "took over \(Int(timeout)) s; stopped") }
+    let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    let last = text.split(separator: "\n").last.map(String.init) ?? ""
+    return (p.terminationStatus, last)
+  }
+
   /// Which model the brain drafts with: OFFLOAD_BRAIN_MODEL when set, else the stub for the demo week (its drafts are
   /// labelled "Sample drafts"), else the brain's default.
   static func model(environment: [String: String], demo: Bool) -> String? {
