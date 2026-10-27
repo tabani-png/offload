@@ -36,6 +36,8 @@ export interface StatusResponse {
   retention: {
     /** Days kept on this Mac (store/vault.ts KEEP_DAYS, 30). */
     keepDays: number;
+    /** s32: every stored day inside keepDays, oldest first (store.days is the analysis week, at most 7). */
+    days: Day[];
     /** Oldest stored day, which is the next one the observer purges. */
     nextPurgeDay: Day | null;
     /** Local midnight after which nextPurgeDay is older than keepDays (ms), null when empty. */

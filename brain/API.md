@@ -49,8 +49,9 @@ it by that threshold (`IDLE_THRESHOLD_MS`), so the detection window is not count
 
 ## GET /status → `StatusResponse`
 Observer state (`recording` = an event in the last 5 min, `paused` = last event is `pause`, `stale`, `no_data`),
-the stored days with event and bad-line counts and day errors (e.g. missing key), retention (`keepDays` 30, the next
-day to be purged and the local midnight it expires), and a summary of the analysis.
+the days the analysis read (the newest 7) with event and bad-line counts and day errors (e.g. missing key), retention
+(`keepDays` 30, `days`: every retained day oldest first (s32), the next day to be purged = the oldest retained day,
+and the local midnight it expires), and a summary of the analysis.
 
 s11: `captioner` (`CaptionerStatusDTO`) is the health of the local vision captioner that turns the observer's masked
 keyframes into Frame notes (ADR 0007): `enabled`, `captioner` (`off` | `stub` | `ollama`), `model` (tag in use; with

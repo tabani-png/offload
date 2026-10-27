@@ -67,6 +67,8 @@ export interface StoreRead {
   days: DayRead[];
   /** Stored days older than 30 local days: not read. */
   refused: DayLabel[];
+  /** s32: every stored day inside the retention window, oldest first (the analysis reads only the newest windowDays). */
+  retained: DayLabel[];
   eventCount: number;
   badLineCount: number;
 }
@@ -273,8 +275,8 @@ export function readStore(home: string, opts: { windowDays?: number; env?: Reade
   const env = opts.env ?? process.env;
   const stored = listDays(home);
   const refused = stored.filter((d) => isExpired(d, now));
-  const days = stored
-    .filter((d) => !isExpired(d, now))
+  const retained = stored.filter((d) => !isExpired(d, now));
+  const days = retained
     .slice(-window)
     .map((d) => readDay(home, d, { now, ...(opts.env === undefined ? {} : { env: opts.env }) }));
   // After reading, so a purge never races the days this read keeps.
@@ -286,6 +288,7 @@ export function readStore(home: string, opts: { windowDays?: number; env?: Reade
     home,
     days,
     refused,
+    retained,
     eventCount: days.reduce((n, d) => n + d.events.length, 0),
     badLineCount: days.reduce((n, d) => n + d.bad.length, 0),
   };

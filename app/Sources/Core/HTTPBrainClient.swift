@@ -339,6 +339,9 @@ enum DashboardComposer {
   /// s32: the timeline is the analysis week, not the retention window (30 days are kept, 7 are drawn).
   static let timelineMax = 7
 
+  /// s32: days stored on this Mac (retention.days; older brains: the store's days).
+  static func retainedDays(_ s: StatusResponse) -> Int { s.retention.days?.count ?? s.store.days.count }
+
   /// The newest stored days, oldest first, at most timelineMax (and never more than keepDays).
   static func timelineDays(_ s: StatusResponse) -> [String] {
     Array(s.store.days.map(\.day).sorted().suffix(max(1, min(timelineMax, s.retention.keepDays))))
@@ -399,7 +402,7 @@ enum DashboardComposer {
     }
 
     let observing = ObservingState(
-      state: ObserverState(wire: s.observer.state), daysStored: s.store.days.count, keepDays: s.retention.keepDays,
+      state: ObserverState(wire: s.observer.state), daysStored: retainedDays(s), keepDays: s.retention.keepDays,
       nextPurgeDay: s.retention.nextPurgeDay, nextPurgeAt: s.retention.nextPurgeAt.map(BrainWire.date(ms:)),
       permissions: permissions, captioner: s.captioner, models: s.models)
     return DashboardData(automations: autos, hours: d.hoursSaved, observing: observing, tasks: tasks, days: days)
