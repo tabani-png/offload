@@ -37,7 +37,7 @@ struct OnboardingFlow: Equatable, Sendable {
   static let neverStores: [String] = [
     "Passwords, banking and private windows: skipped entirely",
     "Card, account and ID numbers, one-time codes and keys: masked before writing",
-    "Anything older than 7 days: deleted",
+    "Anything older than \(LocalRetention.days) days: deleted",
   ]
 
   static let localNote = "Everything stays on this Mac, encrypted. If you turn on Claude, only masked text and masked screenshots go to your Claude account, to read and draft. Nothing else leaves this Mac."

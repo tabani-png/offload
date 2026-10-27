@@ -16,10 +16,10 @@ import Testing
 
     func now(_ iso: String) -> Date { ISO8601DateFormatter().date(from: iso)! }
 
-    @Test func deletesDayFileAndKeyOlderThan7LocalDaysAndKeepsTheRest() throws {
+    @Test func deletesDayFileAndKeyOlderThan30LocalDaysAndKeepsTheRest() throws {
         let layout = StoreLayout(home: tempHome())
         for day in ["2026-10-12", "2026-10-16", "2026-10-17", "2026-10-24"] { try seed(layout, day: day, days: utc) }
-        let records = Retention(layout: layout, days: utc).purge(now: now("2026-10-24T09:00:00Z"))
+        let records = Retention(layout: layout, days: utc).purge(now: now("2026-11-16T09:00:00Z"))
         #expect(records.map(\.day) == ["2026-10-12", "2026-10-16"])
         for day in ["2026-10-12", "2026-10-16"] {
             #expect(!FileManager.default.fileExists(atPath: layout.encryptedDayFile(day).path))
@@ -31,7 +31,7 @@ import Testing
     @Test func eachPurgeAppendsAPurgeLogLine() throws {
         let layout = StoreLayout(home: tempHome())
         try seed(layout, day: "2026-10-01", count: 3, days: utc)
-        let at = now("2026-10-24T09:00:00Z")
+        let at = now("2026-11-16T09:00:00Z")
         Retention(layout: layout, days: utc).purge(now: at)
         let lines = try String(contentsOf: layout.purgeLog, encoding: .utf8).split(separator: "\n")
         #expect(lines.count == 1)
@@ -45,14 +45,14 @@ import Testing
         try FileManager.default.removeItem(at: layout.encryptedDayFile("2026-10-01"))
         try DayStore(layout: layout, plain: true, days: utc)
             .append(Event(id: "p", ts: epochMillis(now("2026-10-02T12:00:00Z")), kind: .pause))
-        Retention(layout: layout, days: utc).purge(now: now("2026-10-24T09:00:00Z"))
+        Retention(layout: layout, days: utc).purge(now: now("2026-11-16T09:00:00Z"))
         #expect(Retention(layout: layout, days: utc).storedDays().isEmpty)
     }
 
     @Test func dayAgeUsesTheLocalTimeZone() throws {
-        // 2026-10-24 23:30 UTC is already 2026-10-25 in Tokyo, so 2026-10-17 is 8 days old there but 7 in UTC.
+        // 2026-11-16 23:30 UTC is already 2026-11-17 in Tokyo, so 2026-10-17 is 31 days old there but 30 in UTC.
         let tokyo = DayCalendar(timeZone: TimeZone(identifier: "Asia/Tokyo")!)
-        let instant = now("2026-10-24T23:30:00Z")
+        let instant = now("2026-11-16T23:30:00Z")
         let utcLayout = StoreLayout(home: tempHome())
         try seed(utcLayout, day: "2026-10-17", days: utc)
         #expect(Retention(layout: utcLayout, days: utc).purge(now: instant).isEmpty)
@@ -63,7 +63,7 @@ import Testing
 
     @Test func observerPurgesAtStartAndThenHourly() throws {
         let layout = StoreLayout(home: tempHome())
-        let clock = ManualClock(now("2026-10-24T09:00:00Z"))
+        let clock = ManualClock(now("2026-11-16T09:00:00Z"))
         try seed(layout, day: "2026-10-10", days: utc)
         let observer = Observer(clock: clock, workspace: FakeWorkspace(), idle: FakeIdle(), input: FakeInput(),
                                 screenText: nil, pauseState: FakePause(),

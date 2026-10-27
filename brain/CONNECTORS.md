@@ -213,7 +213,7 @@ actions such as `mail.search`, `mail.send`, `sheet.append`, and `screen.read` / 
 cached in `$OFFLOAD_HOME/connector-chain.json` (0600; no secret: methods, codes, reasons, capability and tool names,
 a scrubbed last error) for 10 minutes (2 minutes when nothing works). A run that fails on a method marks it failed for
 2 minutes and the next one is used. Apps from your task profiles that the catalog does not know (`app-<name>`,
-`web-<host>`) are kept there 7 days from when they were last seen, then dropped with their decisions (the purge does
+`web-<host>`) are kept there 30 days from when they were last seen, then dropped with their decisions (the purge does
 it too). The stub model (`serve --model stub`) uses deterministic demo probes (nothing runs) kept apart from real ones;
 `OFFLOAD_STUB_CHAIN_FAIL=mcp,composio` makes those demo probes fail.
 

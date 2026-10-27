@@ -48,11 +48,11 @@ describe("s09b last dry run", () => {
     expect(r.body.instances.length).toBe(second.body.instances.length);
   });
 
-  test("LATEST: 404 once the dry run is older than 7 local days (purged), and the sealed file is gone", async () => {
+  test("LATEST: 404 once the dry run is older than 30 local days (purged), and the sealed file is gone", async () => {
     w = await s09bWorld();
     const id = w.outreach.id;
     await w.call<DryRunResponse>(`/workflows/${id}/dry-run`, { method: "POST", body: { limit: 1 } });
-    w.clock.now = local(2026, 10, 28, 9, 0);
+    w.clock.now = local(2026, 11, 20, 9, 0);
     const r = await w.call<ErrorResponse>(latest(id));
     expect(r.status).toBe(404);
     expect(existsSync(join(w.home, "workflows", id, "dry-run.json.enc"))).toBe(false);

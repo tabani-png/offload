@@ -336,9 +336,12 @@ enum DashboardComposer {
   static let namedTasks = 3
   static let otherTaskId = "other"
 
-  /// The newest stored days, oldest first, at most keepDays.
+  /// s32: the timeline is the analysis week, not the retention window (30 days are kept, 7 are drawn).
+  static let timelineMax = 7
+
+  /// The newest stored days, oldest first, at most timelineMax (and never more than keepDays).
   static func timelineDays(_ s: StatusResponse) -> [String] {
-    Array(s.store.days.map(\.day).sorted().suffix(max(1, s.retention.keepDays)))
+    Array(s.store.days.map(\.day).sorted().suffix(max(1, min(timelineMax, s.retention.keepDays))))
   }
 
   static func compose(dashboard d: DashboardResponse, status s: StatusResponse, workflows: [WorkflowDTO],

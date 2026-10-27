@@ -17,7 +17,7 @@ Date: 2026-10-25. Status: draft from operator brief, not started. Stage 1 (singl
 ## Shape
 ```
 Employee Mac (Stage 1 app)          Company control plane (new)            Cloud workers (new)
-- watches, learns, local 7-day  --> - org, teams, roles (SSO/SCIM)     <-> - one VM per person/role
+- watches, learns, local 30-day --> - org, teams, roles (SSO/SCIM)     <-> - one VM per person/role
   store; raw screens never leave    - workflow registry (owned by org)     - runs workflows 24/7 and
 - runs workflows                    - metrics: aggregates only             overnight; browser, search,
 - sends only aggregates + workflow  - policies: allowed tools, approval    MCP, Composio, computer use

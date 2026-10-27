@@ -63,8 +63,8 @@ struct S10AConsistencyTests {
 
   @Test("the rail and the dashboard count the same stored days")
   func days() {
-    #expect(SampleWeek.rail.observerLabel.hasSuffix("Day 7 of 7"))
-    #expect(S10AFixture.dashboard.observingDays == "7 of 7 days stored")
+    #expect(SampleWeek.rail.observerLabel.hasSuffix("Day 7 of 30"))
+    #expect(S10AFixture.dashboard.observingDays == "7 of 30 days stored")
     #expect(SampleWeek.status.daysStored == SampleWeek.dashboard.observing.daysStored)
   }
 

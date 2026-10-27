@@ -1,10 +1,11 @@
 // Sync state on disk: $OFFLOAD_HOME/sync/state.json (0600, atomic writes). Ids, counters and flags only, no content
 // and no secret: the device keys are brain keys (sync/keys.ts) and the access token lives in memory only.
 // `seq` is the last sequence number USED: it is written before an envelope goes out, so a crash or restart can never
-// reuse one (replay protection, ADR 0103 §3). `known` remembers object ids already queued or sent (8 days); `digests`
+// reuse one (replay protection, ADR 0103 §3). `known` remembers object ids already queued or sent (KEEP_DAYS + 1 days); `digests`
 // the last queued form of each run outcome, so a run that progresses is sent again under its id.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { KEEP_DAYS } from "../store/vault.ts";
 import type { LocalAck } from "./consent.ts";
 import type { Binding } from "./types.ts";
 
@@ -32,7 +33,8 @@ export interface SyncState {
 
 export const syncDir = (home: string) => join(home, "sync");
 export const statePath = (home: string) => join(syncDir(home), "state.json");
-export const KNOWN_KEEP_MS = 8 * 86_400_000;
+/** As long as an object can sit in the outbox: the retention window plus today. */
+export const KNOWN_KEEP_MS = (KEEP_DAYS + 1) * 86_400_000;
 
 export const emptyState = (): SyncState => ({ version: 1, controlUrl: null, deviceId: null, personId: null, tenantId: null, enrolledAt: null, seq: 0, paused: false, revoked: false, acks: [], bindings: {}, known: {}, digests: {}, failures: 0, lastFlushAt: null, nextFlushAt: null, lastError: null });
 

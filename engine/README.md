@@ -1,7 +1,7 @@
 # engine: the Offload Observer
 
 Swift, macOS 26, arm64. Records Events (`../schemas/event.schema.json`) into a local encrypted store
-(`../docs/store-contract.md`) and deletes days older than 7 local days. No network code (a test enforces it).
+(`../docs/store-contract.md`) and deletes days older than 30 local days (ADR 0016). No network code (a test enforces it).
 
 ## Build and test
 SwiftPM does not work on this machine (Command Line Tools PackageDescription mismatch), so `build.sh` calls `swiftc`.
@@ -42,7 +42,7 @@ engine/.build/offload-observer wrap-key --name NAME --import  # store the key gi
 engine/.build/offload-observer unwrap-key --name NAME # prints the stored brain key
 ```
 Exit codes: 0 ok, 1 failure (message on stderr), 2 usage error (also: a key on stdin without `--import`), 3
-`export-day`, `wrap-key` or `unwrap-key` of a day older than 7 local days.
+`export-day`, `wrap-key` or `unwrap-key` of a day older than 30 local days.
 An expired `export-day` is refused even when the observer is not running, and it runs the retention purge first, so
 the day file and key are gone afterwards (and logged in `purge-log.jsonl`).
 
@@ -56,7 +56,7 @@ stdin is refused (exit 2) unless `--import` is passed. `wrap-key --import` reads
 when a different one is. `unwrap-key` prints the key; it never creates a master key. stdout carries only the base64
 key; stderr carries file names and status codes, never key bytes.
 
-Brain key retention (REVIEW-2 N4): when NAME is a local date (`brain-YYYY-MM-DD.key`) older than 7 local days, the
+Brain key retention (REVIEW-2 N4): when NAME is a local date (`brain-YYYY-MM-DD.key`) older than 30 local days, the
 observer's retention (at start, hourly, `purge-now`, an expired `export-day`) deletes it, so the brain's sealed files
 for that day cannot be opened even if the brain never runs again. Deletions are logged on stderr; they get no
 `purge-log.jsonl` line, which counts day-file events. `wrap-key` and `unwrap-key` of such a name exit 3 after running

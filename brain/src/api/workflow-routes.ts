@@ -163,9 +163,9 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
   if (latest !== null) {
     methods(req, "GET");
     const wf = mustWorkflow(ctx.home, latest[1]!);
-    // Opened with the day's brain key for this response only; a purged (older than 7 local days) one reads as none.
+    // Opened with the day's brain key for this response only; a purged (older than 30 local days) one reads as none.
     const last = readLastDryRun(ctx.home, wf.id, ctx.now());
-    if (last === null) throw new HttpError(404, "not_found", "no dry run in the last 7 days: run one");
+    if (last === null) throw new HttpError(404, "not_found", "no dry run in the last 30 days: run one");
     return json(200, last);
   }
 

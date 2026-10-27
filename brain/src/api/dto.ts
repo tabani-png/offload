@@ -3,6 +3,7 @@ import type { UnderstandingStatusDTO } from "./s14-types.ts";
 import type { Analysis, Insight } from "../analyze.ts";
 import type { Connector } from "../connectors/catalog.ts";
 import type { DayLabel, Figure, Span, TaskStats, TaskUnderstanding } from "../types.ts";
+import { KEEP_DAYS } from "../store/vault.ts";
 import {
   API_VERSION,
   CAPTIONER_OFF,
@@ -22,7 +23,6 @@ import {
 } from "./types.ts";
 
 const RECORDING_WINDOW_MS = 5 * 60_000;
-export const KEEP_DAYS = 7;
 
 const round = (x: number, dp: number) => Math.round(x * 10 ** dp) / 10 ** dp;
 

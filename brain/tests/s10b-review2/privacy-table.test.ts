@@ -1,7 +1,7 @@
 // s10b, REVIEW-2 section 3 (privacy inventory). Every file with plaintext user content is either sealed and purged at
 // 7 days, or a user file (recipients.csv, facts.md, crm-log.csv, tone cards the user edited) kept until the user
 // deletes it and listed in GET /observer `keptFiles` for the app's "Observing" section.
-//   live batches: sealed under the day they were drafted, purged at 7 days; never-write-twice survives the purge
+//   live batches: sealed under the day they were drafted, purged at 30 days; never-write-twice survives the purge
 //                 through a content-free ledger (sha256 of workflow + address);
 //   tone/<bucket>.md the user did not edit: purged with the corpus they came from;
 //   gate-log.jsonl: no addresses and no argument snippets on disk (items are hashed refs), rotated at 5 MB.
@@ -45,10 +45,10 @@ describe("s10b privacy table", () => {
     expect(readBatch(w.home, w.outreach.id, b.hash, MON_0800)?.state).toBe("sent");
   });
 
-  test("PRIV: live batches are purged 7 days after they were drafted", async () => {
+  test("PRIV: live batches are purged 30 days after they were drafted", async () => {
     w = await activeWorld();
     const b = await sentBatch(w);
-    const later = MON_0800 + 8 * DAY_MS;
+    const later = MON_0800 + 31 * DAY_MS;
     purgeAll(w.home, later, { log: () => {} });
     expect(existsSync(join(workflowDir(w.home, w.outreach.id), "batches", `${b.hash}.json.enc`))).toBe(false);
     expect(listBatches(w.home, w.outreach.id, later).filter((x) => x.kind === "live")).toEqual([]);
@@ -63,7 +63,7 @@ describe("s10b privacy table", () => {
     const ex = new ScriptedExecutor({ [SEND]: async (i) => { if ((i as { to: string }).to === "bo@seed.vc") throw new Error("timeout"); x.sends.push(i as Record<string, unknown>); } }, sendEachItem(SEND));
     const out = await executeBatch({ home: x.home, workflowId: x.outreach.id, hash: b.hash, token, executor: ex, now: () => MON_0800 });
     expect(out.itemStates?.["bo@seed.vc"]?.state).toBe("unknown");
-    const later = MON_0800 + 8 * DAY_MS;
+    const later = MON_0800 + 31 * DAY_MS;
     purgeAll(x.home, later, { log: () => {} });
     writeFileSync(join(workflowDir(x.home, x.outreach.id), "recipients.csv"), "email,first_name,last_name,org,notes\nana@fund.vc,Ana,,F,\nbo@seed.vc,Bo,,S,\ncy@pre.vc,Cy,,P,\ndee@new.vc,Dee,,N,\n");
     const next = await prepareLiveBatch({ home: x.home, workflowId: x.outreach.id, model: x.model, now: () => later });
@@ -77,7 +77,7 @@ describe("s10b privacy table", () => {
     const generated = styleCardPath(w.home, "scheduling");
     expect(existsSync(generated)).toBe(true);
     await w.call(`/workflows/${w.outreach.id}/tone`, { method: "PUT", body: { text: "- Mine. Short." } });
-    purgeAll(w.home, Date.UTC(2026, 9, 19, 12) + 8 * DAY_MS, { log: () => {} });
+    purgeAll(w.home, Date.UTC(2026, 9, 19, 12) + 31 * DAY_MS, { log: () => {} });
     expect(existsSync(generated)).toBe(false);
     expect(readFileSync(edited, "utf8")).toBe("- Mine. Short.");
     expect(existsSync(join(w.home, "tone", "corpus.jsonl.enc"))).toBe(false);

@@ -1,7 +1,7 @@
 # Offload: setup guide
 
 Offload is a Mac app that watches your screen and shows where your time goes.
-It masks what it sees, encrypts it, and deletes it after 7 days.
+It masks what it sees, encrypts it, and deletes it after 30 days.
 It finds work you repeat in any field and proposes the best kind of fix.
 It does nothing outside your Mac without your exact, one-time approval.
 
@@ -207,7 +207,7 @@ Each day is stored in its own file, encrypted with AES-GCM.
 Day keys are wrapped by a master key in the macOS Keychain.
 
 **Retention.**
-Data is kept for 7 days.
+Data is kept for 30 days.
 The observer purges at start, every hour, and on `offload-observer purge-now`.
 An expired day cannot be exported, even if the observer is off.
 

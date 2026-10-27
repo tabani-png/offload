@@ -1,7 +1,7 @@
 // Dry run (AC-4): the workflow on last week's real instances from the store, every side effect disabled.
 // Per instance: our draft next to what the user really wrote (OCR excerpt) and the time arithmetic (code, ADR 0005).
 // The response carries the OCR excerpt; on disk the dry run and its batch are sealed with the day's brain key and
-// purged after 7 days (store/vault.ts, REVIEW-1 H4).
+// purged after 30 days (store/vault.ts, REVIEW-1 H4).
 import { join } from "node:path";
 import { localDay, openText, sealText } from "../store/vault.ts";
 import type { Analysis } from "../analyze.ts";
@@ -139,7 +139,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
   if (Object.keys(facts).length < 3 && emailWorkflow) warnings.push("facts.md is mostly empty: drafts will show [missing: ...] gaps");
 
   // REVIEW-2 N3: everything this dry run writes is sealed under the capture day of its oldest instance, so it is
-  // purged 7 days after that capture, not 7 days after the run.
+  // purged 30 days after that capture, not 30 days after the run.
   const sealDay = [...out.map((i) => i.day), ...(general?.general.instances.map((i) => i.day) ?? [])].filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort()[0] ?? localDay(now);
 
   // Every side-effect step goes through the gate in dry-run mode: all denied, all logged.
@@ -215,7 +215,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
   return res;
 }
 
-/** The last dry run of a workflow, or null when there is none or it is older than 7 local days. */
+/** The last dry run of a workflow, or null when there is none or it is older than 30 local days. */
 export function readLastDryRun(home: string, workflowId: string, now: number = Date.now()): DryRunResult | null {
   const text = openText(home, join(workflowDir(home, workflowId), "dry-run.json.enc"), now);
   return text === null ? null : (JSON.parse(text) as DryRunResult);

@@ -2,7 +2,7 @@
 // from its content, and report. Proxy metrics are computed in code; the real test is the human one: a shuffled
 // A/B file (which one did you write?) with the answer key in a separate file. Ship when the user cannot pick their
 // own email in more than 1 of 3 pairs. Both files hold real mail text, so they are sealed with the day's brain key
-// and purged after 7 days (store/vault.ts): read them with `tone pairs --home DIR [--answers]` or readBlindFile.
+// and purged after 30 days (store/vault.ts): read them with `tone pairs --home DIR [--answers]` or readBlindFile.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -125,7 +125,7 @@ export async function runBlindTest(o: BlindOptions): Promise<BlindReport> {
   };
 }
 
-/** Plain text of a sealed blind-test file, or null when it is gone or older than 7 local days. */
+/** Plain text of a sealed blind-test file, or null when it is gone or older than 30 local days. */
 export function readBlindFile(home: string, path: string, now: number = Date.now()): string | null {
   return openText(home, path, now);
 }

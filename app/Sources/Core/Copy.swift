@@ -321,8 +321,9 @@ struct ConfirmCopy: Equatable, Sendable {
 
 enum InboxEmptyCopy {
   /// Under "Nothing to decide.": after the learning week says the week is done, not just "still watching".
+  /// s32: "Week 1" is the learning week (7 days), not the 30-day retention window the rail counts against.
   static func message(daysStored: Int, windowDays: Int) -> String {
-    daysStored >= windowDays
+    daysStored >= min(windowDays, 7)
       ? "Week 1 done. Nothing repeated enough yet.\nStill watching."
       : "Still watching. Offload speaks up\nwhen a task starts to repeat."
   }
@@ -334,10 +335,16 @@ enum AutomationsEmptyCopy {
   static let action = "Open the inbox"
 }
 
+/// s32: days what Offload saw is kept on this Mac (engine Retention.defaultKeepDays, brain KEEP_DAYS). Fixed copy
+/// uses it; the dashboard shows the brain's own `retention.keepDays`.
+enum LocalRetention {
+  static let days = 30
+}
+
 enum KeptFileCopy {
   static let footnote = "Who auto-send may write to. Yours to edit."
   static let section = "Kept until you delete them"
-  static let footer = "What Offload saw is deleted after 7 days. Files you gave it stay."
+  static let footer = "What Offload saw is deleted after \(LocalRetention.days) days. Files you gave it stay."
 }
 
 // MARK: dashboard

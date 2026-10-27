@@ -1,6 +1,6 @@
 // s10b N3 (REVIEW-2): sealed artefacts are dated, and purged, by the CAPTURE day of the oldest source data they
 // contain, never by the day they were written. The case from the review: OCR captured 2026-10-16, dry run written
-// 2026-10-19: sealed under 10-16, readable through 10-23 (7 local days), gone from 10-24.
+// 2026-10-19: sealed under 10-16, readable through 11-15 (30 local days), gone from 11-16.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -28,10 +28,10 @@ describe("s10b N3: seal day = capture day", () => {
     expect(sealedDay(join(dir, "batches", `${r.batchHash}.json.enc`))).toBe("2026-10-16");
   });
 
-  test("N3: readable through 2026-10-23, refused and purged on 2026-10-24 (not 10-27)", async () => {
+  test("N3: readable through 2026-11-15, refused and purged on 2026-11-16 (not 11-18)", async () => {
     const r = await dryRun({ home: w.home, analysis: w.analysis, workflowId: w.outreach.id, model: w.model, limit: 1, now: () => WRITTEN });
-    expect(readLastDryRun(w.home, w.outreach.id, local(2026, 10, 23, 23, 59))).not.toBeNull();
-    const at = local(2026, 10, 24, 0, 1);
+    expect(readLastDryRun(w.home, w.outreach.id, local(2026, 11, 15, 23, 59))).not.toBeNull();
+    const at = local(2026, 11, 16, 0, 1);
     expect(readLastDryRun(w.home, w.outreach.id, at)).toBeNull();
     purgeExpired(w.home, at, { log: () => {} });
     const dir = workflowDir(w.home, w.outreach.id);

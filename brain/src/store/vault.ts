@@ -14,7 +14,7 @@
 //
 // Sealed file: line 1 "OBV1 YYYY-MM-DD", line 2 the encrypted text (crypto.ts line format).
 // Purge (brain start before serving, hourly, and `cli.ts purge` which the app runs at launch; see startPurgeSchedule
-// and store/retention.ts): days older than 7 local days lose their key and artefacts, and a line goes to
+// and store/retention.ts): days older than 30 local days lose their key and artefacts, and a line goes to
 // $OFFLOAD_HOME/purge-log.jsonl {day, deletedAt, events: 0, files, by: "brain"}. Readers refuse an expired artefact
 // even before the purge ran. The observer purges expired brain keys too (keys/brain-YYYY-MM-DD.key, engine 52b205b,
 // REVIEW-2 N4), so a closed brain still loses the key on time; wrap/unwrap of such a day exits 3 = "expired".
@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { decryptLine, encryptLine, generateKey, KEY_BYTES } from "./crypto.ts";
 import { runObserverSync, type ObserverEnv } from "./observer.ts";
 
-export const KEEP_DAYS = 7;
+export const KEEP_DAYS = 30;
 export const PURGE_INTERVAL_MS = 3_600_000;
 const MAGIC = "OBV1";
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -45,7 +45,7 @@ export function dayAge(day: string, now: number): number | null {
   return Math.round((today - then) / 86_400_000);
 }
 
-/** Older than KEEP_DAYS local days: today and the 7 days before it are kept (same rule as the observer). */
+/** Older than KEEP_DAYS local days: today and the KEEP_DAYS days before it are kept (same rule as the observer). */
 export const isExpired = (day: string, now: number) => {
   const age = dayAge(day, now);
   return age === null || age > KEEP_DAYS;
@@ -81,7 +81,7 @@ function isObserverHome(home: string): boolean {
 }
 
 /** s20 review: the key mode a home settled on, kept in $OFFLOAD_HOME/brain-key-mode ("file" or "keychain", 0600). The
- * day files the mode is first read from expire after 7 days; the keys sealed under it (day keys, the sync device
+ * day files the mode is first read from expire after 30 days; the keys sealed under it (day keys, the sync device
  * keys) do not, so the mode must never be re-derived from what retention left. */
 export const keyModePath = (home: string) => join(home, "brain-key-mode");
 
@@ -246,7 +246,7 @@ function keyExists(home: string, day: string): boolean {
 
 /** Writes `text` sealed under the key of a local day (0600, atomic). `at` is a timestamp (its local day) or a day
  * label YYYY-MM-DD: callers pass the CAPTURE day of the oldest source data in `text` (REVIEW-2 N3), so the file is
- * purged 7 days after that capture, not after the write. Throws BrainKeyError when the observer cannot provide a
+ * purged 30 days after that capture, not after the write. Throws BrainKeyError when the observer cannot provide a
  * key, and BrainKeyExpiredError for a day that is already expired (nothing is written). */
 export function sealText(home: string, path: string, text: string, at: number | string, env: ObserverEnv = process.env): void {
   const day = typeof at === "number" ? localDay(at) : at;
@@ -391,13 +391,13 @@ function artefacts(home: string): Artefact[] {
     for (const n of ls(join(tone, "blind-test", run))) if (/^(pairs\.md|key\.json)(\.enc)?$/.test(n)) out.push({ path: join(tone, "blind-test", run, n), plain: !n.endsWith(SEALED_SUFFIX) });
   }
   // s11: Frame notes (what the local vision model saw), sealed under the frame's capture day (vision/notes.ts).
-  // s14: the file-name day counts too: a note file goes when its name OR its seal day is past 7 days, or when the two
+  // s14: the file-name day counts too: a note file goes when its name OR its seal day is past 30 days, or when the two
   // disagree (a note is never kept longer than the frame it describes).
   for (const n of ls(join(home, "frame-notes"))) {
     const m = /^(\d{4}-\d{2}-\d{2})\.jsonl\.enc$/.exec(n);
     if (m !== null) out.push({ path: join(home, "frame-notes", n), plain: false, nameDay: m[1]! });
   }
-  // s14: fixture sidecars of frame notes (frames/DAY.jsonl[.enc], s12 fixtures and demos): deleted after 7 days by name.
+  // s14: fixture sidecars of frame notes (frames/DAY.jsonl[.enc], s12 fixtures and demos): deleted after 30 days by name.
   for (const n of ls(join(home, "frames"))) {
     const m = /^(\d{4}-\d{2}-\d{2})\.jsonl(\.enc)?$/.exec(n);
     if (m !== null) out.push({ path: join(home, "frames", n), plain: false, nameDay: m[1]!, byNameOnly: true });

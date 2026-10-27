@@ -191,7 +191,7 @@ export function chainDeps(o: Partial<ChainDeps> & Pick<ChainDeps, "home" | "env"
 
 // ---------- the cache file ----------
 
-/** App targets come from observed task profiles (app names, hosts): kept 7 days from when they were last seen, like
+/** App targets come from observed task profiles (app names, hosts): kept 30 days from when they were last seen, like
  * the observed data they come from (ADR 0003), then dropped with their decisions. */
 export const APP_TARGET_RETAIN_MS = 7 * 24 * 60 * 60_000;
 
@@ -243,7 +243,7 @@ export function rememberTargets(home: string, targets: readonly ChainTarget[], n
   if (changed) writeChainFile(home, f);
 }
 
-/** The target for an id: a catalog connector, or an app target seen in the last 7 days; null otherwise. */
+/** The target for an id: a catalog connector, or an app target seen in the last 30 days; null otherwise. */
 export function knownTarget(home: string, id: string, now: number = Date.now()): ChainTarget | null {
   const c = catalogTarget(id);
   if (c !== null) return c;

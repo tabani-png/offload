@@ -1,7 +1,7 @@
 // Workflow folders on disk: $OFFLOAD_HOME/workflows/<id>/{SKILL.md, workflow.json, facts.md, recipients.csv,
 // crm-log.csv, scripts/, batches/<hash>.json.enc (live and dry run, sealed; plain <hash>.json only from before s10b),
 // approvals.json, gate-log.jsonl, dry-run.json.enc, dry-runs/<ts>.json.enc, labels.json.enc, contacted.ledger,
-// preparing.json}. All 0600/0700. Sealed files hold OCR or mail text and are purged 7 days after the capture day of
+// preparing.json}. All 0600/0700. Sealed files hold OCR or mail text and are purged 30 days after the capture day of
 // their oldest source data (store/vault.ts, store/retention.ts).
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

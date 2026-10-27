@@ -45,12 +45,12 @@ test("OUTBOX: a paused outbox holds objects locally (sealed) and sends them afte
   expect(w.control.acceptedObjects().map((o) => o.kind)).toEqual(["notice_ack"]);
 });
 
-test("OUTBOX: objects older than 7 days are dropped by the purge with a purge-log line", async () => {
+test("OUTBOX: objects older than 30 days are dropped by the purge with a purge-log line", async () => {
   await connect(w);
   w.client.setPaused(true);
   await w.client.refreshConfig();
   await w.client.acknowledgeNotice(NOTICE_1);
-  const later = NOW + 8 * DAY_MS;
+  const later = NOW + 31 * DAY_MS;
   const res = purgeAll(w.home, later, { log: () => {} });
   expect(res.syncFiles).toBeGreaterThan(0);
   expect(files(outboxDir(w.home))).toEqual([]);
@@ -63,9 +63,9 @@ test("OUTBOX: the reader refuses an expired day even before the purge ran", asyn
   await connect(w);
   await w.client.refreshConfig();
   await w.client.acknowledgeNotice(NOTICE_1);
-  expect(new Outbox(w.home).list(NOW + 7 * DAY_MS)).toHaveLength(1);
-  expect(new Outbox(w.home).list(NOW + 8 * DAY_MS)).toEqual([]);
-  expect(purgeOutbox(w.home, NOW + 7 * DAY_MS).files).toBe(0);
+  expect(new Outbox(w.home).list(NOW + 30 * DAY_MS)).toHaveLength(1);
+  expect(new Outbox(w.home).list(NOW + 31 * DAY_MS)).toEqual([]);
+  expect(purgeOutbox(w.home, NOW + 30 * DAY_MS).files).toBe(0);
 });
 
 test("OUTBOX: accepted objects leave the outbox; a flush with nothing new sends nothing", async () => {

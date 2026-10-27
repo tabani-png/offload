@@ -490,7 +490,7 @@ async function runCommand(args: Args): Promise<number> {
   if (args.command === "tone pairs") {
     const run = latestBlindRun(args.home);
     const text = run === null ? null : readBlindFile(args.home, `${run}/${args.answers ? "key.json.enc" : "pairs.md.enc"}`);
-    if (text === null) throw new UsageError("no blind test from the last 7 days: run `tone test` first");
+    if (text === null) throw new UsageError("no blind test from the last 30 days: run `tone test` first");
     console.log(text);
     return 0;
   }
@@ -506,7 +506,7 @@ async function runCommand(args: Args): Promise<number> {
         const r = await runBlindTest({ home: args.home, emails: await source.listSent({ limit: 500 }), holdBack: args.holdBack, model: modelOf(args), models });
         console.log(`blind test: ${r.summary.n} held back, trained on ${r.trainedOn.length}`);
         console.log(`  greeting match ${Math.round(r.summary.greetingMatch * 100)}% · sign-off match ${Math.round(r.summary.signMatch * 100)}% · length ratio ${r.summary.meanWordRatio} · word overlap ${r.summary.meanOverlap}`);
-        console.log(`  pairs for you (sealed, kept 7 days): tone pairs --home ${args.home}\n  answer key: tone pairs --home ${args.home} --answers\n  rule: ${r.summary.rule}`);
+        console.log(`  pairs for you (sealed, kept 30 days): tone pairs --home ${args.home}\n  answer key: tone pairs --home ${args.home} --answers\n  rule: ${r.summary.rule}`);
       }
     } finally {
       await close();

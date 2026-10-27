@@ -34,7 +34,7 @@ California risk assessments, Quebec profiling rules and German works-council agr
 6. **Purpose lock**: product terms and UI copy state metrics are for process improvement and must not be the sole basis
    for pay, discipline or dismissal. No ranking endpoints; per-person views list a person's own workflows and hours,
    never sorted league tables across people.
-7. **Retention defaults** (configurable downward only): raw on Mac 7 days (fixed); per-person aggregates 90 days;
+7. **Retention defaults** (configurable downward only): raw on Mac 30 days (fixed, ADR 0016); per-person aggregates 90 days;
    working-time aggregates 30 days; group aggregates 24 months; audit 6 years; notices 3 years after replacement.
 8. **Works council mode** (DE): sensitive features stay off; aggregate views limited to what the uploaded agreement
    allows (tenant-configured list of enabled views).

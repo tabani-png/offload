@@ -2,10 +2,10 @@ import Foundation
 import Testing
 @testable import OffloadCore
 
-/// REVIEW-1 M4: `export-day` must not serve a day older than the 7-day window, and asking for one purges it.
+/// REVIEW-1 M4: `export-day` must not serve a day older than the 30-day window, and asking for one purges it.
 @Suite struct S02CExportAgeTests {
     let utc = DayCalendar(timeZone: TimeZone(identifier: "UTC")!)
-    let now = ISO8601DateFormatter().date(from: "2026-10-24T09:00:00Z")!
+    let now = ISO8601DateFormatter().date(from: "2026-11-16T09:00:00Z")!
 
     func seed(_ layout: StoreLayout, day: String) throws -> Event {
         let noon = try #require(utc.date(ofDay: day)).addingTimeInterval(12 * 3600)
@@ -32,7 +32,7 @@ import Testing
         #expect(r.code == 3)
         #expect(r.out.isEmpty)
         #expect(r.err.count == 1)
-        #expect(r.err.first?.contains("older than 7 days") == true)
+        #expect(r.err.first?.contains("older than 30 days") == true)
         #expect(r.err.first?.contains("secret thread") == false)
     }
 
@@ -61,7 +61,7 @@ import Testing
     @Test func anOldDayWithNoFilesIsStillRefusedAsExpiredNotNotFound() throws {
         let r = try export("2026-09-01", home: tempHome())
         #expect(r.code == 3)
-        #expect(r.err.first?.contains("older than 7 days") == true)
+        #expect(r.err.first?.contains("older than 30 days") == true)
     }
 
     @Test func todayAndInvalidDaysKeepTheirOldExitCodes() throws {
@@ -84,6 +84,6 @@ import Testing
         let err = String(decoding: errPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         p.waitUntilExit()
         #expect(p.terminationStatus == 3)
-        #expect(err.contains("older than 7 days"))
+        #expect(err.contains("older than 30 days"))
     }
 }

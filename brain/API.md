@@ -49,7 +49,7 @@ it by that threshold (`IDLE_THRESHOLD_MS`), so the detection window is not count
 
 ## GET /status → `StatusResponse`
 Observer state (`recording` = an event in the last 5 min, `paused` = last event is `pause`, `stale`, `no_data`),
-the stored days with event and bad-line counts and day errors (e.g. missing key), retention (`keepDays` 7, the next
+the stored days with event and bad-line counts and day errors (e.g. missing key), retention (`keepDays` 30, the next
 day to be purged and the local midnight it expires), and a summary of the analysis.
 
 s11: `captioner` (`CaptionerStatusDTO`) is the health of the local vision captioner that turns the observer's masked
@@ -193,7 +193,7 @@ The proof behind every number: `figures.<name>.eventIds` (all figures plus `savi
 That day's spans in time order, each with its `taskId`, plus `byTask` minutes (sums to `activeMinutes`).
 
 ## GET /time[?day=YYYY-MM-DD][&window=week] → `TimeBreakdownResponse` (s23)
-Where the time goes, then what could be faster (`brain/src/time/`). No `day`: the store's 7-day window; `day=`: that
+Where the time goes, then what could be faster (`brain/src/time/`). No `day`: the newest 7 stored days (the analysis week); `day=`: that
 stored day only (400 malformed, 404 not stored). `window` other than `week` is 400. GET only (405). Reads spans, never
 content (ADR 0003); every number is code and carries its event ids (ADR 0005); no model call; drafts nothing (ADR 0006).
 - `total`: active minutes of every span in the window (sessionized as `analyze.ts` does); `eventIds` = the events
@@ -232,8 +232,8 @@ A workflow is a folder `$OFFLOAD_HOME/workflows/<id>/`: `SKILL.md`, `workflow.js
 may state), `recipients.csv`, `crm-log.csv`, `scripts/`, `batches/<hash>.json` (live) or `<hash>.json.enc` (dry run,
 sealed), `approvals.json`, `gate-log.jsonl`, `dry-run.json.enc`, `dry-runs/<ts>.json.enc`. Files holding OCR or mail
 text (dry runs, dry-run batches, `tone/corpus.jsonl.enc`, blind-test pairs) are sealed with a per-day brain key and
-purged after 7 local days, at `serve` startup and hourly, with a
-`purge-log.jsonl` line `{day, deletedAt, events: 0, files, by: "brain"}` (s05b). Days older than 7 local days are
+purged after 30 local days, at `serve` startup and hourly, with a
+`purge-log.jsonl` line `{day, deletedAt, events: 0, files, by: "brain"}` (s05b). Days older than 30 local days are
 never read, even when their files exist; the brain asks `offload-observer purge-now` to delete them.
 Brain keys (s05c, closes REVIEW-1 H4): by default the observer holds them, Keychain-wrapped, in
 `$OFFLOAD_HOME/keys/brain-YYYY-MM-DD.key`; the brain gets a day's key with `offload-observer wrap-key --name DAY`
@@ -257,7 +257,7 @@ top of `active` when a batch waits or a connector is missing. Auto-run is off by
 | `GET /workflows` | | `WorkflowsResponse` |
 | `GET /workflows/:id` | | `WorkflowDetailDTO` (steps, SKILL.md, facts, batches, `pendingItems` for review) |
 | `POST /workflows/:id/dry-run` | `{ limit? 1..50 }` | `DryRunResponse` |
-| `GET /workflows/:id/dry-runs/latest` | | `DryRunResponse`: the last dry run, opened from its sealed file for this response only; no model call. 404 when there is none or it was purged (older than 7 local days) (s09b) |
+| `GET /workflows/:id/dry-runs/latest` | | `DryRunResponse`: the last dry run, opened from its sealed file for this response only; no model call. 404 when there is none or it was purged (older than 30 local days) (s09b) |
 | `POST /workflows/:id/run` | | `RunResponse` (201): the next live batch, pending your review (409 until active) |
 | `POST /workflows/:id/approve` | `{ batchHash }` | `ApproveResponse`: dry-run hash → `activated`; live hash → `sending` |
 | `POST /workflows/:id/pause` / `resume` | | `WorkflowSummaryDTO`. Pause also stops a running batch before its next item |
@@ -279,7 +279,7 @@ Tone `measured` (s10e, `ToneMeasuredDTO | null`, on GET and PUT): "Your voice" a
 `{ form: "Hi {first},", count: 18 }`, null when the emails have none), `askShare` and `exclamationShare` (0..1),
 `sample` (one sentence quoted from a real sent email of the bucket, never the greeting or sign-off, at most 140 chars:
 the first body sentence of 5+ words of the median-length email) and `source` in plain words ("18 sent investor
-emails"). null when there is no tone pack (or it was purged after 7 days) or the bucket has no email. `serve` does
+emails"). null when there is no tone pack (or it was purged after 30 days) or the bucket has no email. `serve` does
 not build a pack; `tone build` does (scripts/demo.sh builds one for the demo home from the fixture sent mail).
 
 Default facts (s10e): when `$OFFLOAD_HOME/default-facts.md` exists, a new workflow's `facts.md` starts as a copy of it
@@ -340,7 +340,7 @@ unknown) also at the top level. Always 200: a missing binary, non-zero exit, tim
 schemaVersion gives `available: false`, `status: null` and the reason in `error`.
 `keptFiles` (s10b, `KeptFileDTO[]`): files with your content that are kept until you delete them (recipients.csv,
 facts.md, crm-log.csv per workflow, tone cards you edited), for the "Observing" section. Everything else holding
-observed or mail text is sealed and purged 7 days after its capture day (slices/s10b-review2-brain/SPEC.md).
+observed or mail text is sealed and purged 30 days after its capture day (slices/s10b-review2-brain/SPEC.md).
 
 ## Purge and logs (s10b)
 `bun run brain/src/cli.ts purge --home DIR [--json]` runs the brain's purge (expired sealed artefacts and keys,
@@ -404,7 +404,7 @@ every few seconds.", "Gmail is connected.", "The sign-in did not start: Composio
 - s13: every link / status answer carries `chain: ConnectorChainDTO` (above). Stub: probed. Real: `/status` probes when
   the cached decision expired (`?refresh=1` now); `/link` answers from the cache, so a sign-in poll never starts a
   probe. `:id` may also be an app target id (`app-…`, `web-…`) once `GET /connectors` has seen it in an insight (kept
-  7 days from when it was last seen); its methods are `composio, api, computer`.
+  30 days from when it was last seen); its methods are `composio, api, computer`.
 - s13: `api` and `computer` are real ways of connecting now. Both answer at once from the chain's probe: `connected`,
   or `failed` with the reason in `detail` ("No direct connection is set up for Gmail.", "Using apps on your screen is
   off until you turn it on."). `next` only names a way that can work for that connector right now (api only when
@@ -742,7 +742,7 @@ against its schema before it is queued. Raw activity has no code path to the net
 - Keys: `device-signing` (P-256 private scalar, ES256) and `device-evidence` (HMAC key) are brain keys wrapped by the
   observer (`offload-observer wrap-key --name device-signing|device-evidence`; raw files under `OFFLOAD_KEYS=file`).
   `DeviceSigner` is the seam for a Secure Enclave key. `instanceRef = hex(HMAC-SHA256(deviceEvidenceKey,
-  localInstanceId))[0:32]`; the ref -> instance map is sealed per capture day and resolves only on this Mac, 7 days.
+  localInstanceId))[0:32]`; the ref -> instance map is sealed per capture day and resolves only on this Mac, 30 days.
 - Consent (checked here before anything but the notice ack is sent; the server re-checks): unknown config = only
   `notice_ack`; no required notice in the config = only `notice_ack` too (fail closed, ADR 0111 §3); G1 nothing else
   until the required notice version is acknowledged on this Mac. Consent is forward-only: nothing observed before that
@@ -754,7 +754,7 @@ against its schema before it is queued. Raw activity has no code path to the net
   G4 a proposal only after `?confirm=1` on its preview; G5 pause holds everything. A kill switch holds everything but
   acks. Kinds outside `allowedKinds` are held.
 - Outbox: `$OFFLOAD_HOME/sync/outbox/DAY.json.enc`, sealed with the brain day key of the day queued (no plaintext);
-  purged after 7 days with a purge-log line `{day, deletedAt, events: 0, files, by: "sync-outbox"}` (expired ref maps:
+  purged after 30 days with a purge-log line `{day, deletedAt, events: 0, files, by: "sync-outbox"}` (expired ref maps:
   `by: "sync-refs"`). State (ids, seq,
   flags, acks, bindings; no secrets) in `sync/state.json`; measured review seconds in `sync/reviews.json`.
 - Envelopes: RFC 8785 JCS body `{v: 1, deviceId, seq, sentAt, objects}` (<= 500 objects, <= 1 MiB), signed ES256 in

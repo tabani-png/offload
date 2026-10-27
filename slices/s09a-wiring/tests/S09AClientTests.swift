@@ -63,7 +63,7 @@ struct S09AClientTests {
     let s = try await client(t).status()
     #expect(s.state == .stale)  // the fixture week ended yesterday: no event in the last 5 min
     #expect(s.daysStored == 7)
-    #expect(s.windowDays == 7)
+    #expect(s.windowDays == 30)
     #expect(s.insightsWaiting > 0)
   }
 
@@ -214,7 +214,7 @@ struct S09AClientTests {
     #expect(days.count == DashboardComposer.timelineDays(st).count)
     #expect(days.allSatisfy { $0.hasPrefix("day=") })
     #expect(d.observing.permissions == perms)
-    #expect(d.observing.keepDays == 7)
+    #expect(d.observing.keepDays == 30)
     #expect(d.hours.measured == nil)
     #expect(d.tasks.count <= DashboardComposer.namedTasks + 1)
     #expect(!d.days.isEmpty)
@@ -297,7 +297,7 @@ struct S09AComposerTests {
     #expect(d.tasks.first?.automated == true)
   }
 
-  @Test("timeline days: the newest stored days, oldest first, at most keepDays")
+  @Test("timeline days: the newest stored days, oldest first, at most the 7-day analysis week")
   func timelineDays() throws {
     var st = try BrainWire.decoder.decode(StatusResponse.self, from: S09AFixture.data("status.json"))
     st.store.days = (10...20).map { .init(day: "2026-10-\($0)", source: "plain", events: 1, badLines: 0, errors: []) }.reversed()

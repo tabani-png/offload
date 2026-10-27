@@ -2,7 +2,7 @@
 // instance refs). Same store contract as the brain's day keys (docs/store-contract.md "Brain keys"): by default the
 // observer keeps them wrapped with its Keychain master key (`offload-observer wrap-key --name NAME`, never replacing a
 // stored key; `unwrap-key --name NAME`), base64 on stdout. OFFLOAD_KEYS=file (tests, fixtures): raw 32-byte files in
-// $OFFLOAD_HOME/brain-keys/NAME.key (0600). Names are not dates, so the 7-day purge keeps them (otherBrainKeys).
+// $OFFLOAD_HOME/brain-keys/NAME.key (0600). Names are not dates, so the 30-day purge keeps them (otherBrainKeys).
 // Unwrapped bytes stay in this process's memory only.
 import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

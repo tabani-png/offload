@@ -57,14 +57,14 @@ public enum ObserverCLI {
       run                  record events until stopped (Ctrl-C / SIGTERM)
       status [--json]      print observer state as JSON (schemaVersion 1)
       pause | resume       stop / restart recording (the running observer notices within 1 s)
-      purge-now            delete days older than 7 local days now
-      export-day YYYY-MM-DD  print that day's decrypted events as JSON lines (exit 3 + purge if older than 7 days)
-      list-frames YYYY-MM-DD print that day's keyframe index as JSON lines (exit 3 + purge if older than 7 days)
-      export-frame FRAMEID   write that keyframe's decrypted JPEG to stdout (exit 3 + purge if older than 7 days)
+      purge-now            delete days older than \(Retention.defaultKeepDays) local days now
+      export-day YYYY-MM-DD  print that day's decrypted events as JSON lines (exit 3 + purge if older than \(Retention.defaultKeepDays) days)
+      list-frames YYYY-MM-DD print that day's keyframe index as JSON lines (exit 3 + purge if older than \(Retention.defaultKeepDays) days)
+      export-frame FRAMEID   write that keyframe's decrypted JPEG to stdout (exit 3 + purge if older than \(Retention.defaultKeepDays) days)
       wrap-key --name NAME   store a new random 32-byte brain key wrapped with the Keychain master key in
                            keys/brain-NAME.key (or keep the stored one); prints the key as base64
       wrap-key --name NAME --import  store the 32-byte key given as one base64 line on stdin instead (migration)
-      unwrap-key --name NAME print the stored brain key as base64 (exit 3 if NAME is a day older than 7 days)
+      unwrap-key --name NAME print the stored brain key as base64 (exit 3 if NAME is a day older than \(Retention.defaultKeepDays) days)
       exclude list         print exclusions.json (your entries; built-ins always apply too)
       exclude add|remove --app BUNDLE_ID | --host HOST | --title TEXT
       install-agent        write ~/Library/LaunchAgents/ai.offload.observer.plist (does not load it)

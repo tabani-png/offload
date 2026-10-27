@@ -36,7 +36,7 @@ import Testing
     @Test func framesArePurgedWithTheirDayAndCountedInThePurgeLog() throws {
         let home = tempHome()
         defer { try? FileManager.default.removeItem(at: home) }
-        let old = now.addingTimeInterval(-9 * 86_400)
+        let old = now.addingTimeInterval(-32 * 86_400)
         _ = try put(home, at: old)
         _ = try put(home, at: old.addingTimeInterval(60))
         let keep = try put(home, at: now)
@@ -45,11 +45,11 @@ import Testing
         let dayStore = DayStore(layout: layout, plain: false, days: s11UTC)
         try dayStore.append(Event(id: ids.next(millis: epochMillis(old)), ts: epochMillis(old), kind: .focus, app: "a"))
         let records = Retention(layout: layout, days: s11UTC).purge(now: now)
-        #expect(records.map(\.day) == ["2026-10-11"])
+        #expect(records.map(\.day) == ["2026-09-18"])
         #expect(records.first?.frames == 2)
         #expect(records.first?.events == 1)
-        #expect(!FileManager.default.fileExists(atPath: layout.frameDir("2026-10-11").path))
-        #expect(!FileManager.default.fileExists(atPath: layout.keyFile("2026-10-11").path))
+        #expect(!FileManager.default.fileExists(atPath: layout.frameDir("2026-09-18").path))
+        #expect(!FileManager.default.fileExists(atPath: layout.keyFile("2026-09-18").path))
         #expect(FileManager.default.fileExists(atPath: layout.frameFile("2026-10-20", keep).path))
         let line = try #require(try purgeLog(home).first)
         #expect(line["frames"] as? Int == 2)
@@ -59,20 +59,20 @@ import Testing
         let home = tempHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let layout = StoreLayout(home: home)
-        _ = try put(home, at: now.addingTimeInterval(-8 * 86_400))
+        _ = try put(home, at: now.addingTimeInterval(-31 * 86_400))
         // Drop the key to simulate a frames-only folder (e.g. key purged earlier by a crash midway).
-        try FileManager.default.removeItem(at: layout.keyFile("2026-10-12"))
-        #expect(Retention(layout: layout, days: s11UTC).storedDays() == ["2026-10-12"])
+        try FileManager.default.removeItem(at: layout.keyFile("2026-09-19"))
+        #expect(Retention(layout: layout, days: s11UTC).storedDays() == ["2026-09-19"])
         let records = Retention(layout: layout, days: s11UTC).purge(now: now)
-        #expect(records.map(\.day) == ["2026-10-12"])
-        #expect(!FileManager.default.fileExists(atPath: layout.frameDir("2026-10-12").path))
+        #expect(records.map(\.day) == ["2026-09-19"])
+        #expect(!FileManager.default.fileExists(atPath: layout.frameDir("2026-09-19").path))
     }
 
     @Test func purgeLinesWithoutFramesAreUnchanged() throws {
         let home = tempHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let layout = StoreLayout(home: home)
-        let old = now.addingTimeInterval(-9 * 86_400)
+        let old = now.addingTimeInterval(-32 * 86_400)
         try DayStore(layout: layout, plain: true, days: s11UTC).append(Event(id: ids.next(millis: epochMillis(old)), ts: epochMillis(old), kind: .focus))
         _ = Retention(layout: layout, days: s11UTC).purge(now: now)
         let line = try #require(try purgeLog(home).first)
@@ -109,14 +109,14 @@ import Testing
         #expect(cli(["export-frame"], home: home, now: now).code == 2)
         #expect(cli(["list-frames", "2026-13-99"], home: home, now: now).code == 2)
         #expect(cli(["export-frame", "01ARZ3NDEKTSV4RRFFQ69G5FAV"], home: home, now: now).code == 1)
-        let old = try put(home, at: now.addingTimeInterval(-9 * 86_400))
+        let old = try put(home, at: now.addingTimeInterval(-32 * 86_400))
         let r = cli(["export-frame", old], home: home, now: now)
         #expect(r.code == 3)
         #expect(r.bytes.isEmpty)
-        #expect(!FileManager.default.fileExists(atPath: StoreLayout(home: home).frameDir("2026-10-11").path))
-        _ = try put(home, at: now.addingTimeInterval(-9 * 86_400))
-        #expect(cli(["list-frames", "2026-10-11"], home: home, now: now).code == 3)
-        #expect(!FileManager.default.fileExists(atPath: StoreLayout(home: home).frameDir("2026-10-11").path))
+        #expect(!FileManager.default.fileExists(atPath: StoreLayout(home: home).frameDir("2026-09-18").path))
+        _ = try put(home, at: now.addingTimeInterval(-32 * 86_400))
+        #expect(cli(["list-frames", "2026-09-18"], home: home, now: now).code == 3)
+        #expect(!FileManager.default.fileExists(atPath: StoreLayout(home: home).frameDir("2026-09-18").path))
     }
 
     @Test func aDamagedBlobIsAnErrorNotAPartialImage() throws {

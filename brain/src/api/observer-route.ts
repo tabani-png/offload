@@ -3,6 +3,7 @@
 // with the reason, so the UI can say what is wrong instead of failing the request.
 import { existsSync } from "node:fs";
 import { missingBinMessage, observerBin, observerChildEnv, type ObserverEnv } from "../store/observer.ts";
+import { KEEP_DAYS } from "../store/vault.ts";
 import { API_VERSION, type ObserverControlResponse, type ObserverPermissionsDTO, type ObserverResponse, type ObserverStatusDTO } from "./types.ts";
 
 export const OBSERVER_STATUS_TIMEOUT_MS = 5_000;
@@ -29,7 +30,7 @@ export function toObserverStatus(raw: unknown): ObserverStatusDTO {
     running: bool(raw.running),
     paused: bool(raw.paused),
     daysStored: Array.isArray(raw.daysStored) ? raw.daysStored.filter((d): d is string => typeof d === "string") : [],
-    keepDays: num(raw.keepDays) ?? 7,
+    keepDays: num(raw.keepDays) ?? KEEP_DAYS,
     keysMode: str(raw.keysMode),
     keyFiles: { raw: num(keyFiles.raw) ?? 0, wrapped: num(keyFiles.wrapped) ?? 0 },
     permissions: permissions(raw.permissions),

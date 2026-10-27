@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import OffloadCore
 
-/// REVIEW-2 N4: observer retention also deletes `keys/brain-YYYY-MM-DD.key` past the 7-day window, so the brain's
+/// REVIEW-2 N4: observer retention also deletes `keys/brain-YYYY-MM-DD.key` past the 30-day window, so the brain's
 /// sealed files become unreadable even when the brain never runs; `unwrap-key` refuses expired day names.
 @Suite struct S10CBrainKeyRetentionTests {
     func seedDay(_ layout: StoreLayout, _ day: String) throws {
@@ -93,7 +93,7 @@ import Testing
         let r = try s10cCLI(["unwrap-key", "--name", "2026-10-16"], home: home, secrets: secrets)
         #expect(r.code == 3)
         #expect(r.out.isEmpty)
-        #expect(r.err.first?.contains("older than 7 days") == true)
+        #expect(r.err.first?.contains("older than 30 days") == true)
         #expect(!s10cExists(layout.brainKeyFile("2026-10-16")))
     }
 

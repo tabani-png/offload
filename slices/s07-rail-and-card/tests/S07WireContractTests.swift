@@ -54,7 +54,7 @@ private let statusJSON = #"""
       { "day": "2026-10-21", "source": "both", "events": 8800, "badLines": 2, "errors": [] },
       { "day": "2026-10-22", "source": "encrypted", "events": 9300, "badLines": 0, "errors": [] }
     ], "events": 36200, "badLines": 2 },
-  "retention": { "keepDays": 7, "nextPurgeDay": "2026-10-19", "nextPurgeAt": 1792972800000 },
+  "retention": { "keepDays": 30, "nextPurgeDay": "2026-10-19", "nextPurgeAt": 1794960000000 },
   "analysis": { "generatedAt": 1792800000000, "windowDays": ["2026-10-19"], "tasks": 12, "insights": 3 }
 }
 """#
@@ -125,9 +125,9 @@ struct S07WireContractTests {
     let s = try decode(StatusResponse.self, statusJSON).toObserverStatus()
     #expect(s.state == .watching)
     #expect(s.daysStored == 4)
-    #expect(s.windowDays == 7)
+    #expect(s.windowDays == 30)
     #expect(s.insightsWaiting == 3)
-    #expect(s.nextPurge == Date(timeIntervalSince1970: 1_792_972_800))
+    #expect(s.nextPurge == Date(timeIntervalSince1970: 1_794_960_000))
     #expect(ObserverState(wire: "paused") == .paused)
     #expect(ObserverState(wire: "stale") == .stale)
     #expect(ObserverState(wire: "no_data") == .noData)
@@ -140,7 +140,7 @@ struct S07WireContractTests {
     s.state = .stale
     let rail = RailModel(status: s, automations: [], micRecording: false)
     #expect(rail.dots.first?.role == .needsYou)
-    #expect(rail.observerLabel == "Not recording · Day 4 of 7")
+    #expect(rail.observerLabel == "Not recording · Day 4 of 30")
   }
 
   @Test("EvidenceResponse spans map to evidence rows with epoch-ms times")

@@ -228,7 +228,7 @@ struct S09AObserverTests {
   func decode() throws {
     let r = try JSONDecoder().decode(ObserverReport.self, from: S09AFixture.data("observer-status.json"))
     #expect(r.schemaVersion == 1)
-    #expect(r.keepDays == 7)
+    #expect(r.keepDays == 30)
     let rows = r.permissionRows()
     #expect(rows.map(\.name) == ["Screen Recording", "Accessibility", "Input Monitoring"])
     #expect(rows.map(\.required) == [true, true, false])
@@ -287,7 +287,7 @@ struct S09AObserverTests {
     let fake = script(d, "offload-observer", "echo \"$@\" >> '\(log.path)'\ncase \"$1\" in status) cat <<'EOF'\n\(json)\nEOF\n;; pause|resume) echo ok ;; *) exit 2 ;; esac")
     let c = ObserverControl(binary: fake, home: URL(fileURLWithPath: "/tmp/h"))
     let r = try await c.status()
-    #expect(r.keepDays == 7)
+    #expect(r.keepDays == 30)
     try await c.setPaused(true)
     try await c.setPaused(false)
     let calls = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
@@ -329,7 +329,7 @@ struct S09AOnboardingTests {
   func copy() {
     #expect(OnboardingFlow.watches.count == 3)
     #expect(OnboardingFlow.neverStores.contains { $0.contains("Passwords") })
-    #expect(OnboardingFlow.neverStores.contains { $0.contains("7 days") })
+    #expect(OnboardingFlow.neverStores.contains { $0.contains("30 days") })
     #expect(OnboardingFlow.localNote.contains("on this Mac"))
   }
 

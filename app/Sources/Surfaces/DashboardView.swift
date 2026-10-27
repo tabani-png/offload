@@ -797,7 +797,7 @@ private struct ObservingSection: View {
   }
 }
 
-/// Files with your content that the 7-day deletion does not touch (brain s10b keptFiles): said plainly, with
+/// Files with your content that the retention deletion does not touch (brain s10b keptFiles): said plainly, with
 /// Reveal in Finder, so nothing is kept that you cannot find.
 private struct KeptFilesSection: View {
   @ObservedObject var model: DashboardModel
@@ -808,7 +808,7 @@ private struct KeptFilesSection: View {
     WindowSection(title: "Kept until you delete them", trailing: nil) {
       RingBox {
         if model.keptFiles.isEmpty {
-          Text("Nothing. Everything Offload saw is deleted after 7 days.")
+          Text("Nothing. Everything Offload saw is deleted after \(LocalRetention.days) days.")
             .textStyle(Tokens.TypeScale.body).foregroundStyle(p.ink2).padding(Tokens.Space.s16)
         }
         ForEach(Array(model.keptFiles.enumerated()), id: \.element.id) { i, f in

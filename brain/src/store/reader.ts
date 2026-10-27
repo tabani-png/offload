@@ -1,6 +1,6 @@
 // Reads the observer store (docs/store-contract.md). Plain `.jsonl` and encrypted `.jsonl.enc` are both supported.
 // Bad lines are never dropped silently: each one is returned with its file, line number and reason.
-// The 7-day rule (REVIEW-1 M4): days older than 7 local days are refused even when their files still exist (the
+// The 30-day rule (REVIEW-1 M4): days older than 30 local days are refused even when their files still exist (the
 // observer may be stopped, so its purge did not run), and the observer is asked to purge them (`purge-now`).
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -43,7 +43,7 @@ export type ReaderEnv = Readonly<Record<string, string | undefined>>;
 export interface ReadOptions {
   /** OFFLOAD_OBSERVER_BIN (observer binary for wrapped keys) and OFFLOAD_KEYS. Default process.env. */
   env?: ReaderEnv;
-  /** When given, a day older than 7 local days at this time is refused (no events, one error). */
+  /** When given, a day older than 30 local days at this time is refused (no events, one error). */
   now?: number;
 }
 
@@ -65,7 +65,7 @@ function exportDay(home: string, day: DayLabel, env: ReaderEnv): { lines: string
 export interface StoreRead {
   home: string;
   days: DayRead[];
-  /** Stored days older than 7 local days: not read. */
+  /** Stored days older than 30 local days: not read. */
   refused: DayLabel[];
   eventCount: number;
   badLineCount: number;

@@ -33,14 +33,14 @@ function expiredArtefact(): string {
   const wf = join(home, "workflows", "wf_abcd1234");
   mkdirSync(wf, { recursive: true });
   const f = join(wf, "dry-run.json.enc");
-  sealText(home, f, '{"secret":"ocr"}', Date.now() - 9 * DAY_MS);
+  sealText(home, f, '{"secret":"ocr"}', Date.now() - 32 * DAY_MS);
   return f;
 }
 
 describe("s10b N4: purge without a running brain", () => {
   test("N4: `cli.ts purge --home` deletes expired sealed artefacts and their keys and prints what it did", () => {
     const f = expiredArtefact();
-    const key = brainKeyPath(home, Date.now() - 9 * DAY_MS);
+    const key = brainKeyPath(home, Date.now() - 32 * DAY_MS);
     expect(existsSync(key)).toBe(true);
     const r = Bun.spawnSync(["bun", "run", CLI, "purge", "--home", home, "--json"], { env: { ...process.env, OFFLOAD_KEYS: "file" } });
     expect(r.exitCode).toBe(0);

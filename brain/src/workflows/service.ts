@@ -305,7 +305,7 @@ const KEPT_NOTES: Record<KeptFileDTO["kind"], string> = {
   recipients: "Your recipient list. Kept until you delete it; auto-run only sends to rows pinned when you turned it on.",
   facts: "The facts you wrote for drafts. Kept until you delete it.",
   send_log: "Your record of who was emailed, so nobody gets the same email twice. Kept until you delete it.",
-  tone_card: "A tone card you edited. Kept until you delete it; cards you did not edit are deleted with the mail they came from after 7 days.",
+  tone_card: "A tone card you edited. Kept until you delete it; cards you did not edit are deleted with the mail they came from after 30 days.",
 };
 
 /** s22 bias audit: a general (plan) workflow keeps items and a done log, not recipients and an email log. */
@@ -314,7 +314,7 @@ const KEPT_NOTES_PLAN: Partial<Record<KeptFileDTO["kind"], string>> = {
   send_log: "Your record of what was already done, so no item is done twice. Kept until you delete it.",
 };
 
-/** Files with the user's own content that are not purged at 7 days: recipients.csv, facts.md, crm-log.csv per
+/** Files with the user's own content that are not purged at 30 days: recipients.csv, facts.md, crm-log.csv per
  * workflow, and tone cards the user edited. Everything else holding observed or mail text is sealed and purged. */
 export function keptFiles(home: string): KeptFileDTO[] {
   const out: KeptFileDTO[] = [];
