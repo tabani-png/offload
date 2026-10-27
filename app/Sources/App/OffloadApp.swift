@@ -397,7 +397,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// First run of the installed app: ask once. Yes installs and loads the agent; Not now writes nothing. Remembered.
   private func askObserverAgentOnce() {
     guard ObserverAgentSetting.shouldAsk(answer: ObserverAgentSetting.answer(.standard), bundled: brain?.bundled == true,
-                                         observer: observer.binary, mock: isMock, demo: options.demo) else { return }
+                                         observer: observer.binary, mock: isMock, demo: options.demo,
+                                         demoActive: demoActive) else { return }
     let alert = NSAlert()
     alert.messageText = ObserverAgentSetting.question
     alert.informativeText = ObserverAgentSetting.detail

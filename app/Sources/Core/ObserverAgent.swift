@@ -27,8 +27,10 @@ enum ObserverAgentSetting {
   }
 
   /// Ask once: no answer yet, the installed app (bundled brain) with its observer, not the mock or the demo week.
-  static func shouldAsk(answer: ObserverAgentConsent?, bundled: Bool, observer: URL?, mock: Bool, demo: Bool) -> Bool {
-    answer == nil && bundled && observer != nil && !mock && !demo
+  /// `demo` is the --demo launch flag, `demoActive` the demo week chosen in onboarding: either one is demo.
+  static func shouldAsk(answer: ObserverAgentConsent?, bundled: Bool, observer: URL?, mock: Bool, demo: Bool,
+                        demoActive: Bool = false) -> Bool {
+    answer == nil && bundled && observer != nil && !mock && !demo && !demoActive
   }
 }
 
@@ -70,9 +72,16 @@ struct ObserverAgent {
     guard b.status == 0 else { throw ObserverAgentError(description: "macOS did not start the observer (\(b.status)).") }
   }
 
-  /// Unloads it (if loaded) and deletes the plist.
+  /// Unloads it (if loaded) and deletes the plist. A failed bootout is fine only when the agent is not loaded
+  /// (`launchctl print` fails); if it is still loaded the plist stays and this throws, so the switch stays on.
   func remove() throws {
-    if loadsLaunchd { _ = run(Self.launchctl, ["bootout", "gui/\(uid)/\(Self.label)"], environment) }
+    if loadsLaunchd {
+      let target = "gui/\(uid)/\(Self.label)"
+      let b = run(Self.launchctl, ["bootout", target], environment)
+      if b.status != 0 && run(Self.launchctl, ["print", target], environment).status == 0 {
+        throw ObserverAgentError(description: "macOS did not stop the observer (\(b.status)). It is still running.")
+      }
+    }
     let r = run(binary, ["uninstall-agent", "--home", home.path], environment)
     guard r.status == 0 else { throw ObserverAgentError(description: "The observer could not remove its login item (\(r.status)).") }
   }

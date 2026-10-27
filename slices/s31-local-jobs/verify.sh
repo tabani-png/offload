@@ -196,6 +196,7 @@ case $scope_rc in
          app/Sources/Core/BrainSupervisor.swift|app/Sources/Core/BrainCheck.swift|app/Sources/App/OffloadApp.swift|app/build.sh) ;;
          app/Sources/Core/ObserverAgent.swift|app/Sources/Surfaces/DashboardModel.swift|app/Sources/Surfaces/DashboardView.swift) ;;
          brain/src/store/observer.ts|brain/tests/s31-local-jobs/*|slices/s31-local-jobs/*) ;;
+         agent-control/rework-ledger.md) ;;   # review rework rows (coordinator request, PR #38)
          *) fail "out-of-scope path changed: $p" ;;
        esac
      done <<< "$SLICE_FILES"
