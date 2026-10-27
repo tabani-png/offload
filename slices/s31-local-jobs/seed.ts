@@ -6,8 +6,8 @@
 //   - a stub tone pack and the outreach workflow, dry-run and approved (active, auto-run off), with 3 recipients;
 //   - activatedAt 8 days ago and no lastScheduledAt: a weekday 09:00 slot came due while "the Mac slept" (missed slot);
 //   - 2 keyframes captured today (engine on-disk format) for the caption worker;
-//   - two purge targets: frame-notes/<10 days ago>.jsonl.enc and frames/<10 days ago>.jsonl (older than 7 days) and
-//     one keeper frames/<6 days ago>.jsonl (inside the window).
+//   - two purge targets: frame-notes/<33 days ago>.jsonl.enc and frames/<33 days ago>.jsonl (older than 30 days) and
+//     one keeper frames/<8 days ago>.jsonl (inside the 30-day window, s32; past the old 7-day one).
 // Prints one JSON line: {workflowId, oldDay, keepDay}.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -72,8 +72,8 @@ writeFrame(home, now - 120_000);
 writeFrame(home, now - 60_000);
 
 // Purge targets (by file-name day) and one keeper.
-const oldDay = localDay(now - 10 * DAY);
-const keepDay = localDay(now - 6 * DAY);
+const oldDay = localDay(now - 33 * DAY);
+const keepDay = localDay(now - 8 * DAY);
 mkdirSync(join(home, "frame-notes"), { recursive: true, mode: 0o700 });
 writeFileSync(join(home, "frame-notes", `${oldDay}.jsonl.enc`), "s31-old\n", { mode: 0o600 });
 writeFileSync(join(home, "frames", `${oldDay}.jsonl`), "s31-old\n", { mode: 0o600 });

@@ -94,9 +94,9 @@ api /status | py "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('
 
 echo "== PURGE (the app's launch purge, before serve)"
 grep -qE "^purge: exit 0 purged [1-9][0-9]* artefact" "$OUT" || fail "PURGE: the launch purge did not run or deleted nothing"
-[ -e "$H/frame-notes/$OLD.jsonl.enc" ] && fail "PURGE: frame-notes/$OLD (older than 7 days) is still there"
-[ -e "$H/frames/$OLD.jsonl" ] && fail "PURGE: frames/$OLD.jsonl (older than 7 days) is still there"
-[ -f "$H/frames/$KEEP.jsonl" ] || fail "PURGE: frames/$KEEP.jsonl (6 days old) was deleted"
+[ -e "$H/frame-notes/$OLD.jsonl.enc" ] && fail "PURGE: frame-notes/$OLD (older than 30 days) is still there"
+[ -e "$H/frames/$OLD.jsonl" ] && fail "PURGE: frames/$OLD.jsonl (older than 30 days) is still there"
+[ -f "$H/frames/$KEEP.jsonl" ] || fail "PURGE: frames/$KEEP.jsonl (8 days old, inside 30 days) was deleted"
 grep -q "\"day\":\"$OLD\"" "$H/purge-log.jsonl" 2>/dev/null && echo "purge-log names $OLD" || fail "PURGE: purge-log.jsonl does not name $OLD"
 
 echo "== SCHED (a weekday 09:00 slot missed while closed: one pending batch on the first tick, nothing sent)"
