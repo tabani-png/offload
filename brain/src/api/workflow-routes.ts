@@ -15,7 +15,7 @@ import { buildChain } from "../workflows/chain-executor.ts";
 import { declaredActions } from "../workflows/runner.ts";
 import type { Model } from "../models/model.ts";
 import { draftWorkflow, NotFoundError } from "../workflows/drafter.ts";
-import { dryRun, DryRunError, readLastDryRun } from "../workflows/dryrun.ts";
+import { dryRun, DryRunError, DryRunStopped, readLastDryRun } from "../workflows/dryrun.ts";
 import type { ExecResult, Executor } from "../workflows/executor.ts";
 import { disableAutoRun, enableAutoRun, partitionForAuto } from "../workflows/autorun.ts";
 import type { Batch } from "../workflows/batch.ts";
@@ -26,6 +26,7 @@ import { applySkillUpdate, SkillEditError, skillDTO } from "../workflows/skill.t
 import { loadTonePack, MAX_TONE_CARD_BYTES, readStyleCard, writeStyleCard, type StyleCard } from "../tone/pack.ts";
 import { toneMeasured } from "../tone/style.ts";
 import type { WorkflowJson } from "../workflows/types.ts";
+import type { SourceFetcher } from "../workflows/read-fetch.ts";
 import { buildWorkflowPlaybook, identityForWorkflow, PlaybookInputError } from "../playbook/build.ts";
 import { PlaybookLeakError } from "../playbook/leak.ts";
 import { PlaybookNotesError, readPlaybook, readPlaybookMd, setPlaybookNotes } from "../playbook/store.ts";
@@ -47,6 +48,8 @@ export interface WorkflowContext {
   background: (p: Promise<unknown>) => void;
   /** s13: the connector chain (resolver, per-method executors, computer use). Absent = the s10e single-executor path. */
   chain?: ChainContext;
+  /** s27: reads a workflow's source (its read step) through the chain, read only. Absent = live items from the list. */
+  read?: SourceFetcher;
 }
 
 export interface ChainContext {
@@ -123,6 +126,7 @@ export async function workflowRoute(req: Request, path: string, ctx: WorkflowCon
     return await route(req, path, ctx);
   } catch (err) {
     if (err instanceof HttpError) return error(err.status, err.code, err.message);
+    if (err instanceof DryRunStopped) return error(409, "conflict", err.message);
     if (err instanceof NotFoundError || err instanceof DryRunError) return error(404, "not_found", err.message);
     if (err instanceof RunError) return error(err.code === "not_found" ? 404 : err.code === "conflict" ? 409 : 400, err.code, err.message);
     if (err instanceof SkillEditError) return error(400, "bad_request", err.message);
@@ -201,10 +205,11 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
     case "dry-run": {
       const limit = b.limit;
       if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 50)) throw new HttpError(400, "bad_request", "limit must be an integer in [1, 50]");
-      return json(200, await dryRun({ home: ctx.home, analysis: await ctx.analysis(), workflowId: wf.id, model: ctx.model, modelLabel: ctx.modelLabel, now: ctx.now, ...(limit === undefined ? {} : { limit }) }));
+      return json(200, await dryRun({ home: ctx.home, analysis: await ctx.analysis(), workflowId: wf.id, model: ctx.model, modelLabel: ctx.modelLabel, now: ctx.now, ...(limit === undefined ? {} : { limit }), ...(ctx.read === undefined ? {} : { read: ctx.read }) }));
     }
     case "run": {
-      let batch = await prepareLiveBatch({ home: ctx.home, workflowId: wf.id, model: ctx.model, now: ctx.now });
+      let batch = await prepareLiveBatch({ home: ctx.home, workflowId: wf.id, model: ctx.model, now: ctx.now, ...(ctx.read === undefined ? {} : { read: ctx.read }) });
+      const source = batch.source;
       let held: Batch | null = null;
       // Auto-run sends only what is pinned and unchanged (REVIEW-2 N1); the rest waits in a held batch.
       if (readWorkflow(ctx.home, wf.id)?.autoRun === true) {
@@ -212,7 +217,7 @@ async function route(req: Request, path: string, ctx: WorkflowContext): Promise<
         batch = d.sending ?? d.held ?? batch;
         held = d.sending === null ? null : d.held;
       }
-      const res: RunResponse = { version: API_VERSION, workflowId: wf.id, batch: batchSummary(batch), items: batch.items.map((i) => ({ key: i.key, to: i.to, subject: i.subject, body: i.body, warnings: [...i.warnings] })), held: held === null ? null : batchSummary(held) };
+      const res: RunResponse = { version: API_VERSION, workflowId: wf.id, batch: batchSummary(batch), items: batch.items.map((i) => ({ key: i.key, to: i.to, subject: i.subject, body: i.body, warnings: [...i.warnings] })), held: held === null ? null : batchSummary(held), ...(source === undefined ? {} : { source }) };
       return json(201, res);
     }
     case "approve": {

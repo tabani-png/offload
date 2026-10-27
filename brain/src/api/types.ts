@@ -288,6 +288,10 @@ export interface MeasuredSavingDTO {
   hoursPerWeekBefore: number;
   hoursPerWeekAfter: number;
   hoursSavedPerWeek: number;
+  /** s27: when the workflow reads its source itself, the reading time on it is part of before and after (included in
+   * hoursPerWeekBefore / After): before = reading right before the task's instances, after = all time on the source. */
+  readingHoursPerWeekBefore?: number;
+  readingHoursPerWeekAfter?: number;
   /** e.g. "before: 24.1 h over 4 days = 42.2 h/wk; after: 1.2 h over 2 days = 4.2 h/wk → saves 38.0 h/wk" */
   arithmetic: string;
 }
@@ -489,6 +493,8 @@ export interface RunResponse {
   /** s10b N1, auto-run on: recipients auto-run did not send (new or changed since the pin), split into this pending
    * batch for review. Absent or null when nothing was held. */
   held?: BatchSummaryDTO | null;
+  /** s27: plan workflows: where the items came from (the workflow's read source, or the person's list), in plain words. */
+  source?: { kind: "read" | "list"; name: string; via: string | null; message: string; skipped?: Array<{ missing: string[]; ambiguous?: string[]; reason?: string }> };
 }
 
 export interface ConnectorsResponse {

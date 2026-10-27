@@ -23,8 +23,14 @@ import { checkPlaybook } from "../playbook/check.ts";
 import { readPlaybook } from "../playbook/store.ts";
 import { NameMap } from "../privacy/names.ts";
 import { readNamePolicy, signNames } from "../privacy/policy.ts";
+import type { ReadPreviewDTO } from "../api/s14-types.ts";
+import { recordRead, type SourceFetcher } from "./read-fetch.ts";
+import { registerPreview } from "./runner.ts";
+import { queryOf } from "../plan/read-source.ts";
 
 export class DryRunError extends Error {}
+/** s27: the dry run stopped because the workflow was paused or deleted while it read its source. */
+export class DryRunStopped extends Error {}
 
 export interface DryRunOptions {
   home: string;
@@ -37,10 +43,15 @@ export interface DryRunOptions {
   modelLabel?: ModelLabel;
   /** s14: onboarding context for text steps of general workflows (prompts only). */
   user?: UserContext;
+  /** s27: reads the workflow's source now (read only) to show what a live run would use. */
+  read?: SourceFetcher;
 }
 
+/** s27: a dry run of a plan workflow says what its read step read now (or why nothing). */
+export const NO_SOURCE_DRY = "Offload has not seen where these values come from; live runs use your list items.csv.";
+
 /** s14: a dry run of a general workflow also carries `general` (per-instance outputs of any type). */
-export type DryRunResult = DryRunResponse & { general?: GeneralDryRunDTO; tools?: Array<{ stepId: string; tool: string; name: string; runsWith: string }> };
+export type DryRunResult = DryRunResponse & { general?: GeneralDryRunDTO; tools?: Array<{ stepId: string; tool: string; name: string; runsWith: string }>; read?: ReadPreviewDTO };
 
 const round1 = (x: number) => Math.round(x * 10 + 1e-9) / 10;
 
@@ -56,7 +67,30 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
   const emailWorkflow = wf.template !== "generic";
   // s14: a general plan dry-runs any output type; the email templates keep the s05 path below.
   const user = o.user ?? readUserContext(o.home).context;
-  const general = wf.plan === undefined ? null : await generalDryRun({ home: o.home, analysis: o.analysis, wf, model: o.model, models, limit, now, facts: factsText, ...(user === undefined ? {} : { user }) });
+  // s27: the read step reads its source now, read only (gate mode read), so the dry run shows the values a live run uses.
+  let read: ReadPreviewDTO | undefined;
+  if (wf.plan !== undefined) {
+    const src = wf.read;
+    if (src === undefined) read = { status: "none", name: null, via: null, query: null, rows: [], rowsTotal: 0, message: NO_SOURCE_DRY };
+    else if (o.read === undefined) read = { status: "not_read", name: src.targetName, via: null, query: queryOf(src), rows: [], rowsTotal: 0, message: `Reading ${src.targetName} is not set up on this Mac yet; live runs use your list ${wf.inputs.list}.` };
+    else {
+      // Pause and delete stop this read like a live run's: before every method and call, and in the readers.
+      const stop = registerPreview(o.home, wf.id);
+      let r;
+      try {
+        r = await o.read.fetch({ wf, now, logPath: gateLogPath(o.home, wf.id), signal: stop.signal, cancelled: stop.cancelled });
+      } finally {
+        stop.done();
+      }
+      if (!r.ok && r.status === "cancelled") throw new DryRunStopped(r.message);
+      recordRead(o.home, wf.id, r, now);
+      read = r.ok
+        ? { status: "fetched", name: src.targetName, via: r.via, query: queryOf(src), rows: r.rows.slice(0, 20), rowsTotal: r.rows.length, skipped: r.skipped ?? [], message: r.message }
+        : { status: r.status === "cancelled" ? "not_read" : r.status, name: src.targetName, via: null, query: queryOf(src), rows: [], rowsTotal: 0, message: `Could not read ${src.targetName}: ${r.message} Live runs use your list ${wf.inputs.list} until it can be read.` };
+    }
+  }
+  const readAutomated = read?.status === "fetched";
+  const general = wf.plan === undefined ? null : await generalDryRun({ home: o.home, analysis: o.analysis, wf, model: o.model, models, limit, now, facts: factsText, readAutomated, ...(user === undefined ? {} : { user }) });
   const pack: TonePack = general !== null ? { corpus: [], cards: {} } : (loadTonePack(o.home, now) ?? { corpus: [], cards: {} });
   if (general === null && pack.corpus.length === 0) warnings.push("no tone pack yet: run `tone build` so drafts follow your past emails");
   if (general !== null) warnings.push(...general.warnings);
@@ -131,14 +165,22 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
   const timed = general !== null ? general.general.instances.map((i) => i.estimate.observedMinutes) : out.map((i) => i.estimate.observedMinutes);
   const observedMinutes = round1(timed.reduce((n, m) => n + m, 0));
   // s26: a general instance the workflow cannot fill at all saves nothing; only the ones it can do count.
-  const doable = general !== null ? general.general.instances.filter((i) => !producesNothing(general.general.outputType, i.ours)).map((i) => i.estimate.observedMinutes) : timed;
-  const doableMinutes = round1(doable.reduce((n, m) => n + m, 0));
+  const doableOnes = general !== null ? general.general.instances.filter((i) => !producesNothing(general.general.outputType, i.ours)) : [];
+  const doable = general !== null ? doableOnes.map((i) => i.estimate.observedMinutes) : timed;
+  // s27: the reading time on the source, counted only when Offload read it itself.
+  const readTotal = round1((general?.general.instances ?? []).reduce((n, i) => n + (i.estimate.readMinutes ?? 0), 0));
+  const readDoable = round1(doableOnes.reduce((n, i) => n + (i.estimate.readMinutes ?? 0), 0));
+  const readName = wf.read?.targetName ?? "";
+  const readCounted = readAutomated && wf.read !== undefined && readTotal > 0;
+  const doableMinutes = round1(doable.reduce((n, m) => n + m, 0) + (readCounted ? readDoable : 0));
   const reviewMinutes = round1((doable.length * wf.reviewSecondsPerItem) / 60);
   const savedMinutes = Math.max(0, round1(doableMinutes - reviewMinutes));
+  const spent = `you spent ${observedMinutes.toFixed(1)} min on these ${timed.length}${readCounted ? ` + ${readTotal.toFixed(1)} min reading ${readName} (Offload reads it)` : ""}`;
+  const tail = wf.read !== undefined && !readCounted && readTotal > 0 ? `; reading ${readName} stays with you (${readTotal.toFixed(1)} min, not counted)` : "";
   const arithmetic =
-    doable.length === timed.length
-      ? `you spent ${observedMinutes.toFixed(1)} min on these ${timed.length} → review ${timed.length} × ${wf.reviewSecondsPerItem} s = ${reviewMinutes.toFixed(1)} min → saves ${savedMinutes.toFixed(1)} min`
-      : `you spent ${observedMinutes.toFixed(1)} min on these ${timed.length} → ${doable.length} of ${timed.length} can be done from what was on screen (${doableMinutes.toFixed(1)} min) → review ${doable.length} × ${wf.reviewSecondsPerItem} s = ${reviewMinutes.toFixed(1)} min → saves ${savedMinutes.toFixed(1)} min`;
+    (doable.length === timed.length
+      ? `${spent} → review ${timed.length} × ${wf.reviewSecondsPerItem} s = ${reviewMinutes.toFixed(1)} min → saves ${savedMinutes.toFixed(1)} min`
+      : `${spent} → ${doable.length} of ${timed.length} can be done from what was on screen (${doableMinutes.toFixed(1)} min) → review ${doable.length} × ${wf.reviewSecondsPerItem} s = ${reviewMinutes.toFixed(1)} min → saves ${savedMinutes.toFixed(1)} min`) + tail;
   const res: DryRunResult = {
     version: API_VERSION,
     workflowId: wf.id,
@@ -158,6 +200,7 @@ export async function dryRun(o: DryRunOptions): Promise<DryRunResult> {
     warnings,
     ...(o.modelLabel === undefined ? {} : { model: o.modelLabel }),
     ...(general === null ? {} : { general: general.general }),
+    ...(read === undefined ? {} : { read }),
     // s14: the tools this dry run stands for (the chosen option per step), shown next to the result.
     ...(wf.tools === undefined ? {} : { tools: wf.tools.map((t) => ({ stepId: t.stepId, tool: t.chosen, name: t.options.find((x) => x.id === t.chosen)?.name ?? t.chosen, runsWith: t.runsWith })) }),
   };

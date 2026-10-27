@@ -69,6 +69,9 @@ export interface Batch {
   sealDay?: string;
   /** s10b N1: sha256 of facts.md, the tone card and SKILL.md as they were when this batch was drafted. */
   draftedWith?: Record<string, string>;
+  /** s27: where a plan workflow's live items came from (its read source, or the person's list). Not hashed: the items'
+   * commits carry the exact values. */
+  source?: { kind: "read" | "list"; name: string; via: string | null; message: string; skipped?: Array<{ missing: string[]; ambiguous?: string[]; reason?: string }> };
   /** s10b N1: why auto-run did not send this pending batch on its own. */
   review?: { newRecipients: number; changedRecipients: number; changedFiles: string[]; unfilledNames?: number };
 }

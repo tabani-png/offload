@@ -11,6 +11,7 @@ import type { Batch } from "./batch.ts";
 import type { CrmSheet } from "./allowlist.ts";
 import type { Gate, GateAction } from "./gate.ts";
 import { UNTRUSTED_RULE, untrustedBlock } from "./untrusted.ts";
+import { agentSdkAuth, type AgentSdkAuth } from "../models/agent-auth.ts";
 
 export interface ExecJob {
   batch: Batch;
@@ -116,41 +117,8 @@ export function sendPrompt(batch: Batch, only?: ReadonlySet<string>): string {
   ].join("\n");
 }
 
-/** Variables the Claude Code child needs to run and authenticate. Never OFFLOAD_TOKEN or connector secrets (REVIEW-1 L5). */
-const ENV_ALLOW = [
-  "PATH",
-  "HOME",
-  "USER",
-  "LOGNAME",
-  "SHELL",
-  "TMPDIR",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-  "TERM",
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_BASE_URL",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "CLAUDE_CONFIG_DIR",
-  "CLAUDE_CODE_USE_BEDROCK",
-  "CLAUDE_CODE_USE_VERTEX",
-  "NODE_EXTRA_CA_CERTS",
-  "HTTPS_PROXY",
-  "HTTP_PROXY",
-  "NO_PROXY",
-] as const;
-
-export function executorEnv(env: Readonly<Record<string, string | undefined>> = process.env): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const k of ENV_ALLOW) {
-    const v = env[k];
-    if (v !== undefined && v !== "") out[k] = v;
-  }
-  return out;
-}
-
 /** The exact query() arguments the SDK executor uses (exported so tests can pin them without a network call). */
-export function sdkQueryOptions(job: ExecJob, env: Readonly<Record<string, string | undefined>> = process.env): { prompt: string; options: Options } {
+export function sdkQueryOptions(job: ExecJob, auth: Pick<AgentSdkAuth, "env" | "settings">): { prompt: string; options: Options } {
   const abort = new AbortController();
   if (job.signal !== undefined) {
     if (job.signal.aborted) abort.abort(job.signal.reason);
@@ -168,7 +136,9 @@ export function sdkQueryOptions(job: ExecJob, env: Readonly<Record<string, strin
       mcpServers: job.mcpServers ?? {},
       permissionMode: "default",
       maxTurns: job.batch.items.length * 2 + 4,
-      env: executorEnv(env),
+      // s27 round 13: the env and the key helper come only from agentSdkAuth (models/agent-auth.ts).
+      env: { ...auth.env },
+      ...(auth.settings === undefined ? {} : { settings: { ...auth.settings } }),
       abortController: abort,
       ...(job.cwd === undefined ? {} : { cwd: job.cwd }),
     },
@@ -176,11 +146,23 @@ export function sdkQueryOptions(job: ExecJob, env: Readonly<Record<string, strin
 }
 
 export class AgentSdkExecutor implements Executor {
+  constructor(private readonly o: { env?: Readonly<Record<string, string | undefined>>; log?: (line: string) => void } = {}) {}
+
   async execute(job: ExecJob): Promise<ExecResult> {
-    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    // Signed in before anything starts (the one sign-in function); no key and no token is a plain refusal.
+    const auth = agentSdkAuth(this.o.env ?? process.env, this.o.log);
+    try {
+      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      return await this.run(job, query, auth);
+    } finally {
+      auth.cleanup();
+    }
+  }
+
+  private async run(job: ExecJob, query: typeof import("@anthropic-ai/claude-agent-sdk").query, auth: AgentSdkAuth): Promise<ExecResult> {
     const toolCalls: ToolCallRecord[] = [];
     const byId = new Map<string, ToolCallRecord>();
-    const base = sdkQueryOptions(job);
+    const base = sdkQueryOptions(job, auth);
     const q = query({
       prompt: base.prompt,
       options: {

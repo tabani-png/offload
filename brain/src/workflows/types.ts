@@ -1,6 +1,6 @@
 // workflow.json, the typed half of a Workflow folder ($OFFLOAD_HOME/workflows/<id>/). SKILL.md is the plain-words
 // half; facts.md holds the only facts drafts may state; scripts/ holds the deterministic parts.
-import type { WorkflowPlanDTO } from "../api/s14-types.ts";
+import type { ReadSourceDTO, WorkflowPlanDTO } from "../api/s14-types.ts";
 import type { StepToolsDTO } from "../plan/tools.ts";
 import type { ConnectorDTO } from "../api/types.ts";
 import type { ModelConfig } from "../models/model.ts";
@@ -89,4 +89,7 @@ export interface WorkflowJson {
   tools?: StepToolsDTO[];
   /** s14: instances a day the tools were picked for (from the insight; code arithmetic). */
   volumePerDay?: number;
+  /** s27: where the task's values come from (learned from the recordings, plan/read-source.ts) and the last read of
+   * it. Absent when the recordings show no source: live items then come from `inputs.list`. Labels only, no values. */
+  read?: ReadSourceDTO;
 }

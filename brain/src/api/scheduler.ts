@@ -80,7 +80,7 @@ export async function schedulerTick(ctx: WorkflowContext, log: (line: string) =>
         out.skipped.push({ workflowId: wf.id, reason: "a batch already waits for review" });
         continue;
       }
-      const batch = await prepareLiveBatch({ home: ctx.home, workflowId: wf.id, model: ctx.model, now: ctx.now });
+      const batch = await prepareLiveBatch({ home: ctx.home, workflowId: wf.id, model: ctx.model, now: ctx.now, ...(ctx.read === undefined ? {} : { read: ctx.read }) });
       mark(wf.id, null);
       const d = dispatchAuto(ctx, wf.id, batch, now, log);
       const shown = d.sending ?? d.held ?? batch;

@@ -112,7 +112,8 @@ export interface GeneralDryRunInstanceDTO {
   match: { matched: number; total: number; value: number; arithmetic: string };
   steps: { ours: string[]; theirs: string[] };
   evidence: { eventIds: string[]; spanIds: string[]; frameIds: string[] };
-  estimate: { observedMinutes: number; reviewSeconds: number; savedMinutes: number };
+  /** s27: readMinutes = time on the read source right before this instance; counted as saved only when readCounted. */
+  estimate: { observedMinutes: number; reviewSeconds: number; savedMinutes: number; readMinutes?: number; readCounted?: boolean };
   /** The commit the s13 chain would make for this item after your approval (BatchItem.commit). */
   commit: {
     verb: string;
@@ -150,4 +151,91 @@ export interface UnderstandingStatusDTO {
   version: "v1" | "v2";
   embedder: string | null;
   framesRead: number;
+}
+
+// ---------- s27: read steps (workflows fetch their own data) ----------
+
+/** One value a read step takes from its source: the commit label it fills and the label the source shows before it. */
+export interface ReadFieldDTO {
+  /** Label on the commit screen (the sheet's column): what the item's commit fills. */
+  label: string;
+  /** Label the source shows before the value ("Active users"). */
+  sourceLabel: string;
+  /** Instances whose source screen showed this value next to this label. */
+  support: number;
+}
+
+/** The last read of a source: whether Offload read it itself, how, and in plain words. */
+export interface ReadStatusDTO {
+  at: number;
+  ok: boolean;
+  /** mcp | composio | api | computer when it was read; null when not. */
+  via: string | null;
+  message: string;
+}
+
+/** s27 (operator, 2026-10-26): the read's arguments, learned from the recordings: the report the person looked at (its
+ * name), the fields, and the filters seen on screen (e.g. period "last 7 days"). Offload builds its own view of the
+ * data from these; the page address the person had open is never stored. Shown in the dry run, covered by approvals. */
+export interface ReadQueryDTO {
+  report: string | null;
+  fields: string[];
+  filters: Array<[string, string]>;
+}
+
+/** s27: where a repeated task's values come from, learned from the recordings (plan/read-source.ts, code only).
+ * Only labels, the app or site and code arithmetic are kept: never a value. */
+export interface ReadSourceDTO {
+  version: 1;
+  /** Chain target id: a catalog connector, or `web-<host>` / `app-<name>`. */
+  target: string;
+  /** Display name ("PostHog"). */
+  targetName: string;
+  app: string;
+  appName: string;
+  host: string;
+  /** The site (host) or app the source spans are matched on. */
+  surface: string;
+  fields: ReadFieldDTO[];
+  /** Instances of the task in the recordings. */
+  instances: number;
+  /** Instances with this source on screen right before them. */
+  seenBefore: number;
+  /** Of those, instances where the values typed were on the source's screen. */
+  withValues: number;
+  readSecondsPerInstance: number;
+  readHoursPerWeek: number;
+  arithmetic: string;
+  evidence: { spanIds: string[]; eventIds: string[]; frameIds: string[] };
+  /** The learned read arguments (absent on sources found before round 1: the fields alone). */
+  query?: ReadQueryDTO;
+  foundAt: number;
+  lastRead?: ReadStatusDTO | null;
+}
+
+/** s27: what a dry run read from the source now (read only), or why nothing was read. */
+export interface ReadPreviewDTO {
+  status: "fetched" | "refused" | "not_read" | "none";
+  name: string | null;
+  via: string | null;
+  /** What the read asks the source for (learned); null without a source. */
+  query: ReadQueryDTO | null;
+  /** Fetched rows, [commit label, value] pairs, as the live batch would use them (the first 20 shown). */
+  rows: Array<Array<[string, string]>>;
+  /** Every row the source returned (rows shows at most 20). */
+  rowsTotal: number;
+  /** Rows the source returned without every value: skipped, with the fields they lacked. */
+  skipped?: Array<{ missing: string[]; ambiguous?: string[]; reason?: string }>;
+  message: string;
+}
+
+/** s27: where the items of a live batch came from. */
+export interface RunSourceDTO {
+  kind: "read" | "list";
+  /** The source's name, or the list file. */
+  name: string;
+  via: string | null;
+  message: string;
+  /** Rows read without every value: skipped (not entered, not done), with the fields they lacked. */
+  skipped?: Array<{ missing: string[]; ambiguous?: string[]; reason?: string }>;
 }

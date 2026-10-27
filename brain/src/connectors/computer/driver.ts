@@ -2,6 +2,7 @@
 // what has focus, and input (click, type, key, scroll). Two drivers: StubDriver (in memory, deterministic, used by the
 // stub model and every test; it never touches the real UI) and OsaDriver (osa-driver.ts, opt-in real mode).
 import type { ChainTarget } from "../targets.ts";
+import { formatAxLine } from "./ax-text.ts";
 
 export interface AxElement {
   role: string;
@@ -148,7 +149,8 @@ export class StubDriver implements ComputerDriver {
     return this.elements.filter((e) => e.editable).map((e) => ({ label: e.title || (e.description ?? ""), role: e.role, value: e.value ?? "" }));
   }
   async readUi() {
-    return this.elements.map((e) => `${e.role} "${e.title}"${e.editable ? ` = ${JSON.stringify(e.value ?? "")}` : ""}`).join("\n");
+    // s27: the one accessibility-line format (ax-text.ts), so the read step parses exactly what is written.
+    return this.elements.map((e) => formatAxLine(e.role, e.title, e.editable ? (e.value ?? "") : null)).join("\n");
   }
   async click(x: number, y: number, button: MouseButton, count: 1 | 2 | 3) {
     this.pos = { x, y };

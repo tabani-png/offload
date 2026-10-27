@@ -48,6 +48,8 @@ export const KNOWN_SURFACES: readonly KnownSurface[] = [
   { id: "zendesk", name: "Zendesk", aliases: ["zendesk"], toolkit: "zendesk", routable: true },
   { id: "hubspot", name: "HubSpot", aliases: ["hubspot", "app.hubspot.com"], host: "app.hubspot.com", toolkit: "hubspot", routable: true },
   { id: "airtable", name: "Airtable", aliases: ["airtable", "airtable.com"], host: "airtable.com", toolkit: "airtable", routable: true },
+  // s27: an analytics dashboard people read numbers from before typing them elsewhere.
+  { id: "posthog", name: "PostHog", aliases: ["posthog", "us.posthog.com"], host: "us.posthog.com", toolkit: "posthog", routable: true },
   // Containers: they name where the user was, not a product a workflow acts in.
   { id: "chrome", name: "Chrome", aliases: ["google chrome", "chrome"], app: "com.google.Chrome", routable: false },
   { id: "safari", name: "Safari", aliases: ["safari"], app: "com.apple.Safari", routable: false },

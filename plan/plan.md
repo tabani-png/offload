@@ -42,6 +42,7 @@ flowchart LR
 - 0007 Perception for any domain; connectors resolve by a chain per app (MCP -> Composio -> API -> computer use).
 - 0008 `@anthropic-ai/sdk` (pinned, already the Agent SDK's peer) for computer use with `computer_toolset_20260801`.
 - 0013 (proposed) Safe builder: run builder code in a micro-VM; ship config-patch setup fixes without the builder first.
+- 0015 Read steps: read arguments learned from the recordings; Offload builds its own view (no stored page address); read only; done rows before limits.
 
 ## Slices
 | id | name | owner type | depends |
@@ -62,6 +63,7 @@ flowchart LR
 | s14 | general workflow builder: any task profile -> SKILL.md + steps + gates; onboarding role/industry context | engineer (TS) + UI | s12, s13 |
 | s15 | e2e any-domain + independent design review 4 | QA + UI | all |
 | s26 | individual automation e2e: one non-email task from capture to an executed, approved fix and a measured saving; live batches for general plans; ADR 0013 | engineer (TS) | s13, s14, s22, s23, s24 |
+| s27 | workflows fetch their own data: the read source learned from the recordings, a read-only read step through the chain (gate mode read), live items from the fetched values, items.csv only as the fallback; honest reading time | engineer (TS) | s13, s14, s17, s26 |
 
 ## API (brain, 127.0.0.1, bearer token)
 - `GET /status` observer state, days stored, next purge.

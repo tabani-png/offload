@@ -501,6 +501,61 @@ gate sees (`mcp__composio_cli__<SLUG>`); `allowedByGate` is false until the allo
   route and model, prices, the last 100 routing decisions (route, tiers tried, escalation reasons, tokens, cost).
 - CLI: `draft` and `dry-run` take `--understanding v1|v2` (and the embedder flags); `draft` of a general insight uses
   the stub design model unless `--model real` is given.
+- s27 read steps (workflows fetch their own data; `slices/s27-workflow-reads/SPEC.md`):
+  - Building a plan workflow looks, in code, for where its values come from: the site or app on screen right before at
+    least half of the instances whose screen (masked OCR or frame notes) showed the values then typed. Found: the
+    workflow gets `read` (`ReadSourceDTO`: `target`, `targetName`, `app`, `host`, `surface`, `fields: [{label,
+    sourceLabel, support}]`, `instances`, `seenBefore`, `withValues`, `readSecondsPerInstance`, `readHoursPerWeek`,
+    `arithmetic`, `evidence`, `lastRead`; labels only, never a value), and both plan variants start with the step
+    `read_source` (type read, role read, never gated). `GET /workflows/:id` carries `read`.
+  - A read goes through the connector chain in order (MCP, Composio, direct API, then a screen read: open the app or
+    site and read its accessibility text; no click, no typing). Every call passes the gate in mode `read`: only
+    allowlisted reads; anything else is denied with "a read step only reads: it never writes, saves or sends" and
+    stops the read (no other method is tried). Gate log lines of reads have `mode: "read"`.
+  - `POST /workflows/:id/dry-run` adds `read` (`ReadPreviewDTO`: `status` fetched | refused | not_read | none, `name`,
+    `via`, `rows`, `message`); a plan with a source fills each past instance from what the source showed right before
+    it; `estimate.readMinutes` / `readCounted` per instance; reading minutes count as saved only when `status` is
+    `fetched` (the totals say "+ X min reading <source> (Offload reads it)" or "reading <source> stays with you").
+  - `POST /workflows/:id/run` reads the source first: its values are the items (`commit.fields` = commit labels with
+    the fetched values; hashed), the body ends with "Read from <source> <how>.". `items.csv` is the fallback when no
+    source is known or it cannot be read (items then carry the reason as a warning). The response adds `source:
+    {kind: read | list, name, via, message}`. 409 "nothing new at <source> since the last run: ..." when the fetched
+    rows are done.
+  - Dashboard: when the last read worked, `estimatedHoursSavedPerWeek` adds `read.readHoursPerWeek` (the arithmetic
+    says so) and `measured` adds `readingHoursPerWeekBefore` / `After` (before: reading right before the instances;
+    after: all time on the source) inside `hoursPerWeekBefore` / `After`.
+  - Round 1 (ADR 0015): `read.query` (`ReadQueryDTO {report, fields, filters}`) is learned from the recordings and
+    sent as the read's arguments; the dry run shows it (`read.query`, plus `rowsTotal`; `rows` shows at most 20) and
+    dry-run and live item text names it, so approvals cover it. The page address is never stored; a screen read opens
+    only the site. Live runs drop done rows before the batch size applies. A pause or delete during a read stops the
+    run with 409 "stopped before reading <source>: ..." and no other method is tried.
+  - Round 2: a pause or delete during a dry run's read answers 409 the same way. Direct-connection reads include the
+    GET operations of the connection's OpenAPI file (one resolver for the probe, the gate and the reader).
+  - Round 3: direct reads fill `{path}` arguments from the learned query (the rest go in the query string; a missing
+    one refuses that way). Answers are read through nested envelopes and `columns` + `rows` tables; an answer with
+    more pages is flagged on the items and in "nothing new".
+  - Round 4: a screen read accepts values only when the learned report and filters are on screen (else that way is
+    refused with the reason); a connector answer naming another report or period is refused. Incomplete rows are
+    skipped and reported (`read.skipped`, `source.skipped`, item warnings, "nothing new"), never counted done.
+  - Round 5: one parser for connector answers (normalise, pick the collection over all its rows, check the context of
+    the envelopes and of every row, then each row). A row or envelope naming another report or period refuses the
+    answer for that method.
+  - Round 6: reading an answer has four outcomes: ok (rows and skipped rows, even 0 complete), empty (a recognised
+    empty collection: "nothing new", no fall back), wrong_context (a conflicting report or filter anywhere: that
+    method is marked failed, the next is tried), unreadable (the next is tried; the list only after all).
+  - Round 7: text answers go through the same pipeline; every value is exactly what the source shows (sign and
+    formatting kept). Workflow runs get the Claude key through `settings.apiKeyHelper` (Keychain reference), never in
+    the child's env.
+  - Round 8: a repeated report or filter with any conflicting value refuses the answer; a field shown twice with
+    different values in one row skips that row (`skipped[].ambiguous`). Accessibility lines use one format
+    (connectors/computer/ax-text.ts) written by both drivers and read by the read step.
+  - Round 9: workflow runs sign in with an API key through apiKeyHelper; with only a Claude Code OAuth token, the
+    token goes in the child env as before (one warning line in the brain log); with neither, runs are refused
+    ("add a key in Settings"). Composio answers are parsed from the CLI's raw text.
+  - Round 12: a configured direct read's fixed `map` values are sent and win on clashes; the learned query fills the
+    rest. MCP answers with only structuredContent are read too (with a note on number formatting).
+  - Round 13: every Agent SDK child (workflow sends, model completions on the Claude Code backend) signs in through
+    one function: an API key via apiKeyHelper, else an OAuth token in its env (warned), else refused.
 
 ## s19: messaging playbook (additive, ADR 0011)
 A messaging workflow (outreach, follow-ups, replies) gets a de-personalised playbook: the MESSAGE the person portrays,

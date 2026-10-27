@@ -19,7 +19,8 @@ import { CRM_HEADER } from "./scripts/crm-log.ts";
 import { ensureDir, readWorkflow, workflowDir, writePrivate, writeWorkflow } from "./store.ts";
 import type { TemplateId, WorkflowJson, WorkflowStep } from "./types.ts";
 import { buildPlan, chosenVariant, legacySteps, PLAN_DESCRIPTIONS, PLAN_TITLES, planConnectors, renderPlanSkillMd, wantsGeneralPlan } from "../plan/build.ts";
-import type { CapabilityResolver } from "../plan/capabilities.ts";
+import { PendingChainResolver, type CapabilityResolver } from "../plan/capabilities.ts";
+import { findReadSource, readStep, withReadStep } from "../plan/read-source.ts";
 import type { Model } from "../models/model.ts";
 import type { UserContext } from "../types.ts";
 import { carryChoices, chainReadsOnly, recommendTools, refineTools } from "../plan/tools.ts";
@@ -292,7 +293,15 @@ export async function draftGeneralWorkflow(o: DraftGeneralOptions): Promise<{ wo
   if (existing !== null) return { workflow: existing, created: false };
   const now = (o.now ?? Date.now)();
   const models = o.models ?? { ...DEFAULT_MODELS };
-  const { plan } = await buildPlan({ analysis: o.analysis, insight, model: o.model, models, ...(o.user === undefined ? {} : { user: o.user }), ...(o.resolver === undefined ? {} : { resolver: o.resolver }) });
+  const built = await buildPlan({ analysis: o.analysis, insight, model: o.model, models, ...(o.user === undefined ? {} : { user: o.user }), ...(o.resolver === undefined ? {} : { resolver: o.resolver }) });
+  let plan = built.plan;
+  // s27: where the values come from (the recordings show it read right before each instance): a read step first.
+  const source = findReadSource(o.analysis, insight.taskId, now);
+  if (source !== null) {
+    plan = withReadStep(plan, source);
+    const resolved = await (o.resolver ?? new PendingChainResolver()).resolve([readStep(source).capability!]);
+    plan = { ...plan, capabilities: [...plan.capabilities, ...resolved] };
+  }
   const v = chosenVariant(plan);
   const s = insight.saving;
   const wf: WorkflowJson = {
@@ -324,6 +333,7 @@ export async function draftGeneralWorkflow(o: DraftGeneralOptions): Promise<{ wo
     lastDryRunAt: null,
     lastDryRunHash: null,
     plan,
+    ...(source === null ? {} : { read: source }),
   };
   const ctx = [userContextBlock(o.user), "<task_profile>", profileSummary(insight.profile), "</task_profile>"].filter((l) => l !== "").join("\n");
   wf.volumePerDay = insight.stats.instancesPerDay.value;
