@@ -22,11 +22,20 @@ enum OffloadMain {
       }
     }
     // s25: start the brain the way the app does, answer GET /status, stop. Used by slices/s25-standalone-install.
+    // s31: it runs the app's launch purge first and passes the observer the app finds; `--hold S` and
+    // `--captioner stub|off` (check mode only) keep the brain up for slices/s31-local-jobs.
     if args.contains("--brain-check") {
       let env = ProcessInfo.processInfo.environment
+      let checkOptions: BrainCheck.Options
+      do { checkOptions = try BrainCheck.Options.parse(args) } catch {
+        FileHandle.standardError.write(Data("Offload --brain-check: \(error)\n\(BrainCheck.usage)\n".utf8))
+        exit(64)
+      }
       exit(BrainCheck.run(bundleURL: Bundle.main.bundleURL, environment: env,
                           home: LaunchOptions.parse(arguments: args, environment: env).home,
-                          keyStatus: ClaudeKeychain().status()))
+                          keyStatus: ClaudeKeychain().status(),
+                          executableDir: Bundle.main.executableURL?.deletingLastPathComponent(),
+                          options: checkOptions))
     }
     MainActor.assumeIsolated {
       let app = NSApplication.shared
@@ -217,26 +226,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   /// REVIEW-2: one `cli.ts purge` before serve, so expired days go even if serve never starts. Skipped when the
   /// brain has no purge command.
+  /// s31: built like the serve launch (BrainLaunch.purgeSpec), so the installed app's purge gets the bundled observer.
   private func purgeOnce(home: URL) {
-    guard let repo, let bun = brain?.bun,
-          let args = BrainLaunch.purgeArguments(repo: repo, home: home) else { return }
-    let p = Process()
-    p.executableURL = bun
-    p.arguments = args
-    p.environment = Self.environment(demo: options.demo)
-    p.currentDirectoryURL = repo
-    p.standardInput = FileHandle.nullDevice
-    p.standardOutput = FileHandle.nullDevice
-    p.standardError = FileHandle.nullDevice
-    do {
-      try p.run()
-      // Bounded: a stuck purge must not hold the app's launch. serve purges again on start and hourly.
-      let deadline = Date().addingTimeInterval(10)
-      while p.isRunning && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
-      if p.isRunning { p.terminate(); NSLog("Offload: brain purge took over 10 s; stopped it"); return }
-      if p.terminationStatus != 0 { NSLog("Offload: brain purge exited %d", p.terminationStatus) }
-    } catch {
-      NSLog("Offload: brain purge did not run: %@", String(describing: error))
+    guard let loc = brain,
+          let spec = BrainLaunch.purgeSpec(location: loc, home: home, baseEnvironment: Self.environment(demo: options.demo),
+                                           observer: observer.binary) else { return }
+    // Bounded: a stuck purge must not hold the app's launch. serve purges again on start and hourly.
+    let r = BrainLaunch.runPurge(spec)
+    if let s = r.status {
+      if s != 0 { NSLog("Offload: brain purge exited %d", s) }
+    } else {
+      NSLog("Offload: brain purge %@", r.output)
     }
   }
 
