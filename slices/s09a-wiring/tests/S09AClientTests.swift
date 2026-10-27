@@ -304,6 +304,16 @@ struct S09AComposerTests {
     #expect(DashboardComposer.timelineDays(st) == (14...20).map { "2026-10-\($0)" })
   }
 
+  @Test("s32: days stored counts every retained day (retention.days), not only the 7-day analysis week")
+  func retainedDaysStored() throws {
+    var st = try BrainWire.decoder.decode(StatusResponse.self, from: S09AFixture.data("status.json"))
+    st.retention.days = (1...12).map { String(format: "2026-10-%02d", $0) }
+    #expect(st.toObserverStatus().daysStored == 12)
+    #expect(DashboardComposer.retainedDays(st) == 12)
+    st.retention.days = nil  // an older brain without retention.days: the store's days
+    #expect(DashboardComposer.retainedDays(st) == st.store.days.count)
+  }
+
   @Test("connector states from GET /connectors land on the automation rows")
   func connectorStates() throws {
     let st = try BrainWire.decoder.decode(StatusResponse.self, from: S09AFixture.data("status.json"))
