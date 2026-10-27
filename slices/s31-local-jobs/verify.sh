@@ -39,8 +39,9 @@ echo "== brain (tests/s31-local-jobs)"
 bt="$(cd "$ROOT/brain" && bun test tests/s31-local-jobs 2>&1)"; bcode=$?
 echo "$bt" | grep -E "^ *[0-9]+ (pass|fail)"
 [ $bcode -eq 0 ] || fail "brain s31 tests exited $bcode"
-n="$(echo "$bt" | grep -cE "\(pass\) .*OBSBIN:")"
-[ "$n" -gt 0 ] && echo "OBSBIN: $n passing" || fail "no passing brain test named \"OBSBIN: ...\""
+ot="$(cd "$ROOT/brain" && bun test tests/s31-local-jobs -t "OBSBIN: " 2>&1)"; ocode=$?
+n="$(echo "$ot" | sed -n 's/^ *\([0-9][0-9]*\) pass.*/\1/p' | head -1)"
+[ $ocode -eq 0 ] && [ "${n:-0}" -gt 0 ] && echo "OBSBIN: $n passing" || fail "no passing brain test named \"OBSBIN: ...\""
 
 echo "== build engine + app (outside the repo)"
 eb="$(OFFLOAD_BUILD_DIR="$ROOT/engine/.build" "$ROOT/engine/build.sh" 2>&1)" || { echo "$eb" | tail -20; fail "engine/build.sh exited non-zero"; }
@@ -73,7 +74,7 @@ env -i HOME="$T/home" PATH="$STRIPPED_PATH" TMPDIR="$T/tmp" OFFLOAD_KEYS=file \
 CHECK=$!
 bunpids() { ps -axo pid=,comm= | awk -v b="$C/Contents/Helpers/bun" '$2 == b { print $1 }'; }
 endpoints() { grep -c "^brain endpoint: " "$OUT" 2>/dev/null; }
-url() { sed -n 's/^brain endpoint: //p' "$OUT" | tail -1; }
+url() { sed -n 's/^brain endpoint: //p' "$OUT" | tail -1 | sed 's:/$::'; }
 api() { curl -s --max-time 10 -H "authorization: Bearer $(cat "$H/.brain-check-token" 2>/dev/null)" "$(url)$1"; }
 code() { curl -s -o /dev/null -w "%{http_code}" --max-time 10 -H "authorization: Bearer $(cat "$H/.brain-check-token" 2>/dev/null)" "$(url)$1"; }
 up() { [ "$(endpoints)" -ge "$1" ] && [ -s "$H/.brain-check-token" ] && [ "$(code /status)" = 200 ]; }
@@ -154,7 +155,7 @@ U="$(url)"
 kill -9 "$CHECK"; CHECK=""
 gone() { [ -z "$(bunpids)" ]; }
 wait_for 5 gone && echo "brain stopped with the app" || fail "QUIT: the brain outlived the app: $(bunpids)"
-curl -s -o /dev/null --max-time 3 "${U}status" && fail "QUIT: the brain still answers"
+curl -s -o /dev/null --max-time 3 "$U/status" && fail "QUIT: the brain still answers"
 
 echo "== AGENT (observer LaunchAgent written by the bundled observer; temp agents dir, never loaded)"
 a="$(env -i HOME="$T/home" PATH="$STRIPPED_PATH" OFFLOAD_LAUNCH_AGENTS_DIR="$T/agents" "$C/Contents/MacOS/offload-observer" install-agent --home "$H" 2>&1)" \
