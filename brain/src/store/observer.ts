@@ -10,7 +10,18 @@ export type ObserverEnv = Readonly<Record<string, string | undefined>>;
 export function observerBin(env: ObserverEnv): string {
   const given = env.OFFLOAD_OBSERVER_BIN;
   if (given !== undefined && given !== "") return given;
-  return fileURLToPath(new URL("../../../engine/.build/offload-observer", import.meta.url));
+  return defaultObserverBin(import.meta.url);
+}
+
+/** s31: the observer when nobody names one. In a checkout: engine/.build/offload-observer. In Offload.app (the brain at
+ * Contents/Resources/offload/brain) that repo path does not exist, so the app's own Contents/MacOS/offload-observer is
+ * used when it is there. Otherwise the repo path (the error message names it). */
+export function defaultObserverBin(moduleUrl: string, exists: (path: string) => boolean = existsSync): string {
+  const repo = fileURLToPath(new URL("../../../engine/.build/offload-observer", moduleUrl));
+  if (exists(repo)) return repo;
+  const m = /^(.+\.app)\/Contents\/Resources\/offload\/brain\/src\/store\/[^/]+$/.exec(fileURLToPath(moduleUrl));
+  const inApp = m === null ? null : `${m[1]}/Contents/MacOS/offload-observer`;
+  return inApp !== null && exists(inApp) ? inApp : repo;
 }
 
 /** The only variables an observer child gets (REVIEW-2 N6): never OFFLOAD_TOKEN, connector secrets or anything else. */
